@@ -21,8 +21,9 @@ test("details preserve plain text, provide only owner actions and allow choosing
     const own = { layerId: "l", layerName: "Habitats", canEdit: true, polygon: { id: "p", name: "<b>River</b>", note: "First\nSecond", contributor: "Lee" } };
     const peer = { ...own, canEdit: false, polygon: { ...own.polygon, id: "other", contributor: "Maria" } };
     controls.showPolygonInspection(peer, [peer, own], index => actions.push(["select", index]));
-    assert.equal(controls.inspection.children[0].textContent, "<b>River</b>");
-    assert.equal(controls.inspection.children[2].textContent, "First\nSecond");
+    assert.equal(controls.inspection.children[0].textContent, "Selected polygon");
+    assert.equal(controls.inspection.children[1].textContent, "<b>River</b>");
+    assert.equal(controls.inspection.children[3].textContent, "First\nSecond");
     assert.equal(controls.inspection.children.some(child => child.tag === "div"), false, "peers get no edit/delete actions");
     const choices = controls.inspection.children.at(-1).children[0];
     choices.value = "1"; choices.dispatchEvent(new Event("change"));
@@ -36,4 +37,26 @@ test("details preserve plain text, provide only owner actions and allow choosing
     assert.equal(controls.inspection.children[0], retained, "unchanged data preserves the focused controls");
     controls.clearPolygonInspection();
     assert.equal(controls.inspection.hidden, true);
+});
+
+test("selection emphasis runs only on explicit selection and respects reduced motion", () => {
+    const controls = Object.create(AnnotationLayerControls.prototype);
+    let reducedMotion = false, animations = 0, cancellations = 0;
+    controls.document = { createElement: tag => new Element(tag), defaultView: {
+        matchMedia: query => { assert.equal(query, "(prefers-reduced-motion: reduce)"); return { matches: reducedMotion }; },
+    } };
+    controls.inspection = new Element("section");
+    controls.inspection.animate = () => { animations++; return { cancel() { cancellations++; } }; };
+    const hit = { layerId: "layer", layerName: "Habitats", canEdit: false, polygon: { id: "polygon", name: "River", note: "" } };
+    controls.showPolygonInspection(hit, [hit], () => {}, true);
+    assert.equal(animations, 1);
+    hit.polygon.note = "Shared update";
+    controls.showPolygonInspection(hit, [hit], () => {});
+    assert.equal(animations, 1, "background updates do not highlight again");
+    controls.clearPolygonInspection();
+    assert.equal(cancellations, 1);
+    reducedMotion = true;
+    controls.showPolygonInspection(hit, [hit], () => {}, true);
+    assert.equal(animations, 1, "reduced-motion users retain the static caption and distinct card");
+    assert.equal(controls.inspection.children[0].textContent, "Selected polygon");
 });

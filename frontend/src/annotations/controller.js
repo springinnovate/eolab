@@ -639,7 +639,7 @@ export class AnnotationController {
         for (const controls of this.controls.values()) controls.clearPolygonInspection();
         for (const [id, rendering] of this.layers) rendering.setInspectedPolygon(id === hit.layerId ? hit.polygon.id : null);
         this.inspectedPolygon = { layerId: hit.layerId, polygonId: hit.polygon.id };
-        this.controls.get(hit.layerId).showPolygonInspection(hit, this.inspectionMatches, choice => this.selectInspectionMatch(choice));
+        this.controls.get(hit.layerId).showPolygonInspection(hit, this.inspectionMatches, choice => this.selectInspectionMatch(choice), true);
         this.panel.showLayer(`local:annotation:${hit.layerId}`);
         this.controls.get(hit.layerId).inspection.scrollIntoView({ block: "nearest" });
     }

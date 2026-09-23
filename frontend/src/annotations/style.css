@@ -156,9 +156,15 @@
     max-width: min(18rem, calc(100% - 8px)); overflow-wrap: anywhere;
 }
 .annotation-hover-card[hidden], .annotation-polygon-inspection[hidden] { display: none; }
-.annotation-polygon-inspection { border-bottom: 1px solid var(--border-1); padding-bottom: 0.75rem; margin-bottom: 0.75rem; }
+.annotation-polygon-inspection {
+    border: 1px solid var(--brand); border-left-width: 4px; border-radius: var(--radius);
+    background: var(--surface-selected); padding: 0.65rem 0.75rem; margin: 0.3rem 0 1rem;
+}
 .annotation-polygon-inspection h3 { margin: 0 0 0.3rem; overflow-wrap: anywhere; }
 .annotation-polygon-inspection p { margin: 0.3rem 0; }
+.annotation-polygon-inspection .annotation-selection-caption {
+    margin: 0 0 0.35rem; font-size: 0.75rem; font-weight: 700; color: var(--brand-hover);
+}
 .annotation-inspected-note { white-space: pre-wrap; overflow-wrap: anywhere; }
 .annotation-polygon-inspection label { display: block; margin-top: 0.5rem; }
 .annotation-polygon-inspection select { display: block; width: 100%; }

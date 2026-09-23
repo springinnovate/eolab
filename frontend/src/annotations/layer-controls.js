@@ -111,13 +111,17 @@ export class AnnotationLayerControls {
      * @param {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}} hit Selected polygon and owner's permission decision.
      * @param {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}[]} matches Top-first polygons at the last click, across annotation layers.
      * @param {(index:number)=>void} select Choose a different overlapping polygon.
+     * @param {boolean} [emphasize=false] Briefly highlight an explicit map or overlap selection, respecting reduced motion.
      * @return {void}
      */
-    showPolygonInspection(hit, matches, select) {
+    showPolygonInspection(hit, matches, select, emphasize = false) {
         const signature = JSON.stringify([hit, matches]);
         if (!this.inspection.hidden && this.inspectionSignature === signature) return;
         this.inspectionSignature = signature;
         const { polygon, canEdit } = hit;
+        const selected = this.document.createElement("p");
+        selected.className = "annotation-selection-caption";
+        selected.textContent = "Selected polygon";
         const heading = this.document.createElement("h3");
         heading.textContent = polygon.name;
         const author = this.document.createElement("p");
@@ -125,7 +129,7 @@ export class AnnotationLayerControls {
         const note = this.document.createElement("p");
         note.className = "annotation-inspected-note";
         note.textContent = polygon.note || "No notes yet.";
-        this.inspection.replaceChildren(heading, author, note);
+        this.inspection.replaceChildren(selected, heading, author, note);
         if (canEdit) {
             const actions = this.document.createElement("div");
             actions.className = "annotation-actions";
@@ -156,10 +160,22 @@ export class AnnotationLayerControls {
             this.inspection.append(label);
         }
         this.inspection.hidden = false;
+        if (emphasize && !this.document.defaultView.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            this.selectionHighlight?.cancel();
+            this.selectionHighlight = this.inspection.animate([
+                { boxShadow: "0 0 0 4px var(--brand)" },
+                { boxShadow: "0 0 0 0 transparent" },
+            ], { duration: 900, easing: "ease-out" });
+        }
     }
 
     /** Hide click details without changing the layer's retained editor fields. @return {void} */
-    clearPolygonInspection() { this.inspection.hidden = true; this.inspectionSignature = null; }
+    clearPolygonInspection() {
+        this.selectionHighlight?.cancel();
+        this.selectionHighlight = null;
+        this.inspection.hidden = true;
+        this.inspectionSignature = null;
+    }
 
     /**
      * Create a label containing text and an input, and connect valid edits to onChange.
