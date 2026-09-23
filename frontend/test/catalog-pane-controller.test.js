@@ -97,7 +97,8 @@ test("included-layer details open and close a dialog without revealing catalog r
   assert.equal(dialog.open, true);
   assert.equal(dialog.content, fixture.inspectorPane);
   assert.equal(fixture.document.activeElement, fixture.inspectorHeading);
-  assert.equal(fixture.closeItemDetails.textContent, "Close layer details");
+  assert.equal(fixture.closeItemDetails.textContent, "×");
+  assert.equal(fixture.closeItemDetails.title, "Close layer details");
   fixture.closeItemDetails.dispatchEvent(new Event("click"));
   assert.equal(dialog.open, false);
   assert.equal(fixture.document.activeElement, opener);

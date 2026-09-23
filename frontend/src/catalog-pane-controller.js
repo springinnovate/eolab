@@ -74,7 +74,8 @@ export function initializeCatalogPaneControls(
     let returnFocusTarget = null;
     if (detailsDialog) {
         detailsDialog.append(elements.inspectorPane);
-        elements.closeItemDetails.textContent = "Close layer details";
+        elements.closeItemDetails.textContent = "×";
+        elements.closeItemDetails.title = "Close layer details";
         elements.closeItemDetails.setAttribute("aria-label", "Close layer details");
     }
 
