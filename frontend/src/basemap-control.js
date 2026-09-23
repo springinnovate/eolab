@@ -13,7 +13,7 @@ const ERROR_TILE_URL = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/200
  *
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} map Initialized Leaflet map.
- * @param {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number}}} configuration Browser-safe tile settings.
+ * @param {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} configuration Browser-safe tile settings.
  * @param {number[][]} bounds Canonical single-world bounds.
  * @param {typeof fetch} [fetchAsset=globalThis.fetch] Static outline asset reader.
  * @return {Object} Leaflet control; removing it cancels loading and removes its background.
@@ -27,6 +27,7 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
     const layers = new Map();
     let activeLayer = null;
     let pending = null;
+    let satelliteLayer = null;
     let select, status;
     const control = leaflet.control({ position: "bottomright" });
 
@@ -46,6 +47,13 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
             noWrap: true,
             bounds,
         });
+    }
+
+    /** Report failed satellite tiles without exposing the provider URL or key. @return {void} */
+    function reportSatelliteError() {
+        if (activeLayer !== satelliteLayer) return;
+        status.hidden = false;
+        status.textContent = "Some satellite tiles could not load. Choose another basemap, or select Satellite again to retry. Check the MapTiler key, allowed domains and quota if this continues.";
     }
 
     /**
@@ -94,13 +102,20 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
                     }
                 }
             } else {
-                layers.set(id, tileBackground(id === "carto" ? configuration.carto : configuration));
+                const settings = id === "carto" ? configuration.carto
+                    : id === "maptiler" ? configuration.maptiler : configuration;
+                const layer = tileBackground(settings);
+                if (id === "maptiler") {
+                    satelliteLayer = layer;
+                    layer.on("tileerror", reportSatelliteError);
+                }
+                layers.set(id, layer);
             }
         }
         activeLayer = layers.get(id);
-        activeLayer.addTo(map);
         status.textContent = "";
         status.hidden = true;
+        activeLayer.addTo(map);
     }
 
     /** Apply the dropdown's selected background. @return {void} */
@@ -130,6 +145,7 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         const options = [
             ["detailed", "Detailed"],
             ...(configuration.carto ? [["carto", "Light (CARTO)"]] : []),
+            ...(configuration.maptiler ? [["maptiler", "Satellite (MapTiler)"]] : []),
             ["outlines", "Country outlines"],
             ["none", "None"],
         ];
@@ -161,6 +177,8 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
         control.getContainer().removeEventListener("keydown", stopMapKeys);
         if (activeLayer) map.removeLayer(activeLayer);
         activeLayer = null;
+        satelliteLayer?.off("tileerror", reportSatelliteError);
+        satelliteLayer = null;
         layers.clear();
     };
     return control.addTo(map);

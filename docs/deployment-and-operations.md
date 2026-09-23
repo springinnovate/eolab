@@ -111,6 +111,22 @@ CARTO documents that its raster tile service is being retired; this optional
 Leaflet raster integration can be disabled by clearing the key. No additional
 renderer is required by EOLab.
 
+To offer **Satellite (MapTiler)**, set `EOLAB_MAPTILER_API_KEY` and redeploy.
+Missing or blank hides the option. Compose passes it as `MAPTILER_API_KEY` to
+the app container. Use a map-access key from
+[MapTiler Cloud](https://cloud.maptiler.com/account/keys/), restricted to the
+viewer domains. This key is browser-visible; it is not a private account token.
+The browser requests `satellite-v2` JPEG tiles directly from MapTiler only when
+selected. This is imagery without road or place labels. Native tiles are used
+through zoom 22, as advertised by the provider's TileJSON metadata.
+
+MapTiler/OSM attribution and a linked MapTiler logo remain visible while Satellite
+is selected, including the logo required by free accounts. Usage counts against
+the supplied key's account plan and quota. If imagery cannot load, the basemap
+control shows a message; check allowed domains, key validity, quota and network
+access. Switching to another basemap and back retries the tile requests.
+See [MapTiler attribution requirements](https://docs.maptiler.com/guides/map-design/attribution/add-attribution/).
+
 The outline asset is Natural Earth **1:110m Admin 0 Countries**, version 5.1.2,
 [public-domain data](https://www.naturalearthdata.com/about/terms-of-use/).
 `frontend/src/assets/country-outlines.geojson` retains the coordinates of all

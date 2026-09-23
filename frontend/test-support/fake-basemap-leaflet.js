@@ -32,7 +32,12 @@ export function createLeafletDouble() {
      * @return {Object} Layer double with tracked attachment.
      */
     function layer(kind, data, options) {
-        const result = { kind, data, options, addTo(map) {
+        const events = new EventTarget();
+        const result = { kind, data, options,
+            on: (type, handler) => events.addEventListener(type, handler),
+            off: (type, handler) => events.removeEventListener(type, handler),
+            fire: type => events.dispatchEvent(new Event(type)),
+            addTo(map) {
             if (!map.attached.has(this) && options.attribution) {
                 map.attributions.set(options.attribution, (map.attributions.get(options.attribution) ?? 0) + 1);
             }
