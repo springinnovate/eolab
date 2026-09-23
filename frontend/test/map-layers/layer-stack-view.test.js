@@ -172,6 +172,7 @@ class FakeLayerStackDocument {
       ["#map-layer-counts", new FakeLayerStackElement("span", this)],
       ["#map-layers-show-all", new FakeLayerStackElement("button", this)],
       ["#map-layers-hide-all", new FakeLayerStackElement("button", this)],
+      ["#map-layers-sort", new FakeLayerStackElement("select", this)],
       ["#map-layer-removal", new FakeLayerStackElement("li", this)],
       ["#map-layer-removal-message", new FakeLayerStackElement("p", this)],
       ["#undo-layer-removal", new FakeLayerStackElement("button", this)],
@@ -870,6 +871,33 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
     documentContext.activeElement,
     documentContext.querySelector("#raster-layer-stack-status"),
   );
+});
+
+test("sort is a repeatable one-time action, preserves focus and needs at least two layers", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const sort = doc.querySelector("#map-layers-sort");
+  const received = [];
+  view.bind({ onSort: order => { received.push(order); view.render(LAYERS, null); } });
+  view.render([], null);
+  assert.equal(sort.disabled, true);
+  view.render([LAYERS[0]], null);
+  assert.equal(sort.disabled, true);
+  view.render(LAYERS, null);
+  assert.equal(sort.disabled, false);
+  sort.focus();
+  for (const order of ["name-ascending", "name-descending", "visible-first", "layer-type", "layer-type"]) {
+    sort.value = order;
+    sort.dispatchEvent(new Event("change"));
+    assert.equal(sort.value, "");
+    assert.equal(doc.activeElement, sort);
+  }
+  assert.deepEqual(received, ["name-ascending", "name-descending", "visible-first", "layer-type", "layer-type"]);
+  sort.dispatchEvent(new Event("change"));
+  view.unbind();
+  sort.value = "name-ascending";
+  sort.dispatchEvent(new Event("change"));
+  assert.equal(received.length, 5, "empty choice and unbound view do not sort");
 });
 
 test("bulk visibility actions track empty, mixed, all shown and all hidden states", () => {
