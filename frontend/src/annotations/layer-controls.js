@@ -247,7 +247,7 @@ export class AnnotationLayerControls {
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
-            empty.textContent = filtered ? "No polygons match the filter." : "Draw a polygon on the map, then give it a name or note. Saved changes are shared automatically when this layer is in a session.";
+            empty.textContent = filtered ? "No polygons match the filter." : "Draw a polygon and add its name and notes in the editor. Save shares the complete polygon with this layer's contributors.";
             this.polygonList.append(empty);
         }
         if (focusPolygon) {
@@ -317,23 +317,30 @@ export class AnnotationLayerControls {
     }
 
     /**
-     * Show saved text; name, note and Edit polygon all open the same polygon editor.
+     * Show the saved name and notes as text, with one combined Edit polygon action and Delete.
      * @param {import("./model.js").AnnotationPolygon} polygon Saved polygon.
      * @return {HTMLLIElement} Annotation row.
      */
     polygonRow(polygon) {
         const row = this.document.createElement("li");
         row.dataset.polygonId = polygon.id;
-        const name = this.button(polygon.name, () => this.actions.edit(polygon.id, "name"));
-        name.title = "Edit polygon name and notes";
+        const name = this.document.createElement("strong");
+        name.className = "annotation-row-name";
+        name.textContent = polygon.name;
         const actions = this.document.createElement("div");
         actions.className = "annotation-actions";
-        const note = this.button(polygon.note || "Add note", () => this.actions.edit(polygon.id, "note"));
-        note.classList.add("annotation-note-preview");
-        note.title = "Edit polygon name and notes";
-        actions.append(this.button("Edit polygon", () => this.actions.edit(polygon.id)),
+        const edit = this.button("Edit polygon", () => this.actions.edit(polygon.id));
+        edit.title = "Edit shape, name and notes";
+        actions.append(edit,
             this.button("Delete", () => this.actions.removePolygon(polygon.id)));
-        row.append(name, actions, note);
+        row.append(name);
+        if (polygon.note) {
+            const note = this.document.createElement("p");
+            note.className = "annotation-note-preview";
+            note.textContent = polygon.note;
+            row.append(note);
+        }
+        row.append(actions);
         return row;
     }
 
