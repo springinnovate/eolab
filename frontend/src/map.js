@@ -90,3 +90,28 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
 
     return leafletMap;
 }
+
+/**
+ * Keep Leaflet's pixel coordinates aligned when a sidebar resizes the map.
+ * ResizeObserver covers CSS transitions and panel changes without knowing which
+ * tool caused them. Removing the map releases the observer and pending frame.
+ * @param {Object} map Initialized Leaflet map.
+ * @return {void}
+ */
+export function observeMapViewportSize(map) {
+    const container = map.getContainer();
+    const view = container.ownerDocument.defaultView;
+    let frame = null;
+    const observer = new view.ResizeObserver(() => {
+        if (frame !== null) return;
+        frame = view.requestAnimationFrame(() => {
+            frame = null;
+            map.invalidateSize({animate: false, debounceMoveend: true});
+        });
+    });
+    observer.observe(container);
+    map.once("unload", () => {
+        observer.disconnect();
+        if (frame !== null) view.cancelAnimationFrame(frame);
+    });
+}
