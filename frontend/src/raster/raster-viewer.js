@@ -576,7 +576,7 @@ export function initializeRasterViewer(
             return;
         }
         candidate.item = session.item;
-        candidate.label = getCatalogRasterBasename(session.item);
+        candidate.label = session.label;
         const sessionRangeResolved = !hasDefaultRasterRange(
             session.rasterStyle,
             session.rasterStyleWasEdited
@@ -628,7 +628,7 @@ export function initializeRasterViewer(
         const candidate = {
             key,
             item,
-            label: getCatalogRasterBasename(item),
+            label: liveSession?.label ?? getCatalogRasterBasename(item),
             rasterStyle: {
                 ...(styleSource?.rasterStyle ?? DEFAULT_RASTER_STYLE),
             },
@@ -1015,13 +1015,13 @@ export function initializeRasterViewer(
     /**
      * Build visible cursor participants in top-first map order.
      * The pixel API determines coverage from the actual raster grid.
-     * @return {Object[]} Catalog identities and concise filename stems.
+     * @return {Object[]} Catalog identities and custom names, falling back to filename stems.
      */
     function rasterCursorSampleParticipants() {
         return allVisibleRasterRecords()
             .map(({ entry }) => ({
                 key: entry.key,
-                label: getCatalogRasterStem(entry.item),
+                label: entry.customName ?? getCatalogRasterStem(entry.item),
                 item: entry.item,
             }));
     }
@@ -1072,7 +1072,7 @@ export function initializeRasterViewer(
         }
         return [{
             key: activeLayerKey,
-            label: getCatalogRasterBasename(activeRasterItem),
+            label: mapLayers.getRecord(activeLayerKey)?.entry.label ?? getCatalogRasterBasename(activeRasterItem),
             item: activeRasterItem,
             axis: null,
         }];
@@ -1138,10 +1138,27 @@ export function initializeRasterViewer(
      * migrates with visibility and order. Does nothing during clear(). Never
      * call this to choose a style target.
      *
+     * Label changes refresh existing results without resampling.
      * @return {void}
      */
     function syncVisibleLayers() {
         if (clearing) return;
+        for (const record of mapLayers.retainedRecords) {
+            if (record.adapter === rasterMapLayerAdapter) record.state.label = record.entry.label;
+        }
+        let pairLabelsChanged = false;
+        for (const candidate of bivariateCandidates) {
+            const label = mapLayers.getRecord(candidate.key)?.entry.label;
+            if (label !== undefined && label !== candidate.label) {
+                candidate.label = label;
+                pairLabelsChanged = true;
+            }
+        }
+        if (pairLabelsChanged && bivariateMode.active) {
+            const presentation = getBivariatePresentation();
+            controlsView.renderBivariateMode?.({ active: true, ...presentation });
+            if (bivariateStatistics) controlsView.renderPairedStatistics?.(bivariateStatistics, presentation);
+        }
         followsVisibleLayers = true;
         const records = visibleRasterRecords();
         if (rasterCursorPosition !== null) {
@@ -1169,6 +1186,8 @@ export function initializeRasterViewer(
         if (signature === visibleHistogramSignature && activeLayerKey === primaryKey &&
             (!primaryIsRetained || mapLayers.activeKey === primaryKey)) {
             renderLayerHistogramSummaries();
+            pointSamplesController.synchronize(rasterPointSampleParticipants());
+            if (records[0]) controlsView.setActiveLayer(records[0].entry.label, records[0].entry.visible);
             refreshStyle();
             return;
         }
@@ -1716,8 +1735,8 @@ export function initializeRasterViewer(
         );
         return {
             paletteName: bivariateMode.paletteName,
-            xLabel: candidates.xCandidate.label,
-            yLabel: candidates.yCandidate.label,
+            xLabel: mapLayers.getRecord(candidates.xCandidate.key)?.entry.label ?? candidates.xCandidate.label,
+            yLabel: mapLayers.getRecord(candidates.yCandidate.key)?.entry.label ?? candidates.yCandidate.label,
             xStyle: axisStyles.xStyle,
             yStyle: axisStyles.yStyle,
             xItem: candidates.xCandidate.item,

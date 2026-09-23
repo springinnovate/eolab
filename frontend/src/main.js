@@ -104,9 +104,13 @@ import { DownloadsController } from "./processing/downloads-controller.js";
 import { DownloadsView } from "./processing/downloads-view.js";
 import { PendingSubmissionStorage } from "./processing/pending-submission.js";
 
-/** Copy the Catalog identity and title for a download intent. @param {Object} item Catalog Item. @return {Object} Clip source value. */
-function clipSource(item) {
-    return { collectionId: item.collection, itemId: item.id, label: item.properties?.title ?? item.id };
+/** Copy the Catalog identity and map label for a processing intent.
+ * @param {Object} item Catalog Item.
+ * @param {string} [label] Map-specific display name; defaults to the catalog title.
+ * @return {Object} Source identity and presentation label.
+ */
+function clipSource(item, label = item.properties?.title ?? item.id) {
+    return { collectionId: item.collection, itemId: item.id, label };
 }
 
 /** Access session storage without making restricted browsers lose the map. @return {Storage|null} Storage or unavailable. */
@@ -749,6 +753,7 @@ async function initializeCatalog(
     };
     let layerStyleEditor = null;
     let savedMapViewController = null;
+    let calculations = null;
     let vectorFeatureInspector = null;
     let vectorFilterControls = null;
     let vectorSampling = null;
@@ -783,6 +788,7 @@ async function initializeCatalog(
             vectorFilterControls?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
+            calculations?.refreshSourceNames();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -804,7 +810,7 @@ async function initializeCatalog(
     /** Read current raster identities and sampling area. @return {{sources: Object[], area: Object|null}} Current Processing context. */
     const processingContext = () => ({
         sources: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
-            .map(layer => clipSource(layer.item)),
+            .map(layer => clipSource(layer.item, layer.label)),
         area: rasterVisualization?.getSelectedArea() ?? null,
     });
     /** Open and focus the shared sampling controls. @return {void} */
@@ -818,7 +824,7 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
-    const calculations = new SummaryStatisticsController({
+    calculations = new SummaryStatisticsController({
         api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(),
         calculationRequests,
         onAreaChange: updateRasterSeriesArea, getContext: processingContext,
@@ -838,11 +844,11 @@ async function initializeCatalog(
     });
     mapLayerController.onDownload = (key) => {
         const record = mapLayerController.getRecord(key);
-        if (record) downloads.open(clipSource(record.entry.item));
+        if (record) downloads.open(clipSource(record.entry.item, record.entry.label));
     };
     mapLayerController.onCalculate = (key) => {
         const record = mapLayerController.getRecord(key);
-        if (record) calculations.open(clipSource(record.entry.item));
+        if (record) calculations.open(clipSource(record.entry.item, record.entry.label));
     };
     void downloads.start();
 
@@ -851,9 +857,9 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onDownloadRequested: (item, area) => downloads.open(clipSource(item), area),
+        onDownloadRequested: (item, area) => downloads.open(clipSource(item, mapLayerController.getRecord(getCatalogItemKey(item))?.entry.label), area),
         onCalculateRequested: (item, area) => {
-            calculations.open(clipSource(item), area);
+            calculations.open(clipSource(item, mapLayerController.getRecord(getCatalogItemKey(item))?.entry.label), area);
             calculations.calculateSelection(true);
         },
         onSamplingAreaChange: area => {

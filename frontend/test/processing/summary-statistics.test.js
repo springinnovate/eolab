@@ -31,6 +31,27 @@ test("the first active map click calculates and an unchanged completed box reuse
     assert.equal(h.controller.state.statistics[0].current, true);
 });
 
+test("changing the map source name preserves calculated values and pending request identity", async () => {
+    const context = { sources: [{ ...source }], area: box(77) };
+    const h = fixture({}, new Map(), {}, context); await h.open();
+    h.controller.calculateSelection(); await h.tick();
+    const card = h.controller.state.statistics[0], key = h.controller.key(card);
+    context.sources[0] = { ...source, label: "Renamed raster" };
+    h.controller.refreshSourceNames();
+    assert.equal(card.source.label, "Renamed raster");
+    assert.equal(h.controller.key(card), key);
+    assert.equal(h.submits(), 1);
+    await h.finish();
+    const result = card.result;
+    context.sources[0] = { ...source, label: "Final name" };
+    h.controller.refreshSourceNames();
+    assert.equal(card.source.label, "Final name");
+    assert.equal(card.result, result);
+    assert.equal(card.current, true);
+    assert.equal(h.submits(), 1);
+    h.controller.destroy();
+});
+
 test("late formula checks and plans cannot submit after leaving the summary panel", async () => {
     for (const stage of ["validateCalculation", "planCalculation"]) {
         const response = deferred(); const h = fixture(); await h.open();
@@ -390,7 +411,8 @@ test("histogram action opens and runs all valid configured cards without Calcula
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8").replaceAll("\r\n", "\n");
     const callback = main.slice(main.indexOf("onCalculateRequested: ") + "onCalculateRequested: ".length,
         main.indexOf(",\n        onSamplingAreaChange:"));
-    const action = new Function("calculations", "clipSource", `return (${callback});`)(h.controller, item => item);
+    const action = new Function("calculations", "clipSource", "mapLayerController", "getCatalogItemKey", `return (${callback});`)(
+        h.controller, item => item, { getRecord: () => null }, item => item.itemId);
     h.controller.setActive(false);
     action(source, box(80)); action(source, box(80));
     await h.tick();

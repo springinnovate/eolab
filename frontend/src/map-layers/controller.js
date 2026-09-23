@@ -6,6 +6,20 @@ import { MapLayerStack } from "./layer-stack.js";
 import { MapLayerStackView } from "./layer-stack-view.js";
 
 /**
+ * Trim a map-specific name, using null to restore the original catalog name.
+ * @param {unknown} value User-entered or saved display name; null resets it.
+ * @return {string|null} Trimmed name, or null for the source name.
+ * @throws {TypeError} If the name is blank, not text, or longer than 160 characters.
+ */
+function normalizeCustomLayerName(value) {
+    if (value === null) return null;
+    if (typeof value !== "string" || !value.trim() || [...value.trim()].length > 160) {
+        throw new TypeError("Layer name must contain 1 to 160 characters.");
+    }
+    return value.trim();
+}
+
+/**
  * @typedef {Object} MapLayerAdapter
  * @property {(item:Object)=>string} label Return a readable layer label.
  * @property {(item:Object)=>Promise<Object>} publish Publish one Catalog Item.
@@ -58,6 +72,7 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @typedef {Object} RemovedMapLayer
  * @property {string} key Stable layer identity.
  * @property {string} label Display name before removal.
+ * @property {string|null} [customName] Map-specific catalog layer name, or null for its source name.
  * @property {number} index Previous top-first drawing position.
  * @property {boolean} visible Previous visibility.
  * @property {number} opacity Previous overlay opacity.
@@ -148,6 +163,7 @@ export class MapLayerController {
             onAllVisibility: (visible) => this.setAllVisible(visible),
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
             onSort: (order) => this.sortLayers(order),
+            onRename: (key, name) => this.renameLayer(key, name),
             onRemove: (key) => this.removeWithUndo(key),
             onUndoRemove: () => void this.undoLayerRemoval(),
             onDismissRemoval: () => this.dismissLayerRemoval(),
@@ -252,12 +268,14 @@ export class MapLayerController {
      * @param {Object} [presentation] Initial neutral presentation.
      * @param {boolean} [presentation.visible=true] Initial visibility.
      * @param {number} [presentation.opacity=1] Initial opacity in [0, 1].
+     * @param {string|null} [presentation.customName=null] Optional map-specific display name.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached
      * publication, owner state, and Leaflet layer.
      * @throws {Error} If publication or detached construction fails.
      */
-    async stage(item, adapter, { visible = true, opacity = 1 } = {}) {
+    async stage(item, adapter, { visible = true, opacity = 1, customName = null } = {}) {
         this.#requireAdapter(adapter);
+        customName = normalizeCustomLayerName(customName);
         if (this.destroyed) {
             throw new Error("Map-layer controller is destroyed.");
         }
@@ -281,7 +299,7 @@ export class MapLayerController {
             item,
             adapter,
             publication,
-            { visible, opacity }
+            { visible, opacity, customName }
         );
     }
 
@@ -345,6 +363,7 @@ export class MapLayerController {
                 );
                 this.stack.setOpacity(key, presentation.opacity);
                 this.stack.setVisible(key, presentation.visible);
+                entry.customName = presentation.customName ?? null;
                 record.entry = entry;
                 this.records.set(key, record);
                 this.leafletLayers.add(key, layer, {
@@ -749,7 +768,7 @@ export class MapLayerController {
             const record = this.#requireRecord(key);
             const { entry, adapter } = record;
             const snapshot = {
-                key, label: entry.label,
+                key, label: entry.label, customName: entry.customName ?? null,
                 index: this.stack.entries.findIndex(candidate => candidate.key === key),
                 visible: entry.visible, opacity: entry.opacity,
                 item: entry.item === null ? null : { collection: entry.item.collection, id: entry.item.id },
@@ -831,6 +850,7 @@ export class MapLayerController {
             const { entry } = this.stack.add(presentation.item, presentation.label, this.recordIntent());
             this.stack.setVisible(key, presentation.visible);
             this.stack.setOpacity(key, presentation.opacity);
+            entry.customName = presentation.customName ?? null;
             record.entry = entry;
             this.records.set(key, record);
             this.leafletLayers.add(key, layer, { visible: false, opacity: entry.opacity });
@@ -924,6 +944,24 @@ export class MapLayerController {
     }
 
     /**
+     * Rename a catalog layer in this map without changing its source or requesting new data.
+     * Annotation names continue to belong to their existing annotation editor.
+     * @param {string} key Retained catalog layer identity.
+     * @param {string|null} name Custom display name, or null to use the source name.
+     * @return {void}
+     * @throws {TypeError|RangeError} If the name is invalid or the layer is not a retained catalog layer.
+     */
+    renameLayer(key, name) {
+        const record = this.#requireRecord(key);
+        if (record.entry.item === null) throw new TypeError("Use the annotation editor to rename this layer.");
+        const customName = normalizeCustomLayerName(name);
+        record.entry.customName = customName;
+        record.entry.label = customName ?? record.adapter.label(record.entry.item);
+        this.render({ key, action: "rename" });
+        this.view.announceStatus?.(`Layer renamed to ${record.entry.label}.`);
+    }
+
+    /**
      * Build presentation-ready snapshots for the layer-list view.
      *
      * @return {Object[]} Retained layers in top-first order.
@@ -934,6 +972,7 @@ export class MapLayerController {
             return {
                 ...entry,
                 ...record.adapter.snapshot(record),
+                sourceName: entry.item === null ? null : record.adapter.label(entry.item),
                 styleClipboard: this.#styleClipboardSnapshot(record),
                 error: record.error,
             };
@@ -1094,7 +1133,7 @@ export class MapLayerController {
      * @param {Object} item Supported Catalog Item.
      * @param {MapLayerAdapter} adapter Feature-owned adapter.
      * @param {Object} publication Completed owner publication response.
-     * @param {{visible:boolean,opacity:number}} presentation Initial state.
+     * @param {{visible:boolean,opacity:number,customName?:string|null}} presentation Initial state and optional display name.
      * @return {{key:string,record:Object,layer:Object}} Detached layer.
      */
     #createStaged(item, adapter, publication, presentation) {
@@ -1102,7 +1141,8 @@ export class MapLayerController {
         const entry = {
             key,
             item,
-            label: adapter.label(item),
+            label: presentation.customName ?? adapter.label(item),
+            customName: presentation.customName ?? null,
             retentionOrder: 1,
             visible: presentation.visible,
             opacity: presentation.opacity,

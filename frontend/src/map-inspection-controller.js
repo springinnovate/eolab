@@ -229,6 +229,21 @@ export class MapInspectionController {
     }
 
     /**
+     * Update an existing layer editor's tab without opening it or changing focus.
+     * @param {"style"|"filter"} editor Layer editor whose target was renamed.
+     * @param {string} layerLabel Current map-layer display name.
+     * @return {void}
+     * @throws {TypeError} If the editor or display name is invalid.
+     */
+    updateLayerEditorName(editor, layerLabel) {
+        if (!["style", "filter"].includes(editor) || typeof layerLabel !== "string" || !layerLabel.trim()) {
+            throw new TypeError("A style or filter editor and a non-empty layer name are required.");
+        }
+        const action = editor === "style" ? "Style" : "Filter";
+        this.#setToolLabel(editor, `${action} · ${layerLabel}`, `${action} ${layerLabel}`);
+    }
+
+    /**
      * Reveal a dedicated layer filter editor.
      * @param {string} layerLabel User-facing retained layer label.
      * @return {void}

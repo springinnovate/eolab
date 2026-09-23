@@ -73,8 +73,8 @@ export class CatalogVisualizationCoordinator {
      * Publish and construct one supported layer without attaching it to a map.
      *
      * @param {Object} item Supported and prepared Catalog Item.
-     * @param {{visible:boolean,opacity:number}} presentation Initial neutral
-     * layer visibility and opacity.
+     * @param {{visible:boolean,opacity:number,customName?:string|null}} presentation Initial neutral
+     * visibility, opacity and optional map-specific name.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached layer
      * prepared by the owning raster or vector adapter.
      * @throws {TypeError} If the Item has no visualization adapter.

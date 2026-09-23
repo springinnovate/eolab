@@ -124,6 +124,25 @@ export class SummaryStatisticsController {
         this.render();
     }
 
+    /**
+     * Refresh displayed raster names from composition without invalidating formulas or completed results.
+     * Submitted job metadata keeps the name recorded when the job was created.
+     * @return {void}
+     */
+    refreshSourceNames() {
+        const names = new Map((this.getContext().sources ?? []).map(source => [sourceKey(source), source.label]));
+        let changed = false;
+        const rename = source => {
+            const label = names.get(sourceKey(source));
+            if (label === undefined || label === source?.label) return source;
+            changed = true;
+            return { ...source, label };
+        };
+        this.state.sources = this.state.sources.map(rename);
+        for (const card of this.state.statistics) card.source = rename(card.source);
+        if (changed) this.render();
+    }
+
     setActive(active) {
         if (this.state.active === active) return;
         this.state.active = active;

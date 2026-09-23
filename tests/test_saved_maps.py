@@ -40,6 +40,26 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_custom_layer_name_round_trip() -> None:
+    """Keep custom names as presentation text while preserving catalog identities."""
+    candidate = map_request()
+    layer = candidate["view"]["layers"][0]
+    original_identity = deepcopy(layer["catalogItem"])
+    layer["customName"] = "  Protected areas <custom>  "
+    parsed = CreateSavedMap.model_validate(candidate)
+    exported = parsed.model_dump(mode="json", exclude_unset=True)["view"]["layers"][0]
+    assert exported["customName"] == "Protected areas <custom>"
+    assert exported["catalogItem"] == original_identity
+    for value in ("", " ", "x" * 161, 4, {}):
+        layer["customName"] = value
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(candidate)
+    layer["customName"] = "🌲" * 160
+    assert CreateSavedMap.model_validate(candidate).view.layers[0].customName == layer["customName"]
+    layer["customName"] = None
+    assert CreateSavedMap.model_validate(candidate).view.layers[0].customName is None
+
+
 def test_subtitle_and_basemap_contract() -> None:
     """Store an optional subtitle and only a provider ID in version-three maps."""
     candidate = map_request()

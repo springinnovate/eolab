@@ -417,6 +417,48 @@ const LAYERS = [
   },
 ];
 
+test("inline Rename preserves draft text across refreshes, validates, saves and resets", () => {
+  const documentContext = new FakeLayerStackDocument(), view = new MapLayerStackView(documentContext);
+  const layer = { ...LAYERS[0], sourceName: "source.tif" }, renamed = [];
+  view.bind({ onRename(key, name) {
+    if (name === " ") throw new Error("Layer name must contain 1 to 160 characters.");
+    renamed.push([key, name]);
+    layer.label = name ?? layer.sourceName;
+    view.render([layer], layer.key);
+  } });
+  view.render([layer], layer.key);
+  const list = documentContext.querySelector("#raster-layer-list");
+  actionControl(list.children[0], "rename").dispatchEvent(new Event("click"));
+  let form = elementsByClass(list, "map-layer-name-editor")[0];
+  const input = form.children[0].children[0];
+  assert.equal(documentContext.activeElement, input);
+  input.value = "Draft title";
+  view.render([layer], layer.key);
+  assert.equal(elementsByClass(list, "map-layer-name-editor")[0], form);
+  assert.equal(input.value, "Draft title");
+  assert.equal(documentContext.activeElement, input);
+  input.value = " ";
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  assert.equal(form.children[2].hidden, false);
+  input.value = "<b>Forests</b>";
+  form.dispatchEvent(new Event("submit", { cancelable: true }));
+  assert.deepEqual(renamed, [[layer.key, "<b>Forests</b>"]]);
+  assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
+  assert.equal(elementsByClass(list, "raster-layer-name")[0].textContent, "<b>Forests</b>");
+  actionControl(list.children[0], "rename").dispatchEvent(new Event("click"));
+  form = elementsByClass(list, "map-layer-name-editor")[0];
+  form.children[3].children[1].dispatchEvent(new Event("click"));
+  assert.deepEqual(renamed.at(-1), [layer.key, null]);
+  actionControl(list.children[0], "rename").dispatchEvent(new Event("click"));
+  form = elementsByClass(list, "map-layer-name-editor")[0];
+  form.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
+  assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
+  assert.equal(renamed.length, 2);
+  view.render([{ ...layer, item: null, datasetKind: "annotation" }], layer.key);
+  assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
+  assert.equal(elementsByClass(list, "secondary-button").some(button => button.dataset.layerAction === "rename"), false);
+});
+
 test("heading counts retained types through mixed, hidden, single-type, and empty maps", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);

@@ -755,6 +755,13 @@ h5 {
   gap: 6px;
 }
 .map-layer-title { display: grid; flex: 1; min-width: 0; gap: 2px; }
+
+.map-layer-name-editor { grid-column: 2; display: grid; gap: 6px; min-width: 0; }
+.map-layer-name-editor label { display: grid; gap: 4px; }
+.map-layer-name-editor input { width: 100%; min-width: 0; box-sizing: border-box; }
+.map-layer-name-editor small { overflow-wrap: anywhere; }
+.map-layer-name-editor > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.map-layer-name-editor .secondary-button { padding: 3px 6px; font-size: inherit; }
 .map-layer-type { color: var(--text-3); font-size: 0.65rem; line-height: 1.3; }
 .raster-layer-visibility {
   flex: 1;

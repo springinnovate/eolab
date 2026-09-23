@@ -109,11 +109,13 @@ export class VectorFilterControls {
         this.closeButton.focus();
     }
 
-    /** Refresh applied state and counts without disrupting typing. @return {void} */
+    /** Refresh the layer name, applied state and counts without disrupting typing or activating the panel. @return {void} */
     refresh() {
         if (this.key === null) return;
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
+        this.title.textContent = target.label;
+        this.inspection.updateLayerEditorName("filter", target.label);
         this.applied.textContent = this.action
             ? `Sampling filter: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
             : `Applied: ${vectorFilterSummary(target.filter)}`;
