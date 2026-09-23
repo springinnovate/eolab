@@ -24,7 +24,7 @@ export class TileRecovery {
         this.layer = layer;
         this.onStatus = onStatus;
         this.tiles = new Map();
-        this.loading = true;
+        this.loading = false;
         this.destroyed = false;
         this.scheduled = false;
         this.onMove = () => this.refresh();

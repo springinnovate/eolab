@@ -79,6 +79,13 @@ test("annotation interleaving tracks both catalog grids and recovers a failed im
     f.set.clear();
 });
 
+test("a view outside catalog layer bounds has no missing tiles or endless loading", async () => {
+    const f = fixture();
+    await flush();
+    assert.deepEqual(f.status(), { phase: "complete", total: 0, loaded: 0, failed: 0 });
+    f.set.clear();
+});
+
 test("exhausted independent tiles offer targeted retry and clear their layer warning on success", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
     const f = fixture(), failed = f.tile("a"), good = f.tile("b");
