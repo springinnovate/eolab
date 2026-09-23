@@ -3,6 +3,45 @@ import test from "node:test";
 import { AnnotationMapEditor } from "../../src/annotations/map-editor.js";
 import { AnnotationModel } from "../../src/annotations/model.js";
 
+test("completion selects the name and forwards text, repeat, Done and Escape without saving geometry again", () => {
+    const document = new EventTarget();
+    document.defaultView = new EventTarget();
+    document.createElement = tag => Object.assign(new EventTarget(), {
+        tag, children: [], hidden: false,
+        setAttribute() {}, append(...children) { this.children.push(...children); },
+        focus() { document.activeElement = this; }, select() { this.selected = true; },
+    });
+    const mapElement = document.createElement("div");
+    mapElement.ownerDocument = document;
+    const map = { getContainer: () => mapElement, on() {} };
+    const leaflet = { layerGroup: () => ({}), DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} } };
+    const calls = [];
+    const editor = new AnnotationMapEditor({ leaflet, map,
+        onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onSave() { calls.push("save"); }, onCancel() {},
+        onTextChange: (...text) => calls.push(text), onDrawAnother: () => calls.push("another"), onDone: () => calls.push("done"),
+    });
+    editor.showCompletion("Habitat areas", { name: "Polygon 1", note: "" });
+    assert.equal(editor.heading.textContent, "Polygon added to Habitat areas");
+    assert.equal(editor.strip.hidden, false);
+    assert.equal(editor.draftControls.hidden, true);
+    assert.equal(document.activeElement, editor.polygonName);
+    assert.equal(editor.polygonName.selected, true);
+    assert.equal(editor.polygonName.maxLength, 160);
+    assert.equal(editor.polygonNote.maxLength, 10000);
+    editor.polygonName.value = "Corridor"; editor.polygonNote.value = "Keep connected";
+    editor.polygonNote.dispatchEvent(new Event("input"));
+    const actions = editor.completion.children[2].children;
+    actions.find(button => button.textContent === "Draw another polygon").dispatchEvent(new Event("click"));
+    actions.find(button => button.textContent === "Done").dispatchEvent(new Event("click"));
+    const escape = new Event("keydown", { cancelable: true });
+    escape.key = "Escape"; document.dispatchEvent(escape);
+    assert.deepEqual(calls, [["Corridor", "Keep connected"], "another", "done", "done"]);
+    assert.equal(escape.defaultPrevented, true);
+    editor.closeCompletion();
+    assert.equal(editor.strip.hidden, true);
+    assert.equal(editor.completion.hidden, true);
+});
+
 /**
  * Supply the small Leaflet projection and point contract used by polygon dragging.
  * @param {number} x Horizontal coordinate.
