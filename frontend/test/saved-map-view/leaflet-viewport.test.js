@@ -17,5 +17,5 @@ test("saved map Leaflet adapter snapshots and restores the neutral viewport", ()
     zoom: 7,
   });
   viewport.restore(snapshot);
-  assert.deepEqual(calls, [[[44.5, -120.25], 7]]);
+  assert.deepEqual(calls, [[[44.5, -120.25], 7, { animate: false }]]);
 });
