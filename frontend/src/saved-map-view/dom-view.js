@@ -1,4 +1,5 @@
 /** DOM presentation and browser-link interaction for portable saved maps. */
+import { suggestMapLinkName } from "./api-client.js";
 
 /** Present shared-map actions without owning restoration or validation. */
 export class SavedMapViewDomView {
@@ -56,6 +57,21 @@ export class SavedMapViewDomView {
         this.handlers = null;
         this.copiedTimer = null;
         this.blockCancel = (event) => event.preventDefault();
+        this.publishDialog = documentContext.querySelector("#publish-map-dialog");
+        this.publishForm = documentContext.querySelector("#publish-map-form");
+        this.publishFields = documentContext.querySelector("#publish-map-fields");
+        this.publishTitle = documentContext.querySelector("#publish-map-title");
+        this.publishSubtitle = documentContext.querySelector("#publish-map-subtitle");
+        this.publishSlug = documentContext.querySelector("#publish-map-slug");
+        this.publishPreview = documentContext.querySelector("#publish-map-preview");
+        this.publishStatus = documentContext.querySelector("#publish-map-status");
+        this.publishSubmit = documentContext.querySelector("#publish-map-submit");
+        this.publishClose = documentContext.querySelector("#publish-map-close");
+        this.publishResult = documentContext.querySelector("#publish-map-result");
+        this.publishUrl = documentContext.querySelector("#publish-map-url");
+        this.publishOpen = documentContext.querySelector("#publish-map-open");
+        this.publishCopy = documentContext.querySelector("#publish-map-copy");
+        this.slugEdited = false;
     }
 
     /**
@@ -65,18 +81,106 @@ export class SavedMapViewDomView {
      * @param {()=>void} handlers.onCopy Copy the current shared map link.
      * @param {()=>void} handlers.onReset Restore the configured initial view.
      * @param {()=>void} handlers.onUndo Restore the pre-reset view.
+     * @param {(fields:Object)=>void} handlers.onPublish Save the captured map under the entered name.
      * @return {void}
      */
-    bind({ onCopy, onReset, onUndo }) {
+    bind({ onCopy, onReset, onUndo, onPublish }) {
         this.unbind();
         this.handlers = {
             copy: () => onCopy(),
             reset: () => onReset(),
             undo: () => onUndo(),
+            publish: event => {
+                event.preventDefault();
+                onPublish({ title: this.publishTitle.value, subtitle: this.publishSubtitle.value, slug: this.publishSlug.value });
+            },
+            title: () => {
+                if (!this.slugEdited) this.publishSlug.value = suggestMapLinkName(this.publishTitle.value);
+                this.updatePublicationPreview();
+            },
+            slug: () => { this.slugEdited = true; this.updatePublicationPreview(); },
+            close: () => this.publishDialog.close(),
+            copyPublished: async () => {
+                const result = await this.copyUrl(this.publishUrl.value);
+                this.publishStatus.textContent = result.copied ? "Link copied." : "Select and copy the link above.";
+            },
         };
         this.copyButton.addEventListener("click", this.handlers.copy);
         this.resetButton.addEventListener("click", this.handlers.reset);
         this.undoButton.addEventListener("click", this.handlers.undo);
+        this.publishForm.addEventListener("submit", this.handlers.publish);
+        this.publishTitle.addEventListener("input", this.handlers.title);
+        this.publishSlug.addEventListener("input", this.handlers.slug);
+        this.publishClose.addEventListener("click", this.handlers.close);
+        this.publishCopy.addEventListener("click", this.handlers.copyPublished);
+    }
+
+    /**
+     * Show a fresh publication form without modifying the map.
+     * @param {{title:string,subtitle:string}} defaults Initial map labels.
+     * @return {void}
+     */
+    showPublicationForm(defaults) {
+        this.publishTitle.value = defaults.title;
+        this.publishSubtitle.value = defaults.subtitle;
+        this.publishSlug.value = suggestMapLinkName(defaults.title);
+        this.slugEdited = false;
+        this.publishStatus.textContent = "";
+        this.publishFields.hidden = false;
+        this.publishSubmit.hidden = false;
+        this.publishResult.hidden = true;
+        this.publishClose.textContent = "Cancel";
+        this.updatePublicationPreview();
+        this.publishDialog.showModal();
+        this.publishTitle.focus();
+        this.publishTitle.select();
+    }
+
+    /** Update the visible URL suggestion after title or link-name edits. @return {void} */
+    updatePublicationPreview() {
+        this.publishPreview.textContent = `${new URL(this.location.href).origin}/maps/${this.publishSlug.value || "your-link-name"}`;
+    }
+
+    /**
+     * Prevent duplicate submission and dismissal while the create request is in flight.
+     * @param {boolean} busy Whether publishing is in flight.
+     * @return {void}
+     */
+    setPublicationBusy(busy) {
+        this.publishFields.disabled = busy;
+        this.publishSubmit.disabled = busy;
+        this.publishClose.disabled = busy;
+        this.publishForm.setAttribute("aria-busy", String(busy));
+        this.publishDialog.removeEventListener("cancel", this.blockCancel);
+        if (busy) {
+            this.publishDialog.addEventListener("cancel", this.blockCancel);
+            this.publishStatus.textContent = "Creating shared map…";
+        }
+    }
+
+    /**
+     * Keep entered labels visible after a publication error.
+     * @param {string} message Actionable API or validation error.
+     * @return {void}
+     */
+    showPublicationError(message) { this.publishStatus.textContent = message; }
+
+    /**
+     * Offer the published URL as plain text, an open link and a copy action.
+     * @param {string} slug Validated stored URL name.
+     * @return {void}
+     */
+    showPublishedMap(slug) {
+        const url = new URL(`/maps/${encodeURIComponent(slug)}`, this.location.href).href;
+        this.publishFields.hidden = true;
+        this.publishSubmit.hidden = true;
+        this.publishResult.hidden = false;
+        this.publishUrl.value = url;
+        this.publishOpen.href = url;
+        this.publishClose.textContent = "Done";
+        this.publishStatus.textContent = "Shared map created. Anyone with this link can open it.";
+        this.publishUrl.focus();
+        this.publishUrl.select();
     }
 
     /** Expose the one-step undo action after a completed reset. @return {void} */
@@ -99,6 +203,24 @@ export class SavedMapViewDomView {
      */
     async copyLink(fragment) {
         const url = createSavedMapViewUrl(this.location.href, fragment);
+        return this.copyUrl(url);
+    }
+
+    /**
+     * Copy the original named map, excluding private presentation changes and fragments.
+     * @param {string} slug Named map's URL name.
+     * @return {Promise<{copied:boolean,url:string}>} Copy result and canonical URL.
+     */
+    async copyNamedMapLink(slug) {
+        return this.copyUrl(new URL(`/maps/${encodeURIComponent(slug)}`, this.location.href).href);
+    }
+
+    /**
+     * Copy a complete link, returning it for a manual fallback when clipboard access fails.
+     * @param {string} url Complete map URL.
+     * @return {Promise<{copied:boolean,url:string}>} Clipboard outcome.
+     */
+    async copyUrl(url) {
         if (typeof this.clipboard?.writeText !== "function") {
             return { copied: false, url };
         }
@@ -243,6 +365,12 @@ export class SavedMapViewDomView {
             this.copyButton.removeEventListener("click", this.handlers.copy);
             this.resetButton.removeEventListener("click", this.handlers.reset);
             this.undoButton.removeEventListener("click", this.handlers.undo);
+            this.publishForm.removeEventListener("submit", this.handlers.publish);
+            this.publishTitle.removeEventListener("input", this.handlers.title);
+            this.publishSlug.removeEventListener("input", this.handlers.slug);
+            this.publishClose.removeEventListener("click", this.handlers.close);
+            this.publishCopy.removeEventListener("click", this.handlers.copyPublished);
+            this.publishDialog.removeEventListener("cancel", this.blockCancel);
             this.handlers = null;
         }
         if (this.copiedTimer !== null) {

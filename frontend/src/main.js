@@ -77,6 +77,7 @@ import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
+import { SavedMapApiClient, namedMapSlugFromPath } from "./saved-map-view/api-client.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
@@ -126,10 +127,14 @@ const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 
 /** Presentation mode only; API permissions and source authorization are unchanged.
- * Shared links keep this query parameter when copied. Named-map loading is a later step.
- * @type {boolean}
+ * Read the named-map URL before choosing authoring or recipient controls.
+ * @type {string|null}
  */
-const isSharedViewer = new URL(globalThis.location.href).searchParams.get("viewer") === "shared";
+const namedMapSlug = namedMapSlugFromPath(globalThis.location.pathname);
+/** @type {boolean} Named maps and older shared links use recipient controls. */
+const isSharedViewer = namedMapSlug !== null || new URL(globalThis.location.href).searchParams.get("viewer") === "shared";
+/** @type {Object|null} Public basemap selection interface supplied by the map owner. */
+let basemapControl = null;
 
 /**
  * Browser-safe application settings loaded from the backend.
@@ -173,7 +178,7 @@ async function loadAppGlobalConfiguration() {
  * @return {L.Map} The initialized Leaflet map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration);
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
 
     const mapPositionElement = document.querySelector("#map-position");
 
@@ -202,49 +207,52 @@ function initializeMap(appGlobalConfiguration) {
  * @return {void}
  */
 function applyAppGlobalConfiguration(appGlobalConfiguration) {
-    document.title = appGlobalConfiguration.appTitle;
+    applyMapHeading(appGlobalConfiguration.appTitle, appGlobalConfiguration.appSubtitle);
+    document.querySelector("#app-version").textContent = appGlobalConfiguration.appVersion;
+    const catalogLinkElement = document.querySelector("#catalog-link");
+    applyCatalogSystemState(
+        {
+            disclosure: document.querySelector("#system-state"),
+            stateText: document.querySelector("#system-state-text"),
+            stateAnnouncement: document.querySelector("#catalog-state-announcement")
+        },
+        "Catalog: connecting"
+    );
+    renderScanLocations(document.querySelector("#scan-locations"), appGlobalConfiguration.scanDisplayPaths);
+    catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
+}
+
+/**
+ * Set map titles and accessible names, hiding an omitted optional subtitle.
+ * @param {string} title Site title or published map title.
+ * @param {string} subtitle Site subtitle or the creator's optional subtitle.
+ * @return {void}
+ */
+function applyMapHeading(title, subtitle) {
+    document.title = title;
     document.querySelector("#app-title").textContent =
-        appGlobalConfiguration.appTitle;
+        title;
     document.querySelector("#app-title").title =
-        appGlobalConfiguration.appTitle;
+        title;
     document.querySelector("#app-subtitle").textContent =
-        appGlobalConfiguration.appSubtitle;
+        subtitle;
     document.querySelector("#app-subtitle").title =
-        appGlobalConfiguration.appSubtitle;
-    document.querySelector("#app-version").textContent =
-        appGlobalConfiguration.appVersion;
+        subtitle;
+    document.querySelector("#app-subtitle").hidden = !subtitle;
     document
         .querySelector("#map")
         .setAttribute(
             "aria-label",
-            `${appGlobalConfiguration.appTitle} interactive map`
+            `${title} interactive map`
         );
     document
         .querySelector("#control-panel")
         .setAttribute(
             "aria-label",
-            `${appGlobalConfiguration.appTitle} controls`
+            `${title} controls`
         );
     document.querySelector("#open-panel").textContent =
-        `Open ${appGlobalConfiguration.appTitle}`;
-
-    const catalogLinkElement = document.querySelector("#catalog-link");
-
-    applyCatalogSystemState(
-        {
-            disclosure: document.querySelector("#system-state"),
-            stateText: document.querySelector("#system-state-text"),
-            stateAnnouncement: document.querySelector(
-                "#catalog-state-announcement"
-            )
-        },
-        "Catalog: connecting"
-    );
-    renderScanLocations(
-        document.querySelector("#scan-locations"),
-        appGlobalConfiguration.scanDisplayPaths
-    );
-    catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
+        `Open ${title}`;
 }
 
 /**
@@ -1020,6 +1028,12 @@ async function initializeCatalog(
         viewerOrigin: globalThis.location.origin,
         storage: isSharedViewer ? null : new SavedMapViewLocalStorage(),
         restoreSharedMap: isSharedViewer,
+        publicationApi: new SavedMapApiClient(),
+        namedMapSlug,
+        allowPublishing: !isSharedViewer,
+        publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: appGlobalConfiguration.appSubtitle },
+        applyMapHeading,
+        basemap: basemapControl,
         initialViewport: {
             center: {
                 latitude: appGlobalConfiguration.initialView.latitude,
@@ -1043,6 +1057,7 @@ async function initializeCatalog(
     leafletMap.on("moveend", () =>
         savedMapViewController?.scheduleRemember()
     );
+    leafletMap.on("basemapchange", () => savedMapViewController?.scheduleRemember());
     const rasterAreaSeries = new RasterSeriesCalculations({ api: processingApi, requests: calculationRequests });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
@@ -1230,7 +1245,7 @@ async function initializeCatalog(
             summarySampling.refresh();
             await annotationSessions.start({ restoreBindings: !isSharedViewer, refreshImmediately: false });
             await savedMapViewController.restoreStartupView(globalThis.location.hash);
-            annotations.restoreLayerOrder({ useSavedPositions: !globalThis.location.hash });
+            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && !globalThis.location.hash });
             void annotationSessions.refresh();
         });
     }
@@ -1995,6 +2010,9 @@ async function startApplication() {
         document.querySelector("#reset-map-view .panel-header-action-label").textContent = "Restore shared map";
         document.querySelector("#reset-map-view").title = "Restore the shared map's starting layers, styles and location; retry any layers that could not load";
         document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Use Restore shared map to retry, or ask the author for a complete map link.";
+    } else {
+        document.querySelector("#copy-map-link-label").textContent = "Create shared map";
+        document.querySelector("#copy-map-link").title = "Create a named shared map from this view";
     }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);

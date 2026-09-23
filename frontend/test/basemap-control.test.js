@@ -12,6 +12,21 @@ const geometry = { type: "FeatureCollection", features: [] };
 const maptiler = { url: "https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=test-key",
     attribution: 'MapTiler <img alt="MapTiler logo"> and OpenStreetMap', maxNativeZoom: 22 };
 
+test("saved basemaps expose provider IDs and unavailable providers report a fallback", async () => {
+    const { leaflet, leafletMap: map, calls } = createLeafletDouble();
+    const control = addBasemapControl(leaflet, map, { ...configured, maptiler }, bounds);
+    assert.equal(await control.restore("maptiler"), null);
+    assert.equal(control.snapshot(), "maptiler");
+    assert.equal(calls.basemap.url, maptiler.url);
+    await choose(control, "none");
+    assert.equal(calls.event, "basemapchange");
+    assert.match(await control.restore("carto"), /unavailable|not configured/);
+    assert.equal(control.snapshot(), "detailed");
+    await control.restore("none");
+    assert.equal(control.snapshot(), "none");
+    control.remove();
+});
+
 /**
  * Dispatch the user's choice and await pending promise continuations.
  * @param {Object} control Mounted basemap control double.

@@ -2640,6 +2640,35 @@ h5 {
   display: none;
 }
 
+#publish-map-fields {
+    display: grid;
+    gap: 0.8rem;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+}
+
+#publish-map-dialog label {
+    display: grid;
+    gap: 0.3rem;
+}
+
+#publish-map-dialog input {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 0.5rem;
+    font: inherit;
+}
+
+.publish-map-url {
+    overflow-wrap: anywhere;
+}
+
+#publish-map-fields[hidden] {
+    display: none;
+}
+
 .panel-content:has(#toggle-catalog-workspace[hidden]) {
   grid-template-columns: minmax(0, 1fr);
 }

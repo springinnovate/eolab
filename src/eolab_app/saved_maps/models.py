@@ -168,13 +168,14 @@ class MapAnnotationLayer(MapDocumentPart):
 
 
 class SavedMapView(MapDocumentPart):
-    """Portable map JSON; version two also permits live annotation references."""
+    """Portable map JSON; version three adds the basemap provider identifier."""
 
     format: Literal["eolab-map-view"]
-    schemaVersion: Annotated[int, Field(ge=1, le=2)]
+    schemaVersion: Annotated[int, Field(ge=1, le=3)]
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
+    basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
     layers: Annotated[list[MapLayer | MapAnnotationLayer], Field(max_length=50)]
 
     @field_validator("createdAt")
@@ -202,14 +203,20 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_layer_uniqueness_and_size(self) -> Self:
-        """Reject repeated layers, version-one annotation references and oversized maps.
+        """Reject inconsistent versions, repeated layers and oversized maps.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If a layer repeats, needs version two or exceeds the size limit.
+            ValueError: If fields do not match the schema version, a layer repeats,
+                or the document exceeds the size limit.
         """
+        if self.schemaVersion == 3:
+            if self.basemap is None:
+                raise ValueError("Saved-map version three requires a basemap provider.")
+        elif "basemap" in self.model_fields_set:
+            raise ValueError("Basemap selection requires saved-map version three.")
         identities = []
         for layer in self.layers:
             if isinstance(layer, MapAnnotationLayer):
@@ -233,9 +240,12 @@ class SavedMapView(MapDocumentPart):
 
 
 class CreateSavedMap(MapDocumentPart):
-    """Title, URL name and map configuration to save permanently on this site."""
+    """Title, optional subtitle, URL name and map settings to save on this site."""
 
     title: Title
+    subtitle: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=240)
+    ] = ""
     slug: Slug
     view: SavedMapView
 

@@ -64,9 +64,10 @@ export function formatSingleWorldPosition(position) {
  *
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} appGlobalConfiguration Browser-safe application settings.
+ * @param {(control:Object)=>void} [onBasemapReady] Receive the basemap's public selection interface.
  * @return {Object} Initialized Leaflet-compatible map.
  */
-export function createSingleWorldMap(leaflet, appGlobalConfiguration) {
+export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapReady = () => {}) {
     const leafletMap = leaflet.map("map", {
         zoomControl: false,
         minZoom: 0,
@@ -83,7 +84,7 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration) {
     );
 
     leaflet.control.zoom({ position: "bottomleft" }).addTo(leafletMap);
-    addBasemapControl(leaflet, leafletMap, appGlobalConfiguration.basemap, SINGLE_WORLD_BOUNDS);
+    onBasemapReady(addBasemapControl(leaflet, leafletMap, appGlobalConfiguration.basemap, SINGLE_WORLD_BOUNDS));
 
     return leafletMap;
 }

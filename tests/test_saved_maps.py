@@ -40,6 +40,28 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_subtitle_and_basemap_contract() -> None:
+    """Store an optional subtitle and only a provider ID in version-three maps."""
+    candidate = map_request()
+    candidate["subtitle"] = "  Explore habitat  "
+    candidate["view"].update(schemaVersion=3, basemap="maptiler")
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.subtitle == "Explore habitat"
+    assert parsed.view.basemap == "maptiler"
+    candidate["subtitle"] = ""
+    assert CreateSavedMap.model_validate(candidate).subtitle == ""
+    candidate["view"]["basemap"] = "https://tiles.example/secret-key"
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(candidate)
+    candidate["view"].pop("basemap")
+    with pytest.raises(ValidationError, match="basemap"):
+        CreateSavedMap.model_validate(candidate)
+    candidate["view"]["schemaVersion"] = 1
+    candidate["subtitle"] = "x" * 241
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(candidate)
+
+
 def test_shared_annotation_reference_contract() -> None:
     """Round-trip the browser fixture while rejecting credentials, polygons and v1 references."""
     view = json.loads(
@@ -130,7 +152,7 @@ def test_origin_is_only_a_site(origin: str) -> None:
     "field,value",
     [
         ("schemaVersion", True),
-        ("schemaVersion", 3),
+        ("schemaVersion", 4),
         ("createdAt", "bad date"),
         ("layers", [{}] * 51),
     ],

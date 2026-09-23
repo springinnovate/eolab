@@ -40,6 +40,12 @@ export class SavedMapViewController {
      * for transient map presentations excluded from the portable contract.
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
+     * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
+     * @param {string|null} [configuration.namedMapSlug] URL name to load instead of fragments or private autosave.
+     * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
+     * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
+     * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
+     * @param {{snapshot:()=>string,restore:(id:string)=>Promise<string|null>}} [configuration.basemap] Public basemap interface.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
      * @param {SubtleCrypto} [configuration.subtleCrypto] Revision hasher.
      * @param {(handler:()=>void,delay:number)=>unknown} [configuration.setTimer]
@@ -60,6 +66,12 @@ export class SavedMapViewController {
         beforeRestore = () => {},
         exportAnnotation = () => null,
         restoreAnnotation = async () => { throw new Error("Shared annotations are unavailable."); },
+        publicationApi = null,
+        namedMapSlug = null,
+        allowPublishing = false,
+        publicationDefaults = { title: "", subtitle: "" },
+        applyMapHeading = () => {},
+        basemap = { snapshot: () => "detailed", restore: async () => null },
         clock = () => new Date(),
         subtleCrypto = globalThis.crypto?.subtle,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
@@ -90,6 +102,13 @@ export class SavedMapViewController {
         this.beforeRestore = beforeRestore;
         this.exportAnnotation = exportAnnotation;
         this.restoreAnnotation = restoreAnnotation;
+        this.publicationApi = publicationApi;
+        this.namedMapSlug = namedMapSlug;
+        this.allowPublishing = allowPublishing;
+        this.publicationDefaults = publicationDefaults;
+        this.applyMapHeading = applyMapHeading;
+        this.basemap = basemap;
+        this.publishingView = null;
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
         this.setTimer = setTimer;
@@ -113,14 +132,15 @@ export class SavedMapViewController {
                 layers: [],
             });
         this.view.bind({
-            onCopy: () => void this.copyMapLink(),
+            onCopy: () => void (this.allowPublishing ? this.openPublicationDialog() : this.copyMapLink()),
+            onPublish: fields => void this.publishMap(fields),
             onReset: () => void this.resetView(),
             onUndo: () => void this.undoReset(),
         });
     }
 
     /**
-     * Build and copy a compressed link for the current portable map document.
+     * Copy the original named URL, or a compressed link for an older fragment view.
      *
      * @return {Promise<void>} Completion after copy or fallback presentation.
      */
@@ -128,6 +148,12 @@ export class SavedMapViewController {
         if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
+            if (this.namedMapSlug !== null) {
+                const result = await this.view.copyNamedMapLink(this.namedMapSlug);
+                if (result.copied) this.view.showCopied();
+                else this.view.showCopyFallback(result.url);
+                return;
+            }
             const savedMapView = await this.#snapshotCurrentView();
             const fragment = await encodeSavedMapViewFragment(
                 serializeSavedMapView(savedMapView),
@@ -138,6 +164,70 @@ export class SavedMapViewController {
             else this.view.showCopyFallback(result.url);
         } catch (error) {
             this.view.showError(asError(error), "copy");
+        } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Capture the current map once and ask the creator for publication labels.
+     * @return {Promise<void>} Completion when the form or capture error is displayed.
+     */
+    async openPublicationDialog() {
+        if (this.busy || this.destroyed) return;
+        this.#setBusy(true);
+        try {
+            this.publishingView = await this.#snapshotCurrentView();
+            this.view.showPublicationForm(this.publicationDefaults);
+        } catch (error) {
+            this.view.showError(asError(error), "copy");
+        } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Publish the captured view without replacing an existing named map.
+     * A rejected name leaves the form and captured view available for correction.
+     * @param {{title:string,subtitle:string,slug:string}} fields Creator's publication labels.
+     * @return {Promise<void>} Completion after success or an actionable form error.
+     */
+    async publishMap(fields) {
+        if (this.busy || this.destroyed || this.publishingView === null) return;
+        this.#setBusy(true);
+        this.view.setPublicationBusy(true);
+        try {
+            const saved = await this.publicationApi.create({ ...fields, view: this.publishingView });
+            this.publishingView = null;
+            this.view.showPublishedMap(saved.slug);
+        } catch (error) {
+            this.view.showPublicationError(asError(error).message);
+        } finally {
+            this.view.setPublicationBusy(false);
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Load the named record, then restore it through the ordinary layer owners.
+     * Never falls back to a fragment or private map when a record cannot be loaded.
+     * @return {Promise<void>} Completion after restoring the map or reporting its failure.
+     */
+    async openNamedMap() {
+        if (this.busy || this.destroyed) return;
+        this.#cancelScheduledRemember();
+        const generation = ++this.restoreGeneration;
+        this.#setBusy(true);
+        this.view.showLoading(0);
+        try {
+            const saved = await this.publicationApi.get(this.namedMapSlug);
+            if (this.destroyed || generation !== this.restoreGeneration) return;
+            this.applyMapHeading(saved.title, saved.subtitle);
+            this.view.showLoading(saved.view.layers.length);
+            const report = await this.#restore(saved.view, generation);
+            if (report !== null) this.view.showResults(report);
+        } catch (error) {
+            this.view.showError(asError(error), "open");
         } finally {
             this.#setBusy(false);
         }
@@ -183,7 +273,8 @@ export class SavedMapViewController {
     /**
      * Restore the authoritative startup source with shared-link precedence.
      *
-     * An owned `#view=` fragment is always attempted and never falls back to
+     * A named URL takes precedence over fragments and private storage.
+     * Otherwise an owned `#view=` fragment is attempted and never falls back to
      * private storage when malformed. Authoring mode can restore the last
      * validated origin-local document without a fragment; a shared viewer
      * requires a shared fragment and never restores private map storage.
@@ -192,6 +283,10 @@ export class SavedMapViewController {
      * @return {Promise<void>} Completion after shared or local restoration.
      */
     async restoreStartupView(fragment) {
+        if (this.namedMapSlug !== null) {
+            await this.openNamedMap();
+            return;
+        }
         if (this.restoreSharedMap) {
             this.startingFragment = fragment;
             if (!isSavedMapViewFragment(fragment)) {
@@ -336,6 +431,7 @@ export class SavedMapViewController {
             },
             createdAt: this.clock().toISOString(),
             viewport,
+            basemap: this.basemap.snapshot(),
             layers: layers.filter(layer => layer !== null),
         });
     }
@@ -403,6 +499,8 @@ export class SavedMapViewController {
             return null;
         }
         this.viewport.restore(savedMapView.viewport);
+        const basemapWarning = savedMapView.basemap === undefined ? null : await this.basemap.restore(savedMapView.basemap);
+        if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
@@ -413,9 +511,9 @@ export class SavedMapViewController {
         return {
             loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,
-            details: preparations
+            details: [...(basemapWarning ? [basemapWarning] : []), ...preparations
                 .map(({ detail }) => detail)
-                .filter((detail) => detail !== null),
+                .filter((detail) => detail !== null)],
         };
     }
 

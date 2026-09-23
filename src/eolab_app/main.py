@@ -11,6 +11,7 @@ import sys
 import httpx2
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.saved_maps.store import SavedMapStore
@@ -410,6 +411,21 @@ def create_app(
     )
 
     static_directory = Path(__file__).parent / "static"
+
+    @application.get("/maps/{slug:path}", include_in_schema=False)
+    def open_named_map(slug: str) -> FileResponse:
+        """Serve the existing viewer for a named-map URL, including direct reloads.
+
+        Args:
+            slug: URL name validated by the browser and saved-map API, never a file path.
+
+        Returns:
+            The application HTML. Missing or invalid map names are reported by its viewer.
+        """
+        return FileResponse(
+            static_directory / "index.html", headers={"Cache-Control": "no-cache"}
+        )
+
     application.mount(
         "/",
         StaticFiles(directory=static_directory, html=True, check_dir=False),

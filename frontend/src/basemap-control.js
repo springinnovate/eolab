@@ -16,7 +16,8 @@ const ERROR_TILE_URL = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/200
  * @param {{url:string,attribution:string,carto?:{url:string,attribution:string,maxNativeZoom:number},maptiler?:{url:string,attribution:string,maxNativeZoom:number}}} configuration Browser-safe tile settings.
  * @param {number[][]} bounds Canonical single-world bounds.
  * @param {typeof fetch} [fetchAsset=globalThis.fetch] Static outline asset reader.
- * @return {Object} Leaflet control; removing it cancels loading and removes its background.
+ * @return {Object} Leaflet control with snapshot()/restore(id) for provider IDs;
+ * removing it cancels loading and removes its background.
  */
 export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsset = globalThis.fetch) {
     const paneName = "eolab-basemap-pane";
@@ -121,7 +122,24 @@ export function addBasemapControl(leaflet, map, configuration, bounds, fetchAsse
     /** Apply the dropdown's selected background. @return {void} */
     function applySelectedBasemap() {
         void selectBasemap(select.value);
+        map.fire("basemapchange");
     }
+
+    /** Read the selected provider ID without including URLs or keys. @return {string} Provider ID. */
+    control.snapshot = () => select.value;
+
+    /**
+     * Restore a saved provider, or use the default with a visible warning if unavailable.
+     * @param {string} id Saved provider ID.
+     * @return {Promise<string|null>} Warning for an unavailable provider, otherwise null.
+     */
+    control.restore = async function restore(id) {
+        const available = ["detailed", "none", "outlines", ...(configuration.carto ? ["carto"] : []), ...(configuration.maptiler ? ["maptiler"] : [])];
+        const warning = available.includes(id) ? null : "The saved basemap is unavailable on this site; Detailed was selected instead.";
+        select.value = warning ? "detailed" : id;
+        await selectBasemap(select.value);
+        return warning;
+    };
 
     /**
      * Keep keyboard interaction with the dropdown from panning the map.

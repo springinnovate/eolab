@@ -11,6 +11,75 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
+test("publication captures once and preserves that view while correcting a duplicate name", async () => {
+  const view = createView(), submissions = [];
+  let current = emptySavedMap(10, 20, 6).viewport;
+  Object.assign(view, {
+    showPublicationForm(defaults) { this.defaults = defaults; },
+    setPublicationBusy(value) { this.publishing = value; },
+    showPublicationError(message) { this.publicationError = message; },
+    showPublishedMap(slug) { this.published = slug; },
+  });
+  const controller = new SavedMapViewController({ view, allowPublishing: true,
+    viewport: { snapshot: () => current }, mapLayers: { retainedRecords: [] },
+    viewerVersion: "0.6.0", viewerOrigin: "https://viewer.example",
+    publicationDefaults: { title: "Site", subtitle: "Explore" },
+    basemap: { snapshot: () => "none" },
+    publicationApi: { async create(candidate) {
+      submissions.push(candidate);
+      if (submissions.length === 1) throw new Error("Name already in use");
+      return candidate;
+    } },
+  });
+  await controller.openPublicationDialog();
+  current = emptySavedMap(0, 0, 2).viewport;
+  await controller.publishMap({ title: "New title", subtitle: "", slug: "taken" });
+  assert.match(view.publicationError, /already in use/);
+  await controller.publishMap({ title: "New title", subtitle: "", slug: "new-name" });
+  assert.equal(view.published, "new-name");
+  assert.equal(view.publishing, false);
+  assert.equal(submissions[0].view, submissions[1].view);
+  assert.deepEqual(submissions[1].view.viewport, emptySavedMap(10, 20, 6).viewport);
+  assert.equal(submissions[1].view.basemap, "none");
+  assert.equal(submissions[1].subtitle, "");
+});
+
+test("named URLs override fragments and private state, restore basemap and copy the original link", async () => {
+  const view = createView(), storage = createStorage("private"), loaded = [], headings = [], basemaps = [];
+  let position;
+  view.copyNamedMapLink = async slug => { view.namedCopy = slug; return { copied: true }; };
+  const saved = { ...emptySavedMap(10, 20, 6), basemap: "none" };
+  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true, namedMapSlug: "amazon",
+    publicationApi: { async get(slug) { loaded.push(slug); return { title: "Amazon", subtitle: "", view: saved }; } },
+    applyMapHeading: (...values) => headings.push(values),
+    viewport: { snapshot: () => position, restore(value) { position = value; } },
+    basemap: { restore: async id => { basemaps.push(id); return null; } },
+    catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
+  });
+  await controller.restoreStartupView("#view=invalid-fragment");
+  position = emptySavedMap(0, 0, 2).viewport;
+  await controller.copyMapLink();
+  assert.equal(view.namedCopy, "amazon");
+  await controller.resetView();
+  assert.deepEqual(position, saved.viewport);
+  assert.deepEqual(loaded, ["amazon", "amazon"]);
+  assert.deepEqual(headings, [["Amazon", ""], ["Amazon", ""]]);
+  assert.deepEqual(basemaps, ["none", "none"]);
+  assert.equal(storage.reads, 0);
+  assert.equal(storage.writes.length, 0);
+});
+
+test("missing named maps never fall back to fragments or private maps", async () => {
+  const view = createView(), storage = createStorage("private");
+  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true, namedMapSlug: "missing",
+    publicationApi: { async get() { throw new Error("Saved map not found."); } },
+  });
+  await controller.restoreStartupView("#view=other-map");
+  assert.match(view.error.message, /not found/);
+  assert.equal(storage.reads, 0);
+  assert.equal(view.errorOperation, "open");
+});
+
 test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
   const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
     visible: true, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
@@ -764,7 +833,7 @@ test("remembered map persistence coalesces complete validated snapshots", async 
     style: { kind: "vector", definition: { width: 4 } },
   }]);
   assert.deepEqual(Object.keys(remembered).sort(), [
-    "createdAt", "format", "layers", "schemaVersion", "viewer", "viewport",
+    "basemap", "createdAt", "format", "layers", "schemaVersion", "viewer", "viewport",
   ]);
 });
 
