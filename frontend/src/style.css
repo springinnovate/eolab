@@ -4800,9 +4800,4 @@ summary:hover > .raster-disclosure-chevron {
 .coordinate-crosshair text { fill: #164d70; }
 .coordinate-guide-toggle { padding: 3px 6px; font-size: 0.75rem; }
 .coordinate-guide-toggle[aria-pressed="true"] { border-color: var(--brand); }
-.has-coordinate-guide .leaflet-bottom { bottom: 25px; }
-.has-coordinate-guide .leaflet-left { left: 65px; }
-.has-coordinate-guide .leaflet-right { right: 65px; }
-.has-coordinate-guide .map-tool-openers { top: 26px; right: 65px; max-width: calc(100% - 130px); }
-.has-coordinate-guide .leaflet-control-attribution { max-width: min(400px, 45vw); }
 .has-coordinate-guide .map-position { display: none; }
