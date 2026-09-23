@@ -136,6 +136,8 @@ class Settings:
         basemap_attribution: Browser basemap attribution.
         carto_basemap_api_key: Optional browser-visible CARTO basemap key.
             Blank disables the CARTO option; use a domain-restricted basemap key.
+        maptiler_api_key: Optional browser-visible MapTiler map key.
+            Blank disables satellite imagery; restrict the key to viewer domains.
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
@@ -181,6 +183,7 @@ class Settings:
     processing_data_path: Path = Path("/processing-data").absolute()
     jobs_token: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
+    maptiler_api_key: str = field(default="", repr=False)
     raster_statistics_queue_capacity: int = 32
     raster_statistics_queue_wait_seconds: float = 30
     raster_statistics_max_waiters: int = 256
@@ -331,8 +334,8 @@ class Settings:
             the browser-facing catalog and WMS URLs, user-facing scan paths,
             basemap URL and attribution strings, and numeric initial-view
             latitude, longitude, and zoom values. When configured, basemap.carto
-            contains a tile URL with the browser-visible CARTO key, attribution,
-            and native zoom limit. Internal service URLs are not exposed.
+            and basemap.maptiler contain tile URLs with browser-visible keys,
+            attribution, and native zoom limits. Internal service URLs are not exposed.
         """
         basemap: dict[str, object] = {
             "url": self.basemap_url,
@@ -350,6 +353,23 @@ class Settings:
                     '<a href="https://carto.com/attributions">CARTO</a>'
                 ),
                 "maxNativeZoom": 20,
+            }
+        if self.maptiler_api_key:
+            basemap["maptiler"] = {
+                "url": (
+                    "https://api.maptiler.com/tiles/satellite-v2/"
+                    "{z}/{x}/{y}.jpg?key=" + quote(self.maptiler_api_key, safe="")
+                ),
+                "attribution": (
+                    '<a href="https://www.maptiler.com/">'
+                    '<img src="https://api.maptiler.com/resources/logo.svg" '
+                    'alt="MapTiler logo" width="88" height="22" '
+                    'class="eolab-maptiler-logo"></a> '
+                    '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> '
+                    '&copy; <a href="https://www.openstreetmap.org/copyright">'
+                    "OpenStreetMap contributors</a>"
+                ),
+                "maxNativeZoom": 22,
             }
         return {
             "appTitle": self.app_title,
@@ -486,6 +506,7 @@ def load_settings(
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
         carto_basemap_api_key=os.environ.get("CARTO_BASEMAP_API_KEY", "").strip(),
+        maptiler_api_key=os.environ.get("MAPTILER_API_KEY", "").strip(),
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),
         initial_longitude=float(os.environ["INITIAL_LONGITUDE"]),
         initial_zoom=float(os.environ["INITIAL_ZOOM"]),

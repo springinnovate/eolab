@@ -4685,3 +4685,4 @@ summary:hover > .raster-disclosure-chevron {
 .eolab-basemap-control select { width: 100%; min-width: 0; font-size: 0.8rem; padding: 4px; }
 .eolab-basemap-control p { max-width: 200px; margin: 6px 0 0; font-size: 0.75rem; }
 .eolab-basemap-control p[hidden] { display: none; }
+.eolab-maptiler-logo { vertical-align: middle; }

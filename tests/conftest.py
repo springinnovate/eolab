@@ -36,6 +36,7 @@ DEFAULT_ENVIRONMENT = {
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "CARTO_BASEMAP_API_KEY": "",
+    "MAPTILER_API_KEY": "",
     "INITIAL_LATITUDE": "20",
     "INITIAL_LONGITUDE": "0",
     "INITIAL_ZOOM": "2",
