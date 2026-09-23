@@ -153,6 +153,44 @@ test("saved positions accept older documents and reject invalid stack indices", 
 });
 
 
+test("shape, name and notes remain private through outline closure and commit together", () => {
+    const annotations = model();
+    const layer = annotations.createLayer();
+    const polygon = triangle(annotations, layer.id);
+    const saved = annotations.document();
+    annotations.beginPolygon(layer.id, polygon.id);
+    annotations.updateDraftText("  Corridor  ", "Survey the river");
+    annotations.addVertex([-73.5, -5], 1);
+    annotations.closePolygonOutline();
+    assert.deepEqual(annotations.document(), saved);
+    assert.equal(annotations.draft.outlineClosed, true);
+    assert.equal(annotations.savePolygon(), polygon);
+    assert.equal(polygon.name, "Corridor");
+    assert.equal(polygon.note, "Survey the river");
+    assert.equal(polygon.vertices.length, 4);
+});
+
+test("invalid saves and Cancel preserve all committed polygon fields", () => {
+    const annotations = model();
+    const layer = annotations.createLayer();
+    const polygon = triangle(annotations, layer.id);
+    const saved = annotations.document();
+    annotations.beginPolygon(layer.id, polygon.id);
+    annotations.updateDraftText("Draft", "Not sent");
+    annotations.draft.polygon.vertices = [[0, 0], [1, 1]];
+    assert.throws(() => annotations.closePolygonOutline(), /3 vertices/);
+    assert.throws(() => annotations.savePolygon(), /3 vertices/);
+    assert.deepEqual(annotations.document(), saved);
+    assert.throws(() => annotations.updateDraftText("x".repeat(161), "note"), /too long/);
+    assert.equal(annotations.draft.polygon.name, "Draft");
+    annotations.cancelPolygon();
+    assert.deepEqual(annotations.document(), saved);
+    annotations.beginPolygon(layer.id);
+    annotations.updateDraftText("", "New draft");
+    annotations.cancelPolygon();
+    assert.deepEqual(annotations.document(), saved);
+});
+
 test("edge insertion preserves ring order and remains an isolated edit until Save", () => {
     const annotations = model();
     const layer = annotations.createLayer();

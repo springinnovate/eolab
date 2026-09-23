@@ -3,7 +3,7 @@ import test from "node:test";
 import { AnnotationMapEditor } from "../../src/annotations/map-editor.js";
 import { AnnotationModel } from "../../src/annotations/model.js";
 
-test("completion selects the name and forwards text, repeat, Done and Escape without saving geometry again", () => {
+test("one editor forwards private text changes and explicit Save/Cancel intents", () => {
     const document = new EventTarget();
     document.defaultView = new EventTarget();
     document.createElement = tag => Object.assign(new EventTarget(), {
@@ -16,31 +16,31 @@ test("completion selects the name and forwards text, repeat, Done and Escape wit
     const map = { getContainer: () => mapElement, on() {} };
     const leaflet = { layerGroup: () => ({}), DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} } };
     const calls = [];
-    const labelLayout = { register(owner, polygons, editing) { assert.equal(editing, true); } };
-    const editor = new AnnotationMapEditor({ leaflet, map, labelLayout,
-        onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onSave() { calls.push("save"); }, onCancel() {},
-        onTextChange: (...text) => calls.push(text), onDrawAnother: () => calls.push("another"), onDone: () => calls.push("done"),
+    const editor = new AnnotationMapEditor({ leaflet, map, labelLayout: { register() {} },
+        onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onCloseOutline() {},
+        onSave: another => calls.push(["save", another]), onCancel: () => calls.push(["cancel"]),
+        onTextChange: (...text) => calls.push(["draft", ...text]),
     });
-    editor.showCompletion("Habitat areas", { name: "Polygon 1", note: "" });
-    assert.equal(editor.heading.textContent, "Polygon added to Habitat areas");
-    assert.equal(editor.strip.hidden, false);
-    assert.equal(editor.draftControls.hidden, true);
+    editor.draft = { polygon: { name: "Polygon 1", note: "" } };
+    editor.focusTextField("name");
     assert.equal(document.activeElement, editor.polygonName);
     assert.equal(editor.polygonName.selected, true);
     assert.equal(editor.polygonName.maxLength, 160);
     assert.equal(editor.polygonNote.maxLength, 10000);
     editor.polygonName.value = "Corridor"; editor.polygonNote.value = "Keep connected";
     editor.polygonNote.dispatchEvent(new Event("input"));
-    const actions = editor.completion.children[2].children;
-    actions.find(button => button.textContent === "Draw another polygon").dispatchEvent(new Event("click"));
-    actions.find(button => button.textContent === "Done").dispatchEvent(new Event("click"));
+    assert.deepEqual(calls, [["draft", "Corridor", "Keep connected"]]);
+    editor.saveAndDraw.dispatchEvent(new Event("click"));
+    editor.save.dispatchEvent(new Event("click"));
     const escape = new Event("keydown", { cancelable: true });
     escape.key = "Escape"; document.dispatchEvent(escape);
-    assert.deepEqual(calls, [["Corridor", "Keep connected"], "another", "done", "done"]);
+    const enter = new Event("keydown", { cancelable: true }); enter.key = "Enter"; enter.ctrlKey = true;
+    editor.strip.dispatchEvent(enter);
+    assert.deepEqual(calls.slice(1), [["save", true], ["save", false], ["cancel"], ["save", false]]);
+    assert.equal(enter.defaultPrevented, true);
     assert.equal(escape.defaultPrevented, true);
-    editor.closeCompletion();
-    assert.equal(editor.strip.hidden, true);
-    assert.equal(editor.completion.hidden, true);
+    editor.focusTextField("note");
+    assert.equal(document.activeElement, editor.polygonNote);
 });
 
 /**

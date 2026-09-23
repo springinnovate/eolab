@@ -8,7 +8,7 @@ import { polygonValidationMessage } from "./geometry.js";
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
  * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string|Object,polygons:AnnotationPolygon[]}} AnnotationLayer
  * @typedef {{version:1,layers:AnnotationLayer[]}} AnnotationDocument
- * @typedef {{layerId:string,polygon:AnnotationPolygon,isNew:boolean}} PolygonDraft
+ * @typedef {{layerId:string,polygon:AnnotationPolygon,isNew:boolean,outlineClosed:boolean}} PolygonDraft
  */
 
 /** Maximum annotation layers saved on this device for this app. @type {number} */
@@ -204,7 +204,34 @@ export class AnnotationModel {
             : layer.polygons.find(candidate => candidate.id === polygonId);
         if (!polygon) throw new Error("This polygon no longer exists.");
         if (polygonId === null && layer.polygons.length >= MAX_POLYGONS_PER_LAYER) throw new Error(`This annotation layer already has ${MAX_POLYGONS_PER_LAYER} polygons.`);
-        this.draft = { layerId, polygon: structuredClone(polygon), isNew: polygonId === null };
+        this.draft = { layerId, polygon: structuredClone(polygon), isNew: polygonId === null, outlineClosed: polygonId !== null };
+    }
+
+    /**
+     * Change the draft's name and notes without touching saved or shared polygons.
+     * Blank names remain editable and become Polygon on Save.
+     * @param {string} name Polygon name, at most 160 characters.
+     * @param {string} note Polygon notes, at most 10,000 characters.
+     * @return {void}
+     * @throws {Error} If no draft exists or either text value exceeds its limit.
+     */
+    updateDraftText(name, note) {
+        if (!this.draft) throw new Error("Start editing a polygon before changing its name or notes.");
+        requireText(name, MAX_ANNOTATION_NAME_LENGTH, true);
+        requireText(note, MAX_ANNOTATION_NOTE_LENGTH, true);
+        Object.assign(this.draft.polygon, { name, note });
+    }
+
+    /**
+     * Close a valid outline without saving; vertices, name and notes remain editable.
+     * @return {void}
+     * @throws {Error} If the draft is missing or its outline is invalid.
+     */
+    closePolygonOutline() {
+        if (!this.draft) throw new Error("Start a polygon before closing its outline.");
+        const message = polygonValidationMessage(this.draft.polygon.vertices);
+        if (message) throw new Error(message);
+        this.draft.outlineClosed = true;
     }
 
     /**
@@ -225,24 +252,27 @@ export class AnnotationModel {
     }
 
     /**
-     * Save valid draft geometry, retaining the previous polygon on failure.
+     * Save a polygon's shape, name and notes together, retaining the previous polygon on failure.
      * @return {AnnotationPolygon} Saved polygon.
-     * @throws {Error} If the draft is missing or geometrically invalid.
+     * @throws {Error} If the draft is missing, its geometry/text is invalid, or the saved polygon is gone.
      */
     savePolygon() {
         if (!this.draft) throw new Error("No polygon is being edited.");
         const message = polygonValidationMessage(this.draft.polygon.vertices);
         if (message) throw new Error(message);
         const { layerId, polygon, isNew } = this.draft;
+        requireText(polygon.name, MAX_ANNOTATION_NAME_LENGTH, true);
+        requireText(polygon.note, MAX_ANNOTATION_NOTE_LENGTH, true);
         const layer = this.layer(layerId);
         const saved = isNew ? polygon : layer.polygons.find(candidate => candidate.id === polygon.id);
+        if (!saved) throw new Error("This polygon is no longer available to edit.");
+        Object.assign(saved, { vertices: polygon.vertices, name: polygon.name.trim() || "Polygon", note: polygon.note });
         if (isNew) layer.polygons.push(saved);
-        else saved.vertices = polygon.vertices;
         this.draft = null;
         return saved;
     }
 
-    /** Discard draft geometry without changing saved polygons. @return {void} */
+    /** Discard draft geometry, name and notes without changing saved polygons. @return {void} */
     cancelPolygon() { this.draft = null; }
 
     /**

@@ -30,13 +30,36 @@ test("details preserve plain text, provide only owner actions and allow choosing
     assert.deepEqual(actions, [["select", 1]]);
     controls.showPolygonInspection(own, [peer, own], () => {});
     const buttons = controls.inspection.children.find(child => child.tag === "div").children;
-    buttons[0].dispatchEvent(new Event("click")); buttons[2].dispatchEvent(new Event("click"));
+    buttons[0].dispatchEvent(new Event("click")); buttons[1].dispatchEvent(new Event("click"));
     assert.deepEqual(actions.slice(1), [["edit", "p"], ["delete", "p"]]);
     const retained = controls.inspection.children[0];
     controls.showPolygonInspection(own, [peer, own], () => {});
     assert.equal(controls.inspection.children[0], retained, "unchanged data preserves the focused controls");
     controls.clearPolygonInspection();
     assert.equal(controls.inspection.hidden, true);
+});
+
+test("polygon rows show plain text with only combined Edit polygon and Delete actions", () => {
+    const actions = [];
+    const controls = Object.create(AnnotationLayerControls.prototype);
+    controls.document = { createElement: tag => Object.assign(new Element(tag), { dataset: {}, classList: { add() {} } }) };
+    controls.actions = { edit: id => actions.push(["edit", id]), removePolygon: id => actions.push(["delete", id]) };
+    const polygon = { id: "p", name: "<b>River</b>", note: "First\nSecond" };
+    const before = structuredClone(polygon);
+    const row = controls.polygonRow(polygon);
+    assert.deepEqual(row.children.map(child => child.tag), ["strong", "p", "div"]);
+    assert.equal(row.children[0].textContent, polygon.name);
+    assert.equal(row.children[1].textContent, polygon.note);
+    const buttons = row.children[2].children;
+    assert.deepEqual(buttons.map(button => button.textContent), ["Edit polygon", "Delete"]);
+    assert.equal(buttons[0].title, "Edit shape, name and notes");
+    buttons[0].dispatchEvent(new Event("click"));
+    buttons[1].dispatchEvent(new Event("click"));
+    assert.deepEqual(actions, [["edit", "p"], ["delete", "p"]]);
+    assert.deepEqual(polygon, before);
+    assert.equal(row.children.some(child => child.tag === "input" || child.tag === "textarea"), false);
+    const withoutNote = controls.polygonRow({ ...polygon, note: "" });
+    assert.deepEqual(withoutNote.children.map(child => child.tag), ["strong", "div"], "empty notes do not add a placeholder action");
 });
 
 test("selection emphasis runs only on explicit selection and respects reduced motion", () => {

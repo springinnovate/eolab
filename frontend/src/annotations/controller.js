@@ -40,8 +40,6 @@ export class AnnotationController {
         this.requestEditing = requestEditing;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
-        /** @type {{layerId:string,polygonId:string}|null} Newly added polygon being named. */
-        this.completedPolygon = null;
         this.shared = new Map();
         this.controls = new Map();
         this.layers = new Map();
@@ -80,7 +78,7 @@ export class AnnotationController {
             this.save();
         }));
         this.retryButton.addEventListener("click", () => this.save());
-        this.beforeUnload = event => { if (this.dirty || this.model.draft) { event.preventDefault(); event.returnValue = ""; } };
+        this.beforeUnload = event => { if (this.hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ""; } };
         globalThis.addEventListener?.("beforeunload", this.beforeUnload);
         this.labelLayout = new PolygonLabelLayout(map);
         this.editor = new AnnotationMapEditor({ leaflet, map, labelLayout: this.labelLayout,
@@ -99,13 +97,17 @@ export class AnnotationController {
                 if (index === 0) this.deletePolygon(draft.layerId, draft.polygon.id);
                 else { draft.polygon.vertices.splice(index, 1); this.renderEditor(); }
             }),
-            onSave: () => this.perform(() => this.finishPolygon()),
+            onSave: drawAnother => this.perform(() => this.finishPolygon(drawAnother)),
+            onCloseOutline: () => this.perform(() => {
+                this.model.closePolygonOutline();
+                this.renderEditor();
+                this.editor.save.focus({ preventScroll: true });
+            }),
             onCancel: () => { this.model.cancelPolygon(); this.updateEditor(); },
-            onTextChange: (name, note) => this.perform(() => this.updateCompletedPolygonText(name, note)),
-            onDrawAnother: () => {
-                if (this.completedPolygon) this.beginPolygon(this.completedPolygon.layerId);
-            },
-            onDone: () => this.closePolygonCompletion(),
+            onTextChange: (name, note) => this.perform(() => {
+                this.model.updateDraftText(name, note);
+                this.editor.refreshDraftLabels();
+            }),
         });
     }
 
@@ -310,7 +312,7 @@ export class AnnotationController {
             share: () => this.onShare(layer.id),
             color: color => this.onColor(layer.id, color),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
-            edit: id => this.beginPolygon(layer.id, id),
+            edit: (id, field) => this.beginPolygon(layer.id, id, field),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),
             change: (rebuild = true) => this.perform(() => {
                 validateAnnotationStyle(layer.style);
@@ -358,8 +360,6 @@ export class AnnotationController {
             },
             visibilityChanged: (_record, visible) => {
                 layer.visible = visible;
-                if (!visible && this.completedPolygon?.layerId === layer.id) this.closePolygonCompletion();
-                if (!visible && this.model.draft?.layerId === layer.id) { this.model.cancelPolygon(); this.updateEditor(); }
                 this.refreshInspection();
                 this.save();
             },
@@ -370,7 +370,6 @@ export class AnnotationController {
             },
             removed: () => {
                 this.clearInspection();
-                if (this.completedPolygon?.layerId === layer.id) this.closePolygonCompletion();
                 if (this.model.draft?.layerId === layer.id) { this.model.cancelPolygon(); this.updateEditor(); }
                 if (this.model.deleted?.layerId === layer.id) this.model.deleted = null;
                 this.model.layers = this.model.layers.filter(candidate => candidate.id !== layer.id);
@@ -477,18 +476,23 @@ export class AnnotationController {
     }
 
     /**
-     * Enter drawing or geometry editing; saved polygons remain unchanged until Save.
+     * Edit a polygon shape, name and notes in one draft; saved polygons stay unchanged until Save.
      * @param {string} layerId Annotation layer identifier.
      * @param {string|null} [polygonId=null] Existing polygon or new drawing.
+     * @param {"name"|"note"|null} [field=null] Focus the requested text field; otherwise focus Name on entry.
      * @return {void}
      */
-    beginPolygon(layerId, polygonId = null) {
+    beginPolygon(layerId, polygonId = null, field = null) {
         if (this.requestEditing && !this.requestEditing(layerId)) return;
         this.perform(() => {
+            if (polygonId && this.model.draft?.layerId === layerId && this.model.draft.polygon.id === polygonId) {
+                this.editor.focusTextField(field ?? "name", false);
+                return;
+            }
             this.model.beginPolygon(layerId, polygonId);
-            this.closePolygonCompletion();
             this.mapLayers.setVisible(`local:annotation:${layerId}`, true);
             this.updateEditor();
+            if (field) this.editor.focusTextField(field);
         });
     }
 
@@ -499,7 +503,6 @@ export class AnnotationController {
      * @return {void}
      */
     deletePolygon(layerId, polygonId) {
-        if (this.completedPolygon?.polygonId === polygonId) this.closePolygonCompletion();
         this.model.deletePolygon(layerId, polygonId);
         this.updateEditor();
         this.panel.show();
@@ -509,7 +512,6 @@ export class AnnotationController {
 
     /** Synchronize map editing presentation and notify composition of the mode. @return {void} */
     updateEditor() {
-        this.closePolygonCompletion();
         this.clearInspection();
         this.hoverCard.setEnabled(!this.model.draft);
         this.onEditingChange(!!this.model.draft);
@@ -533,49 +535,26 @@ export class AnnotationController {
     }
 
     /**
-     * Commit valid geometry and offer naming and repeat drawing only for a new polygon.
+     * Save the draft's shape, name and notes together and optionally start another polygon.
+     * Validation failures keep the complete draft open for correction; no draft is a no-op.
+     * @param {boolean} [drawAnother=false] Start a new draft in the same layer after saving.
      * @return {void}
-     * @throws {Error} If the current draft is missing or invalid; the draft remains editable.
+     * @throws {Error} If the draft is invalid or this contributor can no longer edit it.
      */
-    finishPolygon() {
-        const { layerId, isNew } = this.model.draft;
+    finishPolygon(drawAnother = false) {
+        if (!this.model.draft) return;
+        const { layerId } = this.model.draft;
+        if (this.shared.get(layerId)?.canContribute === false) throw new Error("Join this layer before saving your polygon.");
         const polygon = this.model.savePolygon();
         this.updateEditor();
-        this.refreshLayer(layerId, true, isNew ? null : polygon.id);
-        if (isNew) {
-            this.completedPolygon = { layerId, polygonId: polygon.id };
-            this.hoverCard.setEnabled(false);
-            this.onEditingChange(true);
-            this.editor.showCompletion(this.model.layer(layerId).name, polygon);
-        }
+        this.refreshLayer(layerId, true, polygon.id);
         void this.save();
+        if (drawAnother) this.beginPolygon(layerId);
     }
 
-    /**
-     * Apply completion-card text to the author's polygon using the existing autosave path.
-     * @param {string} name Name entered in the bounded text input; empty uses Polygon.
-     * @param {string} note Notes entered in the bounded textarea.
-     * @return {void}
-     */
-    updateCompletedPolygonText(name, note) {
-        if (!this.completedPolygon) return;
-        const { layerId, polygonId } = this.completedPolygon;
-        const polygon = this.model.layer(layerId).polygons.find(item => item.id === polygonId);
-        polygon.name = name.trim() || "Polygon";
-        polygon.note = note;
-        this.refreshLayer(layerId, false);
-        void this.save();
-    }
-
-    /** Dismiss naming without deleting the committed polygon or starting another save. @return {void} */
-    closePolygonCompletion() {
-        if (!this.completedPolygon) return;
-        const { layerId } = this.completedPolygon;
-        this.completedPolygon = null;
-        this.hoverCard.setEnabled(!this.model.draft);
-        this.controls.get(layerId).refresh();
-        this.onEditingChange(!!this.model.draft);
-        this.editor.closeCompletion();
+    /** Whether leaving would lose an unfinished polygon or failed/pending save. @return {boolean} */
+    hasUnsavedChanges() {
+        return !!(this.dirty || this.model.draft);
     }
 
     /**
@@ -591,7 +570,6 @@ export class AnnotationController {
         const labelChanged = record.entry.label !== layer.name;
         record.entry.label = layer.name;
         this.panel.renameLayer(`local:annotation:${id}`, layer.name);
-        if (this.completedPolygon?.layerId === id) this.editor.heading.textContent = `Polygon added to ${layer.name}`;
         this.layers.get(id).refresh();
         if (rebuild) this.controls.get(id).refresh(focusPolygon);
         // Polygon text changes do not alter stack controls unless a filter is active.
@@ -605,7 +583,7 @@ export class AnnotationController {
      * @return {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}[]} Top-first hits with local edit permission.
      */
     polygonsAt(position) {
-        if (this.model.draft || this.completedPolygon) return [];
+        if (this.model.draft) return [];
         return [...this.model.layers].sort((a, b) => a.position - b.position).flatMap(layer => {
             if (!layer.visible || layer.opacity === 0) return [];
             return (this.layers.get(layer.id)?.polygonsAt(position) ?? []).map(polygon => ({
@@ -684,7 +662,6 @@ export class AnnotationController {
         if (record?.entry.item !== null) return false;
         const controls = this.controls.get(record?.state?.id);
         if (!controls) return false;
-        this.closePolygonCompletion();
         this.clearInspection();
         this.panel.showLayer(key);
         controls.open(action);
