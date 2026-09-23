@@ -1,6 +1,8 @@
 """Restricted public WMS validation, authorization, and forwarding."""
 
 import asyncio
+import hashlib
+import json
 import re
 
 import httpx2
@@ -315,13 +317,20 @@ def create_wms_proxy_router(
         forwarded_headers = geoserver_forward_headers(request)
         try:
             if operation == "getmap":
+                request_identity = json.dumps(
+                    sorted((key.lower(), value) for key, value in query_entries),
+                    separators=(",", ":"),
+                )
+                tile_request_key = "direct:" + hashlib.sha256(
+                    request_identity.encode()
+                ).hexdigest()
                 return await forward_geoserver_get_map(
                     request,
                     render_queue.run(lambda: geoserver_client.get(
                         f"{internal_geoserver_url}/eolab/wms",
                         params=query_entries,
                         headers=forwarded_headers,
-                    )),
+                    ), tile_key=tile_request_key),
                     get_map_request_tracker,
                 )
             else:

@@ -1,9 +1,77 @@
 """Exercise rendering admission independently of GeoServer speed."""
 
 import asyncio
+import json
+import logging
 
 import httpx2
 import pytest
+
+
+def test_queue_logs_duplicates_cancellation_and_upstream_timing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Observe saturation without changing duplicate execution or cancellation rules."""
+    caplog.set_level(logging.INFO, logger="eolab_app.rendering.render_queue")
+
+    async def scenario() -> None:
+        """Exercise waiting, rejection, cancellation and a completed cache hit."""
+        queue = GeoServerRenderQueue(1, capacity=1)
+        starts: list[str] = []
+        first = ControlledRender("first", starts)
+        second = ControlledRender("second", starts)
+        active = asyncio.create_task(queue.run(first, tile_key="direct:abc"))
+        await first.started.wait()
+        waiting = asyncio.create_task(queue.run(second, tile_key="direct:abc"))
+        await asyncio.sleep(0)
+        with pytest.raises(RenderQueueUnavailableError, match="busy"):
+            await queue.run(second, tile_key="direct:abc")
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        active.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert not first.cancelled
+        first.release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        async def cache_hit() -> httpx2.Response:
+            """Return a completed upstream cache hit.
+
+            Returns:
+                PNG response with its GeoWebCache result header.
+            """
+            return httpx2.Response(200, headers={"geowebcache-cache-result": "HIT"})
+
+        await queue.run(cache_hit, tile_key="direct:abc")
+        await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
+    events = [
+        json.loads(record.getMessage().removeprefix("render_queue "))
+        for record in caplog.records
+        if record.name == "eolab_app.rendering.render_queue"
+    ]
+    rejected = next(event for event in events if event["event"] == "full")
+    assert (rejected["waiting"], rejected["running"], rejected["same_tile"]) == (
+        1,
+        1,
+        2,
+    )
+    assert any(event["event"] == "canceled_queued" for event in events)
+    assert any(event["event"] == "canceled_running" for event in events)
+    finished = [event for event in events if event["event"] == "finished"]
+    assert len(finished) == 2
+    assert finished[0]["caller_canceled"] is True
+    assert finished[1]["cache"] == "HIT"
+    assert finished[1]["same_tile"] == 0
+    assert all(
+        event["wait_seconds"] >= 0 and event["upstream_seconds"] >= 0
+        for event in finished
+    )
+
 
 from eolab_app.rendering.render_queue import (
     GeoServerRenderQueue,
