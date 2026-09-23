@@ -11,6 +11,7 @@ export class AnnotationMapEditor {
      * @param {Object} options Editor dependencies and intent callbacks.
      * @param {Object} options.leaflet Leaflet namespace.
      * @param {Object} options.map Leaflet map.
+     * @param {import("./polygon-label-layout.js").PolygonLabelLayout} options.labelLayout Map-local annotation label placement.
      * @param {(point:number[])=>void} options.onAdd Add a longitude/latitude vertex.
      * @param {(index:number,point:number[])=>void} options.onInsert Insert a vertex before the index.
      * @param {(index:number,point:number[])=>void} options.onMove Move a vertex.
@@ -21,7 +22,7 @@ export class AnnotationMapEditor {
      * @param {()=>void} options.onDrawAnother Start another polygon in the completed polygon's layer.
      * @param {()=>void} options.onDone Close completion without undoing the polygon.
      */
-    constructor({ leaflet, map, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onTextChange, onDrawAnother, onDone }) {
+    constructor({ leaflet, map, labelLayout, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onTextChange, onDrawAnother, onDone }) {
         this.leaflet = leaflet;
         this.map = map;
         this.onInsert = onInsert;
@@ -35,6 +36,8 @@ export class AnnotationMapEditor {
         this.suppressClick = false;
         this.vertexMarkers = [];
         this.drawing = leaflet.layerGroup();
+        this.labelLayout = labelLayout;
+        labelLayout.register(this, () => this.drawing.getLayers().filter(layer => layer.getTooltip?.()), true);
         this.document = map.getContainer().ownerDocument;
         this.strip = this.document.createElement("section");
         this.strip.className = "annotation-editor-strip";
@@ -164,6 +167,7 @@ export class AnnotationMapEditor {
         this.map.getContainer().classList.toggle("is-editing-annotation", !!draft);
         this.clearEdgePreview();
         this.drawing.clearLayers();
+        this.labelLayout.schedule();
         this.vertexMarkers = [];
         this.error.textContent = message;
         if (!draft) {
@@ -242,6 +246,7 @@ export class AnnotationMapEditor {
                     }
                 }
             });
+            this.labelLayout.schedule();
         });
         marker.on("dragend", () => {
             const position = marker.getLatLng();
@@ -310,6 +315,7 @@ export class AnnotationMapEditor {
         this.draft.polygon.vertices = positions.map(point => [point.lng, point.lat]);
         drag.shape.setLatLngs(positions);
         updatePolygonLabel(drag.shape, this.draft.polygon, this.style, this.document, "tooltipPane");
+        this.labelLayout.schedule();
         positions.forEach((point, index) => this.vertexMarkers[index].setLatLng(point));
     }
 
@@ -424,6 +430,7 @@ export class AnnotationMapEditor {
     /** Release map listeners, draft markers and editing-mode presentation. @return {void} */
     destroy() {
         this.render(null);
+        this.labelLayout.unregister(this);
         this.map.off("click", this.click);
         this.map.off("movestart zoomstart", this.clearPreview);
         this.map.getContainer().removeEventListener("pointermove", this.previewEdge);

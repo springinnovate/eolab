@@ -25,8 +25,24 @@ function setup() {
             bindTooltip(content) { this.tooltip = { getContent: () => content, setLatLng(position) { this.position = position; }, update() {} }; },
             unbindTooltip() { this.tooltip = undefined; } }) };
     const map = { getPane: element, getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {} };
-    return { annotation, members, rendering: createAnnotationLeafletLayer(leaflet, map, annotation) };
+    const labelLayout = { register(owner, polygons) { this.polygons = polygons; this.owner = owner; },
+        schedule() { this.scheduled = true; }, unregister(owner) { assert.equal(owner, this.owner); this.released = true; } };
+    return { annotation, members, labelLayout, rendering: createAnnotationLeafletLayer(leaflet, map, annotation, labelLayout) };
 }
+
+test("label layout sees filtered, visible saved polygons and releases removed renderers", () => {
+    const { annotation, members, labelLayout, rendering } = setup();
+    assert.deepEqual(labelLayout.polygons(), [...members]);
+    rendering.setOpacity(0);
+    assert.deepEqual(labelLayout.polygons(), []);
+    rendering.setOpacity(0.5);
+    assert.deepEqual(labelLayout.polygons(), [...members]);
+    annotation.filter = "absent";
+    rendering.refresh();
+    assert.deepEqual(labelLayout.polygons(), []);
+    rendering.release();
+    assert.equal(labelLayout.released, true);
+});
 
 test("each polygon uses its contributor's color while opacity and outlines remain layer settings", () => {
     const { annotation, members, rendering } = setup();

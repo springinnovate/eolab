@@ -6,6 +6,7 @@ import { AnnotationStorage } from "./storage.js";
 import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
+import { PolygonLabelLayout } from "./polygon-label-layout.js";
 
 /** Own local layers, isolated polygon drafts, annotation controls and autosave. */
 export class AnnotationController {
@@ -77,7 +78,8 @@ export class AnnotationController {
         this.retryButton.addEventListener("click", () => this.save());
         this.beforeUnload = event => { if (this.dirty || this.model.draft) { event.preventDefault(); event.returnValue = ""; } };
         globalThis.addEventListener?.("beforeunload", this.beforeUnload);
-        this.editor = new AnnotationMapEditor({ leaflet, map,
+        this.labelLayout = new PolygonLabelLayout(map);
+        this.editor = new AnnotationMapEditor({ leaflet, map, labelLayout: this.labelLayout,
             onAdd: point => this.perform(() => { this.model.addVertex(point); this.renderEditor(); }),
             onInsert: (index, point) => this.perform(() => {
                 this.model.addVertex(point, index);
@@ -311,7 +313,7 @@ export class AnnotationController {
         this.controls.set(layer.id, controls);
         const displayLayer = Object.create(layer);
         Object.defineProperty(displayLayer, "polygons", { get: () => this.displayLayer(layer).polygons });
-        const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer);
+        const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer, this.labelLayout);
         this.layers.set(layer.id, rendering);
         const adapter = {
             createState: () => layer,

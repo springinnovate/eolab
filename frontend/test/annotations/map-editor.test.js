@@ -16,7 +16,8 @@ test("completion selects the name and forwards text, repeat, Done and Escape wit
     const map = { getContainer: () => mapElement, on() {} };
     const leaflet = { layerGroup: () => ({}), DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} } };
     const calls = [];
-    const editor = new AnnotationMapEditor({ leaflet, map,
+    const labelLayout = { register(owner, polygons, editing) { assert.equal(editing, true); } };
+    const editor = new AnnotationMapEditor({ leaflet, map, labelLayout,
         onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onSave() { calls.push("save"); }, onCancel() {},
         onTextChange: (...text) => calls.push(text), onDrawAnother: () => calls.push("another"), onDone: () => calls.push("done"),
     });
@@ -70,6 +71,7 @@ function setup(mapDragging = true) {
         hasPointerCapture: id => captured === id,
         releasePointerCapture: () => { captured = null; } };
     const editor = Object.create(AnnotationMapEditor.prototype);
+    editor.labelLayout = { schedule() {} };
     editor.draft = model.draft;
     editor.polygonDrag = null;
     editor.map = { getZoom: () => 5,
