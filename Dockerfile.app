@@ -29,6 +29,7 @@ RUN npm ci
 COPY frontend/ ./
 # Shared with backend validation tests; needed when CI tests this build stage.
 COPY tests/fixtures/saved-map-v1.json /build/tests/fixtures/saved-map-v1.json
+COPY tests/fixtures/saved-map-v2.json /build/tests/fixtures/saved-map-v2.json
 RUN npm run build \
     && (node --version; npm --version) > /frontend-build-versions.txt
 

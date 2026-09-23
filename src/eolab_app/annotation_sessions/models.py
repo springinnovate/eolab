@@ -181,6 +181,18 @@ class SessionSnapshot(SessionSummary):
     layers: list[SharedLayerSummary]
 
 
+class InvitationSnapshot(SessionSummary):
+    """Live layer metadata visible through an invitation, without creating membership.
+
+    contributorId identifies this browser's existing membership, or is null when
+    the visitor must supply a name before contributing. It grants no edit rights.
+    """
+
+    contributorId: UUID | None
+    contributors: list[ContributorSummary]
+    layers: list[SharedLayerSummary]
+
+
 class SharedLayerContents(SessionInput):
     """One shared GeoJSON collection with the revision required for subsequent writes."""
 

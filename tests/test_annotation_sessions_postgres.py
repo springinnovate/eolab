@@ -18,6 +18,89 @@ BASE = "/api/annotation-sessions"
 HEADERS = {"X-EOLab-Annotations": "1"}
 
 
+def test_map_invitation_reads_live_layers_without_granting_write_access(
+    store: AnnotationSessionStore,
+) -> None:
+    """Invitations allow live reads; cookie membership alone grants own-contribution writes.
+
+    Args:
+        store: Isolated real PostgreSQL session store.
+    """
+    app = FastAPI()
+    app.include_router(create_annotation_sessions_router(store))
+    author = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    visitor = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    session = author.post(
+        BASE, json={"name": "Saved map layer", "contributorName": "Author"}
+    ).json()
+    path = f"{BASE}/{session['id']}"
+    invitation = f"{BASE}/invitations/{session['id']}/{session['joinCode']}"
+    upload = {"revision": 0, "collection": collection()}
+    assert author.put(path + f"/layers/{session['id']}", json=upload).status_code == 200
+    snapshot = visitor.get(invitation)
+    assert snapshot.status_code == 200
+    assert snapshot.json()["contributorId"] is None
+    assert len(snapshot.json()["contributors"]) == 1
+    assert visitor.get(BASE).json() == [], "reading must not create membership"
+    contribution = f"/contributors/{session['contributorId']}/layers/{session['id']}"
+    first = visitor.get(invitation + contribution).json()
+    assert first["revision"] == 1
+    assert visitor.get(path).status_code == 404
+    assert visitor.get(path + contribution).status_code == 404
+    assert (
+        visitor.put(path + f"/layers/{session['id']}", json=upload).status_code == 404
+    )
+    assert visitor.patch(path + "/color", json={"color": "#123456"}).status_code == 404
+    bad_code = "AAAAAAAA" if session["joinCode"] != "AAAAAAAA" else "BBBBBBBB"
+    assert (
+        visitor.get(f"{BASE}/invitations/{session['id']}/{bad_code}").status_code == 404
+    )
+    assert (
+        visitor.get(f"{BASE}/invitations/{uuid4()}/{session['joinCode']}").status_code
+        == 404
+    )
+    updated = collection()
+    updated["features"][0]["properties"]["note"] = "Live update"
+    author.put(
+        path + f"/layers/{session['id']}", json={"revision": 1, "collection": updated}
+    )
+    assert (
+        visitor.get(invitation + contribution).json()["collection"]["features"][0][
+            "properties"
+        ]
+        == updated["features"][0]["properties"]
+    )
+    assert visitor.get(invitation).json()["layers"][0]["revision"] == 2
+    assert author.get(invitation).json()["contributorId"] == session["contributorId"]
+    assert (
+        visitor.post(
+            BASE + "/join",
+            json={"joinCode": session["joinCode"], "contributorName": "Author"},
+        ).status_code
+        == 409
+    )
+    joined = visitor.post(
+        BASE + "/join",
+        json={"joinCode": session["joinCode"], "contributorName": "Visitor"},
+    ).json()
+    assert joined["contributorId"] != session["contributorId"]
+    assert visitor.get(invitation).json()["contributorId"] == joined["contributorId"]
+    assert (
+        visitor.put(path + f"/layers/{session['id']}", json=upload).status_code == 200
+    )
+    assert (
+        author.get(path + contribution).json()["collection"]["features"][0][
+            "properties"
+        ]
+        == updated["features"][0]["properties"]
+    )
+    other = author.post(
+        BASE, json={"name": "Other layer", "contributorName": "Author"}
+    ).json()
+    other_contribution = f"/contributors/{other['contributorId']}/layers/{other['id']}"
+    assert visitor.get(invitation + other_contribution).status_code == 404
+
+
 def test_contributor_colors_are_shared_owned_and_persistent(
     store: AnnotationSessionStore,
 ) -> None:

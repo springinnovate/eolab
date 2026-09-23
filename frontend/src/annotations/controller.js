@@ -22,9 +22,10 @@ export class AnnotationController {
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
      * @param {(id:string,color:string)=>void} [options.onColor] Save this contributor's shared polygon color through composition.
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
+     * @param {(id:string)=>boolean} [options.requestEditing] Permit editing or open the owning membership prompt.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -34,6 +35,7 @@ export class AnnotationController {
         this.onColor = onColor;
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
+        this.requestEditing = requestEditing;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
         /** @type {{layerId:string,polygonId:string}|null} Newly added polygon being named. */
@@ -103,13 +105,15 @@ export class AnnotationController {
 
     /**
      * Restore local layers without opening their editor; reveal the panel if loading fails.
+     * @param {Object} [options] Startup presentation policy.
+     * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them stored but off the shared map.
      * @return {Promise<void>} Completion, including a visible storage error if needed.
      */
-    async load() {
+    async load({ attachSavedLayers = true } = {}) {
         try {
             this.model.layers = await this.storage.load();
             this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
-            for (const layer of [...this.model.layers].reverse()) this.attachLayer(layer);
+            if (attachSavedLayers) for (const layer of [...this.model.layers].reverse()) this.attachLayer(layer);
             this.loaded = true;
             this.importButton.disabled = false;
             this.status.textContent = "";
@@ -122,17 +126,40 @@ export class AnnotationController {
     /** Restore your server contribution as a local editable layer after joining.
      * @param {string} name Shared layer name.
      * @param {Object} collection Server-validated GeoJSON belonging to this contributor.
+     * @param {Object} [options] Existing contribution restoration options.
+     * @param {string|null} [options.localId=null] Reuse this device layer when present.
+     * @param {boolean} [options.replacePolygons=false] Replace a visitor's empty collection after authenticated joining.
      * @return {Promise<string>} Local layer ID after successful device persistence.
      * @throws {Error} If geometry, capacity or device persistence prevents restoration.
      */
-    async restoreSharedContribution(name, collection) {
+    async restoreSharedContribution(name, collection, { localId = null, replacePolygons = false } = {}) {
         if (!this.loaded) throw new Error("Local annotations are not available yet.");
         const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
-        const layer = this.model.importLayer({ ...imported, name });
-        this.attachLayer(layer);
+        const existing = this.model.layers.find(layer => layer.id === localId);
+        const layer = existing ?? this.model.importLayer({ ...imported, name });
+        if (existing && replacePolygons) layer.polygons = imported.polygons;
+        layer.name = name;
+        if (!this.layers.has(layer.id)) this.attachLayer(layer);
+        else this.refreshLayer(layer.id);
         await this.save();
         if (this.dirty) throw new Error(this.status.textContent);
         return layer.id;
+    }
+
+    /** Apply a saved map's local appearance without changing polygons or shared colors.
+     * @param {string} id Local annotation layer identifier.
+     * @param {Object} savedLayer Validated portable visibility, opacity and appearance.
+     * @return {string} Retained map-layer key.
+     */
+    restoreMapAppearance(id, savedLayer) {
+        const layer = this.model.layers.find(layer => layer.id === id);
+        Object.assign(layer.style, savedLayer.appearance);
+        const key = `local:annotation:${id}`;
+        this.mapLayers.setVisible(key, savedLayer.visible);
+        this.mapLayers.setOpacity(key, savedLayer.opacity);
+        this.refreshLayer(id);
+        void this.save();
+        return key;
     }
 
     /** Combine committed polygons and apply the shared colors without changing ownership.
@@ -405,7 +432,7 @@ export class AnnotationController {
      * @return {Object[]} Layer identities, fields and polygon snapshots.
      */
     summaryTargets() {
-        return this.model.layers.map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, this.displayLayer(layer)));
+        return this.model.layers.filter(layer => this.layers.has(layer.id)).map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, this.displayLayer(layer)));
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.
@@ -443,6 +470,7 @@ export class AnnotationController {
      * @return {void}
      */
     beginPolygon(layerId, polygonId = null) {
+        if (this.requestEditing && !this.requestEditing(layerId)) return;
         this.perform(() => {
             this.model.beginPolygon(layerId, polygonId);
             this.closePolygonCompletion();
@@ -574,14 +602,22 @@ export class AnnotationController {
      * Restore each annotation's saved position among all loaded layers without changing Catalog order.
      * Composition calls this after both independent startup loads settle. Missing Catalog layers
      * shorten the stack; annotation positions then stop at its end, retaining their relative order.
+     * @param {Object} [options] Startup order policy.
+     * @param {boolean} [options.useSavedPositions=true] Restore device positions; false retains the portable map's order.
      * @return {void}
      */
-    restoreLayerOrder() {
+    restoreLayerOrder({ useSavedPositions = true } = {}) {
         if (!this.loaded || this.orderRestored) return;
-        const annotationKeys = new Set(this.model.layers.map(layer => `local:annotation:${layer.id}`));
+        if (!useSavedPositions) {
+            this.orderRestored = true;
+            this.observeLayerOrder(this.mapLayers.snapshots());
+            return;
+        }
+        const attached = this.model.layers.filter(layer => this.layers.has(layer.id));
+        const annotationKeys = new Set(attached.map(layer => `local:annotation:${layer.id}`));
         const keys = this.mapLayers.snapshots().map(layer => layer.key).filter(key => !annotationKeys.has(key));
         let nextIndex = 0;
-        for (const layer of [...this.model.layers].sort((a, b) => a.position - b.position)) {
+        for (const layer of [...attached].sort((a, b) => a.position - b.position)) {
             const index = Math.min(keys.length, Math.max(nextIndex, layer.position));
             keys.splice(index, 0, `local:annotation:${layer.id}`);
             nextIndex = index + 1;
@@ -601,10 +637,11 @@ export class AnnotationController {
     observeLayerOrder(snapshots, explicitReorder = false) {
         if (!this.loaded || (!this.orderRestored && !explicitReorder)) return;
         const positions = new Map(snapshots.map((layer, index) => [layer.key, index]));
-        const order = [...this.model.layers].sort((a, b) => positions.get(`local:annotation:${a.id}`) - positions.get(`local:annotation:${b.id}`));
+        const order = [...this.model.layers].sort((a, b) => (positions.get(`local:annotation:${a.id}`) ?? a.position) - (positions.get(`local:annotation:${b.id}`) ?? b.position));
         let changed = order.some((layer, index) => layer !== this.model.layers[index]);
         for (const layer of order) {
             const position = positions.get(`local:annotation:${layer.id}`);
+            if (position === undefined) continue;
             if (position !== layer.position) { layer.position = position; changed = true; }
         }
         if (changed) {

@@ -1028,11 +1028,21 @@ async function initializeCatalog(
             zoom: appGlobalConfiguration.initialView.zoom,
         },
         beforeRestore: clearCatalogSelection,
+        exportAnnotation: record => {
+            const sharedAnnotation = annotationSessions?.getMapReference(record.state.id);
+            if (!sharedAnnotation) return null;
+            const { outline, weight, fillOpacity, labels, notes } = record.adapter.exportSavedState(record).style;
+            return { sharedAnnotation, visible: record.entry.visible, opacity: record.entry.opacity,
+                appearance: { outline, weight, fillOpacity, labels, notes } };
+        },
+        restoreAnnotation: async (layer, isCurrent) => {
+            const id = await annotationSessions.openMapReference(layer.sharedAnnotation, isCurrent);
+            return id && isCurrent() ? annotations.restoreMapAppearance(id, layer) : null;
+        },
     });
     leafletMap.on("moveend", () =>
         savedMapViewController?.scheduleRemember()
     );
-    const startupMapRestore = savedMapViewController.restoreStartupView(globalThis.location.hash);
     const rasterAreaSeries = new RasterSeriesCalculations({ api: processingApi, requests: calculationRequests });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
@@ -1184,7 +1194,7 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
-    if (!isSharedViewer) {
+    {
         const annotationPanel = new AnnotationPanelView({ document,
             onOpen: () => mapInspection.showAnnotations(),
             onClose: () => mapInspection.hideAnnotations() });
@@ -1195,6 +1205,7 @@ async function initializeCatalog(
             mapLayers: mapLayerController,
             onShare: id => annotationSessions.shareLayer(id),
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
+            requestEditing: id => annotationSessions.requestDrawing(id),
             onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
             onFilter: key => vectorFilterControls.open(key),
             onEditingChange: editing => {
@@ -1206,17 +1217,22 @@ async function initializeCatalog(
         });
         annotationSessions = new AnnotationSessionsController({
             document,
-            createLayer: (name, collection) => annotations.restoreSharedContribution(name, collection),
+            createLayer: (name, collection, options) => annotations.restoreSharedContribution(name, collection, options),
             revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
+            drawAfterJoining: id => annotations.beginPolygon(id),
             getLayers: () => annotations.sharableLayers(),
             present: (id, data) => {
                 if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
-        const startupAnnotations = annotations.load();
-        void startupAnnotations.then(() => { summarySampling.refresh(); return annotationSessions.start(); });
-        // Local editing remains available independently of Catalog loading; only order restoration waits.
-        void Promise.allSettled([startupMapRestore, startupAnnotations]).then(() => annotations.restoreLayerOrder());
+        const startupAnnotations = annotations.load({ attachSavedLayers: !isSharedViewer });
+        void startupAnnotations.then(async () => {
+            summarySampling.refresh();
+            await annotationSessions.start({ restoreBindings: !isSharedViewer, refreshImmediately: false });
+            await savedMapViewController.restoreStartupView(globalThis.location.hash);
+            annotations.restoreLayerOrder({ useSavedPositions: !globalThis.location.hash });
+            void annotationSessions.refresh();
+        });
     }
     leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);

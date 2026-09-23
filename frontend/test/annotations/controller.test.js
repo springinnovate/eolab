@@ -11,7 +11,7 @@ import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
-        model: new AnnotationModel(), loaded: true, dirty: false, saving: false, pendingSave: false,
+        model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },
@@ -20,6 +20,24 @@ function controller() {
     });
     return annotations;
 }
+
+test("shared viewer keeps private layers stored but never attaches or exposes them as summary targets", async () => {
+    const annotations = controller();
+    const privateLayer = annotations.model.createLayer("Private notes");
+    privateLayer.name = "Private notes";
+    const original = annotations.model.document();
+    const attached = [];
+    annotations.storage.load = async () => structuredClone(original.layers);
+    annotations.attachLayer = layer => { attached.push(layer.id); annotations.layers.set(layer.id, {}); };
+    await annotations.load({ attachSavedLayers: false });
+    assert.deepEqual(attached, []);
+    assert.deepEqual(annotations.summaryTargets(), []);
+    await annotations.restoreSharedContribution("Included shared layer", { type: "FeatureCollection", features: [] });
+    assert.equal(attached.length, 1);
+    assert.equal(annotations.model.layer(privateLayer.id).name, "Private notes");
+    assert.equal(annotations.sharableLayers().some(layer => layer.id === privateLayer.id), true, "private data is retained during saves");
+    assert.equal(annotations.summaryTargets().length, 1);
+});
 
 /** Connect the drawing lifecycle to the real model and recorded presentation/save boundaries.
  * @return {Object} Controller, layer and observed UI transitions.

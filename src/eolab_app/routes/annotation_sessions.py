@@ -11,13 +11,14 @@ from typing import Annotated, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
 from eolab_app.annotation_sessions.models import (
     SessionSummary,
     SessionSnapshot,
+    InvitationSnapshot,
     SharedLayerContents,
     CreateSession,
     ContributorProfile,
@@ -345,6 +346,63 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
             headers={
                 "Content-Disposition": 'attachment; filename="shared-annotations.geojson"'
             },
+        )
+
+    @router.get(
+        "/invitations/{session_id}/{join_code}", response_model=InvitationSnapshot
+    )
+    def view_invited_layer(
+        session_id: UUID,
+        join_code: Annotated[str, Path(pattern=r"^[A-Z2-9]{8}$")],
+        browser: Annotated[str, Depends(browser_identity)],
+    ) -> dict[str, Any]:
+        """Read live contributor and revision metadata without joining the layer.
+
+        Args:
+            session_id: Shared layer referenced by the map.
+            join_code: Invitation belonging to that same layer.
+            browser: Private cookie hash for recognizing an existing contributor.
+
+        Returns:
+            Current metadata and this browser's existing contributor ID, if any.
+
+        Raises:
+            SessionError: If the invitation is invalid or storage is unavailable.
+        """
+        return store.get_session_snapshot(session_id, browser, join_code=join_code)
+
+    @router.get(
+        "/invitations/{session_id}/{join_code}/contributors/{contributor_id}/layers/{layer_id}",
+        response_model=SharedLayerContents,
+    )
+    def read_invited_contribution(
+        session_id: UUID,
+        join_code: Annotated[str, Path(pattern=r"^[A-Z2-9]{8}$")],
+        contributor_id: UUID,
+        layer_id: UUID,
+        browser: Annotated[str, Depends(browser_identity)],
+    ) -> dict[str, Any]:
+        """Read one current contribution through the map's layer invitation.
+
+        Args:
+            session_id: Layer referenced by the map.
+            join_code: Invitation for that layer, not an edit credential.
+            contributor_id: Author of the requested polygons.
+            layer_id: Contribution's layer identifier.
+            browser: Private browser-cookie hash.
+
+        Returns:
+            Validated polygon collection and its revision.
+
+        Raises:
+            SessionError: If the invitation or requested contribution is unavailable.
+        """
+        return store.read_shared_layer(
+            session_id,
+            browser,
+            contributor_id,
+            layer_id,
+            join_code=join_code,
         )
 
     return router

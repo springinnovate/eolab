@@ -194,6 +194,7 @@ export class AnnotationLayerControls {
      * @return {void}
      */
     setCollaboration(data, polygons) {
+        this.sharedAppearance.hidden = data.canContribute === false;
         if (!this.collaborating) {
             this.collaborating = true;
             this.appearance.classList.add("has-shared-color");
