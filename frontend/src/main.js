@@ -51,9 +51,11 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
+    observeMapViewportSize,
     getCatalogItemMapBounds,
     formatSingleWorldPosition
 } from "./map.js";
+import { addMapCoordinateGuide } from "./map-coordinate-guide.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
@@ -176,15 +178,25 @@ async function loadAppGlobalConfiguration() {
 }
 
 /**
- * Creates the Leaflet map from the application settings.
+ * Create the map, coordinate guide and viewport resize observation.
+ * Place map controls inside that viewport so docked panels cannot cover them.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @return {L.Map} The initialized Leaflet map.
  */
 function initializeMap(appGlobalConfiguration) {
     const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
+    observeMapViewportSize(leafletMap);
+    addMapCoordinateGuide(L, leafletMap);
+
+    // These presentation controls follow the map's allocated viewport.
+    leafletMap.getContainer().append(document.querySelector(".map-tool-openers"));
+    L.DomEvent.disableClickPropagation(document.querySelector(".map-tool-openers"));
+    L.DomEvent.disableScrollPropagation(document.querySelector(".map-tool-openers"));
+    L.DomEvent.on(document.querySelector(".map-tool-openers"), "keydown", L.DomEvent.stopPropagation);
 
     const mapPositionElement = document.querySelector("#map-position");
+    leafletMap.getContainer().append(mapPositionElement);
 
     /**
      * Displays a geographic position reported by Leaflet.

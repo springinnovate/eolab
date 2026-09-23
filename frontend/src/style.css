@@ -91,7 +91,7 @@ select:hover:not(:disabled) {
 
 #map {
   position: absolute;
-  inset: var(--workspace-edge) var(--workspace-edge) var(--workspace-edge)
+  inset: var(--workspace-edge) calc(var(--workspace-edge) + var(--inspection-space)) var(--workspace-edge)
     calc(
       var(--active-workspace-width) + var(--workspace-edge) +
         var(--workspace-gap)
@@ -2233,6 +2233,8 @@ h5 {
  */
 
 #app {
+  --inspection-width: 420px;
+  --inspection-space: 0px;
   --workspace-sidebar-width: clamp(340px, 27vw, 420px);
   --workspace-column-rail-width: 44px;
   --workspace-catalog-region-width: clamp(340px, 27vw, 420px);
@@ -2243,7 +2245,7 @@ h5 {
   --workspace-catalog-track: var(--workspace-column-rail-width);
   --workspace-map-layers-track: var(--workspace-column-rail-width);
   --workspace-maximum-width: calc(
-    100vw - 420px - var(--workspace-edge) - var(--workspace-edge) -
+    100vw - 320px - var(--inspection-space) - var(--workspace-edge) - var(--workspace-edge) -
       var(--workspace-gap)
   );
   --active-workspace-width: clamp(
@@ -3601,11 +3603,11 @@ article.raster-histogram-summary {
   inset: 16px 20px 16px auto;
   display: flex;
   height: calc(100dvh - 32px);
-  max-height: min(calc(100dvh - 32px), var(--map-inspection-available-height, 100dvh));
+  max-height: calc(100dvh - 32px);
   flex-direction: column;
   gap: 8px;
   margin: 0;
-  width: min(420px, calc(100vw - 32px));
+  width: min(var(--inspection-width), calc(100vw - 32px));
   border: 0;
   padding: 0;
   background: transparent;
@@ -3615,12 +3617,19 @@ article.raster-histogram-summary {
   pointer-events: none;
 }
 
-#map-inspection[data-active-tool="time-series"],
-#map-inspection[data-active-tool="feature-profile"] {
-  width: min(580px, calc(100vw - 32px));
+#app:has(#map-inspection[data-active-tool="time-series"]),
+#app:has(#map-inspection[data-active-tool="feature-profile"]) {
+  --inspection-width: min(580px, calc(100vw - 744px));
 }
 
-#map-inspection[data-minimized="true"] {
+#app:has(#map-inspection:popover-open[data-minimized="false"] .map-inspection-panels:not([hidden])) {
+  --inspection-space: calc(var(--inspection-width) + var(--workspace-gap));
+}
+
+#map-inspection[data-minimized="true"],
+#map-inspection:has(.map-inspection-panels[hidden]) {
+  top: 42px;
+  right: 85px;
   inset-block-end: auto;
   height: auto;
   max-height: none;
@@ -4597,19 +4606,30 @@ summary:hover > .raster-disclosure-chevron {
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
 
-/* Kept with the late-defined map-inspection component so it wins by source order. */
-@media (max-width: 699px) {
-  #map-inspection {
-    inset: 8px;
-    width: auto;
-    height: calc(100dvh - 16px);
-    max-height: min(calc(100dvh - 16px), var(--map-inspection-available-height, 100dvh));
+/* Small screens dock tools below the map instead of covering its edge. */
+@media (max-width: 1199px) {
+  #app { --inspection-space: 0px; }
+  #app:has(#map-inspection:popover-open[data-minimized="false"] .map-inspection-panels:not([hidden])) {
+    --inspection-space: 45dvh;
   }
-
-  #map-inspection[data-minimized="true"] {
-    inset-block-end: auto;
+  #map, #app.is-control-panel-collapsed #map {
+    inset: 0 0 var(--inspection-space);
+  }
+  #map-inspection {
+    inset: auto 8px 8px;
+    width: auto;
+    height: calc(45dvh - 16px);
+    max-height: calc(45dvh - 16px);
+  }
+  #map-inspection[data-minimized="true"],
+  #map-inspection:has(.map-inspection-panels[hidden]) {
+    inset: 30px 65px auto auto;
+    width: min(420px, calc(100vw - 130px));
     height: auto;
     max-height: none;
+  }
+  #app:has(#map-inspection:popover-open) .panel-opener {
+    inset: 90px auto auto 75px;
   }
 }
 
@@ -4741,7 +4761,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .eolab-basemap-control {
-  max-width: min(230px, calc(100vw - 40px), var(--basemap-max-width, 230px));
+  max-width: 230px;
   padding: 8px 10px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -4749,10 +4769,40 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--text-1);
   box-shadow: var(--elevation-control);
 }
-.leaflet-right .eolab-basemap-control { margin-right: var(--basemap-right-gap, 10px); }
 .eolab-basemap-control label { display: grid; gap: 4px; margin: 0; }
 .eolab-basemap-control label > span { font-size: 0.7rem; font-weight: 600; }
 .eolab-basemap-control select { width: 100%; min-width: 0; font-size: 0.8rem; padding: 4px; }
 .eolab-basemap-control p { max-width: 200px; margin: 6px 0 0; font-size: 0.75rem; }
 .eolab-basemap-control p[hidden] { display: none; }
 .eolab-maptiler-logo { vertical-align: middle; }
+
+/* Coordinate guide is a map-owned overlay; its marks never capture input. */
+.map-coordinate-guide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 450;
+  pointer-events: none;
+  overflow: hidden;
+  font: 11px/1 ui-monospace, monospace;
+}
+.coordinate-ticks line { stroke: var(--text-2); stroke-width: 1; }
+.coordinate-ticks text {
+  fill: var(--text-1);
+  paint-order: stroke;
+  stroke: rgb(255 255 255 / 90%);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.coordinate-crosshair line { stroke: rgb(30 65 90 / 45%); stroke-width: 1; stroke-dasharray: 3 4; }
+.coordinate-crosshair rect { fill: rgb(255 255 255 / 94%); }
+.coordinate-crosshair text { fill: #164d70; }
+.coordinate-guide-toggle { padding: 3px 6px; font-size: 0.75rem; }
+.coordinate-guide-toggle[aria-pressed="true"] { border-color: var(--brand); }
+.has-coordinate-guide .leaflet-bottom { bottom: 25px; }
+.has-coordinate-guide .leaflet-left { left: 65px; }
+.has-coordinate-guide .leaflet-right { right: 65px; }
+.has-coordinate-guide .map-tool-openers { top: 26px; right: 65px; max-width: calc(100% - 130px); }
+.has-coordinate-guide .leaflet-control-attribution { max-width: min(400px, 45vw); }
+.has-coordinate-guide .map-position { display: none; }
