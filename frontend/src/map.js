@@ -61,6 +61,7 @@ export function formatSingleWorldPosition(position) {
 
 /**
  * Create the application map and basemap without repeated world copies.
+ * Hide Leaflet branding while retaining active layers' attribution credits.
  *
  * @param {Object} leaflet Leaflet namespace.
  * @param {Object} appGlobalConfiguration Browser-safe application settings.
@@ -83,6 +84,7 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration, onBasemapR
         appGlobalConfiguration.initialView.zoom
     );
 
+    leafletMap.attributionControl.setPrefix(false);
     leaflet.control.zoom({ position: "bottomleft" }).addTo(leafletMap);
     onBasemapReady(addBasemapControl(leaflet, leafletMap, appGlobalConfiguration.basemap, SINGLE_WORLD_BOUNDS));
 

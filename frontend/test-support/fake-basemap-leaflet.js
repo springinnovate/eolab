@@ -10,6 +10,7 @@ export function createLeafletDouble() {
         layers: [], controls: [], stoppedClicks: [], stoppedScrolls: [] };
     const panes = new Map(), attached = new Set(), attributions = new Map();
     const leafletMap = {
+        attributionControl: { setPrefix(prefix) { calls.attributionPrefix = prefix; } },
         fire(type) { calls.event = type; },
         attached, attributions,
         setView(center, zoom) { calls.setView = { center, zoom }; return this; },
