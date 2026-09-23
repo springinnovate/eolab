@@ -1646,6 +1646,30 @@
       </form>
     </dialog>
 
+    <dialog id="publish-map-dialog" class="saved-map-view-dialog" aria-labelledby="publish-map-heading">
+      <form id="publish-map-form">
+        <h2 id="publish-map-heading">Create shared map</h2>
+        <fieldset id="publish-map-fields">
+          <label>Map title<input id="publish-map-title" required maxlength="160" autocomplete="off"></label>
+          <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
+          <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
+          <p id="publish-map-preview" class="publish-map-url"></p>
+          <p>Save this map's layers, styling and location. Shared annotations stay live. Published maps cannot be edited or deleted yet.</p>
+        </fieldset>
+        <div id="publish-map-result" hidden>
+          <label>Shared map link<input id="publish-map-url" readonly></label>
+          <div class="saved-map-view-dialog-actions">
+            <a id="publish-map-open" target="_blank" rel="noopener">Open shared map</a>
+            <button id="publish-map-copy" type="button" class="secondary-button">Copy link</button>
+          </div>
+        </div>
+        <p id="publish-map-status" role="status" aria-live="polite"></p>
+        <div class="saved-map-view-dialog-actions">
+          <button id="publish-map-submit" type="submit">Create shared map</button>
+          <button id="publish-map-close" type="button" class="secondary-button">Cancel</button>
+        </div>
+      </form>
+    </dialog>
     <script type="module" src="/src/main.js"></script>
 
   </body>

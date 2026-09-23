@@ -75,6 +75,24 @@ def test_create_retrieve_restart_and_http_errors(store: SavedMapStore) -> None:
         assert client.get(BASE + "/amazon-priorities").json() == original
 
 
+def test_subtitle_migration_preserves_existing_maps(store: SavedMapStore) -> None:
+    """Upgrade an existing saved-map table without changing its records.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    store.create_saved_map(CreateSavedMap.model_validate(map_request()))
+    with store.transaction() as cursor:
+        cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN subtitle")
+    store.initialize_schema()
+    assert store.get_saved_map("amazon-priorities").subtitle == ""
+    request = map_request("with-subtitle")
+    request["subtitle"] = "Explore habitat"
+    store.create_saved_map(CreateSavedMap.model_validate(request))
+    store.initialize_schema()
+    assert store.get_saved_map("with-subtitle").subtitle == "Explore habitat"
+
+
 def test_concurrent_duplicate_creation_preserves_winner(store: SavedMapStore) -> None:
     """Race two writers and verify that exactly one map is stored unchanged.
 

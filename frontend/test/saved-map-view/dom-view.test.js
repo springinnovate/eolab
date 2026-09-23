@@ -51,6 +51,9 @@ function viewFixture() {
       click() {
         for (const listener of [...(listeners.get("click") ?? [])]) listener();
       },
+      dispatch(type, event = {}) {
+        for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+      },
     };
   }
 
@@ -70,6 +73,9 @@ function viewFixture() {
     querySelector: (selector) => selectors.get(selector),
     createElement: () => element(),
   };
+  for (const name of ["dialog", "form", "fields", "title", "subtitle", "slug", "preview", "status", "submit", "close", "result", "url", "open", "copy"]) {
+    selectors.set(`#publish-map-${name}`, element());
+  }
   selectors.get("#undo-reset-map-view").hidden = true;
   return {
     elements: selectors,
@@ -81,6 +87,39 @@ function viewFixture() {
     }),
   };
 }
+
+test("publication dialog suggests editable names, keeps errors inline and exposes the canonical link", async () => {
+  const { view, elements } = viewFixture();
+  const el = name => elements.get(`#publish-map-${name}`);
+  let submitted;
+  view.bind({ onCopy() {}, onReset() {}, onUndo() {}, onPublish: fields => { submitted = fields; } });
+  view.showPublicationForm({ title: "Amazon priorities", subtitle: "Explore habitat" });
+  assert.equal(el("slug").value, "amazon-priorities");
+  el("title").value = "Peru & Brazil";
+  el("title").dispatch("input");
+  assert.equal(el("slug").value, "peru-brazil");
+  el("slug").value = "my-map";
+  el("slug").dispatch("input");
+  el("title").value = "New title";
+  el("title").dispatch("input");
+  assert.equal(el("slug").value, "my-map");
+  el("subtitle").value = "";
+  el("form").dispatch("submit", { preventDefault() {} });
+  assert.deepEqual(submitted, { title: "New title", subtitle: "", slug: "my-map" });
+  view.setPublicationBusy(true);
+  assert.equal(el("fields").disabled, true);
+  view.showPublicationError("Name already taken");
+  view.setPublicationBusy(false);
+  assert.equal(el("status").textContent, "Name already taken");
+  assert.equal(el("slug").value, "my-map");
+  view.showPublishedMap("my-map");
+  assert.equal(el("open").href, "https://viewer.example/maps/my-map");
+  assert.equal(el("fields").hidden, true);
+  assert.equal(el("result").hidden, false);
+  view.location.href = "https://viewer.example/maps/my-map?viewer=shared#private";
+  assert.deepEqual(await view.copyNamedMapLink("my-map"), { copied: false, url: "https://viewer.example/maps/my-map" });
+  view.unbind();
+});
 
 test("saved map URL keeps the viewer location and replaces its fragment", () => {
   assert.equal(

@@ -1,7 +1,7 @@
 /** Versioned, portable saved-map document validation and construction. */
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
-export const SAVED_MAP_VIEW_SCHEMA_VERSION = 2;
+export const SAVED_MAP_VIEW_SCHEMA_VERSION = 3;
 export const MAX_SAVED_MAP_VIEW_BYTES = 512 * 1024;
 export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 
@@ -32,6 +32,7 @@ export function createSavedMapView(candidate) {
     return validateSavedMapView({
         format: SAVED_MAP_VIEW_FORMAT,
         schemaVersion: SAVED_MAP_VIEW_SCHEMA_VERSION,
+        ...(!candidate.schemaVersion || candidate.schemaVersion === 3 ? { basemap: "detailed" } : {}),
         ...candidate,
     });
 }
@@ -106,19 +107,20 @@ export async function hashSavedMapSourceRevision(
  */
 function validateSavedMapView(candidate) {
     requirePlainObject(candidate, "Saved map");
+    if (![1, 2, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
+        throw new SavedMapViewValidationError(
+            `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
+        );
+    }
     requireExactKeys(
         candidate,
-        ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers"],
+        ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers",
+            ...(candidate.schemaVersion === 3 ? ["basemap"] : [])],
         "Saved map"
     );
     if (candidate.format !== SAVED_MAP_VIEW_FORMAT) {
         throw new SavedMapViewValidationError(
             "This content is not an EOLab saved map."
-        );
-    }
-    if (![1, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
-        throw new SavedMapViewValidationError(
-            `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
         );
     }
     requirePlainObject(candidate.viewer, "Viewer");
@@ -131,6 +133,9 @@ function validateSavedMapView(candidate) {
     const origin = validateOrigin(candidate.viewer.origin);
     const createdAt = validateTimestamp(candidate.createdAt);
     const viewport = validateViewport(candidate.viewport);
+    if (candidate.schemaVersion === 3 && !["detailed", "carto", "maptiler", "outlines", "none"].includes(candidate.basemap)) {
+        throw new SavedMapViewValidationError("Saved basemap provider is invalid.");
+    }
     if (!Array.isArray(candidate.layers)) {
         throw new SavedMapViewValidationError("Saved map layers must be a list.");
     }
@@ -165,6 +170,7 @@ function validateSavedMapView(candidate) {
         viewer: Object.freeze({ version, origin }),
         createdAt,
         viewport,
+        ...(candidate.schemaVersion === 3 ? { basemap: candidate.basemap } : {}),
         layers: Object.freeze(layers),
     });
 }

@@ -70,7 +70,7 @@ class SavedMapStore:
         """Store a new map without replacing an existing map with the same URL name.
 
         Args:
-            request: Validated title, URL name and map document.
+            request: Validated title, optional subtitle, URL name and map document.
 
         Returns:
             Stored map, including the database creation timestamp.
@@ -95,11 +95,12 @@ class SavedMapStore:
                     "This site's saved-map capacity is full. Contact the site administrator.",
                 )
             cursor.execute(
-                "INSERT INTO saved_maps.maps (slug, title, view) VALUES (%s, %s, %s) "
-                'RETURNING slug, title, view, created_at AS "createdAt"',
+                "INSERT INTO saved_maps.maps (slug, title, subtitle, view) VALUES (%s, %s, %s, %s) "
+                'RETURNING slug, title, subtitle, view, created_at AS "createdAt"',
                 (
                     request.slug,
                     request.title,
+                    request.subtitle,
                     Jsonb(request.view.model_dump(mode="json", exclude_unset=True)),
                 ),
             )
@@ -112,14 +113,14 @@ class SavedMapStore:
             slug: Validated lowercase URL name.
 
         Returns:
-            Stored title, map document and creation timestamp.
+            Stored title, subtitle, map document and creation timestamp.
 
         Raises:
             SavedMapError: If the map is absent or storage cannot be read.
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT slug, title, view, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s',
+                'SELECT slug, title, subtitle, view, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s',
                 (slug,),
             )
             row = cursor.fetchone()

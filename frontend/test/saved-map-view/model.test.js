@@ -64,7 +64,7 @@ test("saved map model round trips the versioned bounded contract", () => {
 
   assert.deepEqual(parsed, saved);
   assert.equal(parsed.format, "eolab-map-view");
-  assert.equal(parsed.schemaVersion, 2);
+  assert.equal(parsed.schemaVersion, 3);
   assert.equal(Object.isFrozen(parsed.layers), true);
 });
 
@@ -86,8 +86,8 @@ test("saved map model preserves more than two visible layers", () => {
 test("saved map model rejects incompatible, duplicate, and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
-    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 3 })),
-    /schema 3 is not supported/,
+    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 4 })),
+    /schema 4 is not supported/,
   );
 
   const duplicate = savedMapCandidate();

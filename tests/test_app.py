@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 
 from eolab_app.main import create_app
+import eolab_app.main as application_module
 from eolab_app.settings import load_settings
 from tests.app_support import (
     GeoServerPublicationMock,
@@ -22,6 +23,35 @@ from tests.app_support import (
     mounted_geotiff_item as _mounted_geotiff_item,
     write_geotiff as _write_geotiff,
 )
+
+
+def test_named_map_routes_serve_viewer_and_root_assets(
+    configured_environment: None,
+    version_file_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serve direct named URLs without interpreting the name as a file path.
+
+    Args:
+        configured_environment: Required application configuration.
+        version_file_path: Baked application version fixture.
+        tmp_path: Temporary application static directory.
+        monkeypatch: Redirect only the static directory used by the factory.
+    """
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text('<script src="/assets/app.js"></script>')
+    (static / "assets" / "app.js").write_text("// application")
+    monkeypatch.setattr(application_module, "__file__", str(tmp_path / "main.py"))
+    client = TestClient(create_app(version_file_path))
+    for path in ("/maps/amazon", "/maps/missing", "/maps/", "/maps/invalid/name"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "/assets/app.js" in response.text
+        assert response.headers["cache-control"] == "no-cache"
+    assert client.get("/assets/app.js").text == "// application"
+    assert client.get("/healthz").json()["status"] == "ok"
 
 
 def test_healthz(
