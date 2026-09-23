@@ -59,7 +59,7 @@ export class SavedMapApiClient {
      * @param {typeof fetch} [fetchImplementation] HTTP request implementation.
      */
     constructor(fetchImplementation = globalThis.fetch) {
-        this.fetch = fetchImplementation;
+        this.fetch = (url, options) => fetchImplementation(url, options);
     }
 
     /**

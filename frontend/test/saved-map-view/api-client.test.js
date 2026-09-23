@@ -10,6 +10,15 @@ const view = createSavedMapView({
 });
 const record = { slug: "amazon", title: "Amazon", subtitle: "Priorities", view };
 
+test("browser fetch is called without rebinding its receiver to the API client", async () => {
+  const client = new SavedMapApiClient(function (url) {
+    assert.equal(this, undefined);
+    assert.equal(url, "/api/saved-maps/amazon");
+    return Promise.resolve(new Response(JSON.stringify(record)));
+  });
+  assert.deepEqual(await client.get("amazon"), record);
+});
+
 test("publish and retrieve preserve headings and provider ID through the same-site API", async () => {
   const calls = [];
   const client = new SavedMapApiClient(async (url, options) => {
