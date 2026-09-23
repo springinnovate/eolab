@@ -125,6 +125,12 @@ import "./processing/summary-statistics.css";
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 
+/** Presentation mode only; API permissions and source authorization are unchanged.
+ * Shared links keep this query parameter when copied. Named-map loading is a later step.
+ * @type {boolean}
+ */
+const isSharedViewer = new URL(globalThis.location.href).searchParams.get("viewer") === "shared";
+
 /**
  * Browser-safe application settings loaded from the backend.
  *
@@ -742,7 +748,7 @@ async function initializeCatalog(
     let selectingMapClick = false;
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
-    const mapLayerStackView = new MapLayerStackView();
+    const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
     const mapRenderStatus = addMapRenderStatus(
         L, leafletMap, () => compositeLeafletRenderer.retryFailedTiles(),
     );
@@ -1012,7 +1018,8 @@ async function initializeCatalog(
         catalogItems: catalogItemClient,
         viewerVersion: appGlobalConfiguration.appVersion,
         viewerOrigin: globalThis.location.origin,
-        storage: new SavedMapViewLocalStorage(),
+        storage: isSharedViewer ? null : new SavedMapViewLocalStorage(),
+        restoreSharedMap: isSharedViewer,
         initialViewport: {
             center: {
                 latitude: appGlobalConfiguration.initialView.latitude,
@@ -1177,38 +1184,40 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
-    const annotationPanel = new AnnotationPanelView({ document,
-        onOpen: () => mapInspection.showAnnotations(),
-        onClose: () => mapInspection.hideAnnotations() });
-    annotations = new AnnotationController({
-        panel: annotationPanel,
-        leaflet: L,
-        map: leafletMap,
-        mapLayers: mapLayerController,
-        onShare: id => annotationSessions.shareLayer(id),
-        onColor: (id, color) => annotationSessions.setContributorColor(id, color),
-        onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
-        onFilter: key => vectorFilterControls.open(key),
-        onEditingChange: editing => {
-            mapInteractionMode = editing ? "layer-editing" : "inspection";
-            document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
-            rasterVisualization.setPointerInspectionEnabled(!editing);
-            onLayoutChange();
-        },
-    });
-    annotationSessions = new AnnotationSessionsController({
-        document,
-        createLayer: (name, collection) => annotations.restoreSharedContribution(name, collection),
-        revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
-        getLayers: () => annotations.sharableLayers(),
-        present: (id, data) => {
-            if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
-        },
-    });
-    const startupAnnotations = annotations.load();
-    void startupAnnotations.then(() => { summarySampling.refresh(); return annotationSessions.start(); });
-    // Local editing remains available independently of Catalog loading; only order restoration waits.
-    void Promise.allSettled([startupMapRestore, startupAnnotations]).then(() => annotations.restoreLayerOrder());
+    if (!isSharedViewer) {
+        const annotationPanel = new AnnotationPanelView({ document,
+            onOpen: () => mapInspection.showAnnotations(),
+            onClose: () => mapInspection.hideAnnotations() });
+        annotations = new AnnotationController({
+            panel: annotationPanel,
+            leaflet: L,
+            map: leafletMap,
+            mapLayers: mapLayerController,
+            onShare: id => annotationSessions.shareLayer(id),
+            onColor: (id, color) => annotationSessions.setContributorColor(id, color),
+            onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
+            onFilter: key => vectorFilterControls.open(key),
+            onEditingChange: editing => {
+                mapInteractionMode = editing ? "layer-editing" : "inspection";
+                document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
+                rasterVisualization.setPointerInspectionEnabled(!editing);
+                onLayoutChange();
+            },
+        });
+        annotationSessions = new AnnotationSessionsController({
+            document,
+            createLayer: (name, collection) => annotations.restoreSharedContribution(name, collection),
+            revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
+            getLayers: () => annotations.sharableLayers(),
+            present: (id, data) => {
+                if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
+            },
+        });
+        const startupAnnotations = annotations.load();
+        void startupAnnotations.then(() => { summarySampling.refresh(); return annotationSessions.start(); });
+        // Local editing remains available independently of Catalog loading; only order restoration waits.
+        void Promise.allSettled([startupMapRestore, startupAnnotations]).then(() => annotations.restoreLayerOrder());
+    }
     leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);
     document.querySelector("#open-analysis-tools").addEventListener(
@@ -1795,6 +1804,11 @@ async function initializeCatalog(
      */
     function inspectRetainedMapLayer(item) {
         if (item === null) return;
+        if (isSharedViewer) {
+            renderCatalogItemInspector(item, [], appGlobalConfiguration.scanDisplayPathPrefix);
+            catalogPaneControls.showInspector({ moveFocus: true, returnFocusTarget: document.activeElement });
+            return;
+        }
         onCatalogWorkspaceRequested();
         selectCatalogItem(item);
     }
@@ -1808,7 +1822,7 @@ async function initializeCatalog(
     catalogLayerToggle.addEventListener("click", () => {
         void toggleCatalogLayer(catalogState.selectedItem, { revealMapLayers: true });
     });
-    await loadCatalog(true);
+    if (!isSharedViewer) await loadCatalog(true);
     return loadCatalog.bind(null, true);
 }
 
@@ -1956,17 +1970,28 @@ async function startApplication() {
     let layoutController = null;
     const catalogPaneControls = initializeCatalogPaneControls(
         document,
-        () => layoutController?.notifyLayoutChange()
+        () => layoutController?.notifyLayoutChange(),
+        { detailsDialog: isSharedViewer ? document.querySelector("#shared-layer-details") : null }
     );
+    document.querySelector(".annotation-layer-tools").hidden = isSharedViewer;
+    document.querySelector("#summary-performance").hidden = isSharedViewer;
+    if (isSharedViewer) {
+        document.querySelector("#reset-map-view .panel-header-action-label").textContent = "Restore shared map";
+        document.querySelector("#reset-map-view").title = "Restore the shared map's starting layers, styles and location; retry any layers that could not load";
+        document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Use Restore shared map to retry, or ask the author for a complete map link.";
+    }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
-    initializeRenderingDiagnostics();
+    if (!isSharedViewer) initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     layoutController = new EomapLayoutController({
         documentContext: document,
         schedule: window.setTimeout.bind(window),
         invalidateMapSize: () => leafletMap.invalidateSize(),
+        allowCatalog: !isSharedViewer,
+        allowOperationalStatus: !isSharedViewer,
     });
+    if (isSharedViewer) layoutController.showWorkspace("map-layers");
     const mapInspection = new MapInspectionController();
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
@@ -1978,7 +2003,7 @@ async function startApplication() {
         () => layoutController.showWorkspace("catalog"),
         () => layoutController.notifyLayoutChange()
     );
-    await initializeScanner(refreshCatalog);
+    if (!isSharedViewer) await initializeScanner(refreshCatalog);
 }
 
 startApplication();

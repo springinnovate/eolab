@@ -2631,9 +2631,36 @@ h5 {
   box-shadow: none;
 }
 
+.workspace-disclosure[hidden],
+#toggle-operational-status[hidden],
+#eomap-operational-status-region[hidden],
+.annotation-layer-tools[hidden],
 .catalog-panel[hidden],
 .map-layers-region[hidden] {
   display: none;
+}
+
+.panel-content:has(#toggle-catalog-workspace[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.panel-content:has(#toggle-catalog-workspace[hidden]) > #toggle-map-layers,
+.panel-content:has(#toggle-catalog-workspace[hidden]) > #eomap-map-layers-region {
+  grid-column: 1;
+}
+
+.shared-layer-details .catalog-inspector:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 18px;
+}
+
+.shared-layer-details .catalog-inspector-body {
+  max-height: 65vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
 }
 
 .map-layers-region {

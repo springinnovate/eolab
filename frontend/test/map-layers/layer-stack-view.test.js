@@ -303,6 +303,24 @@ function gradientLegend(style) {
   };
 }
 
+test("shared viewer omits removal but retains included-layer interaction tools", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext, { allowRemoval: false });
+  const calls = [];
+  view.bind({ onStyle: key => calls.push(key), onAllVisibility: visible => calls.push(visible) });
+  view.render(LAYERS, LAYERS[0].key);
+  const list = documentContext.querySelector("#raster-layer-list");
+  assert.equal(elementsByClass(list, "map-layer-remove-button").length, 0);
+  actionControl(list.children[0], "style").dispatchEvent(new Event("click"));
+  for (const action of ["info", "zoom", "visibility", "copy-style", "paste-style"]) {
+    actionControl(list.children[0], action);
+  }
+  documentContext.querySelector("#map-layers-hide-all").dispatchEvent(new Event("click"));
+  assert.deepEqual(calls, [LAYERS[0].key, false]);
+  view.showRemoval({ label: "Old removal", index: 0 }, false, null);
+  assert.equal(documentContext.querySelector("#map-layer-removal").hidden, true);
+});
+
 test("active filter summaries remain actionable in map and dock slots", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);

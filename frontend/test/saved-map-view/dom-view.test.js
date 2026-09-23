@@ -6,6 +6,12 @@ import {
   SavedMapViewDomView,
 } from "../../src/saved-map-view/dom-view.js";
 
+test("re-shared links keep simplified viewer mode", () => {
+  const url = new URL(createSavedMapViewUrl("https://viewer.example/?viewer=shared#view=old", "#view=new"));
+  assert.equal(url.searchParams.get("viewer"), "shared");
+  assert.equal(url.hash, "#view=new");
+});
+
 /** Build the minimal semantic DOM required by the shared-map view. */
 function viewFixture() {
   function element() {

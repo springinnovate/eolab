@@ -34,6 +34,8 @@ export class SavedMapViewController {
      * persistence adapter exposing read, write, and clear operations.
      * @param {Object|null} [configuration.initialViewport] Configured canonical
      * viewport used by Reset view.
+     * @param {boolean} [configuration.restoreSharedMap=false] Reset to the opening
+     * shared fragment, ignore private autosave, and leave personal storage untouched.
      * @param {()=>void} [configuration.beforeRestore] Composition-owned cleanup
      * for transient map presentations excluded from the portable contract.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
@@ -52,6 +54,7 @@ export class SavedMapViewController {
         viewerOrigin,
         storage = null,
         initialViewport = null,
+        restoreSharedMap = false,
         beforeRestore = () => {},
         clock = () => new Date(),
         subtleCrypto = globalThis.crypto?.subtle,
@@ -77,7 +80,9 @@ export class SavedMapViewController {
         this.catalogItems = catalogItems;
         this.viewerVersion = viewerVersion;
         this.viewerOrigin = viewerOrigin;
-        this.storage = storage;
+        this.storage = restoreSharedMap ? null : storage;
+        this.restoreSharedMap = restoreSharedMap;
+        this.startingFragment = null;
         this.beforeRestore = beforeRestore;
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
@@ -173,13 +178,21 @@ export class SavedMapViewController {
      * Restore the authoritative startup source with shared-link precedence.
      *
      * An owned `#view=` fragment is always attempted and never falls back to
-     * private storage when malformed. Other or absent fragments allow the last
-     * validated origin-local document to restore silently.
+     * private storage when malformed. Authoring mode can restore the last
+     * validated origin-local document without a fragment; a shared viewer
+     * requires a shared fragment and never restores private map storage.
      *
      * @param {string} fragment Current browser URL fragment.
      * @return {Promise<void>} Completion after shared or local restoration.
      */
     async restoreStartupView(fragment) {
+        if (this.restoreSharedMap) {
+            this.startingFragment = fragment;
+            if (!isSavedMapViewFragment(fragment)) {
+                this.view.showError(new Error("This shared viewer needs a map link. Ask the map author for the complete link."), "open");
+                return;
+            }
+        }
         if (isSavedMapViewFragment(fragment)) {
             await this.openSharedFragment(fragment);
             return;
@@ -226,11 +239,15 @@ export class SavedMapViewController {
     }
 
     /**
-     * Restore the configured empty initial view and expose one-step undo.
+     * Restore the opening shared map, or reset the authoring map with one-step undo.
      *
      * @return {Promise<void>} Completion after the atomic restore transaction.
      */
     async resetView() {
+        if (this.restoreSharedMap) {
+            await this.restoreStartupView(this.startingFragment ?? "");
+            return;
+        }
         if (this.busy || this.destroyed || this.initialView === null) return;
         this.#cancelScheduledRemember();
         const restoreGeneration = this.restoreGeneration + 1;
