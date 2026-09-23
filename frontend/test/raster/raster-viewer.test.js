@@ -2039,7 +2039,7 @@ test("2D histogram DOM controls preview and apply each axis without resampling",
     let ordinaryStyleOpens = 0;
     const editor = new MapLayerStyleEditor({
         documentContext, mapLayers: h.mapLayers, rasterViewer: h.viewer,
-        inspection: { showStyle() { ordinaryStyleOpens++; }, hideStyle() {} },
+        inspection: { showStyle() { ordinaryStyleOpens++; }, hideStyle() {}, updateLayerEditorName() {} },
     });
     const beforeNavigation = histogramOpens;
     editor.open(styleKey);

@@ -30,7 +30,7 @@ test("filter editor debounces valid drafts and leaves applied rules visible duri
         getTarget: () => ({ fields, filter: current, label: "Earthquakes", status: "5 of 100 features match",
             cancelPending: () => canceled.push(true),
             apply: async (candidate) => { applied.push(candidate); current = candidate; return candidate; } }),
-        inspection: { showFilter() {}, hideFilter() {} },
+        inspection: { showFilter() {}, hideFilter() {}, updateLayerEditorName() {} },
         setTimer: (handler, delay) => { assert.equal(delay, 450); pending = handler; return 1; },
         clearTimer: () => { pending = null; },
     });
@@ -51,13 +51,34 @@ test("filter editor debounces valid drafts and leaves applied rules visible duri
     controls.destroy();
 });
 
+test("renaming an open filter keeps its draft and updates its panel and tab names", () => {
+    const doc = new FakeRasterControlDocument();
+    const target = { fields, filter: filter(), label: "Earthquakes", status: "" };
+    const names = [];
+    let opened = 0;
+    const controls = new VectorFilterControls({ documentContext: doc,
+        getTarget: () => target,
+        inspection: { showFilter() { opened++; }, hideFilter() {},
+            updateLayerEditorName(editor, name) { names.push([editor, name]); } },
+    });
+    controls.open("quakes");
+    const rule = controls.rules.children[0];
+    target.label = "Recent earthquakes";
+    controls.refresh();
+    assert.equal(controls.title.textContent, target.label);
+    assert.deepEqual(names.at(-1), ["filter", target.label]);
+    assert.equal(controls.rules.children[0], rule);
+    assert.equal(opened, 1);
+    controls.destroy();
+});
+
 test("filter enable toggle preserves rules and closing applies pending valid edits", async () => {
     const doc = new FakeRasterControlDocument();
     let current = filter();
     const controls = new VectorFilterControls({ documentContext: doc,
         getTarget: () => ({ fields, filter: current, label: "Earthquakes", status: "",
             cancelPending() {}, apply: async (candidate) => { current = candidate; return candidate; } }),
-        inspection: { showFilter() {}, hideFilter() {} },
+        inspection: { showFilter() {}, hideFilter() {}, updateLayerEditorName() {} },
         setTimer: () => 1, clearTimer() {},
     });
     controls.open("quakes");
@@ -80,7 +101,7 @@ test("default debounce timers retain the browser global receiver", () => {
         const doc = new FakeRasterControlDocument();
         const controls = new VectorFilterControls({ documentContext: doc,
             getTarget: () => ({ fields, filter: filter(), label: "Earthquakes", status: "", cancelPending() {} }),
-            inspection: { showFilter() {}, hideFilter() {} },
+            inspection: { showFilter() {}, hideFilter() {}, updateLayerEditorName() {} },
         });
         controls.open("quakes");
         const input = controls.rules.children[0].children[2];
@@ -132,7 +153,7 @@ test("analysis filters submit only the explicitly applied complete draft and exp
         getTarget: () => ({ fields, filter: filter(), label: "Countries", status: "",
             cancelPending() { throw Error("Analysis must not cancel rendering"); },
             apply() { throw Error("Analysis must not require rendering authorization"); } }),
-        inspection: { showFilter() {}, hideFilter() {} },
+        inspection: { showFilter() {}, hideFilter() {}, updateLayerEditorName() {} },
         setTimer() { throw Error("An analysis draft must not auto-apply"); }, clearTimer() {},
     });
     const action = { apply: candidate => { applied.push(candidate); return new Promise(done => { resolve = done; }); },

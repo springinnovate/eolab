@@ -90,6 +90,21 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.editor.destroy();
 });
 
+test('renaming a layer refreshes an open style tab without changing the active tool', () => {
+    const h = fixture();
+    h.editor.open('a');
+    h.inspection.showHistogram(1);
+    const activeTool = h.inspection.activeTool;
+    const focused = h.doc.activeElement;
+    h.layers[0].label = 'Human impact';
+    h.editor.refresh();
+    assert.equal(h.editor.title.textContent, 'Human impact');
+    assert.equal(h.doc.querySelector('#map-inspection-tab-style').textContent, 'Style · Human impact');
+    assert.equal(h.inspection.activeTool, activeTool);
+    assert.equal(h.doc.activeElement, focused);
+    h.editor.destroy();
+});
+
 test('vector editor explains symbol controls, and removed targets close safely', () => {
     const h = fixture();
     h.editor.open('b');

@@ -73,7 +73,7 @@ export class MapLayerStyleEditor {
         this.closeButton.focus();
     }
 
-    /** Refresh the editing target, redirecting active pairs to 2D styles. @return {void} */
+    /** Refresh the target and its displayed name without activating its tab; redirect active pairs to 2D styles. @return {void} */
     refresh() {
         if (this.key === null) return;
         const layer = this.mapLayers.snapshots().find(
@@ -84,6 +84,7 @@ export class MapLayerStyleEditor {
             return;
         }
         this.title.textContent = layer.label;
+        this.inspection.updateLayerEditorName("style", layer.label);
         const locked = layer.opacityLocked === true;
         if (locked && this.isRaster) {
             const key = this.key;
