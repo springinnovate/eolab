@@ -980,6 +980,23 @@ export class MapLayerController {
     }
 
     /**
+     * Update a layer's exhausted-tile warning without restarting map rendering.
+     * @param {string} key Retained map-layer key; obsolete keys are ignored.
+     * @param {import('./tile-recovery.js').MapTileStatus} status Current visible tile counts.
+     * @return {void}
+     */
+    updateTileStatus(key, status) {
+        const record = this.records.get(key);
+        if (!record || this.destroyed) return;
+        const error = status.failed > 0
+            ? `${status.failed} map tile${status.failed === 1 ? "" : "s"} could not be loaded. Use Retry missing tiles on the map.`
+            : null;
+        if (record.error === error) return;
+        record.error = error;
+        this.view.render(this.snapshots(), this.presentationActiveKey);
+    }
+
+    /**
      * Render and publish current retained-layer state.
      *
      * @param {{key:string,action:string}|null} [requestedFocus=null] Focus hint.
@@ -1160,6 +1177,7 @@ export class MapLayerController {
             if (this.leafletLayers.get(key) !== layer) {
                 return;
             }
+            if (this.leafletLayers.hasTileRecovery(key)) return;
             record.error = adapter.tileErrorMessage;
             this.render();
             adapter.tileError?.(record);

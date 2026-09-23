@@ -4,6 +4,27 @@ import test from "node:test";
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { MapLayerController } from "../../src/map-layers/controller.js";
 
+test("tile recovery updates and clears warnings without republishing layers or restarting rendering", async () => {
+    let changes = 0;
+    const view = createView();
+    const controller = new MapLayerController({ leafletMap: createMap(), view, onLayersChange: () => changes++ });
+    const item = catalogItem("first"), key = getCatalogItemKey(item);
+    await controller.show(item, createAdapter("Vector"));
+    const before = changes;
+    controller.leafletLayers.hasTileRecovery = candidate => candidate === key;
+    controller.getLeafletLayer(key).onTileError();
+    assert.equal(view.layers[0].error, null, "recoverable errors do not create a sticky warning");
+    controller.leafletLayers.render = () => { throw new Error("Tile feedback must not restart rendering"); };
+    controller.updateTileStatus(key, { phase: "incomplete", total: 3, loaded: 2, failed: 1 });
+    assert.match(view.layers[0].error, /1 map tile.*Retry missing tiles/);
+    controller.updateTileStatus(key, { phase: "complete", total: 3, loaded: 3, failed: 0 });
+    assert.equal(view.layers[0].error, null);
+    controller.updateTileStatus("removed", { phase: "incomplete", total: 1, loaded: 0, failed: 1 });
+    assert.equal(changes, before);
+    controller.leafletLayers.render = () => {};
+    controller.destroy();
+});
+
 test("custom names change presentation and sorting without changing source or renderer identity", async () => {
     const view = createView();
     let publications = 0;

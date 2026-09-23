@@ -1,15 +1,8 @@
 /** Present server-composed map tiles and track recovery in the current view. */
 
-const RETRY_DELAYS_MILLISECONDS = Object.freeze([250, 1000]);
+import { TileRecovery } from "./tile-recovery.js";
 
-/**
- * @typedef {Object} MapTileStatus
- * @property {"idle"|"preparing"|"loading"|"retrying"|"complete"|"incomplete"|"error"} phase Rendering state.
- * @property {number} total Requested tiles intersecting the current viewport.
- * @property {number} loaded Successfully loaded visible tiles, including transparent PNGs.
- * @property {number} failed Visible tiles whose automatic retries are exhausted.
- * @property {string} [message] Plan preparation error, when present.
- */
+/** @typedef {import("./tile-recovery.js").MapTileStatus} MapTileStatus */
 
 /** Own one composite grid; never retain an old layer stack behind missing tiles. */
 export class CompositeLeafletRenderer {
@@ -33,9 +26,6 @@ export class CompositeLeafletRenderer {
         this.grid = null;
         this.planFailed = false;
         this.destroyed = false;
-        this.statusScheduled = false;
-        this.onMapMove = () => this.#refreshVisibleTiles();
-        leafletMap.on("moveend zoomend", this.onMapMove);
     }
 
     /**
@@ -85,15 +75,7 @@ export class CompositeLeafletRenderer {
             this.update(this.layers);
             return;
         }
-        const grid = this.grid;
-        if (!grid) return;
-        for (const [tile, record] of grid.tiles) {
-            if (record.phase !== "failed" || !this.#isVisible(record)) continue;
-            record.attempts = 0;
-            record.phase = "retrying";
-            tile.src = record.source;
-        }
-        this.#scheduleStatus();
+        this.grid?.recovery.retryFailedTiles();
     }
 
     /** Remove the grid, cancel retries, and invalidate plan responses. @return {void} */
@@ -107,10 +89,7 @@ export class CompositeLeafletRenderer {
         const grid = this.grid;
         this.grid = null;
         if (grid) {
-            for (const record of grid.tiles.values()) clearTimeout(record.timer);
-            for (const [event, handler] of Object.entries(grid.handlers)) {
-                grid.layer.off(event, handler);
-            }
+            grid.recovery.destroy();
             this.leafletMap.removeLayer(grid.layer);
         }
         this.#emitStatus("idle");
@@ -121,7 +100,6 @@ export class CompositeLeafletRenderer {
         if (this.destroyed) return;
         this.clear();
         this.destroyed = true;
-        this.leafletMap.off("moveend zoomend", this.onMapMove);
     }
 
     /**
@@ -134,113 +112,10 @@ export class CompositeLeafletRenderer {
             layers: "composite", styles: "", format: "image/png",
             transparent: true, version: "1.1.1", noWrap: true,
         });
-        const grid = { layer, tiles: new Map(), loading: true, handlers: {} };
-        this.grid = grid;
-        grid.handlers = {
-            loading: () => { grid.loading = true; this.#scheduleStatus(); },
-            // Leaflet fires load even when tiles failed. Only tileload records success.
-            load: () => { grid.loading = false; this.#scheduleStatus(); },
-            tileloadstart: ({ tile, coords }) => {
-                grid.tiles.set(tile, { coords, source: tile.src, phase: "loading", attempts: 0, timer: null });
-                this.#scheduleStatus();
-            },
-            tileload: ({ tile }) => {
-                const record = grid.tiles.get(tile);
-                if (!record) return;
-                clearTimeout(record.timer);
-                record.timer = null;
-                record.phase = "loaded";
-                this.#scheduleStatus();
-            },
-            tileerror: ({ tile }) => this.#retryTile(grid, tile),
-            tileunload: ({ tile }) => this.#forgetTile(grid, tile),
-            tileabort: ({ tile }) => this.#forgetTile(grid, tile),
-        };
-        for (const [event, handler] of Object.entries(grid.handlers)) layer.on(event, handler);
+        const recovery = new TileRecovery(this.leafletMap, layer, this.onStatus);
+        this.grid = { layer, recovery };
         layer.addTo(this.leafletMap);
-        this.#scheduleStatus();
-    }
-
-    /**
-     * Schedule bounded recovery of one failed image in the current view.
-     * @param {Object} grid Owning grid and tile records.
-     * @param {HTMLImageElement} tile Failed image.
-     * @return {void}
-     */
-    #retryTile(grid, tile) {
-        const record = grid.tiles.get(tile);
-        if (grid !== this.grid || !record || record.timer !== null) return;
-        record.phase = "failed";
-        if (this.#isVisible(record) && record.attempts < RETRY_DELAYS_MILLISECONDS.length) {
-            record.phase = "retrying";
-            record.timer = setTimeout(() => {
-                record.timer = null;
-                if (grid !== this.grid || !grid.tiles.has(tile)) return;
-                if (this.#isVisible(record)) tile.src = record.source;
-                else record.phase = "failed";
-                this.#scheduleStatus();
-            }, RETRY_DELAYS_MILLISECONDS[record.attempts++]);
-        }
-        this.#scheduleStatus();
-    }
-
-    /**
-     * Release a tile that Leaflet discarded or aborted.
-     * @param {Object} grid Owning grid.
-     * @param {HTMLImageElement} tile Removed image.
-     * @return {void}
-     */
-    #forgetTile(grid, tile) {
-        clearTimeout(grid.tiles.get(tile)?.timer);
-        grid.tiles.delete(tile);
-        this.#scheduleStatus();
-    }
-
-    /**
-     * Test tile intersection with the viewport, excluding Leaflet's retained buffer.
-     * @param {{coords:{x:number,y:number,z:number}}} record Tile coordinates.
-     * @return {boolean} Whether the tile belongs to the currently visible zoom and extent.
-     */
-    #isVisible(record) {
-        const { x, y, z } = record.coords;
-        if (z !== Math.round(this.leafletMap.getZoom())) return false;
-        const bounds = this.leafletMap.getPixelBounds();
-        const size = this.grid.layer.getTileSize();
-        return x * size.x < bounds.max.x && (x + 1) * size.x > bounds.min.x &&
-            y * size.y < bounds.max.y && (y + 1) * size.y > bounds.min.y;
-    }
-
-    /** Cancel queued retries outside the new viewport and refresh counts. @return {void} */
-    #refreshVisibleTiles() {
-        if (!this.grid) return;
-        for (const record of this.grid.tiles.values()) {
-            if (!this.#isVisible(record) && record.timer !== null) {
-                clearTimeout(record.timer);
-                record.timer = null;
-                record.phase = "failed";
-            }
-        }
-        this.#scheduleStatus();
-    }
-
-    /** Publish one snapshot after a synchronous burst of Leaflet events. @return {void} */
-    #scheduleStatus() {
-        if (this.statusScheduled) return;
-        this.statusScheduled = true;
-        queueMicrotask(() => {
-            this.statusScheduled = false;
-            if (!this.grid || this.destroyed) return;
-            const tiles = [...this.grid.tiles.values()].filter(record => this.#isVisible(record));
-            const loaded = tiles.filter(record => record.phase === "loaded").length;
-            const failed = tiles.filter(record => record.phase === "failed").length;
-            const retrying = tiles.some(record => record.phase === "retrying");
-            const pending = tiles.length - loaded - failed;
-            let phase = "complete";
-            if (retrying) phase = "retrying";
-            else if (pending || (!tiles.length && this.grid.loading)) phase = "loading";
-            else if (failed) phase = "incomplete";
-            this.onStatus({ phase, total: tiles.length, loaded, failed });
-        });
+        recovery.refresh();
     }
 
     /**
