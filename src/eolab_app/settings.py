@@ -141,6 +141,7 @@ class Settings:
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
+        saved_map_capacity: Maximum named maps retained on this site.
         processing_data_path: Persistent private clip volume shared with the worker.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
@@ -189,6 +190,7 @@ class Settings:
     raster_statistics_max_waiters: int = 256
     map_render_queue_capacity: int = 64
     map_render_queue_wait_seconds: float = 60
+    saved_map_capacity: int = 1000
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -222,6 +224,8 @@ class Settings:
 
         if not -90 <= self.initial_latitude <= 90:
             raise ValueError("INITIAL_LATITUDE must be between -90 and 90")
+        if self.saved_map_capacity < 1:
+            raise ValueError("SAVED_MAP_CAPACITY must be greater than zero")
         if not self.processing_data_path.is_absolute():
             raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
         if not -180 <= self.initial_longitude <= 180:
@@ -440,6 +444,7 @@ def load_settings(
         raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
 
     return Settings(
+        saved_map_capacity=int(os.environ.get("SAVED_MAP_CAPACITY", "1000")),
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),

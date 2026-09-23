@@ -14,6 +14,7 @@ def test_public_app_variables_are_not_self_referential() -> None:
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
     variable_mappings = {
         "APP_TITLE": "EOLAB_APP_TITLE",
+        "SAVED_MAP_CAPACITY": "EOLAB_SAVED_MAP_CAPACITY",
         "APP_SUBTITLE": "EOLAB_APP_SUBTITLE",
         "CATALOG_URL": "EOLAB_CATALOG_URL",
         "BASEMAP_URL": "EOLAB_BASEMAP_URL",

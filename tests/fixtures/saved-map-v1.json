@@ -1,0 +1,24 @@
+{
+  "format": "eolab-map-view",
+  "schemaVersion": 1,
+  "viewer": {"version": "0.6.0", "origin": "https://core-areas.wwfus.science"},
+  "createdAt": "2026-09-22T12:00:00.000Z",
+  "viewport": {"center": {"latitude": -8, "longitude": -65}, "zoom": 5},
+  "layers": [
+    {
+      "catalogItem": {"collection": "rasters", "id": "human-impact"},
+      "sourceRevision": null,
+      "visible": true,
+      "opacity": 0.75,
+      "style": {"kind": "raster", "definition": {"minimum": 0, "maximum": 1}, "paletteName": "viridis"}
+    },
+    {
+      "catalogItem": {"collection": "vectors", "id": "countries"},
+      "sourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "visible": false,
+      "opacity": 1,
+      "style": {"kind": "vector", "definition": {"color": "#FF006E"}},
+      "filter": {"field": "ISO3", "value": "PER"}
+    }
+  ]
+}

@@ -87,6 +87,7 @@ def build_image(application_image: str | None) -> str:
                     ROOT / name for name in ("pyproject.toml", "README.md", "LICENSE")
                 ]
                 paths += list((ROOT / "tests").rglob("*.py"))
+                paths.append(ROOT / "tests" / "fixtures" / "saved-map-v1.json")
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]
                 if not application_image:
                     paths += list((ROOT / "src").rglob("*.py"))

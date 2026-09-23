@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
+from eolab_app.saved_maps.store import SavedMapStore
+from eolab_app.routes.saved_maps import create_saved_maps_router
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
@@ -299,6 +301,11 @@ def create_app(
         create_annotation_sessions_router(AnnotationSessionStore())
     )
     catalog_database = PgStacCatalogDatabase()
+    application.include_router(
+        create_saved_maps_router(
+            SavedMapStore(capacity=app_global_configuration.saved_map_capacity)
+        )
+    )
     application.include_router(
         create_catalog_router(catalog_database.random_matching_item)
     )
