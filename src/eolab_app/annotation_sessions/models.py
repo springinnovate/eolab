@@ -51,6 +51,12 @@ class ContributorProfile(SessionInput):
     name: Name
 
 
+class ContributorColor(SessionInput):
+    """This browser's polygon fill color in one shared layer; any RGB color is allowed."""
+
+    color: Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
+
+
 class PolygonGeometry(SessionInput):
     """One valid, closed polygon without holes, in editable longitude/latitude."""
 
@@ -153,6 +159,7 @@ class ContributorSummary(SessionInput):
 
     id: UUID
     name: str
+    color: Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
 
 
 class SharedLayerSummary(SessionInput):

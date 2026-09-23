@@ -18,7 +18,7 @@ function setup() {
     const members = new Set();
     const leaflet = { DomUtil: { create: element }, svg: () => ({}),
         featureGroup: () => ({ addLayer: shape => members.add(shape), removeLayer: shape => members.delete(shape), clearLayers: () => members.clear() }),
-        polygon: () => ({ setLatLngs(vertices) { this.center = vertices[0]; }, setStyle() {},
+        polygon: () => ({ setLatLngs(vertices) { this.center = vertices[0]; }, setStyle(style) { this.style = style; },
             isTooltipOpen() { return !!this.tooltip; },
             getCenter() { return this.center; },
             getTooltip() { return this.tooltip; },
@@ -27,6 +27,19 @@ function setup() {
     const map = { getPane: element, getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {} };
     return { annotation, members, rendering: createAnnotationLeafletLayer(leaflet, map, annotation) };
 }
+
+test("each polygon uses its contributor's color while opacity and outlines remain layer settings", () => {
+    const { annotation, members, rendering } = setup();
+    annotation.polygons[0].contributorColor = "#FF006E";
+    annotation.polygons.push({ ...annotation.polygons[0], id: "peer", contributorColor: "#7CB518" });
+    rendering.refresh();
+    assert.deepEqual([...members].map(shape => shape.style.fillColor), ["#FF006E", "#7CB518"]);
+    annotation.style.fillOpacity = 0.6; annotation.style.outline = "#123456";
+    annotation.polygons[0].contributorColor = "#C77DFF";
+    rendering.refresh();
+    assert.deepEqual([...members].map(shape => shape.style.fillColor), ["#C77DFF", "#7CB518"]);
+    assert.ok([...members].every(shape => shape.style.fillOpacity === 0.6 && shape.style.color === "#123456"));
+});
 
 test("text edits retain the same polygon and label instead of restarting tooltip fades", () => {
     const { annotation, members, rendering } = setup();
