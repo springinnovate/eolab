@@ -21,6 +21,102 @@ function controller() {
     return annotations;
 }
 
+/** Connect the drawing lifecycle to the real model and recorded presentation/save boundaries.
+ * @return {Object} Controller, layer and observed UI transitions.
+ */
+function drawingController() {
+    const annotations = controller();
+    const layer = annotations.model.createLayer("Habitat areas");
+    const calls = [];
+    annotations.controls = new Map([[layer.id, { refresh() { calls.push("controls"); } }]]);
+    annotations.layers = new Map();
+    annotations.undoButton = {};
+    annotations.onEditingChange = editing => calls.push(["editing", editing]);
+    annotations.mapLayers = { setVisible() {} };
+    annotations.editor = {
+        render(draft, message, style, name) { calls.push(["render", !!draft, name]); },
+        showCompletion(name, polygon) { calls.push(["complete", name, polygon.id]); },
+        closeCompletion() { calls.push("close"); },
+    };
+    annotations.refreshLayer = (...args) => calls.push(["refresh", ...args]);
+    return { annotations, layer, calls };
+}
+
+test("finish offers naming, autosaves text, and drawing another retains the destination and first polygon", async () => {
+    const { annotations, layer, calls } = drawingController();
+    annotations.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point));
+    annotations.finishPolygon();
+    const polygon = layer.polygons[0];
+    assert.equal(annotations.model.draft, null);
+    assert.deepEqual(annotations.completedPolygon, { layerId: layer.id, polygonId: polygon.id });
+    assert.ok(calls.some(call => call[0] === "complete" && call[1] === layer.name));
+    assert.deepEqual(calls.filter(call => call[0] === "editing").at(-1), ["editing", true], "keep map space and pause inspection while naming");
+    annotations.updateCompletedPolygonText("River corridor", "Connect habitats");
+    await annotations.save();
+    assert.equal(annotations.sharableLayers()[0].collection.features[0].properties.name, "River corridor");
+    assert.equal(polygon.note, "Connect habitats");
+    annotations.beginPolygon(layer.id);
+    assert.equal(annotations.completedPolygon, null);
+    assert.equal(annotations.model.draft.layerId, layer.id);
+    assert.equal(annotations.model.draft.isNew, true);
+    assert.equal(layer.polygons[0], polygon);
+    assert.equal(layer.polygons.length, 1);
+});
+
+test("Done preserves committed geometry and text; existing geometry edits skip completion", async () => {
+    const { annotations, layer, calls } = drawingController();
+    annotations.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point));
+    annotations.finishPolygon();
+    await annotations.save();
+    const before = annotations.model.document();
+    let writes = 0; annotations.storage.save = async () => { writes++; };
+    annotations.closePolygonCompletion();
+    assert.deepEqual(calls.filter(call => call[0] === "editing").at(-1), ["editing", false]);
+    assert.deepEqual(annotations.model.document(), before);
+    assert.equal(writes, 0, "Done is not a second save");
+    annotations.beginPolygon(layer.id, layer.polygons[0].id);
+    annotations.model.draft.polygon.vertices[0] = [-1, 0];
+    calls.length = 0;
+    annotations.finishPolygon();
+    assert.equal(annotations.completedPolygon, null);
+    assert.equal(calls.some(call => call[0] === "complete"), false);
+    assert.deepEqual(layer.polygons[0].vertices[0], [-1, 0]);
+});
+
+test("invalid and canceled drafts never open completion or add polygons", () => {
+    const { annotations, layer, calls } = drawingController();
+    annotations.beginPolygon(layer.id);
+    annotations.model.addVertex([0, 0]);
+    assert.throws(() => annotations.finishPolygon(), /at least 3 vertices/);
+    assert.ok(annotations.model.draft);
+    assert.equal(layer.polygons.length, 0);
+    annotations.model.cancelPolygon(); annotations.updateEditor();
+    assert.equal(calls.some(call => call[0] === "complete"), false);
+});
+
+test("completion text survives failed persistence and deletion dismisses stale completion", async () => {
+    const { annotations, layer, calls } = drawingController();
+    annotations.storage.save = async () => { throw new Error("Storage full"); };
+    annotations.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point));
+    annotations.finishPolygon();
+    annotations.updateCompletedPolygonText("Keep this", "Unsaved notes");
+    await annotations.save();
+    assert.equal(annotations.dirty, true);
+    assert.match(annotations.status.textContent, /Storage full/);
+    assert.equal(layer.polygons[0].note, "Unsaved notes");
+    annotations.storage.save = async () => {};
+    await annotations.save();
+    assert.equal(annotations.dirty, false);
+    annotations.deletePolygon(layer.id, layer.polygons[0].id);
+    assert.equal(annotations.completedPolygon, null);
+    assert.ok(calls.includes("close"));
+    annotations.updateCompletedPolygonText("Late event", "Ignored");
+    assert.equal(layer.polygons.length, 0);
+});
+
 test("combined shared polygons are filterable summary inputs but never become editable or uploaded as mine", async () => {
     const annotations = controller();
     const layer = annotations.model.createLayer();

@@ -71,7 +71,7 @@
     font: 0.85rem/1.4 system-ui, sans-serif;
     cursor: default;
 }
-.annotation-editor-strip strong { color: #005e91; }
+.annotation-editor-strip strong { display: block; margin-bottom: 0.4rem; color: #005e91; overflow-wrap: anywhere; }
 .annotation-editor-strip p { margin: 0.25rem 0 0.5rem; }
 .annotation-editor-strip details { margin-top: 0.4rem; }
 .annotation-editor-strip summary { cursor: pointer; }
