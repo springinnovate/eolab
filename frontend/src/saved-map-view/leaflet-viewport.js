@@ -25,15 +25,18 @@ export function createSavedMapLeafletViewport(leafletMap) {
             };
         },
         /**
-         * Restore a previously validated canonical map viewport.
+         * Set the saved center and zoom before restored layers request tiles.
+         * Animation would leave the old viewport active until a later frame,
+         * causing layers added immediately afterward to request unwanted tiles.
          *
-         * @param {Object} viewport Saved viewport.
+         * @param {{center:{latitude:number,longitude:number},zoom:number}} viewport Validated saved viewport.
          * @return {void}
          */
         restore(viewport) {
             leafletMap.setView(
                 [viewport.center.latitude, viewport.center.longitude],
-                viewport.zoom
+                viewport.zoom,
+                { animate: false }
             );
         },
     });
