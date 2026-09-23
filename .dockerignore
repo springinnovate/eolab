@@ -18,6 +18,7 @@ tests
 tests/*
 !tests/fixtures/
 tests/fixtures/*
+!tests/fixtures/saved-map-v1.json
 !tests/fixtures/rasters/
 !tests/fixtures/rasters/*.tif
 !tests/fixtures/vectors/
