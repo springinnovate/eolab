@@ -17,6 +17,7 @@ export class AnnotationLayerControls {
      * @param {(opacity:number)=>void} actions.opacity Set the whole layer's opacity.
      * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
      * @param {()=>void} actions.share Share this layer in a session.
+     * @param {(color:string)=>void} actions.color Save your shared polygon color.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -53,23 +54,35 @@ export class AnnotationLayerControls {
         buttons.append(exportButton);
         this.root.append(buttons);
         this.appearance = this.details("Annotation style");
+        this.sharedAppearance = document.createElement("fieldset");
+        this.localAppearance = document.createElement("fieldset");
+        for (const [group, label] of [[this.sharedAppearance, "Shared with everyone"], [this.localAppearance, "Your view only"]]) {
+            group.className = "annotation-style-group";
+            const legend = document.createElement("legend");
+            legend.textContent = label;
+            legend.hidden = true;
+            group.append(legend);
+            this.appearance.append(group);
+        }
         this.styleInputs = {};
         for (const [key, label, type] of [["color", "Fill color", "color"], ["outline", "Outline color", "color"],
             ["weight", "Outline width", "number"], ["fillOpacity", "Fill opacity", "number"], ["labels", "Show names", "checkbox"], ["notes", "Show notes", "checkbox"]]) {
             const wrapper = this.createLabeledInput(label, type, layer.style[key], value => {
+                if (key === "color" && this.collaborating) { actions.color(value); return; }
                 layer.style[key] = type === "number" ? Number(value) : value;
+                if (key === "color") for (const polygon of layer.polygons) delete polygon.contributorColor;
                 actions.change();
             });
             const input = wrapper.querySelector("input");
             if (type === "number") { input.min = "0"; input.max = key === "weight" ? "10" : "1"; input.step = key === "weight" ? "0.5" : "0.05"; }
             if (key === "notes") wrapper.title = "Show notes on the map. Long notes show the first six lines; the complete note stays in the polygon list.";
             this.styleInputs[key] = input;
-            this.appearance.append(wrapper);
+            (key === "color" ? this.sharedAppearance : this.localAppearance).append(wrapper);
         }
         const opacity = this.createLabeledInput("Layer opacity", "range", layer.opacity, value => actions.opacity(Number(value)));
         this.opacity = opacity.querySelector("input");
         this.opacity.min = "0"; this.opacity.max = "1"; this.opacity.step = "0.05";
-        this.appearance.append(opacity);
+        this.localAppearance.append(opacity);
         this.filter = this.details("Filter polygons");
         this.filter.append(this.button("Edit filter", actions.filter));
         if (typeof layer.filter === "string" && layer.filter) {
@@ -174,13 +187,26 @@ export class AnnotationLayerControls {
         }
     }
 
-    /** Show compact sharing controls on the layer row and read-only contributor polygons in the editor.
+    /** Show contributor details and separate shared color from local appearance controls.
+     * Peer polygons remain read-only; local opacity affects everyone's polygons only on this map.
      * @param {Object} data Contributor list, code and sharing status supplied by composition.
      * @param {Object[]} polygons Other contributors' polygons, never editable here.
      * @return {void}
      */
     setCollaboration(data, polygons) {
-        if (!this.collaborating) { this.collaborating = true; this.refresh(); }
+        if (!this.collaborating) {
+            this.collaborating = true;
+            this.appearance.classList.add("has-shared-color");
+            this.sharedAppearance.querySelector("legend").hidden = false;
+            this.localAppearance.querySelector("legend").hidden = false;
+            this.styleInputs.fillOpacity.parentElement.querySelector("span").textContent = "Layer fill opacity (your view)";
+            this.styleInputs.fillOpacity.parentElement.title = "Fades the fill of all polygons in this layer on your map. Other viewers are unaffected.";
+            this.refresh();
+        }
+        const colorInput = this.styleInputs.color;
+        colorInput.parentElement.querySelector("span").textContent = "Your polygon color";
+        colorInput.value = data.contributors.find(person => person.own)?.color ?? this.layer.style.color;
+        colorInput.parentElement.title = "Shared with everyone. Changes the fill of all your polygons in this layer. Other appearance controls affect only your map.";
         this.members.hidden = false;
         if (this.share.parentElement !== this.drawing) this.drawing.insertBefore(this.share, this.members);
         this.share.title = data.code ? `Copy share code: ${data.code}` : "Copy this layer's sharing code";
@@ -193,7 +219,11 @@ export class AnnotationLayerControls {
             this.members.querySelector("summary").textContent = `${data.contributors.length} ${data.contributors.length === 1 ? "contributor" : "contributors"}`;
             this.memberList.replaceChildren(...data.contributors.map(person => {
                 const row = this.document.createElement("li");
-                row.textContent = `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`; return row;
+                const swatch = this.document.createElement("span");
+                swatch.className = "annotation-contributor-color";
+                swatch.style.backgroundColor = person.color;
+                swatch.setAttribute("aria-hidden", "true");
+                row.append(swatch, `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`); return row;
             }));
         }
         if (!this.remotePolygons) { this.remotePolygons = this.details("Other contributors' polygons"); this.root.append(this.remotePolygons); }

@@ -1186,6 +1186,7 @@ async function initializeCatalog(
         map: leafletMap,
         mapLayers: mapLayerController,
         onShare: id => annotationSessions.shareLayer(id),
+        onColor: (id, color) => annotationSessions.setContributorColor(id, color),
         onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
         onFilter: key => vectorFilterControls.open(key),
         onEditingChange: editing => {

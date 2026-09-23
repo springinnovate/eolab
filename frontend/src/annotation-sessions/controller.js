@@ -33,6 +33,7 @@ export class AnnotationSessionsController {
             if (!Array.isArray(saved)) throw new Error("Invalid shared-layer bookmarks.");
             for (const item of saved) {
                 if (!item || !/^[\da-f-]{36}$/i.test(item.sessionId) || typeof item.localId !== "string" || !Number.isSafeInteger(item.revision) || item.revision < 0) continue;
+                if (item.pendingColor !== undefined && !/^#[\da-f]{6}$/i.test(item.pendingColor)) continue;
                 if (this.getLayers().some(layer => layer.id === item.localId)) this.bindings.set(item.localId, { ...item, remote: new Map(), retryDelay: 5000 });
             }
         } catch (error) { this.view.message(`Could not restore shared layers: ${error.message}`); }
@@ -44,7 +45,7 @@ export class AnnotationSessionsController {
      * @throws {Error} If browser storage cannot preserve synchronization state.
      */
     saveBindings() {
-        this.storage.setItem(STORAGE_KEY, JSON.stringify([...this.bindings.values()].map(({ localId, sessionId, contributorId, revision }) => ({ localId, sessionId, contributorId, revision }))));
+        this.storage.setItem(STORAGE_KEY, JSON.stringify([...this.bindings.values()].map(({ localId, sessionId, contributorId, revision, pendingColor }) => ({ localId, sessionId, contributorId, revision, pendingColor }))));
     }
 
     /** Create/join a layer, restoring only polygons owned by this browser credential.
@@ -102,9 +103,29 @@ export class AnnotationSessionsController {
         const snapshot = binding.snapshot;
         this.present(binding.localId, { name: snapshot?.name, contributors: snapshot?.contributors.map(person => ({
             ...person, own: person.id === snapshot.contributorId,
+            color: person.id === snapshot.contributorId ? binding.pendingColor ?? person.color : person.color,
             polygonCount: snapshot.layers.filter(layer => layer.contributorId === person.id).reduce((sum, layer) => sum + layer.polygonCount, 0),
         })) ?? [], collections: [...binding.remote.values()].map(item => item.collection),
         status, error, code: snapshot?.joinCode ?? "", exportUrl: `/api/annotation-sessions/${binding.sessionId}/export` });
+    }
+
+    /** Save your color choice for one layer and retry failed transfers with its usual refresh.
+     * Rapid changes replace the pending choice; an older reply cannot replace a newer choice.
+     * @param {string} localId Local layer bound to a shared session.
+     * @param {string} color Six-digit hexadecimal fill color from the color picker.
+     * @return {Promise<void>} Completion of the current synchronization cycle.
+     */
+    async setContributorColor(localId, color) {
+        const binding = this.bindings.get(localId);
+        if (!binding || this.closed) return;
+        try {
+            if (!/^#[\da-f]{6}$/i.test(color)) throw new Error("Choose a valid polygon color.");
+            binding.pendingColor = color;
+            this.saveBindings();
+            binding.nextAttempt = 0;
+            this.display(binding, "Saving color…");
+            await this.refresh();
+        } catch (error) { this.display(binding, error.message, true); }
     }
 
     /** Debounce committed device changes; drawings are sent only after local saving succeeds.
@@ -143,6 +164,15 @@ export class AnnotationSessionsController {
                 if (this.closed || !this.getLayers().some(layer => layer.id === id)) continue;
                 if (snapshot.contributorId !== binding.contributorId) throw new Error("This layer belongs to a different contributor. Your local polygons have not been shared.");
                 binding.snapshot = snapshot;
+                if (binding.pendingColor) {
+                    const color = binding.pendingColor;
+                    const saved = await this.api.request(`/${snapshot.id}/color`, "PATCH", { color });
+                    if (this.closed || !this.getLayers().some(layer => layer.id === id)) continue;
+                    snapshot.contributors.find(person => person.id === snapshot.contributorId).color = saved.color;
+                    if (binding.pendingColor === color) delete binding.pendingColor;
+                    else this.again = true;
+                    this.saveBindings();
+                }
                 const keys = new Set();
                 for (const layer of snapshot.layers) {
                     if (layer.contributorId === snapshot.contributorId) continue;
@@ -154,7 +184,7 @@ export class AnnotationSessionsController {
                         : await this.api.request(`/${snapshot.id}/contributors/${layer.contributorId}/layers/${layer.layerId}`);
                     binding.remote.set(key, { revision: data.revision, authorName: author?.name, collection: { ...data.collection,
                         features: data.collection.features.map((feature, index) => ({ ...feature, id: `${layer.contributorId}-${index}`,
-                            properties: { ...feature.properties, contributor: author?.name ?? "Contributor" } })) } });
+                            properties: { ...feature.properties, contributor: author?.name ?? "Contributor", contributorId: layer.contributorId } })) } });
                 }
                 for (const key of binding.remote.keys()) if (!keys.has(key)) binding.remote.delete(key);
                 const saved = this.getLayers().find(layer => layer.id === id);

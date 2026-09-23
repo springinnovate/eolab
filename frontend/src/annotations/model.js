@@ -4,7 +4,7 @@ import { polygonValidationMessage } from "./geometry.js";
 
 /**
  * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean,notes:boolean}} AnnotationStyle
- * @typedef {{id:string,name:string,note:string,vertices:number[][]}} AnnotationPolygon
+ * @typedef {{id:string,name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} AnnotationPolygon
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
  * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string|Object,polygons:AnnotationPolygon[]}} AnnotationLayer
  * @typedef {{version:1,layers:AnnotationLayer[]}} AnnotationDocument
@@ -64,6 +64,10 @@ export function readAnnotationLayers(document) {
             requireIdentifier(polygon.id, identifiers);
             requireText(polygon.name, MAX_ANNOTATION_NAME_LENGTH, false);
             requireText(polygon.note, MAX_ANNOTATION_NOTE_LENGTH, true);
+            if (polygon.contributorColor !== undefined) {
+                requireText(polygon.contributor, MAX_ANNOTATION_NAME_LENGTH, false);
+                if (!/^#[\da-f]{6}$/i.test(polygon.contributorColor)) throw new Error("Saved contributor color is invalid.");
+            }
             if (!Array.isArray(polygon.vertices) || polygon.vertices.length > MAX_POLYGON_VERTICES || polygonValidationMessage(polygon.vertices)) {
                 throw new Error("Saved annotations contain an invalid polygon.");
             }
