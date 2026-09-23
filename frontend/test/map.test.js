@@ -44,6 +44,8 @@ test("application map is bounded to one strict WGS 84 world", () => {
   };
 
   assert.equal(createSingleWorldMap(leaflet, configuration), leafletMap);
+  assert.equal(calls.attributionPrefix, false);
+  assert.deepEqual([...leafletMap.attributions.keys()], ["Example tiles"]);
   assert.deepEqual(calls.map, {
     container: "map",
     options: {
