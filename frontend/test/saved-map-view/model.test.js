@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   createSavedMapView,
@@ -8,6 +9,12 @@ import {
   parseSavedMapView,
   serializeSavedMapView,
 } from "../../src/saved-map-view/model.js";
+
+test("backend parity fixture preserves the browser saved-map document", () => {
+  const text = readFileSync(new URL("../../../tests/fixtures/saved-map-v1.json", import.meta.url), "utf8");
+  assert.deepEqual(parseSavedMapView(text), JSON.parse(text));
+  assert.deepEqual(JSON.parse(serializeSavedMapView(parseSavedMapView(text))), JSON.parse(text));
+});
 
 /**
  * Return one valid portable map candidate with one raster layer.

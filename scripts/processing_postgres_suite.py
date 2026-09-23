@@ -10,6 +10,7 @@ SUITES = (
     "test_processing_planning_postgres.py",
     "test_processing_admission_postgres.py",
     "test_annotation_sessions_postgres.py",
+    "test_saved_maps_postgres.py",
     "test_processing_calculations.py",
     "test_calculation_cache_postgres.py",
     "test_polygon_summary_areas_postgres.py",

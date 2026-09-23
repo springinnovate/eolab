@@ -504,6 +504,57 @@ changing those records is not a substitute for publishing a new asset. Vector
 source checks, job ownership, cancellation and output checksum checks are unchanged.
 
 
+## Named saved maps (API preview)
+
+The first named-map release adds storage APIs under **saved maps** in `/docs`.
+It does not yet add the publishing dialog or `/maps/{slug}` viewer pages.
+Existing map links and browser autosave still work as before.
+
+`POST /api/saved-maps` accepts `title`, `slug`, and `view`. The view is the existing
+`eolab-map-view` version-one JSON document. Slugs are unique within this deployment,
+1–80 lowercase letters/digits with single hyphens between words. Titles contain
+1–160 characters. Include `X-EOLab-Saved-Maps: 1` when creating a map; this header
+prevents cross-origin browser submissions and is not an authentication token.
+Anyone with the map link name can read the stored record. Do not store secrets in it.
+
+For a small API test, use this body in Swagger's POST endpoint, setting its header
+field to `1` (choose a different slug if the example already exists):
+
+```json
+{
+  "title": "Amazon priorities",
+  "slug": "amazon-priorities-demo",
+  "view": {
+    "format": "eolab-map-view",
+    "schemaVersion": 1,
+    "viewer": {"version": "0.6.0", "origin": "https://core-areas.wwfus.science"},
+    "createdAt": "2026-09-22T12:00:00.000Z",
+    "viewport": {"center": {"latitude": -8, "longitude": -65}, "zoom": 5},
+    "layers": []
+  }
+}
+```
+
+A successful POST returns **201**, the stored document plus its database `createdAt`,
+and a `Location` header such as `/api/saved-maps/amazon-priorities-demo`.
+GET that URL to retrieve it. POSTing the same slug returns **409** and preserves
+the original. Missing maps return **404**, invalid input **422**, oversized uploads
+**413**, and unavailable storage or full site capacity **503**.
+
+Maps have no automatic expiry and are immutable in this version. There is no
+list, update, or delete endpoint yet. They live in `saved_maps.maps` in the existing
+PostgreSQL database; include that schema in backups. Schema setup retries after
+database outages without preventing other application routes from starting.
+
+`EOLAB_SAVED_MAP_CAPACITY` controls the per-site record limit (default **1,000**,
+passed to the app as `SAVED_MAP_CAPACITY`). Each map retains the existing saved-map
+limits of **512 KiB** and **50 catalog layers**; the POST envelope allows **516 KiB**.
+The default therefore bounds map documents to roughly 500 MiB before PostgreSQL
+overhead. Raise the record limit and redeploy when more named maps are needed.
+Database operations have a 3-second connection/lock wait and a 5-second statement
+timeout. Stored references do not copy datasets, verify current catalog availability,
+or grant data access. Existing capability APIs still resolve their own sources.
+
 ## Shared annotation layers
 
 In **Map layers**, expand **Annotations**, choose **Create shared** and enter a layer
