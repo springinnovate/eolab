@@ -25,6 +25,10 @@ export class AnnotationLayerControls {
         this.actions = actions;
         this.root = document.createElement("div");
         this.root.className = "annotation-layer-controls";
+        this.inspection = document.createElement("section");
+        this.inspection.className = "annotation-polygon-inspection";
+        this.inspection.hidden = true;
+        this.root.append(this.inspection);
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
             layer.name = value.trim() || "Annotations";
             actions.change(false);
@@ -100,6 +104,62 @@ export class AnnotationLayerControls {
         this.root.append(this.appearance, this.filter, this.polygons);
         this.refresh();
     }
+
+    /**
+     * Show a clicked polygon before the layer controls, with owner-only editing actions.
+     * Preserve the existing polygon lists and forward every mutation to their usual actions.
+     * @param {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}} hit Selected polygon and owner's permission decision.
+     * @param {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}[]} matches Top-first polygons at the last click, across annotation layers.
+     * @param {(index:number)=>void} select Choose a different overlapping polygon.
+     * @return {void}
+     */
+    showPolygonInspection(hit, matches, select) {
+        const signature = JSON.stringify([hit, matches]);
+        if (!this.inspection.hidden && this.inspectionSignature === signature) return;
+        this.inspectionSignature = signature;
+        const { polygon, canEdit } = hit;
+        const heading = this.document.createElement("h3");
+        heading.textContent = polygon.name;
+        const author = this.document.createElement("p");
+        author.textContent = `${polygon.contributor ?? (canEdit ? "You" : "Contributor")}${canEdit ? " · Your polygon" : " · Read-only polygon"}`;
+        const note = this.document.createElement("p");
+        note.className = "annotation-inspected-note";
+        note.textContent = polygon.note || "No notes yet.";
+        this.inspection.replaceChildren(heading, author, note);
+        if (canEdit) {
+            const actions = this.document.createElement("div");
+            actions.className = "annotation-actions";
+            actions.append(this.button("Edit polygon", () => this.actions.edit(polygon.id)),
+                this.button("Edit name or notes", () => {
+                    this.polygons.open = true;
+                    this.refresh(polygon.id);
+                    const row = this.polygonList.querySelector(`[data-polygon-id="${polygon.id}"]`);
+                    row.querySelector("textarea").parentElement.hidden = false;
+                    row.scrollIntoView({ block: "nearest" });
+                }),
+                this.button("Delete polygon", () => this.actions.removePolygon(polygon.id)));
+            this.inspection.append(actions);
+        }
+        if (matches.length > 1) {
+            const label = this.document.createElement("label");
+            label.textContent = `${matches.length} polygons at this location`;
+            const choices = this.document.createElement("select");
+            matches.forEach((match, index) => {
+                const option = this.document.createElement("option");
+                option.value = String(index);
+                option.textContent = `${match.layerName} · ${match.polygon.name}${match.polygon.contributor ? ` — ${match.polygon.contributor}` : ""}`;
+                choices.append(option);
+            });
+            choices.value = String(matches.findIndex(match => match.layerId === hit.layerId && match.polygon.id === polygon.id));
+            choices.addEventListener("change", () => select(Number(choices.value)));
+            label.append(choices);
+            this.inspection.append(label);
+        }
+        this.inspection.hidden = false;
+    }
+
+    /** Hide click details without changing the layer's retained editor fields. @return {void} */
+    clearPolygonInspection() { this.inspection.hidden = true; this.inspectionSignature = null; }
 
     /**
      * Create a label containing text and an input, and connect valid edits to onChange.

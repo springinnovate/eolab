@@ -18,16 +18,20 @@ function setup() {
     const members = new Set();
     const leaflet = { DomUtil: { create: element }, svg: () => ({}),
         featureGroup: () => ({ addLayer: shape => members.add(shape), removeLayer: shape => members.delete(shape), clearLayers: () => members.clear() }),
-        polygon: () => ({ setLatLngs(vertices) { this.center = vertices[0]; }, setStyle(style) { this.style = style; },
+        polygon: () => ({ setLatLngs(vertices) { this.vertices = vertices; this.center = vertices[0]; }, setStyle(style) { this.style = style; },
+            getBounds() { return { contains: ({ lng, lat }) => lng >= Math.min(...this.vertices.map(v => v[1])) && lng <= Math.max(...this.vertices.map(v => v[1]))
+                && lat >= Math.min(...this.vertices.map(v => v[0])) && lat <= Math.max(...this.vertices.map(v => v[0])) }; },
             isTooltipOpen() { return !!this.tooltip; },
             getCenter() { return this.center; },
             getTooltip() { return this.tooltip; },
             bindTooltip(content) { this.tooltip = { getContent: () => content, setLatLng(position) { this.position = position; }, update() {} }; },
             unbindTooltip() { this.tooltip = undefined; } }) };
-    const map = { getPane: element, getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {} };
+    const map = { getPane: element, getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {},
+        attached: true, hasLayer() { return this.attached; }, projections: 0,
+        project({ lng, lat }, zoom) { assert.equal(zoom, 0); this.projections++; return { x: lng, y: Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) }; } };
     const labelLayout = { register(owner, polygons) { this.polygons = polygons; this.owner = owner; },
         schedule() { this.scheduled = true; }, unregister(owner) { assert.equal(owner, this.owner); this.released = true; } };
-    return { annotation, members, labelLayout, rendering: createAnnotationLeafletLayer(leaflet, map, annotation, labelLayout) };
+    return { annotation, members, map, labelLayout, rendering: createAnnotationLeafletLayer(leaflet, map, annotation, labelLayout) };
 }
 
 test("label layout sees filtered, visible saved polygons and releases removed renderers", () => {
@@ -111,4 +115,39 @@ test("geometry updates relocate labels and editing hides only the saved copy", (
     rendering.setEditingPolygon(null);
     assert.equal(members.size, 1);
     assert.deepEqual([...members][0].getTooltip().position, [20, 10]);
+});
+
+test("map hits follow projected polygon edges, include boundaries, and reuse projected vertices", () => {
+    const { annotation, rendering, map } = setup();
+    annotation.polygons[0].vertices = [[0, 0], [10, 0], [0, 80]];
+    rendering.refresh();
+    assert.equal(rendering.polygonsAt({ lng: 5, lat: 50 }).length, 1, "Mercator edge is above the geographic straight-line midpoint");
+    const projections = map.projections;
+    assert.equal(rendering.polygonsAt({ lng: 5, lat: 60 }).length, 0);
+    assert.equal(map.projections, projections + 1, "only the pointer is projected on subsequent moves");
+    assert.equal(rendering.polygonsAt({ lng: 0, lat: 80 }).length, 1, "vertices and edges are included");
+    annotation.polygons[0].vertices = [[0, 0], [1, 0], [0, 1]];
+    rendering.refresh();
+    assert.equal(rendering.polygonsAt({ lng: 5, lat: 50 }).length, 0);
+    assert.equal(rendering.polygonsAt({ lng: 0.1, lat: 0.1 }).length, 1);
+});
+
+test("hit order matches shape drawing order and excludes filtered, hidden, zero-opacity and draft polygons", () => {
+    const { annotation, rendering, map, members } = setup();
+    annotation.polygons.push({ ...annotation.polygons[0], id: "top", name: "Top" });
+    rendering.refresh();
+    const point = { lng: 0.1, lat: 0.1 };
+    assert.deepEqual(rendering.polygonsAt(point).map(p => p.id), ["top", "polygon"]);
+    rendering.setInspectedPolygon("polygon");
+    assert.equal([...members][0].style.dashArray, "6 4");
+    assert.deepEqual(rendering.polygonsAt(point).map(p => p.id), ["top", "polygon"], "highlight does not change hit order");
+    rendering.setEditingPolygon("top");
+    assert.deepEqual(rendering.polygonsAt(point).map(p => p.id), ["polygon"]);
+    annotation.filter = "absent"; rendering.refresh();
+    assert.deepEqual(rendering.polygonsAt(point), []);
+    annotation.filter = ""; rendering.refresh();
+    rendering.setOpacity(0);
+    assert.deepEqual(rendering.polygonsAt(point), []);
+    rendering.setOpacity(1); map.attached = false;
+    assert.deepEqual(rendering.polygonsAt(point), []);
 });
