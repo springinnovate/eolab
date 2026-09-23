@@ -617,6 +617,21 @@ test("raster series remains active during map inspection and closes without hidi
     h.controller.destroy();
 });
 
+test("annotation click details remain active while independent raster and vector results arrive", () => {
+    const h = fixture();
+    h.controller.beginMapClick({ lat: 22, lng: 78 });
+    h.controller.showHistogram(2, { activate: false });
+    h.controller.showFeatureInspector({ activate: false });
+    h.controller.showAnnotations();
+    h.controller.setClickResult("histogram", { state: "ready", message: "2 raster results" });
+    h.controller.setClickResult("feature", { state: "ready", message: "1 feature" });
+    h.controller.setFeatureResultCount(1);
+    assert.equal(h.controller.activeTool, "annotations");
+    assert.equal(h.histogram.hidden, false);
+    assert.equal(h.feature.hidden, false);
+    h.controller.destroy();
+});
+
 test("basemap follows panel widths, narrow map space, visibility and layout cleanup", () => {
     let resize, disconnected = false, open = false;
     const observed = [];

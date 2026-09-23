@@ -1165,7 +1165,7 @@ async function initializeCatalog(
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
-     * Fan one map exploration intent out to independent raster and vector peers.
+     * Sample rasters and catalog vectors, then foreground any clicked annotation's details.
      * Leaflet emits this event only for a completed click, not a drag-pan.
      *
      * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
@@ -1193,6 +1193,7 @@ async function initializeCatalog(
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);
+            annotations?.inspectAt(event.latlng);
         } finally {
             selectingMapClick = false;
         }
@@ -1212,7 +1213,7 @@ async function initializeCatalog(
     {
         const annotationPanel = new AnnotationPanelView({ document,
             onOpen: () => mapInspection.showAnnotations(),
-            onClose: () => mapInspection.hideAnnotations() });
+            onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
             panel: annotationPanel,
             leaflet: L,

@@ -12,6 +12,7 @@ function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
+        controls: new Map(), inspectionMatches: [], inspectedPolygon: null, hoverCard: { hide() {}, setEnabled() {} },
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },
@@ -46,7 +47,7 @@ function drawingController() {
     const annotations = controller();
     const layer = annotations.model.createLayer("Habitat areas");
     const calls = [];
-    annotations.controls = new Map([[layer.id, { refresh() { calls.push("controls"); } }]]);
+    annotations.controls = new Map([[layer.id, { clearPolygonInspection() {}, refresh() { calls.push("controls"); } }]]);
     annotations.layers = new Map();
     annotations.undoButton = {};
     annotations.onEditingChange = editing => calls.push(["editing", editing]);
@@ -59,6 +60,85 @@ function drawingController() {
     annotations.refreshLayer = (...args) => calls.push(["refresh", ...args]);
     return { annotations, layer, calls };
 }
+
+/** @return {Object} Real annotation owner/model with observable panel, hit and highlight boundaries. */
+function inspectionController() {
+    const annotations = controller();
+    const layer = annotations.model.createLayer("Habitats");
+    layer.name = "Habitats";
+    annotations.model.beginPolygon(layer.id);
+    for (const vertex of [[0, 0], [2, 0], [1, 2]]) annotations.model.addVertex(vertex);
+    const own = annotations.model.savePolygon();
+    const peer = { ...own, id: "peer-0", name: "A neighbour's polygon", contributor: "Maria" };
+    annotations.shared.set(layer.id, { contributors: [{ own: true, name: "Lee" }], polygons: [peer], canContribute: true });
+    const controls = { inspection: { scrollIntoView() {} }, clearPolygonInspection() { this.hit = null; },
+        showPolygonInspection(hit, matches, select) { Object.assign(this, { hit, matches, select }); }, setCollaboration() {} };
+    const rendering = { polygonsAt: () => annotations.displayLayer(layer).polygons.slice().reverse(),
+        setInspectedPolygon(id) { this.highlight = id; }, refresh() {} };
+    annotations.layers.set(layer.id, rendering); annotations.controls.set(layer.id, controls);
+    annotations.mapLayers = { render() {} };
+    return { annotations, layer, own, peer, controls, rendering };
+}
+
+test("click selects the topmost peer read-only and offers the author's own polygon without changing ownership", () => {
+    const h = inspectionController();
+    assert.equal(h.annotations.inspectAt({ lat: 0.5, lng: 1 }), true);
+    assert.equal(h.controls.hit.polygon.id, h.peer.id);
+    assert.equal(h.controls.hit.canEdit, false);
+    assert.equal(h.rendering.highlight, h.peer.id);
+    assert.equal(h.annotations.panel.selectedKey, `local:annotation:${h.layer.id}`);
+    h.controls.select(1);
+    assert.equal(h.controls.hit.polygon.id, h.own.id);
+    assert.equal(h.controls.hit.canEdit, true);
+    assert.equal(h.rendering.highlight, h.own.id);
+    h.annotations.shared.get(h.layer.id).canContribute = false;
+    h.annotations.refreshInspection();
+    assert.equal(h.controls.hit.canEdit, false, "a membership change removes editing actions");
+});
+
+test("hiding, filtering, deleting, drawing and empty clicks cannot retain stale polygon details", () => {
+    const h = inspectionController();
+    const click = () => h.annotations.inspectAt({ lat: 0.5, lng: 1 });
+    click(); h.layer.visible = false; h.annotations.refreshInspection();
+    assert.equal(h.controls.hit, null); assert.equal(h.rendering.highlight, null);
+    assert.equal(click(), false);
+    h.layer.visible = true; click(); h.layer.filter = "no match"; h.annotations.refreshInspection();
+    assert.equal(h.controls.hit, null);
+    h.layer.filter = ""; click(); h.annotations.shared.get(h.layer.id).polygons = []; h.annotations.refreshInspection();
+    assert.equal(h.controls.hit, null);
+    click(); h.layer.polygons = []; h.annotations.refreshInspection();
+    assert.equal(h.controls.hit, null);
+    h.layer.polygons = [h.own]; h.annotations.model.beginPolygon(h.layer.id);
+    assert.equal(click(), false);
+    h.annotations.model.cancelPolygon(); h.layer.opacity = 0;
+    assert.equal(click(), false);
+});
+
+test("layer order decides overlapping hits and background updates do not reopen or focus the panel", () => {
+    const h = inspectionController();
+    const upper = h.annotations.model.createLayer("Upper layer");
+    upper.name = "Upper layer";
+    upper.position = 0; h.layer.position = 1;
+    h.annotations.layers.set(upper.id, { polygonsAt: () => [h.peer] });
+    assert.deepEqual(h.annotations.polygonsAt({ lat: 0.5, lng: 1 }).map(hit => hit.layerName), ["Upper layer", "Habitats", "Habitats"]);
+    h.annotations.layers.delete(upper.id);
+    h.annotations.inspectAt({ lat: 0.5, lng: 1 }); h.controls.select(1);
+    h.annotations.panel.open = false;
+    h.own.note = "Updated note"; h.annotations.refreshInspection();
+    assert.equal(h.controls.hit.polygon.note, "Updated note");
+    assert.equal(h.annotations.panel.open, false);
+});
+
+test("replacing a peer contribution clears its selection instead of selecting a reused positional ID", () => {
+    const h = inspectionController();
+    h.annotations.inspectAt({ lat: 0.5, lng: 1 });
+    const collection = exportAnnotationGeoJSON(h.layer);
+    collection.features[0].id = h.peer.id;
+    collection.features[0].properties.contributor = "Maria";
+    h.annotations.updateSharedLayer(h.layer.id, { contributors: [], collections: [collection], canContribute: true });
+    assert.equal(h.controls.hit, null);
+    assert.equal(h.rendering.highlight, null);
+});
 
 test("finish offers naming, autosaves text, and drawing another retains the destination and first polygon", async () => {
     const { annotations, layer, calls } = drawingController();

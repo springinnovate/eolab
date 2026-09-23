@@ -7,6 +7,7 @@ import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
 import { PolygonLabelLayout } from "./polygon-label-layout.js";
+import { AnnotationHoverCard } from "./hover-card.js";
 
 /** Own local layers, isolated polygon drafts, annotation controls and autosave. */
 export class AnnotationController {
@@ -44,6 +45,9 @@ export class AnnotationController {
         this.shared = new Map();
         this.controls = new Map();
         this.layers = new Map();
+        this.inspectionMatches = [];
+        this.inspectedPolygon = null;
+        this.hoverCard = new AnnotationHoverCard(map, position => this.polygonsAt(position));
         this.loaded = false;
         this.savedSharingLayers = [];
         this.orderRestored = false;
@@ -208,6 +212,11 @@ export class AnnotationController {
         const colorsChanged = JSON.stringify(data.contributors) !== JSON.stringify(previous?.contributors);
         if (changed || colorsChanged) { this.layers.get(id).refresh(); this.mapLayers.render(); }
         if (ownColorChanged && this.model.draft?.layerId === id) this.renderEditor();
+        // Peer IDs currently describe positions within a contribution. A replacement
+        // collection must not silently select the polygon that took a deleted one's place.
+        if (changed && this.inspectedPolygon?.layerId === id
+            && !layer.polygons.some(polygon => polygon.id === this.inspectedPolygon.polygonId)) this.clearInspection();
+        if (changed || colorsChanged || renamed || data.canContribute !== previous?.canContribute) this.refreshInspection();
         return changed;
     }
 
@@ -351,14 +360,16 @@ export class AnnotationController {
                 layer.visible = visible;
                 if (!visible && this.completedPolygon?.layerId === layer.id) this.closePolygonCompletion();
                 if (!visible && this.model.draft?.layerId === layer.id) { this.model.cancelPolygon(); this.updateEditor(); }
+                this.refreshInspection();
                 this.save();
             },
-            opacityChanged: (_record, opacity) => { layer.opacity = opacity; controls.opacity.value = opacity; this.save(); },
+            opacityChanged: (_record, opacity) => { layer.opacity = opacity; controls.opacity.value = opacity; this.refreshInspection(); this.save(); },
             copyLayerForUndo: () => {
                 if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the current polygon before removing this layer.");
                 return structuredClone(layer);
             },
             removed: () => {
+                this.clearInspection();
                 if (this.completedPolygon?.layerId === layer.id) this.closePolygonCompletion();
                 if (this.model.draft?.layerId === layer.id) { this.model.cancelPolygon(); this.updateEditor(); }
                 if (this.model.deleted?.layerId === layer.id) this.model.deleted = null;
@@ -499,6 +510,8 @@ export class AnnotationController {
     /** Synchronize map editing presentation and notify composition of the mode. @return {void} */
     updateEditor() {
         this.closePolygonCompletion();
+        this.clearInspection();
+        this.hoverCard.setEnabled(!this.model.draft);
         this.onEditingChange(!!this.model.draft);
         for (const [layerId, rendering] of this.layers) {
             rendering.setEditingPolygon(this.model.draft?.layerId === layerId ? this.model.draft.polygon.id : null);
@@ -531,6 +544,7 @@ export class AnnotationController {
         this.refreshLayer(layerId, true, isNew ? null : polygon.id);
         if (isNew) {
             this.completedPolygon = { layerId, polygonId: polygon.id };
+            this.hoverCard.setEnabled(false);
             this.onEditingChange(true);
             this.editor.showCompletion(this.model.layer(layerId).name, polygon);
         }
@@ -558,6 +572,7 @@ export class AnnotationController {
         if (!this.completedPolygon) return;
         const { layerId } = this.completedPolygon;
         this.completedPolygon = null;
+        this.hoverCard.setEnabled(!this.model.draft);
         this.controls.get(layerId).refresh();
         this.onEditingChange(!!this.model.draft);
         this.editor.closeCompletion();
@@ -581,6 +596,81 @@ export class AnnotationController {
         if (rebuild) this.controls.get(id).refresh(focusPolygon);
         // Polygon text changes do not alter stack controls unless a filter is active.
         if (rebuild || labelChanged || (typeof layer.filter === "string" ? layer.filter : layer.filter.enabled && layer.filter.rules.length)) this.mapLayers.render();
+        this.refreshInspection();
+    }
+
+    /**
+     * Find visible annotation polygons at a map location without intercepting map events.
+     * @param {{lat:number,lng:number}} position Pointer location.
+     * @return {{layerId:string,layerName:string,polygon:import("./model.js").AnnotationPolygon,canEdit:boolean}[]} Top-first hits with local edit permission.
+     */
+    polygonsAt(position) {
+        if (this.model.draft || this.completedPolygon) return [];
+        return [...this.model.layers].sort((a, b) => a.position - b.position).flatMap(layer => {
+            if (!layer.visible || layer.opacity === 0) return [];
+            return (this.layers.get(layer.id)?.polygonsAt(position) ?? []).map(polygon => ({
+                layerId: layer.id, layerName: layer.name, polygon,
+                canEdit: this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id),
+            }));
+        });
+    }
+
+    /**
+     * Open annotation details for a map click; composition still handles raster and catalog-vector sampling.
+     * @param {{lat:number,lng:number}} position Click location.
+     * @return {boolean} Whether a visible annotation polygon was selected.
+     */
+    inspectAt(position) {
+        this.clearInspection();
+        this.inspectionMatches = this.polygonsAt(position);
+        if (!this.inspectionMatches.length) return false;
+        this.selectInspectionMatch(0);
+        return true;
+    }
+
+    /**
+     * Highlight an overlap choice and reveal its owner-supplied controls in the existing panel.
+     * @param {number} index Index in the current click's polygon matches.
+     * @return {void}
+     */
+    selectInspectionMatch(index) {
+        const hit = this.inspectionMatches[index];
+        if (!hit) return;
+        for (const controls of this.controls.values()) controls.clearPolygonInspection();
+        for (const [id, rendering] of this.layers) rendering.setInspectedPolygon(id === hit.layerId ? hit.polygon.id : null);
+        this.inspectedPolygon = { layerId: hit.layerId, polygonId: hit.polygon.id };
+        this.controls.get(hit.layerId).showPolygonInspection(hit, this.inspectionMatches, choice => this.selectInspectionMatch(choice), true);
+        this.panel.showLayer(`local:annotation:${hit.layerId}`);
+        this.controls.get(hit.layerId).inspection.scrollIntoView({ block: "nearest" });
+    }
+
+    /** Clear temporary hover, highlight and details without deleting any polygon. @return {void} */
+    clearInspection() {
+        this.hoverCard.hide();
+        for (const controls of this.controls.values()) controls.clearPolygonInspection();
+        for (const rendering of this.layers.values()) rendering.setInspectedPolygon(null);
+        this.inspectionMatches = [];
+        this.inspectedPolygon = null;
+    }
+
+    /**
+     * Refresh clicked details after edits or collaboration updates; discard unavailable selections.
+     * Never reopen the panel or move focus while background data changes.
+     * @return {void}
+     */
+    refreshInspection() {
+        this.hoverCard.hide();
+        if (!this.inspectedPolygon) return;
+        this.inspectionMatches = this.inspectionMatches.flatMap(hit => {
+            const layer = this.model.layers.find(item => item.id === hit.layerId);
+            if (!layer?.visible || layer.opacity === 0 || !this.layers.has(layer.id)) return [];
+            const polygon = matchingAnnotationPolygons(this.displayLayer(layer)).find(item => item.id === hit.polygon.id);
+            return polygon ? [{ layerId: layer.id, layerName: layer.name, polygon,
+                canEdit: this.shared.get(layer.id)?.canContribute !== false && layer.polygons.some(own => own.id === polygon.id) }] : [];
+        });
+        const hit = this.inspectionMatches.find(item => item.layerId === this.inspectedPolygon.layerId && item.polygon.id === this.inspectedPolygon.polygonId);
+        if (!hit) { this.clearInspection(); return; }
+        this.controls.get(hit.layerId).showPolygonInspection(hit, this.inspectionMatches, choice => this.selectInspectionMatch(choice));
     }
 
     /**
@@ -595,6 +685,7 @@ export class AnnotationController {
         const controls = this.controls.get(record?.state?.id);
         if (!controls) return false;
         this.closePolygonCompletion();
+        this.clearInspection();
         this.panel.showLayer(key);
         controls.open(action);
         return true;

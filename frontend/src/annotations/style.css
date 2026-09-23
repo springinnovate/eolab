@@ -147,3 +147,24 @@
 .annotation-drawing-action { grid-column: 2; min-width: 0; }
 .annotation-drawing-action [hidden] { display: none; }
 .annotation-contributor-color { display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.4em; border: 1px solid #555; border-radius: 2px; }
+
+.annotation-hover-card {
+    position: absolute; z-index: 850; pointer-events: none;
+    padding: 0.3rem 0.5rem; border: 1px solid #777; border-radius: 4px;
+    background: rgb(255 255 255 / 95%); color: #222;
+    font-size: 0.8rem; line-height: 1.35; white-space: pre-line;
+    max-width: min(18rem, calc(100% - 8px)); overflow-wrap: anywhere;
+}
+.annotation-hover-card[hidden], .annotation-polygon-inspection[hidden] { display: none; }
+.annotation-polygon-inspection {
+    border: 1px solid var(--brand); border-left-width: 4px; border-radius: var(--radius);
+    background: var(--surface-selected); padding: 0.65rem 0.75rem; margin: 0.3rem 0 1rem;
+}
+.annotation-polygon-inspection h3 { margin: 0 0 0.3rem; overflow-wrap: anywhere; }
+.annotation-polygon-inspection p { margin: 0.3rem 0; }
+.annotation-polygon-inspection .annotation-selection-caption {
+    margin: 0 0 0.35rem; font-size: 0.75rem; font-weight: 700; color: var(--brand-hover);
+}
+.annotation-inspected-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.annotation-polygon-inspection label { display: block; margin-top: 0.5rem; }
+.annotation-polygon-inspection select { display: block; width: 100%; }
