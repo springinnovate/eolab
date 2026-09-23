@@ -15,7 +15,7 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(record:Object)=>Object} renderDescriptor Return an authorized
  * feature-owned composite-rendering descriptor.
  * @property {(record:Object)=>Object} snapshot Return presentation-ready
- * datasetKind ("raster" or "vector"), legend, optional role badge, and other
+ * datasetKind ("raster", "vector" or "annotation"), legend, optional role badge, and other
  * feature-owned snapshot fields.
  * @property {(record:Object)=>Object} [exportFilterState] Export portable filtering
  * independently of copyable appearance.
@@ -147,6 +147,7 @@ export class MapLayerController {
             onVisibility: (key, visible) => this.setVisible(key, visible),
             onAllVisibility: (visible) => this.setAllVisible(visible),
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
+            onSort: (order) => this.sortLayers(order),
             onRemove: (key) => this.removeWithUndo(key),
             onUndoRemove: () => void this.undoLayerRemoval(),
             onDismissRemoval: () => this.dismissLayerRemoval(),
@@ -644,6 +645,42 @@ export class MapLayerController {
         );
         this.render({ key, action: "reorder" });
         this.onOrderChange(this.snapshots());
+    }
+
+    /**
+     * Sort the drawing stack once, preserving ties, layer contents and manual ordering afterward.
+     * Names use English numeric, case-insensitive ordering. Type groups are annotations,
+     * vectors, then rasters; visibility grouping puts visible layers first.
+     * @param {"name-ascending"|"name-descending"|"visible-first"|"layer-type"} order Requested sort action.
+     * @return {void}
+     * @throws {TypeError} If the requested sort action is unsupported.
+     */
+    sortLayers(order) {
+        const names = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+        const types = { annotation: 0, vector: 1, raster: 2 };
+        const actions = {
+            "name-ascending": { compare: (a, b) => names.compare(a.label, b.label), label: "Name A–Z" },
+            "name-descending": { compare: (a, b) => names.compare(b.label, a.label), label: "Name Z–A" },
+            "visible-first": { compare: (a, b) => Number(b.visible) - Number(a.visible), label: "Visible first" },
+            "layer-type": { compare: (a, b) => (types[a.datasetKind] ?? 3) - (types[b.datasetKind] ?? 3),
+                label: "Annotations, vectors, then rasters" },
+        };
+        if (!Object.hasOwn(actions, order)) throw new TypeError("Unsupported map layer sort action.");
+        const action = actions[order];
+        const previous = this.snapshots();
+        const sorted = [...previous].sort(action.compare);
+        const changed = this.stack.restoreOrder(sorted.map(layer => layer.key));
+        if (changed) {
+            this.#applyLeafletOrder();
+            for (const [index, layer] of sorted.entries()) {
+                if (layer.key === previous[index].key) continue;
+                const record = this.#requireRecord(layer.key);
+                record.adapter.orderChanged?.(record);
+            }
+            this.render();
+            this.onOrderChange(this.snapshots());
+        }
+        this.view.setStatus(`${action.label}. Layers at the top draw above layers below.`);
     }
 
     /**

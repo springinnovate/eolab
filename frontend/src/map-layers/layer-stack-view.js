@@ -58,6 +58,7 @@ function requireLayerStackElement(documentContext, selector) {
  * retained layer.
  * @property {(key: string, targetIndex: number) => void} onReorder Move one
  * layer to a zero-based top-first position.
+ * @property {(order:"name-ascending"|"name-descending"|"visible-first"|"layer-type")=>void} onSort Sort the drawing stack once.
  * @property {(key: string) => void} onRemove Remove one retained layer.
  * @property {()=>void} onUndoRemove Restore the most recently removed layer.
  * @property {()=>void} onDismissRemoval Forget the layer-removal Undo offer.
@@ -99,6 +100,12 @@ export class MapLayerStackView {
         this.hideAll = requireLayerStackElement(documentContext, "#map-layers-hide-all");
         this.showAll.addEventListener("click", () => this.handlers?.onAllVisibility(true));
         this.hideAll.addEventListener("click", () => this.handlers?.onAllVisibility(false));
+        this.sort = requireLayerStackElement(documentContext, "#map-layers-sort");
+        this.sort.addEventListener("change", () => {
+            const order = this.sort.value;
+            this.sort.value = "";
+            if (order) this.handlers?.onSort(order);
+        });
         this.removalNotice = requireLayerStackElement(documentContext, "#map-layer-removal");
         this.removalMessage = requireLayerStackElement(documentContext, "#map-layer-removal-message");
         this.undoRemove = requireLayerStackElement(documentContext, "#undo-layer-removal");
@@ -189,6 +196,7 @@ export class MapLayerStackView {
             if (!retainedKeys.has(key)) this.legends.delete(key);
         }
         this.#renderVisibilityActions(layers);
+        this.sort.disabled = layers.length < 2;
         this.#renderCounts(layers);
         this.#renderFilters(layers);
         if (

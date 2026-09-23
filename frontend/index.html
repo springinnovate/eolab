@@ -443,9 +443,16 @@
                       <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
                       </div>
                     </details>
-                    <div class="map-layer-visibility-actions" role="group" aria-label="Map layer visibility">
+                    <div class="map-layer-visibility-actions" role="group" aria-label="Map layer controls">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>
+                      <select id="map-layers-sort" aria-label="Sort map layers" title="Sort once. Layers at the top draw above layers below." disabled>
+                        <option value="" selected disabled>Sort…</option>
+                        <option value="name-ascending">Name A–Z</option>
+                        <option value="name-descending">Name Z–A</option>
+                        <option value="visible-first">Visible first</option>
+                        <option value="layer-type">Group by layer type</option>
+                      </select>
                     </div>
                     <section class="rendering-availability">
                     <p

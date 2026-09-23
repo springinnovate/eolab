@@ -538,6 +538,68 @@ test("local layers keep their identity and survive Catalog clearing and restorat
 });
 
 
+test("name sorts use displayed numeric names, retain ties and preserve layer state", async () => {
+    const map = createMap(), view = createView(), changes = [];
+    const controller = new MapLayerController({ leafletMap: map, view,
+        onOrderChange: layers => changes.push(layers.map(layer => layer.key)) });
+    const adapter = createAdapter("raster");
+    adapter.snapshot = record => ({ datasetKind: "raster", label: record.state.title });
+    const records = [];
+    for (const [id, title] of [["one", "Layer 10"], ["two", "Layer 2"], ["three", "layer 2"], ["four", "Alpha"]]) {
+        await controller.show(catalogItem(id), adapter);
+        const record = controller.getRecord(getCatalogItemKey(catalogItem(id)));
+        record.state.title = title;
+        records.push(record);
+    }
+    const keys = records.map(record => record.entry.key);
+    controller.restoreOrder(keys);
+    controller.setVisible(keys[1], false);
+    controller.setOpacity(keys[0], 0.3);
+    const originalState = records.map(record => ({ ...record.entry }));
+    const activeKey = controller.presentationActiveKey;
+    adapter.events.length = 0;
+    view.handlers.onSort("name-ascending");
+    assert.deepEqual(changes, [[keys[3], keys[1], keys[2], keys[0]]]);
+    assert.deepEqual(controller.leafletLayers.order, changes[0]);
+    assert.ok(controller.leafletLayers.get(keys[3]).zIndex > controller.leafletLayers.get(keys[0]).zIndex);
+    assert.deepEqual(records.map(record => ({ ...record.entry })), originalState);
+    assert.equal(controller.presentationActiveKey, activeKey);
+    assert.equal(controller.leafletLayers.isAttached(keys[1]), false);
+    assert.deepEqual(adapter.events, [["order", keys[3]], ["order", keys[0]]]);
+    assert.match(view.status, /Layers at the top draw above/);
+    view.handlers.onSort("name-ascending");
+    assert.equal(changes.length, 1, "already sorted layers do not notify or refresh renderers");
+    view.handlers.onSort("name-descending");
+    assert.deepEqual(changes.at(-1), [keys[0], keys[1], keys[2], keys[3]], "descending preserves equal-name order too");
+    controller.reorder(keys[3], 0);
+    assert.deepEqual(changes.at(-1), [keys[3], keys[0], keys[1], keys[2]], "manual ordering still works");
+    records[0].state.title = "A changed name";
+    controller.render();
+    assert.deepEqual(controller.snapshots().map(layer => layer.key), changes.at(-1), "name edits do not automatically resort");
+    assert.throws(() => controller.sortLayers("reverse-stack"), TypeError);
+});
+
+test("visibility and type grouping keep each group's current order without changing visibility", () => {
+    const view = createView();
+    const controller = new MapLayerController({ leafletMap: createMap(), view });
+    for (const [key, kind, visible] of [
+        ["r1", "raster", true], ["v1", "vector", false], ["a1", "annotation", false],
+        ["r2", "raster", false], ["a2", "annotation", true], ["v2", "vector", true],
+    ]) {
+        const adapter = createAdapter(kind);
+        adapter.snapshot = () => ({ datasetKind: kind });
+        controller.addLocal({ key: `local:${key}`, label: key, visible }, adapter);
+    }
+    controller.restoreOrder(["r1", "v1", "a1", "r2", "a2", "v2"].map(key => `local:${key}`));
+    view.handlers.onSort("visible-first");
+    assert.deepEqual(controller.snapshots().map(layer => layer.label), ["r1", "a2", "v2", "v1", "a1", "r2"]);
+    view.handlers.onSort("layer-type");
+    assert.deepEqual(controller.snapshots().map(layer => layer.label), ["a2", "a1", "v2", "v1", "r1", "r2"]);
+    assert.deepEqual(controller.snapshots().map(layer => layer.visible), [true, false, true, false, true, false]);
+    controller.setVisible("local:r2", true);
+    assert.equal(controller.snapshots().at(-1).label, "r2", "visibility changes do not automatically regroup");
+});
+
 test("saved ordering applies atomically without user-reorder callbacks or focus requests", async () => {
     const view = createView(), renders = [], reorders = [];
     view.render = (...args) => renders.push(args);
