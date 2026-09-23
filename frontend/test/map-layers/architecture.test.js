@@ -6,6 +6,7 @@ const MAP_LAYER_MODULES = [
     "composite-api.js",
     "composite-leaflet-renderer.js",
     "map-render-status.js",
+    "tile-recovery.js",
     "controller.js",
     "layer-stack.js",
     "layer-stack-view.js",

@@ -1,5 +1,7 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
+import { TileRecovery } from "./tile-recovery.js";
+
 const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
 
 /** Manage keyed source layers and optional server-composed presentation. */
@@ -10,8 +12,10 @@ export class LeafletLayerSet {
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
      * @param {{update:(layers:Object[])=>void,clear:()=>void}|null}
      * [compositeRenderer=null] Optional ordinary-map composite renderer.
+     * @param {{onStatus:(status:import('./tile-recovery.js').MapTileStatus)=>void,onLayerStatus:(key:string,status:import('./tile-recovery.js').MapTileStatus)=>void}|null}
+     * [tileStatus=null] Optional feedback for independent grids beside local layers.
      */
-    constructor(leafletMap, compositeRenderer = null) {
+    constructor(leafletMap, compositeRenderer = null, tileStatus = null) {
         this.leafletMap = leafletMap;
         this.compositeRenderer = compositeRenderer;
         this.layers = new Map();
@@ -21,6 +25,9 @@ export class LeafletLayerSet {
         this.individualRenderingGeneration = 0;
         this.pendingIndividualRendering = null;
         this.activeIndividualRenderingSignature = null;
+        this.tileStatus = tileStatus;
+        this.localTileRecovery = new Map();
+        this.showingLocalLayers = false;
     }
 
     /**
@@ -216,6 +223,7 @@ export class LeafletLayerSet {
         if (record === undefined) {
             return null;
         }
+        this.#removeLocalTileRecovery(key);
         if (this.pendingIndividualRendering?.keys.has(key)) {
             this.#cancelPendingIndividualRendering();
         }
@@ -237,6 +245,7 @@ export class LeafletLayerSet {
      * @return {void}
      */
     clear() {
+        this.#clearLocalTileRecovery();
         this.individualRenderingGeneration += 1;
         this.#cancelPendingIndividualRendering();
         this.compositeRenderer?.clear();
@@ -256,6 +265,7 @@ export class LeafletLayerSet {
             this.#renderWithLocalLayers();
             return;
         }
+        this.#clearLocalTileRecovery();
         if (this.individualRenderingKeys !== null) {
             this.#prepareIndividualRendering();
             return;
@@ -288,6 +298,8 @@ export class LeafletLayerSet {
         this.#cancelPendingIndividualRendering();
         this.activeIndividualRenderingSignature = null;
         this.compositeRenderer.clear();
+        this.showingLocalLayers = true;
+        this.#watchLocalTiles();
         for (const candidate of this.rendering) {
             const record = this.#require(candidate.key);
             const visible = candidate.visible && (candidate.descriptor === null ||
@@ -297,6 +309,86 @@ export class LeafletLayerSet {
             if (!visible && record.attached) this.leafletMap.removeLayer(record.layer);
             record.attached = visible;
         }
+    }
+
+    /** Retry failed visible independent tiles without reloading successful ones. @return {void} */
+    retryFailedTiles() {
+        for (const { recovery } of this.localTileRecovery.values()) recovery.retryFailedTiles();
+    }
+
+    /**
+     * Report whether this layer's tile errors already have recovery and feedback.
+     * @param {string} key Retained layer key.
+     * @return {boolean} Whether independent tile recovery owns its errors.
+     */
+    hasTileRecovery(key) {
+        return this.localTileRecovery.has(key);
+    }
+
+    /** Observe only visible catalog grids; annotations have no server tiles. @return {void} */
+    #watchLocalTiles() {
+        if (!this.tileStatus) return;
+        const visible = new Set(this.rendering.filter(candidate => candidate.descriptor !== null &&
+            candidate.visible &&
+            (this.individualRenderingKeys === null || this.individualRenderingKeys.has(candidate.key)))
+            .map(candidate => candidate.key));
+        for (const key of this.localTileRecovery.keys()) {
+            if (!visible.has(key)) this.#removeLocalTileRecovery(key);
+        }
+        for (const key of visible) {
+            if (!this.localTileRecovery.has(key)) {
+                const record = this.#require(key);
+                // A previously staged paired grid must start a fresh observable tile cycle.
+                if (record.attached) {
+                    this.leafletMap.removeLayer(record.layer);
+                    record.attached = false;
+                }
+                const status = { phase: "loading", total: 0, loaded: 0, failed: 0 };
+                const recovery = new TileRecovery(this.leafletMap, this.#require(key).layer, snapshot => {
+                    const current = this.localTileRecovery.get(key);
+                    if (!current || current.recovery !== recovery) return;
+                    current.status = snapshot;
+                    this.tileStatus.onLayerStatus(key, snapshot);
+                    this.#reportLocalTileStatus();
+                });
+                this.localTileRecovery.set(key, { recovery, status });
+            }
+            this.localTileRecovery.get(key).recovery.refresh();
+        }
+        this.#reportLocalTileStatus();
+    }
+
+    /** Combine independent grid counts into the existing on-map status. @return {void} */
+    #reportLocalTileStatus() {
+        if (!this.showingLocalLayers || !this.tileStatus) return;
+        const statuses = [...this.localTileRecovery.values()].map(record => record.status);
+        const total = statuses.reduce((sum, status) => sum + status.total, 0);
+        const loaded = statuses.reduce((sum, status) => sum + status.loaded, 0);
+        const failed = statuses.reduce((sum, status) => sum + status.failed, 0);
+        const phase = statuses.length === 0 ? "idle"
+            : statuses.some(status => status.phase === "retrying") ? "retrying"
+            : statuses.some(status => status.phase === "loading") ? "loading"
+            : failed ? "incomplete" : "complete";
+        this.tileStatus.onStatus({ phase, total, loaded, failed });
+    }
+
+    /**
+     * Release one grid's observers and reset its tile warning.
+     * @param {string} key Retained layer key.
+     * @return {void}
+     */
+    #removeLocalTileRecovery(key) {
+        const record = this.localTileRecovery.get(key);
+        if (!record) return;
+        record.recovery.destroy();
+        this.localTileRecovery.delete(key);
+        this.tileStatus.onLayerStatus(key, { phase: "idle", total: 0, loaded: 0, failed: 0 });
+    }
+
+    /** Stop independent tile recovery when another presentation takes ownership. @return {void} */
+    #clearLocalTileRecovery() {
+        this.showingLocalLayers = false;
+        for (const key of this.localTileRecovery.keys()) this.#removeLocalTileRecovery(key);
     }
 
     /**

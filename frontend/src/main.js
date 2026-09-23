@@ -775,7 +775,10 @@ async function initializeCatalog(
     let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
     const mapRenderStatus = addMapRenderStatus(
-        L, leafletMap, () => compositeLeafletRenderer.retryFailedTiles(),
+        L, leafletMap, () => {
+            compositeLeafletRenderer.retryFailedTiles();
+            leafletLayers.retryFailedTiles();
+        },
     );
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
@@ -783,13 +786,14 @@ async function initializeCatalog(
         client: new CompositeMapPlanClient(),
         onStatus: (status) => mapRenderStatus.update(status),
     });
+    const leafletLayers = new LeafletLayerSet(leafletMap, compositeLeafletRenderer, {
+        onStatus: status => mapRenderStatus.update(status),
+        onLayerStatus: (key, status) => mapLayerController.updateTileStatus(key, status),
+    });
     const mapLayerController = new MapLayerController({
         leafletMap,
         view: mapLayerStackView,
-        leafletLayers: new LeafletLayerSet(
-            leafletMap,
-            compositeLeafletRenderer,
-        ),
+        leafletLayers,
         onLayersChange: (layers) => {
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
