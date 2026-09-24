@@ -2034,8 +2034,11 @@ async function startApplication() {
         document.querySelector("#reset-map-view").title = "Restore the shared map's starting layers, styles and location; retry any layers that could not load";
         document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Use Restore shared map to retry, or ask the author for a complete map link.";
     } else {
-        document.querySelector("#copy-map-link-label").textContent = "Create shared map";
-        document.querySelector("#copy-map-link").title = "Create a named shared map from this view";
+        document.querySelector("#copy-map-link-label").textContent = "Publish map";
+        document.querySelector("#copy-map-link").title = "Publish a map for others to explore";
+        document.querySelector("#copy-map-link svg").innerHTML =
+            '<path d="m12 5-3-1-6 3v14l6-3 6 3 6-3v-6M9 4v14m6-5v8"></path>' +
+            '<path d="M15 3h6v6m0-6-8 8"></path>';
     }
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
