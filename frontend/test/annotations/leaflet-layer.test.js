@@ -8,7 +8,7 @@ function element() {
     return { children: [], style: {}, textContent: "", hidden: false,
         append(child) { this.children.push(child); },
         querySelector(selector) { return this.children.find(child => `.${child.className}` === selector); },
-        remove() {} };
+        remove() { this.removed = true; } };
 }
 
 /** @return {Object} Local annotation renderer with doubles for Leaflet's public layer methods. */
@@ -16,7 +16,10 @@ function setup() {
     const annotation = { filter: "", style: { ...DEFAULT_ANNOTATION_STYLE },
         polygons: [{ id: "polygon", name: "Riverbank", note: "Restore habitat", vertices: [[0, 0], [1, 0], [0, 1]] }] };
     const members = new Set();
-    const leaflet = { DomUtil: { create: element }, svg: () => ({}),
+    const panes = { tilePane: element(), tooltipPane: element() };
+    const leaflet = { DomUtil: { create: (tag, className, parent) => {
+        const pane = element(); parent.append(pane); return pane;
+    } }, svg: () => ({}),
         featureGroup: () => ({ addLayer: shape => members.add(shape), removeLayer: shape => members.delete(shape), clearLayers: () => members.clear() }),
         polygon: () => ({ setLatLngs(vertices) { this.vertices = vertices; this.center = vertices[0]; }, setStyle(style) { this.style = style; },
             getBounds() { return { contains: ({ lng, lat }) => lng >= Math.min(...this.vertices.map(v => v[1])) && lng <= Math.max(...this.vertices.map(v => v[1]))
@@ -24,9 +27,9 @@ function setup() {
             isTooltipOpen() { return !!this.tooltip; },
             getCenter() { return this.center; },
             getTooltip() { return this.tooltip; },
-            bindTooltip(content) { this.tooltip = { getContent: () => content, setLatLng(position) { this.position = position; }, update() {} }; },
+            bindTooltip(content, options) { this.tooltip = { options, getContent: () => content, setLatLng(position) { this.position = position; }, update() {} }; },
             unbindTooltip() { this.tooltip = undefined; } }) };
-    const map = { getPane: element, getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {},
+    const map = { getPane: name => panes[name], getContainer: () => ({ ownerDocument: { createElement: element } }), removeLayer() {},
         attached: true, hasLayer() { return this.attached; }, projections: 0,
         project({ lng, lat }, zoom) { assert.equal(zoom, 0); this.projections++; return { x: lng, y: Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) }; } };
     const labelLayout = { register(owner, polygons) { this.polygons = polygons; this.owner = owner; },
@@ -35,17 +38,28 @@ function setup() {
 }
 
 test("label layout sees filtered, visible saved polygons and releases removed renderers", () => {
-    const { annotation, members, labelLayout, rendering } = setup();
+    const { annotation, members, map, labelLayout, rendering } = setup();
+    const polygonPane = map.getPane("tilePane").children[0];
+    const labelPane = map.getPane("tooltipPane").children[0];
+    assert.equal([...members][0].getTooltip().options.pane, labelPane);
+    assert.equal(labelPane.style.pointerEvents, "none");
+    rendering.setZIndex(300);
+    assert.equal(polygonPane.style.zIndex, "300");
+    assert.equal(labelPane.style.zIndex, "300");
     assert.deepEqual(labelLayout.polygons(), [...members]);
     rendering.setOpacity(0);
     assert.deepEqual(labelLayout.polygons(), []);
     rendering.setOpacity(0.5);
+    assert.equal(polygonPane.style.opacity, "0.5");
+    assert.equal(labelPane.style.opacity, "0.5");
     assert.deepEqual(labelLayout.polygons(), [...members]);
     annotation.filter = "absent";
     rendering.refresh();
     assert.deepEqual(labelLayout.polygons(), []);
     rendering.release();
     assert.equal(labelLayout.released, true);
+    assert.equal(polygonPane.removed, true);
+    assert.equal(labelPane.removed, true);
 });
 
 test("each polygon uses its contributor's color while opacity and outlines remain layer settings", () => {

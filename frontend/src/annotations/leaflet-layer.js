@@ -14,6 +14,9 @@ export function createAnnotationLeafletLayer(leaflet, map, annotation, labelLayo
     // Leaflet accepts a pane element, so deleting a layer can release the pane too.
     const pane = leaflet.DomUtil.create("div", "leaflet-pane leaflet-annotation-pane", map.getPane("tilePane"));
     pane.style.pointerEvents = "none";
+    // Keep labels above every polygon while retaining this layer's opacity and cleanup.
+    const labelPane = leaflet.DomUtil.create("div", "leaflet-pane leaflet-annotation-label-pane", map.getPane("tooltipPane"));
+    labelPane.style.pointerEvents = "none";
     const renderer = leaflet.svg({ pane });
     const group = leaflet.featureGroup();
     const shapes = new Map();
@@ -49,7 +52,7 @@ export function createAnnotationLeafletLayer(leaflet, map, annotation, labelLayo
             shape.setStyle({ color: annotation.style.outline, fillColor: polygon.contributorColor ?? annotation.style.color,
                 weight: polygon.id === inspectedPolygon ? Math.max(3, annotation.style.weight + 2) : annotation.style.weight,
                 dashArray: polygon.id === inspectedPolygon ? "6 4" : null, fillOpacity: annotation.style.fillOpacity });
-            updatePolygonLabel(shape, polygon, annotation.style, map.getContainer().ownerDocument, pane);
+            updatePolygonLabel(shape, polygon, annotation.style, map.getContainer().ownerDocument, labelPane);
         }
         labelLayout.schedule();
     };
@@ -89,12 +92,12 @@ export function createAnnotationLeafletLayer(leaflet, map, annotation, labelLayo
         inspectedPolygon = id;
         group.refresh();
     };
-    /** @param {number} value Layer opacity. @return {void} */
-    group.setOpacity = value => { opacity = value; pane.style.opacity = String(value); labelLayout.schedule(); };
+    /** Set polygon and label opacity together. @param {number} value Layer opacity. @return {void} */
+    group.setOpacity = value => { opacity = value; pane.style.opacity = labelPane.style.opacity = String(value); labelLayout.schedule(); };
     /** @param {number} zIndex Position among individual map layers. @return {void} */
-    group.setZIndex = zIndex => { pane.style.zIndex = String(zIndex); };
-    /** Remove the layer's renderer and pane. @return {void} */
-    group.release = () => { labelLayout.unregister(group); group.clearLayers(); shapes.clear(); map.removeLayer(renderer); pane.remove(); };
+    group.setZIndex = zIndex => { pane.style.zIndex = labelPane.style.zIndex = String(zIndex); };
+    /** Remove the layer's renderer, polygon pane and label pane. @return {void} */
+    group.release = () => { labelLayout.unregister(group); group.clearLayers(); shapes.clear(); map.removeLayer(renderer); pane.remove(); labelPane.remove(); };
     group.refresh();
     return group;
 }
