@@ -19,6 +19,7 @@ export class AnnotationLayerControls {
      * @param {()=>void} actions.share Share this layer in a session.
      * @param {(color:string)=>void} actions.color Save your shared polygon color.
      * @param {()=>void} actions.renameContributor Open your shared-layer name for editing.
+     * @param {(id:string)=>void} actions.zoomToContributor Fit the map to a contributor's saved polygons in this layer.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -298,7 +299,12 @@ export class AnnotationLayerControls {
                 swatch.className = "annotation-contributor-color";
                 swatch.style.backgroundColor = person.color;
                 swatch.setAttribute("aria-hidden", "true");
-                row.append(swatch, `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`); return row;
+                const zoom = this.button("Zoom to", () => this.actions.zoomToContributor(person.id));
+                zoom.classList.add("annotation-contributor-zoom");
+                zoom.setAttribute("aria-label", `Zoom to ${person.name}'s polygons in ${this.layer.name}`);
+                zoom.disabled = person.polygonCount === 0;
+                zoom.title = zoom.disabled ? "No polygons to zoom to" : "Zoom to all saved polygons from this contributor";
+                row.append(swatch, `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`, zoom); return row;
             }));
         }
         if (!this.remotePolygons) { this.remotePolygons = this.details("Other contributors' polygons"); this.root.append(this.remotePolygons); }

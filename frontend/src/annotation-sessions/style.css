@@ -8,5 +8,6 @@
 .shared-annotation-dialog p { font-size: 0.85rem; }
 .shared-annotation-members { font-size: 0.85rem; width: 100%; }
 .shared-annotation-members ul { margin: 0.4rem 0; padding-left: 1.2rem; }
+.shared-annotation-members .annotation-contributor-zoom { font-size: inherit; padding: 0.1rem 0.3rem; margin-left: 0.4rem; }
 .shared-annotation-status { font-size: 0.8rem; color: var(--text-3); }
 .shared-annotation-status.is-error { color: #a51e19; }
