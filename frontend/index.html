@@ -23,6 +23,18 @@
         aria-label="CONTROL LABEL TO BE SET BY CONFIGURATION"
       >
         <div class="panel-heading">
+        <form id="published-map-editor" hidden aria-label="Edit published map">
+          <strong id="published-map-editor-heading">Editing published map</strong>
+          <p>Changes won't affect visitors until you save. Shared polygon edits are saved separately.</p>
+          <label>Map title<input id="published-map-edit-title" required maxlength="160"></label>
+          <label>Subtitle<input id="published-map-edit-subtitle" maxlength="240"></label>
+          <p>Fixed URL: <a id="published-map-edit-url" target="_blank" rel="noopener"></a></p>
+          <div class="published-map-editor-actions">
+            <button id="published-map-save" type="submit" disabled>Save changes for everyone</button>
+            <a id="published-map-cancel" href="/admin-eolab">Cancel</a>
+          </div>
+          <p id="published-map-edit-status" role="status" aria-live="polite">Loading published map…</p>
+        </form>
         <header class="panel-header" id="app-header">
           <div class="panel-identity">
             <h1 id="app-title">TITLE TO BE SET BY CONFIGURATION</h1>

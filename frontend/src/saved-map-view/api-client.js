@@ -1,4 +1,4 @@
-/** Same-site publication and retrieval of immutable named maps. */
+/** Same-site publication, retrieval and administrator updates of named maps. */
 import { parseSavedMapView, MAX_SAVED_MAP_VIEW_BYTES } from "./model.js";
 
 export const MAP_LINK_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -20,6 +20,15 @@ export function suggestMapLinkName(title) {
  */
 export function namedMapSlugFromPath(pathname) {
     return pathname.startsWith("/maps/") ? pathname.slice(6).replace(/\/$/, "") : null;
+}
+
+/**
+ * Identify the authenticated editor route without accepting a query-string mode switch.
+ * @param {string} pathname Current URL path.
+ * @return {string|null} Map URL name, or null outside the admin editor.
+ */
+export function editableMapSlugFromPath(pathname) {
+    return /^\/admin-eolab\/maps\/([^/]+)\/edit\/?$/.exec(pathname)?.[1] ?? null;
 }
 
 /**
@@ -87,15 +96,43 @@ export class SavedMapApiClient {
     }
 
     /**
+     * Load a published map and its revision through administrator authentication.
+     * @param {string} slug Fixed map URL name.
+     * @return {Promise<Object>} Validated map with a required revision.
+     * @throws {Error} If unauthorized, absent, unavailable or malformed.
+     */
+    async getForEditing(slug) {
+        validateLinkName(slug);
+        return this.#request(`/${slug}`, { method: "GET" }, slug, true);
+    }
+
+    /**
+     * Save a replacement configuration only against the revision opened for editing.
+     * @param {string} slug Fixed URL name.
+     * @param {Object} candidate Map labels, view and opened revision.
+     * @return {Promise<Object>} Updated map and new revision.
+     * @throws {Error} If validation, authorization, revision matching or storage fails.
+     */
+    async update(slug, candidate) {
+        const fields = validateMapPublication({ ...candidate, slug });
+        if (!Number.isSafeInteger(candidate.revision) || candidate.revision < 1) throw new Error("Reload the map before editing.");
+        const view = parseSavedMapView(JSON.stringify(candidate.view));
+        return this.#request(`/${slug}`, { method: "PUT",
+            headers: { "Content-Type": "application/json", "X-EOLab-Admin": "1" },
+            body: JSON.stringify({ ...fields, view, revision: candidate.revision }) }, slug, true);
+    }
+
+    /**
      * Fetch a bounded saved-map response and validate its identity and document.
      * @param {string} suffix Validated API path suffix.
      * @param {RequestInit} options Request method and optional JSON body.
      * @param {string} slug Expected record identity.
+     * @param {boolean} [administration=false] Use the authenticated editing API and validate its revision.
      * @return {Promise<Object>} Canonical publication labels and view.
      * @throws {Error} For HTTP, timeout, size, JSON or response-contract failures.
      */
-    async #request(suffix, options, slug) {
-        const response = await this.fetch(`/api/saved-maps${suffix}`, {
+    async #request(suffix, options, slug, administration = false) {
+        const response = await this.fetch(`/api/${administration ? "admin/" : ""}saved-maps${suffix}`, {
             ...options, cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(15000),
         });
         if (!response.body) throw new Error("Saved-map service returned an empty response. Try again shortly.");
@@ -121,6 +158,10 @@ export class SavedMapApiClient {
         }
         const fields = validateMapPublication(record);
         if (fields.slug !== slug) throw new Error("Saved-map service returned a different map.");
-        return { ...fields, view: parseSavedMapView(JSON.stringify(record.view)) };
+        if (administration && (!Number.isSafeInteger(record.revision) || record.revision < 1)) {
+            throw new Error("Saved-map service returned an invalid revision. Reload before editing.");
+        }
+        return { ...fields, view: parseSavedMapView(JSON.stringify(record.view)),
+            ...(administration ? { revision: record.revision } : {}) };
     }
 }

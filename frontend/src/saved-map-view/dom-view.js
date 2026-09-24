@@ -82,14 +82,22 @@ export class SavedMapViewDomView {
      * @param {()=>void} handlers.onReset Restore the configured initial view.
      * @param {()=>void} handlers.onUndo Restore the pre-reset view.
      * @param {(fields:Object)=>void} handlers.onPublish Save the captured map under the entered name.
+     * @param {(fields:Object)=>void} [handlers.onSavePublishedMap] Save administrator changes at the existing URL.
      * @return {void}
      */
-    bind({ onCopy, onReset, onUndo, onPublish }) {
+    bind({ onCopy, onReset, onUndo, onPublish, onSavePublishedMap }) {
         this.unbind();
         this.handlers = {
             copy: () => onCopy(),
             reset: () => onReset(),
             undo: () => onUndo(),
+            savePublishedMap: event => {
+                event.preventDefault();
+                onSavePublishedMap({
+                    title: this.document.querySelector("#published-map-edit-title").value,
+                    subtitle: this.document.querySelector("#published-map-edit-subtitle").value,
+                });
+            },
             publish: event => {
                 event.preventDefault();
                 onPublish({ title: this.publishTitle.value, subtitle: this.publishSubtitle.value, slug: this.publishSlug.value });
@@ -113,6 +121,48 @@ export class SavedMapViewDomView {
         this.publishSlug.addEventListener("input", this.handlers.slug);
         this.publishClose.addEventListener("click", this.handlers.close);
         this.publishCopy.addEventListener("click", this.handlers.copyPublished);
+        this.document.querySelector("#published-map-editor")?.addEventListener("submit", this.handlers.savePublishedMap);
+    }
+
+    /**
+     * Display a loaded administrative draft and its fixed public URL.
+     * @param {{slug:string,title:string,subtitle:string}} saved Loaded map labels.
+     * @param {boolean} complete Whether every saved layer and style restored successfully.
+     * @return {void}
+     */
+    showPublishedMapEditor(saved, complete) {
+        this.document.querySelector("#published-map-editor").hidden = false;
+        this.document.querySelector("#published-map-editor-heading").textContent = `Editing published map: ${saved.title}`;
+        this.document.querySelector("#published-map-edit-title").value = saved.title;
+        this.document.querySelector("#published-map-edit-subtitle").value = saved.subtitle;
+        const link = this.document.querySelector("#published-map-edit-url");
+        link.href = `/maps/${encodeURIComponent(saved.slug)}`;
+        link.textContent = link.href;
+        this.document.querySelector("#published-map-save").disabled = !complete;
+        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some layers or settings could not load. Reload before saving to avoid losing them.");
+    }
+
+    /**
+     * Keep headings and navigation stable while a published-map save is pending.
+     * @param {boolean} saving Whether the update is in flight.
+     * @return {void}
+     */
+    setPublishedMapSaving(saving) {
+        for (const id of ["published-map-save", "published-map-edit-title", "published-map-edit-subtitle"]) {
+            this.document.querySelector(`#${id}`).disabled = saving;
+        }
+        this.document.querySelector("#published-map-cancel").hidden = saving;
+        this.document.querySelector("#published-map-editor").setAttribute("aria-busy", String(saving));
+        if (saving) this.showPublishedMapEditStatus("Saving changes for everyone…");
+    }
+
+    /**
+     * Show save progress, confirmation or failure without replacing the draft.
+     * @param {string} message User-facing status.
+     * @return {void}
+     */
+    showPublishedMapEditStatus(message) {
+        this.document.querySelector("#published-map-edit-status").textContent = message;
     }
 
     /**
@@ -371,6 +421,7 @@ export class SavedMapViewDomView {
             this.publishClose.removeEventListener("click", this.handlers.close);
             this.publishCopy.removeEventListener("click", this.handlers.copyPublished);
             this.publishDialog.removeEventListener("cancel", this.blockCancel);
+            this.document.querySelector("#published-map-editor")?.removeEventListener("submit", this.handlers.savePublishedMap);
             this.handlers = null;
         }
         if (this.copiedTimer !== null) {

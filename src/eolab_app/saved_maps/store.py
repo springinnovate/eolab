@@ -1,4 +1,4 @@
-"""Persist immutable named map configurations in the application's PostgreSQL database."""
+"""Persist named map configurations in the application's PostgreSQL database."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -10,11 +10,16 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
-from eolab_app.saved_maps.models import CreateSavedMap, SavedMap, SavedMapError
+from eolab_app.saved_maps.models import (
+    CreateSavedMap,
+    SavedMap,
+    SavedMapError,
+    UpdateSavedMap,
+)
 
 
 class SavedMapStore:
-    """Create and retrieve named maps without contacting the referenced data sources."""
+    """Store and update named maps without contacting their referenced data sources."""
 
     def __init__(self, conninfo: str = "", capacity: int = 1000) -> None:
         """Configure database access and the maximum number of saved maps.
@@ -96,7 +101,7 @@ class SavedMapStore:
                 )
             cursor.execute(
                 "INSERT INTO saved_maps.maps (slug, title, subtitle, view) VALUES (%s, %s, %s, %s) "
-                'RETURNING slug, title, subtitle, view, created_at AS "createdAt"',
+                'RETURNING slug, title, subtitle, view, revision, created_at AS "createdAt"',
                 (
                     request.slug,
                     request.title,
@@ -120,10 +125,64 @@ class SavedMapStore:
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT slug, title, subtitle, view, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s',
+                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s',
                 (slug,),
             )
             row = cursor.fetchone()
             if row is None:
                 raise SavedMapError(404, "Saved map not found.")
             return SavedMap.model_validate(row)
+
+    def list_published_maps(self) -> list[dict[str, str]]:
+        """List titles and fixed URL names without loading map documents.
+
+        Returns:
+            All maps on this site, ordered by title and URL name.
+
+        Raises:
+            SavedMapError: If storage is unavailable.
+        """
+        with self.transaction() as cursor:
+            cursor.execute(
+                "SELECT slug, title FROM saved_maps.maps ORDER BY lower(title), slug"
+            )
+            return cursor.fetchall()
+
+    def update_saved_map(self, slug: str, request: UpdateSavedMap) -> SavedMap:
+        """Replace a published configuration only if its opened revision is current.
+
+        Args:
+            slug: Existing map's fixed URL name.
+            request: Validated replacement configuration and expected revision.
+
+        Returns:
+            Updated map with the same URL and creation time, and a new revision.
+
+        Raises:
+            SavedMapError: If missing, renamed, edited elsewhere, or storage fails.
+        """
+        if request.slug != slug:
+            raise SavedMapError(422, "A published map's URL cannot be changed.")
+        with self.transaction() as cursor:
+            cursor.execute(
+                "UPDATE saved_maps.maps SET title=%s, subtitle=%s, view=%s, revision=revision+1 "
+                "WHERE slug=%s AND revision=%s "
+                'RETURNING slug, title, subtitle, view, revision, created_at AS "createdAt"',
+                (
+                    request.title,
+                    request.subtitle,
+                    Jsonb(request.view.model_dump(mode="json", exclude_unset=True)),
+                    slug,
+                    request.revision,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return SavedMap.model_validate(row)
+            cursor.execute("SELECT 1 FROM saved_maps.maps WHERE slug=%s", (slug,))
+            if cursor.fetchone() is None:
+                raise SavedMapError(404, "Saved map not found.")
+            raise SavedMapError(
+                409,
+                "This map was changed by another administrator. Reload before editing again.",
+            )

@@ -256,9 +256,16 @@ class CreateSavedMap(MapDocumentPart):
 
 
 class SavedMap(CreateSavedMap):
-    """Stored map with its database creation time; the view is never overwritten."""
+    """Stored map with its creation time and revision for administrator updates."""
 
     createdAt: datetime
+    revision: Annotated[int, Field(ge=1, strict=True)] = 1
+
+
+class UpdateSavedMap(CreateSavedMap):
+    """Replacement map configuration and the revision opened by the administrator."""
+
+    revision: Annotated[int, Field(ge=1, strict=True)]
 
 
 class SavedMapError(Exception):

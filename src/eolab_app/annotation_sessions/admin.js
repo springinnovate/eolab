@@ -11,7 +11,7 @@ document.querySelector('#accept-delete').addEventListener('click', () => confirm
  * Call the administrator API without storing credentials in JavaScript.
  * @param {string} path API path.
  * @param {string} [method='GET'] HTTP method.
- * @returns {Promise<AdminSharedLayer[]|null>} Layer list or empty mutation result.
+ * @returns {Promise<AdminSharedLayer[]|{slug:string,title:string}[]|null>} Admin list or empty mutation result.
  * @throws {Error} When authentication, storage or transport fails.
  */
 async function request(path, method = 'GET') {
@@ -148,3 +148,43 @@ async function refreshLayers() {
 
 refresh.addEventListener('click', refreshLayers);
 refreshLayers();
+
+/**
+ * List published configurations separately from independently stored shared polygons.
+ * @returns {Promise<void>} Displays failures without clearing the previous list.
+ */
+async function loadPublishedMaps() {
+  const message = document.querySelector('#maps-status');
+  const button = document.querySelector('#refresh-maps');
+  button.disabled = true;
+  try {
+    const maps = await request('/api/admin/saved-maps');
+    document.querySelector('#maps').replaceChildren(...maps.map(map => {
+      const row = document.createElement('tr');
+      const title = document.createElement('th');
+      title.scope = 'row';
+      title.textContent = map.title;
+      const path = `/maps/${encodeURIComponent(map.slug)}`;
+      const url = document.createElement('td');
+      url.textContent = path;
+      const actions = document.createElement('td');
+      for (const [label, href] of [['Open', path], ['Edit', `/admin-eolab/maps/${encodeURIComponent(map.slug)}/edit`]]) {
+        const link = document.createElement('a');
+        link.textContent = label;
+        link.href = href;
+        link.setAttribute('aria-label', `${label}: ${map.title}`);
+        actions.append(link, ' ');
+      }
+      row.append(title, url, actions);
+      return row;
+    }));
+    message.textContent = maps.length ? `${maps.length} published maps.` : 'No published maps on this site.';
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.querySelector('#refresh-maps').addEventListener('click', loadPublishedMaps);
+loadPublishedMaps();

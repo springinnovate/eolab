@@ -3,14 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Shared layers · EOLab administration</title>
+  <title>EOLab administration</title>
   <link rel="stylesheet" href="/admin-eolab/admin.css">
   <script type="module" src="/admin-eolab/admin.js"></script>
 </head>
 <body>
 <main>
-  <h1>Shared layers</h1>
+  <h1>EOLab administration</h1>
   <p>Administration for this site. <a href="/">Open map</a></p>
+  <h2>Published maps</h2>
+  <button id="refresh-maps" type="button">Refresh maps</button>
+  <p id="maps-status" role="status" aria-live="polite">Loading published maps…</p>
+  <div class="table-scroll">
+    <table>
+      <caption>Published maps with fixed URLs</caption>
+      <thead><tr><th scope="col">Map</th><th scope="col">URL</th><th scope="col">Actions</th></tr></thead>
+      <tbody id="maps"></tbody>
+    </table>
+  </div>
+  <h2>Shared layers</h2>
   <p>Delete stops access to a shared layer. Undo restores its polygons, contributors and
     share code. Deleted data stays stored and counts toward capacity; local copies are not removed.</p>
   <button id="refresh" type="button">Refresh list</button>

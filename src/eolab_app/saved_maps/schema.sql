@@ -6,3 +6,4 @@ CREATE TABLE IF NOT EXISTS saved_maps.maps (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE saved_maps.maps ADD COLUMN IF NOT EXISTS subtitle text NOT NULL DEFAULT '';
+ALTER TABLE saved_maps.maps ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1;

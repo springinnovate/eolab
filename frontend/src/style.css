@@ -4633,6 +4633,17 @@ summary:hover > .raster-disclosure-chevron {
   }
 }
 
+#published-map-editor {
+  padding: 12px 16px;
+  border-bottom: 2px solid var(--brand);
+  background: var(--surface-selected);
+}
+#published-map-editor p { margin: 6px 0; font-size: 0.9rem; }
+#published-map-editor label { display: block; margin-top: 6px; }
+#published-map-editor input { width: 100%; }
+#published-map-edit-url { overflow-wrap: anywhere; }
+.published-map-editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+
 /* Filter editing and always-visible applied-state indicators. */
 #vector-filter-panel { padding: 16px; }
 #vector-filter-title { overflow-wrap: anywhere; font-weight: 600; }

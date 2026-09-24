@@ -3,16 +3,15 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from importlib.resources import files
-import secrets
-from typing import Annotated, Any
-from urllib.parse import urlsplit
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.routing import APIRoute
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
+
+from eolab_app.routes.admin_auth import create_administrator_dependency
 
 from eolab_app.annotation_sessions.models import SessionError
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
@@ -92,42 +91,7 @@ def create_shared_layer_admin_router(
         Router requiring HTTP Basic authentication as admin for every page and API call.
         Deploy behind HTTPS; contributor cookies never grant administration access.
     """
-    basic = HTTPBasic(auto_error=False, realm="EOLab administration")
-
-    def require_administrator(
-        request: Request,
-        credentials: Annotated[HTTPBasicCredentials | None, Depends(basic)],
-    ) -> None:
-        """Authenticate the administrator and require same-origin mutation requests.
-
-        Args:
-            request: Page or management API request.
-            credentials: Browser's HTTP Basic credentials, if supplied.
-
-        Raises:
-            HTTPException: If administration is disabled, authentication fails, or a
-                mutation lacks the same-origin custom header.
-        """
-        if not password:
-            raise HTTPException(404, "Administration is not configured.")
-        username = credentials.username if credentials else ""
-        supplied = credentials.password if credentials else ""
-        correct_user = secrets.compare_digest(username.encode(), b"admin")
-        correct_password = secrets.compare_digest(supplied.encode(), password.encode())
-        if not (correct_user and correct_password):
-            raise HTTPException(
-                401,
-                "Sign in as admin with the administrator password.",
-                headers={"WWW-Authenticate": 'Basic realm="EOLab administration"'},
-            )
-        if request.method not in {"GET", "HEAD"}:
-            origin = request.headers.get("origin")
-            if (
-                request.headers.get("x-eolab-admin") != "1"
-                or request.headers.get("sec-fetch-site") == "cross-site"
-                or (origin and urlsplit(origin).netloc != request.url.netloc)
-            ):
-                raise HTTPException(403, "Use the administrator page on this site.")
+    require_administrator = create_administrator_dependency(password)
 
     router = APIRouter(
         route_class=SharedLayerAdminRoute,
