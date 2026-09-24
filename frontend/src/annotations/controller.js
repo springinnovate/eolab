@@ -23,11 +23,12 @@ export class AnnotationController {
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
      * @param {(id:string,color:string)=>void} [options.onColor] Save this contributor's shared polygon color through composition.
+     * @param {(id:string)=>void} [options.onRenameContributor] Open contributor-name editing through composition.
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {(id:string)=>boolean} [options.requestEditing] Permit editing or open the owning membership prompt.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -35,6 +36,7 @@ export class AnnotationController {
         this.storage = storage;
         this.onShare = onShare;
         this.onColor = onColor;
+        this.onRenameContributor = onRenameContributor;
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
         this.requestEditing = requestEditing;
@@ -311,6 +313,7 @@ export class AnnotationController {
             add: () => this.beginPolygon(layer.id),
             share: () => this.onShare(layer.id),
             color: color => this.onColor(layer.id, color),
+            renameContributor: () => this.onRenameContributor(layer.id),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
             edit: (id, field) => this.beginPolygon(layer.id, id, field),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),

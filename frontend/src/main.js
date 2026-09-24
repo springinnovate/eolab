@@ -1243,6 +1243,7 @@ async function initializeCatalog(
             mapLayers: mapLayerController,
             onShare: id => annotationSessions.shareLayer(id),
             onColor: (id, color) => annotationSessions.setContributorColor(id, color),
+            onRenameContributor: id => annotationSessions.editContributorName(id),
             requestEditing: id => annotationSessions.requestDrawing(id),
             onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
             onFilter: key => vectorFilterControls.open(key),

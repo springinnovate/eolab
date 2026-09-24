@@ -18,6 +18,7 @@ export class AnnotationLayerControls {
      * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
      * @param {()=>void} actions.share Share this layer in a session.
      * @param {(color:string)=>void} actions.color Save your shared polygon color.
+     * @param {()=>void} actions.renameContributor Open your shared-layer name for editing.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -48,6 +49,9 @@ export class AnnotationLayerControls {
         this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
         this.members = this.details("Contributors"); this.members.className = "shared-annotation-members"; this.members.hidden = true;
         this.memberList = document.createElement("ul"); this.members.append(this.memberList);
+        this.renameContributor = this.button("Change your name", () => actions.renameContributor());
+        this.renameContributor.hidden = true;
+        this.members.append(this.renameContributor);
         this.sharedStatus = document.createElement("span"); this.sharedStatus.className = "shared-annotation-status"; this.sharedStatus.setAttribute("role", "status");
         this.drawing.append(this.draw, this.members, this.sharedStatus);
         this.share = this.button("Share", actions.share);
@@ -278,6 +282,7 @@ export class AnnotationLayerControls {
         colorInput.value = data.contributors.find(person => person.own)?.color ?? this.layer.style.color;
         colorInput.parentElement.title = "Shared with everyone. Changes the fill of all your polygons in this layer. Other appearance controls affect only your map.";
         this.members.hidden = false;
+        this.renameContributor.hidden = !data.contributors.some(person => person.own);
         if (this.share.parentElement !== this.drawing) this.drawing.insertBefore(this.share, this.members);
         this.share.title = data.code ? `Copy share code: ${data.code}` : "Copy this layer's sharing code";
         this.name.querySelector("input").disabled = true;

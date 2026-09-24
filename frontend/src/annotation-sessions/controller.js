@@ -23,7 +23,7 @@ export class AnnotationSessionsController {
         Object.assign(this, { getLayers, createLayer, present, revealLayer, drawAfterJoining, storage, api });
         this.savedBindings = [];
         this.bindings = new Map(); this.closed = false; this.running = null; this.connecting = false;
-        this.view = createView(document, { connect: (...args) => this.connect(...args) });
+        this.view = createView(document, { connect: (...args) => this.connect(...args), rename: (id, name) => this.renameContributor(id, name) });
     }
 
     /** Restore bindings only for layers still on this map, then resume synchronization.
@@ -140,6 +140,43 @@ export class AnnotationSessionsController {
             this.display(binding, "Sharing…"); this.view.connected(); this.revealLayer(localId);
             await this.refresh();
             if (mode === "contribute") this.drawAfterJoining(localId);
+        } catch (error) { this.view.message(error.message); }
+        finally { this.connecting = false; this.view.busy(false); }
+    }
+
+    /** Open your current name for editing in one shared layer.
+     * @param {string} localId Local layer whose contributor name should change.
+     * @return {void}
+     */
+    editContributorName(localId) {
+        const binding = this.bindings.get(localId);
+        const own = binding?.snapshot?.contributors.find(person => person.id === binding.contributorId);
+        if (!own || this.closed || this.connecting) return;
+        this.view.open("rename", localId, own.name);
+    }
+
+    /** Save your display name without changing membership or polygon ownership.
+     * Server validation errors leave the entered name in the dialog for correction.
+     * @param {string} localId Local layer bound to the session being updated.
+     * @param {string} name New contributor name; the server validates uniqueness and length.
+     * @return {Promise<void>} Completion, with errors displayed in the dialog.
+     */
+    async renameContributor(localId, name) {
+        if (this.connecting || this.closed) return;
+        const binding = this.bindings.get(localId);
+        if (!binding?.contributorId) return;
+        this.connecting = true; this.view.busy(true); this.view.message("Saving name…");
+        try {
+            const saved = await this.api.request(`/${binding.sessionId}/profile`, "PATCH", { name });
+            // Finish any older snapshot before requesting the newly saved name.
+            if (this.running) await this.running;
+            if (this.closed || this.bindings.get(localId) !== binding) return;
+            const own = binding.snapshot?.contributors.find(person => person.id === binding.contributorId);
+            if (own) own.name = saved.name;
+            binding.nextAttempt = 0;
+            this.display(binding, "Name saved");
+            await this.refresh();
+            if (!this.closed) this.view.connected();
         } catch (error) { this.view.message(error.message); }
         finally { this.connecting = false; this.view.busy(false); }
     }
