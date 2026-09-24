@@ -1,4 +1,5 @@
 /** Leaflet construction and presentation metadata for bounded vector WMS. */
+import { createCancelableWmsLayer } from "../leaflet-wms.js";
 
 /** Fixed browser legend colors matching initializer-owned GeoServer SLDs. */
 export const VECTOR_DEFAULT_SYMBOLOGY = Object.freeze({
@@ -49,7 +50,7 @@ export function createVectorWmsLayer(
     publishedVector,
     onTileError
 ) {
-    const layer = leaflet.tileLayer.wms(wmsUrl, {
+    const layer = createCancelableWmsLayer(leaflet, wmsUrl, {
         layers: publishedVector.layerName,
         styles: publishedVector.styleName,
         format: "image/png",

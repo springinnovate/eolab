@@ -43,6 +43,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
   let capturedRectangle;
   let tileErrorHandler;
   const wmsLayer = {
+    on() {},
     once(type, handler) {
       assert.equal(type, "tileerror");
       tileErrorHandler = handler;

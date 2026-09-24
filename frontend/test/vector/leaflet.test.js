@@ -10,6 +10,7 @@ test("vector WMS uses one bounded layer and no raster environment", () => {
     let capturedRequest;
     let tileErrorHandler;
     const wmsLayer = {
+        on() {},
         once(type, handler) {
             assert.equal(type, "tileerror");
             tileErrorHandler = handler;
@@ -65,7 +66,7 @@ test("default vector geometry families use blue symbols with black outlines", ()
 
 test("crossing vector WMS retains both map edges without wrapping world copies", () => {
     let options;
-    const layer = { once() {} };
+    const layer = { on() {}, once() {} };
     createVectorWmsLayer(
         { tileLayer: { wms(_url, candidate) { options = candidate; return layer; } } },
         "/geoserver/eolab/wms",

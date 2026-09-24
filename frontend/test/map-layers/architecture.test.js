@@ -13,7 +13,7 @@ const MAP_LAYER_MODULES = [
     "leaflet-layer-set.js",
 ];
 
-test("map-layer modules depend only on peers and Catalog identity", async () => {
+test("map-layer modules depend only on peers, Catalog identity and neutral WMS transport", async () => {
     for (const moduleName of MAP_LAYER_MODULES) {
         const source = await readFile(
             new URL(`../../src/map-layers/${moduleName}`, import.meta.url),
@@ -29,10 +29,15 @@ test("map-layer modules depend only on peers and Catalog identity", async () => 
             externalImports,
             moduleName === "layer-stack.js" || moduleName === "controller.js"
                 ? ["../catalog-item-identity.js"]
-                : [],
-            `${moduleName} imports only peers and the Catalog identity contract`,
+                : moduleName === "composite-leaflet-renderer.js" ? ["../leaflet-wms.js"] : [],
+            `${moduleName} imports only its declared lower-level providers`,
         );
     }
+});
+
+test("shared WMS transport has no feature, analysis, or coordinator dependencies", async () => {
+    const source = await readFile(new URL("../../src/leaflet-wms.js", import.meta.url), "utf8");
+    assert.doesNotMatch(source, /^import\s/m);
 });
 
 test("composition owns the controller and raster consumes it", async () => {

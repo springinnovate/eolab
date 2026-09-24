@@ -6,6 +6,7 @@
  * and drawing order. It does not fetch publication or statistics data.
  */
 import { validateRasterSelectedBounds } from "./geometry.js";
+import { createCancelableWmsLayer } from "../leaflet-wms.js";
 
 export const RASTER_SAMPLE_WINDOW_PANE = "rasterSampleWindowPane";
 const RASTER_SAMPLE_WINDOW_PANE_Z_INDEX = "450";
@@ -66,7 +67,7 @@ export function createRasterWmsLayer(
     onTileError
 ) {
     const [west, south, east, north] = publishedRaster.bbox;
-    const rasterLayer = leaflet.tileLayer.wms(wmsUrl, {
+    const rasterLayer = createCancelableWmsLayer(leaflet, wmsUrl, {
         layers: publishedRaster.layerName,
         styles: "dynamic-raster",
         env: styleEnvironment,
