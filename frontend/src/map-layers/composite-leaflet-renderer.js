@@ -1,7 +1,6 @@
 /** Present server-composed map tiles and track recovery in the current view. */
 
 import { TileRecovery } from "./tile-recovery.js";
-import { createCancelableWmsLayer } from "../leaflet-wms.js";
 
 /** @typedef {import("./tile-recovery.js").MapTileStatus} MapTileStatus */
 
@@ -109,7 +108,7 @@ export class CompositeLeafletRenderer {
      * @return {void}
      */
     #present(plan) {
-        const layer = createCancelableWmsLayer(this.leaflet, plan.wmsUrl, {
+        const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
             layers: "composite", styles: "", format: "image/png",
             transparent: true, version: "1.1.1", noWrap: true,
         });

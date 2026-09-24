@@ -39,7 +39,6 @@ function createAdapterFixture(fitToBounds, classifyResult = null) {
       wms(url, options) {
         const layer = {
           styleRequests: [],
-          on() {},
           once(type, handler) {
             this.errorHandler = { type, handler };
           },

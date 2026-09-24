@@ -60,8 +60,6 @@ function fixture(create = null) {
             const assignments = [];
             const tile = { assignments, get src() { return `/tile/${x}/${z}`; },
                 set src(source) { assignments.push(source); } };
-            // This fixture supplies tile events without real HTTP; record retry requests.
-            grids.at(-1).retryTile = image => { image.src = image.src; };
             grids.at(-1).emit("tileloadstart", { tile, coords: { x, y: 0, z } });
             return tile;
         },

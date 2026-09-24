@@ -18,7 +18,7 @@ export class TileRecovery {
     /**
      * Observe a grid before its first attachment to the map.
      * @param {Object} map Leaflet map with zoom, pixel bounds and public events.
-     * @param {Object} layer WMS layer with public tile events and retryTile(image).
+     * @param {Object} layer Leaflet WMS layer with public tile events.
      * @param {(status:MapTileStatus)=>void} onStatus Current-view status observer.
      */
     constructor(map, layer, onStatus) {
@@ -35,7 +35,7 @@ export class TileRecovery {
             load: () => { this.loading = false; this.refresh(); },
             tileloadstart: ({ tile, coords }) => {
                 this.forget(tile);
-                this.tiles.set(tile, { coords, phase: "loading", attempts: 0, timer: null });
+                this.tiles.set(tile, { coords, source: tile.src, phase: "loading", attempts: 0, timer: null });
                 this.refresh();
             },
             tileload: ({ tile }) => {
@@ -61,7 +61,7 @@ export class TileRecovery {
             if (record.phase !== "failed" || !this.isVisible(record)) continue;
             record.attempts = 0;
             record.phase = "retrying";
-            this.layer.retryTile(tile);
+            tile.src = record.source;
         }
         this.refresh();
     }
@@ -91,7 +91,7 @@ export class TileRecovery {
             record.timer = setTimeout(() => {
                 record.timer = null;
                 if (this.destroyed || !this.tiles.has(tile)) return;
-                if (this.isVisible(record)) this.layer.retryTile(tile);
+                if (this.isVisible(record)) tile.src = record.source;
                 else record.phase = "failed";
                 this.refresh();
             }, RETRY_DELAYS_MILLISECONDS[record.attempts++]);

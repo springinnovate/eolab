@@ -143,7 +143,6 @@ function createFakeLayer(details = {}) {
         detach() {
             container = null;
         },
-        on() {},
         once(type, handler) {
             this.eventHandlers.set(type, handler);
         },

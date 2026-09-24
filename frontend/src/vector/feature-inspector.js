@@ -1,5 +1,4 @@
 /** One-shot feature inspection for visible published vector layers. */
-import { createCancelableWmsLayer } from "../leaflet-wms.js";
 
 import {
     fetchVectorFeatureInfo,
@@ -914,7 +913,7 @@ export class VectorFeatureInspectorController {
         }
         this.clearHighlight();
         if (typeof feature.id === "string" && feature.id.length > 0) {
-            const highlightLayer = createCancelableWmsLayer(this.leaflet, this.wmsUrl, {
+            const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {
                 layers: target.publication.layerName,
                 styles: `vector-highlight-${target.geometryKind}`,
                 format: "image/png",
