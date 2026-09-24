@@ -65,7 +65,7 @@ export class AnnotationSessionsController {
         const binding = this.bindings.get(localId);
         if (!binding) return null;
         const joinCode = binding.snapshot?.joinCode ?? binding.joinCode;
-        if (!joinCode) throw new Error("Wait for the shared annotation layer to connect before sharing this map.");
+        if (!joinCode) throw new Error("Wait for the shared layer to connect before sharing this map.");
         return { id: binding.sessionId, joinCode };
     }
 
@@ -94,7 +94,7 @@ export class AnnotationSessionsController {
             contributorId: snapshot.contributorId, revision: bookmark?.revision ?? data.revision,
             snapshot, remote: new Map(), retryDelay: 5000 };
         this.bindings.set(localId, binding); this.saveBindings();
-        this.display(binding, "Loading shared annotations…");
+        this.display(binding, "Loading shared layers…");
         await this.refresh();
         return localId;
     }

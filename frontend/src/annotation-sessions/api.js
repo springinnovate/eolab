@@ -24,7 +24,7 @@ export class AnnotationSessionsApi {
             const detail = data.detail;
             const message = typeof detail === "string" ? detail : Array.isArray(detail)
                 ? detail.map(error => `${error.loc?.slice(1).join(" · ")}: ${error.msg}`).join("; ")
-                : "Shared annotations are unavailable. Try again.";
+                : "Shared layers are unavailable. Try again.";
             throw Object.assign(new Error(message), { status: response.status });
         }
         return data;

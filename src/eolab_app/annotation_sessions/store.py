@@ -73,7 +73,7 @@ class AnnotationSessionStore:
         except psycopg.Error as error:
             raise SessionError(
                 503,
-                "Shared annotations are temporarily unavailable. Your local annotations are safe.",
+                "Shared layers are temporarily unavailable. Your local polygons are safe.",
             ) from error
 
     def initialize_and_clean_join_attempts(self) -> None:
@@ -137,7 +137,7 @@ class AnnotationSessionStore:
             if total >= 100 or cursor.fetchone()["total"] >= 10:
                 raise SessionError(
                     429,
-                    "The annotation-session limit has been reached. Contact the site administrator to free storage.",
+                    "The shared layer limit has been reached. Contact the site administrator to free storage.",
                 )
             while True:
                 code = "".join(
@@ -239,7 +239,8 @@ class AnnotationSessionStore:
             )
             if count >= 64 or cursor.fetchone()["total"] >= 10:
                 raise SessionError(
-                    429, "This session or browser has reached its contributor limit."
+                    429,
+                    "This shared layer or browser has reached its contributor limit.",
                 )
             cursor.execute(
                 "SELECT id,color FROM shared_annotation_layers.contributors WHERE session_id=%s",
@@ -340,7 +341,7 @@ class AnnotationSessionStore:
             (session_id, join_code),
         )
         if not cursor.fetchone():
-            raise SessionError(404, "This shared annotation layer is unavailable.")
+            raise SessionError(404, "This shared layer is unavailable.")
         cursor.execute(
             "SELECT id,name FROM shared_annotation_layers.contributors WHERE session_id=%s AND browser_hash=%s",
             (session_id, browser),
@@ -520,7 +521,7 @@ class AnnotationSessionStore:
             ):
                 raise SessionError(
                     413,
-                    "Shared annotation storage is full (32 MiB per session). Contact the site administrator; your previous contribution is unchanged.",
+                    "Shared layer storage is full (32 MiB per shared layer). Contact the site administrator; your previous contribution is unchanged.",
                 )
             revision = request.revision + 1
             cursor.execute(

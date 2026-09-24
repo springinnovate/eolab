@@ -20,7 +20,7 @@ export async function readAnnotationGeoJSONFile(file) {
     try { text = await file.text(); }
     catch { throw new Error("Could not read this GeoJSON file. Choose it again."); }
     const filename = file.name.replace(/\.(geojson|json)$/i, "").slice(0, MAX_ANNOTATION_NAME_LENGTH);
-    return parseAnnotationGeoJSON(text, filename || "Imported annotations");
+    return parseAnnotationGeoJSON(text, filename || "Imported polygons");
 }
 
 /**
@@ -29,11 +29,11 @@ export async function readAnnotationGeoJSONFile(file) {
  * strings are imported. EOLab exports also retain contributor labels and colors as
  * file metadata, never as edit credentials. Other properties and feature IDs are ignored.
  * @param {string} text JSON file contents, limited to 8 MiB.
- * @param {string} [fallbackName="Imported annotations"] Layer name when the collection has none.
+ * @param {string} [fallbackName="Imported polygons"] Layer name when the collection has none.
  * @return {ImportedAnnotationLayer} Validated data with no local IDs or persistence side effects.
  * @throws {Error} If JSON, geometry, coordinates or resource limits are invalid.
  */
-export function parseAnnotationGeoJSON(text, fallbackName = "Imported annotations") {
+export function parseAnnotationGeoJSON(text, fallbackName = "Imported polygons") {
     if (new TextEncoder().encode(text).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
         throw new Error("GeoJSON file exceeds the 8 MiB import limit.");
     }
@@ -52,10 +52,10 @@ export function parseAnnotationGeoJSON(text, fallbackName = "Imported annotation
     else if (document.type === "Polygon") features = [{ type: "Feature", properties: null, geometry: document }];
     else throw new Error(`Unsupported GeoJSON type: ${String(document.type).slice(0, 80)}. Import Polygon features only.`);
     if (features.length > MAX_POLYGONS_PER_LAYER) {
-        throw new Error(`GeoJSON contains ${features.length} features; an annotation layer supports at most ${MAX_POLYGONS_PER_LAYER} polygons.`);
+        throw new Error(`GeoJSON contains ${features.length} features; a shared layer supports at most ${MAX_POLYGONS_PER_LAYER} polygons.`);
     }
     const name = importAnnotationText([document.type === "FeatureCollection" ? document.name : null, fallbackName],
-        "Imported annotations", MAX_ANNOTATION_NAME_LENGTH, "Layer name");
+        "Imported polygons", MAX_ANNOTATION_NAME_LENGTH, "Layer name");
     const polygons = features.map((feature, index) => {
         const context = `Feature ${index + 1}`;
         if (!feature || feature.type !== "Feature") throw new Error(`${context}: expected a GeoJSON Feature object.`);
@@ -120,7 +120,7 @@ function importPolygonVertices(geometry, context) {
     rejectDeclaredCRS(geometry, context);
     const rings = geometry.coordinates;
     if (!Array.isArray(rings) || rings.length === 0) throw new Error(`${context}: Polygon must contain an exterior ring.`);
-    if (rings.length > 1) throw new Error(`${context}: polygon has holes. Annotation polygons support one exterior ring without holes.`);
+    if (rings.length > 1) throw new Error(`${context}: polygon has holes. Shared layers support polygons with one exterior ring without holes.`);
     const ring = rings[0];
     if (!Array.isArray(ring) || ring.length < 4) throw new Error(`${context}: polygon must have at least 3 vertices and a repeated closing coordinate.`);
     if (ring.length > MAX_POLYGON_VERTICES + 1) throw new Error(`${context}: polygon exceeds the ${MAX_POLYGON_VERTICES}-vertex limit.`);

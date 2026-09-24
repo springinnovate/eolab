@@ -276,14 +276,14 @@ export class MapLayerStackView {
     /**
      * Describe every retained layer, including hidden layers, in the heading.
      *
-     * @param {Array<{datasetKind:"raster"|"vector"}>} layers Current layer
+     * @param {Array<{datasetKind:"raster"|"vector"|"annotation"}>} layers Current layer
      * presentation snapshots supplied by their owning adapters.
      * @return {void}
      */
     #renderCounts(layers) {
         const parts = ["raster", "vector", "annotation"].flatMap((kind) => {
             const count = layers.filter((layer) => layer.datasetKind === kind).length;
-            return count === 0 ? [] : [`${count} ${kind}${count === 1 ? "" : "s"}`];
+            return count === 0 ? [] : [`${count} ${kind === "annotation" ? "shared layer" : kind}${count === 1 ? "" : "s"}`];
         });
         this.counts.textContent = `· ${parts.length === 0 ? "Empty" : parts.join(" · ")}`;
     }
@@ -338,9 +338,9 @@ export class MapLayerStackView {
         activeKey,
         focusTargets
     ) {
-        const typeLabel = layer.typeLabel ?? ({ raster: "Raster", vector: "Vector", annotation: "Annotation" }[layer.datasetKind] ?? "Layer");
+        const typeLabel = layer.typeLabel ?? ({ raster: "Raster", vector: "Vector", annotation: "Shared layer" }[layer.datasetKind] ?? "Layer");
         const accessibleName = layer.item === null
-            ? `${layer.label}; ${typeLabel.toLowerCase()} layer`
+            ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}`
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";

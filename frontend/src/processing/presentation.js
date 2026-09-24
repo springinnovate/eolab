@@ -23,12 +23,12 @@ export function formatDownloadBytes(bytes) {
 export function describeClipArea(area) {
     if (!area) return "No sampling area selected. Choose a box or catalog vector.";
     if (area.kind === "wholeRaster") return "Whole raster";
-    if (area.kind === "polygonArea") return "Annotation polygons";
+    if (area.kind === "polygonArea") return "Shared layer polygons";
     if (area.kind === "catalogSelection" && !Array.isArray(area.bounds)) return "Catalog vector selection; review will show its geographic bounds.";
     const values = area.selectedBounds
         ? [area.selectedBounds.west, area.selectedBounds.south, area.selectedBounds.east, area.selectedBounds.north]
         : area.bounds;
-    const label = area.kind === "polygons" ? "Annotation polygons" : area.kind === "aoi" ? "Historical polygon selection" : area.kind === "catalogSelection" ? "Catalog vector selection" : "Box";
+    const label = area.kind === "polygons" ? "Shared layer polygons" : area.kind === "aoi" ? "Historical polygon selection" : area.kind === "catalogSelection" ? "Catalog vector selection" : "Box";
     return `${label} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
 }
 

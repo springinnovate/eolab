@@ -65,7 +65,7 @@ export class SavedMapViewController {
         restoreSharedMap = false,
         beforeRestore = () => {},
         exportAnnotation = () => null,
-        restoreAnnotation = async () => { throw new Error("Shared annotations are unavailable."); },
+        restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
         publicationApi = null,
         namedMapSlug = null,
         allowPublishing = false,
@@ -484,12 +484,12 @@ export class SavedMapViewController {
                 if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
                 try {
                     if (savedMapView.viewer.origin !== this.viewerOrigin) {
-                        throw new Error("Shared annotations can only be opened on their original EOLab site.");
+                        throw new Error("Shared layers can only be opened on their original EOLab site.");
                     }
                     const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
                     return { key, staged: null, detail: null };
                 } catch (error) {
-                    return { staged: null, detail: `Shared annotation ${layer.sharedAnnotation.id}: ${asError(error).message}` };
+                    return { staged: null, detail: `Shared layer ${layer.sharedAnnotation.id}: ${asError(error).message}` };
                 }
             }
         );

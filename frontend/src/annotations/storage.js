@@ -19,13 +19,13 @@ export class AnnotationStorage {
      * @throws {Error} If storage is unavailable or the saved document is invalid.
      */
     async load() {
-        if (!this.indexedDB) throw new Error("This browser does not support annotation storage.");
+        if (!this.indexedDB) throw new Error("This browser does not support polygon storage.");
         this.database = await new Promise((resolve, reject) => {
             const request = this.indexedDB.open("eolab-annotations", 1);
             request.onupgradeneeded = () => request.result.createObjectStore("documents");
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
-            request.onblocked = () => reject(new Error("Close other EOLab tabs to open annotation storage."));
+            request.onblocked = () => reject(new Error("Close other EOLab tabs to open polygon storage."));
         });
         this.database.onversionchange = () => { this.database.close(); this.database = null; };
         const saved = await new Promise((resolve, reject) => {
@@ -34,7 +34,7 @@ export class AnnotationStorage {
             request.onerror = () => reject(request.error);
         });
         const layers = saved ? readAnnotationLayers(saved.document) : [];
-        if (saved && (!Number.isSafeInteger(saved.revision) || saved.revision < 0)) throw new Error("Saved annotation revision is invalid.");
+        if (saved && (!Number.isSafeInteger(saved.revision) || saved.revision < 0)) throw new Error("Saved layer revision is invalid.");
         this.revision = saved?.revision ?? 0;
         return layers;
     }
@@ -47,9 +47,9 @@ export class AnnotationStorage {
      */
     async save(document) {
         if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
-            throw new Error("Annotations exceed the 8 MiB device-document limit.");
+            throw new Error("Saved polygons exceed the 8 MiB device-document limit.");
         }
-        if (!this.database) throw new Error("Annotation storage is unavailable. Keep this tab open.");
+        if (!this.database) throw new Error("Polygon storage is unavailable. Keep this tab open.");
         const nextRevision = this.revision + 1;
         await new Promise((resolve, reject) => {
             const transaction = this.database.transaction("documents", "readwrite");
@@ -58,14 +58,14 @@ export class AnnotationStorage {
             const request = store.get("annotations");
             request.onsuccess = () => {
                 if ((request.result?.revision ?? 0) !== this.revision) {
-                    failure = new Error("Annotations changed in another tab. Keep this tab open; these changes have not been saved.");
+                    failure = new Error("Polygons changed in another tab. Keep this tab open; these changes have not been saved.");
                     transaction.abort();
                     return;
                 }
                 store.put({ revision: nextRevision, document }, "annotations");
             };
             transaction.oncomplete = () => resolve();
-            transaction.onabort = () => reject(failure ?? transaction.error ?? new Error("Annotation save was interrupted."));
+            transaction.onabort = () => reject(failure ?? transaction.error ?? new Error("Polygon save was interrupted."));
             transaction.onerror = () => reject(transaction.error);
         });
         this.revision = nextRevision;

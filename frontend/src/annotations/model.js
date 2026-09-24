@@ -34,7 +34,7 @@ export function validateAnnotationStyle(style) {
     if (!style || !/^#[\da-f]{6}$/i.test(style.color) || !/^#[\da-f]{6}$/i.test(style.outline) ||
         !Number.isFinite(style.weight) || style.weight < 0 || style.weight > 10 ||
         !Number.isFinite(style.fillOpacity) || style.fillOpacity < 0 || style.fillOpacity > 1 ||
-        typeof style.labels !== "boolean" || (style.notes !== undefined && typeof style.notes !== "boolean")) throw new Error("Annotation style is invalid.");
+        typeof style.labels !== "boolean" || (style.notes !== undefined && typeof style.notes !== "boolean")) throw new Error("Layer style is invalid.");
     return { color: style.color, outline: style.outline, weight: style.weight, fillOpacity: style.fillOpacity, labels: style.labels, notes: style.notes ?? false };
 }
 
@@ -47,18 +47,18 @@ export function validateAnnotationStyle(style) {
  */
 export function readAnnotationLayers(document) {
     if (!document || document.version !== 1 || !Array.isArray(document.layers) || document.layers.length > MAX_ANNOTATION_LAYERS ||
-        new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) throw new Error("Saved annotations have an unsupported format or exceed the storage limit.");
+        new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) throw new Error("Saved polygons have an unsupported format or exceed the storage limit.");
     const layers = structuredClone(document.layers);
     const identifiers = new Set();
     for (const [index, layer] of layers.entries()) {
         if (layer.position === undefined) layer.position = index;
-        if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved annotation layer position is invalid.");
+        if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved shared layer position is invalid.");
         requireIdentifier(layer.id, identifiers);
         requireText(layer.name, MAX_ANNOTATION_NAME_LENGTH, false);
         if (typeof layer.filter === "string") requireText(layer.filter, 300, true);
         else layer.filter = annotationFilterRules(layer.filter);
         if (typeof layer.visible !== "boolean" || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 ||
-            !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved annotation layer is invalid.");
+            !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved shared layer is invalid.");
         layer.style = validateAnnotationStyle(layer.style);
         for (const polygon of layer.polygons) {
             requireIdentifier(polygon.id, identifiers);
@@ -69,7 +69,7 @@ export function readAnnotationLayers(document) {
                 if (!/^#[\da-f]{6}$/i.test(polygon.contributorColor)) throw new Error("Saved contributor color is invalid.");
             }
             if (!Array.isArray(polygon.vertices) || polygon.vertices.length > MAX_POLYGON_VERTICES || polygonValidationMessage(polygon.vertices)) {
-                throw new Error("Saved annotations contain an invalid polygon.");
+                throw new Error("Saved polygons contain an invalid polygon.");
             }
         }
     }
@@ -84,7 +84,7 @@ export function readAnnotationLayers(document) {
  * @throws {Error} If duplicated or malformed.
  */
 function requireIdentifier(id, identifiers) {
-    if (typeof id !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(id) || identifiers.has(id)) throw new Error("Saved annotation identifiers are invalid.");
+    if (typeof id !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(id) || identifiers.has(id)) throw new Error("Saved layer identifiers are invalid.");
     identifiers.add(id);
 }
 
@@ -97,7 +97,7 @@ function requireIdentifier(id, identifiers) {
  * @throws {Error} If text is missing or too long.
  */
 function requireText(text, maximum, allowEmpty) {
-    if (typeof text !== "string" || text.length > maximum || (!allowEmpty && !text.trim())) throw new Error("Annotation text is empty or too long.");
+    if (typeof text !== "string" || text.length > maximum || (!allowEmpty && !text.trim())) throw new Error("Polygon text is empty or too long.");
 }
 
 /**
@@ -134,7 +134,7 @@ export class AnnotationModel {
      */
     layer(id) {
         const layer = this.layers.find(candidate => candidate.id === id);
-        if (!layer) throw new Error("This annotation layer no longer exists.");
+        if (!layer) throw new Error("This shared layer no longer exists.");
         return layer;
     }
 
@@ -144,8 +144,8 @@ export class AnnotationModel {
      * @throws {Error} If the device collection is at its layer limit.
      */
     createLayer() {
-        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} annotation layers.`);
-        const layer = { id: this.newId(), name: `Annotations ${this.layers.length + 1}`, position: 0, visible: true, opacity: 1,
+        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} shared layers.`);
+        const layer = { id: this.newId(), name: `Shared layer ${this.layers.length + 1}`, position: 0, visible: true, opacity: 1,
             style: { ...DEFAULT_ANNOTATION_STYLE }, filter: "", polygons: [] };
         this.layers.unshift(layer);
         return layer;
@@ -160,13 +160,13 @@ export class AnnotationModel {
      */
     importLayer(imported) {
         if (this.draft) throw new Error("Save or cancel the current polygon before importing.");
-        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} annotation layers.`);
+        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} shared layers.`);
         const layer = { id: this.newId(), name: imported.name, position: 0, visible: true, opacity: 1,
             style: { ...DEFAULT_ANNOTATION_STYLE }, filter: "",
             polygons: imported.polygons.map(polygon => ({ ...structuredClone(polygon), id: this.newId() })) };
         const document = { version: 1, layers: [layer, ...this.layers] };
         if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
-            throw new Error("Import would exceed the 8 MiB annotation storage limit. Export and remove an existing layer first.");
+            throw new Error("Import would exceed the 8 MiB polygon storage limit. Export and remove an existing layer first.");
         }
         this.layers.unshift(layer);
         return layer;
@@ -179,12 +179,12 @@ export class AnnotationModel {
      * @throws {Error} If its ID is already present or the current collection would exceed storage limits.
      */
     restoreRemovedLayer(snapshot) {
-        if (this.layers.some(layer => layer.id === snapshot.id)) throw new Error("This annotation layer is already on the map.");
-        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} annotation layers.`);
+        if (this.layers.some(layer => layer.id === snapshot.id)) throw new Error("This shared layer is already on the map.");
+        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} shared layers.`);
         const layer = structuredClone(snapshot);
         const document = { version: 1, layers: [layer, ...this.layers] };
         if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
-            throw new Error("Restoring this layer would exceed the 8 MiB annotation storage limit. Export and remove another layer first.");
+            throw new Error("Restoring this layer would exceed the 8 MiB polygon storage limit. Export and remove another layer first.");
         }
         this.layers.unshift(layer);
         return layer;
@@ -203,7 +203,7 @@ export class AnnotationModel {
         const polygon = polygonId === null ? { id: this.newId(), name: `Polygon ${layer.polygons.length + 1}`, note: "", vertices: [] }
             : layer.polygons.find(candidate => candidate.id === polygonId);
         if (!polygon) throw new Error("This polygon no longer exists.");
-        if (polygonId === null && layer.polygons.length >= MAX_POLYGONS_PER_LAYER) throw new Error(`This annotation layer already has ${MAX_POLYGONS_PER_LAYER} polygons.`);
+        if (polygonId === null && layer.polygons.length >= MAX_POLYGONS_PER_LAYER) throw new Error(`This shared layer already has ${MAX_POLYGONS_PER_LAYER} polygons.`);
         this.draft = { layerId, polygon: structuredClone(polygon), isNew: polygonId === null, outlineClosed: polygonId !== null };
     }
 

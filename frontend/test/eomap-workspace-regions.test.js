@@ -276,7 +276,7 @@ test("Map layers has one heading and collapse control with no nested list widget
     const stack = requireElementRange("raster-layer-stack");
     assert.doesNotMatch(rendering.source, /<h[1-6]\b|workspace-region-heading/);
     assert.match(rendering.source, /aria-labelledby="toggle-map-layers"/);
-    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or create an annotation layer to draw on the map\./);
+    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or create a shared layer to draw on the map\./);
     assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
     assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
     assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);

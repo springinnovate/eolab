@@ -56,7 +56,7 @@ export class MapInspectionController {
         this.tools = [
             { name: "raster-series", label: "Raster series", panel: this.rasterSeries,
                 tab: documentContext.querySelector("#map-inspection-tab-raster-series") },
-            { name: "annotations", label: "Annotation layer", panel: this.annotations,
+            { name: "annotations", label: "Shared layer", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
             { name: "calculations", label: "Summarize", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },

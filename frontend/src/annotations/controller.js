@@ -128,7 +128,7 @@ export class AnnotationController {
             this.importButton.disabled = false;
             this.status.textContent = "";
         } catch (error) {
-            this.status.textContent = `Cannot open saved annotations: ${error.message}`;
+            this.status.textContent = `Cannot open saved polygons: ${error.message}`;
             this.panel.show();
         }
     }
@@ -143,7 +143,7 @@ export class AnnotationController {
      * @throws {Error} If geometry, capacity or device persistence prevents restoration.
      */
     async restoreSharedContribution(name, collection, { localId = null, replacePolygons = false } = {}) {
-        if (!this.loaded) throw new Error("Local annotations are not available yet.");
+        if (!this.loaded) throw new Error("Local layers are not available yet.");
         const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
         const existing = this.model.layers.find(layer => layer.id === localId);
         const layer = existing ?? this.model.importLayer({ ...imported, name });
@@ -332,7 +332,7 @@ export class AnnotationController {
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared annotation" : "Local annotation",
+            snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : "Local layer",
                 legend: this.layerLegend(layer),
                 canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
@@ -349,12 +349,12 @@ export class AnnotationController {
             info: () => this.openControls(key, "info"),
             exportSavedState: () => ({ kind: "annotation", style: { ...layer.style } }),
             checkSavedStateCompatibility: (_record, saved) => {
-                if (saved?.kind !== "annotation") return "Copy a style from an annotation layer first.";
+                if (saved?.kind !== "annotation") return "Copy a style from a shared layer first.";
                 validateAnnotationStyle(saved.style);
                 return null;
             },
             applySavedState: (_record, saved) => {
-                if (saved?.kind !== "annotation") throw new Error("This style is not an annotation style.");
+                if (saved?.kind !== "annotation") throw new Error("This style is not a shared layer style.");
                 const ownColor = layer.style.color;
                 layer.style = validateAnnotationStyle(saved.style);
                 if (this.shared.has(layer.id)) layer.style.color = ownColor;
@@ -423,7 +423,7 @@ export class AnnotationController {
         if (!isCurrent()) throw new Error("Layer restoration was superseded.");
         const existing = this.model.layers.find(layer => layer.id === snapshot.local.id);
         if (existing) {
-            if (existing !== this.restoredLayers.get(snapshot)) throw new Error("This annotation layer is already on the map.");
+            if (existing !== this.restoredLayers.get(snapshot)) throw new Error("This shared layer is already on the map.");
         } else {
             const layer = this.model.restoreRemovedLayer(snapshot.local);
             try {
