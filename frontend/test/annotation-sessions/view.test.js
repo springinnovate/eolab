@@ -36,7 +36,7 @@ function setup() {
     const buttons = new Map();
     document.querySelector = key => { if (!buttons.has(key)) buttons.set(key, document.createElement("button")); return buttons.get(key); };
     const calls = [];
-    const view = new AnnotationSessionsView(document, { connect: (...args) => calls.push(args) });
+    const view = new AnnotationSessionsView(document, { connect: (...args) => calls.push(args), rename: (...args) => calls.push(["rename", ...args]) });
     return { view, document, calls };
 }
 
@@ -80,4 +80,27 @@ test("failed joins retain values and pending connections cannot dismiss the dial
     assert.equal(view.dialog.open, true); assert.equal(view.name.input.value, "Rich");
     assert.equal(view.status.textContent, "That name is already used");
     assert.equal(view.submit.disabled, false);
+});
+
+test("changing your name prefills only the name and saves to the chosen layer", () => {
+    const { view, document, calls } = setup();
+    view.open("rename", "layer-one", "Rich");
+    assert.equal(view.name.input.value, "Rich");
+    assert.equal(document.activeElement, view.name.input);
+    assert.equal(view.layerName.input.disabled, true);
+    assert.equal(view.code.input.disabled, true);
+    assert.equal(view.heading.textContent, "Change your name");
+    assert.equal(view.submit.textContent, "Save name");
+    view.name.input.value = " Richard ";
+    view.form.dispatchEvent(new Event("submit", { cancelable: true }));
+    assert.deepEqual(calls, [["rename", "layer-one", "Richard"]]);
+    view.message("That name is already used");
+    assert.equal(view.name.input.value, " Richard ");
+    assert.equal(view.dialog.open, true);
+    view.cancel.dispatchEvent(new Event("click"));
+    assert.equal(view.dialog.open, false);
+    assert.equal(calls.length, 1, "cancel does not submit another change");
+    view.open("join");
+    assert.equal(view.submit.textContent, "Join layer");
+    assert.match(view.help.textContent, /Everyone with the code/);
 });

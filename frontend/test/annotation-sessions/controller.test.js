@@ -29,6 +29,48 @@ function bind(controller) {
     controller.bindings.set("local", { localId: "local", sessionId: ID, contributorId: "me", revision: 0, remote: new Map(), retryDelay: 0 });
 }
 
+test("renaming uses the existing profile endpoint and preserves membership and polygons", async () => {
+    const metadata = snapshot(); const calls = [];
+    const { controller, local, events } = setup(async (path, method, body) => {
+        calls.push([path, method, body]);
+        if (method === "PATCH") { metadata.contributors[0].name = body.name; return { name: body.name }; }
+        return structuredClone(metadata);
+    });
+    try {
+        bind(controller);
+        const binding = controller.bindings.get("local"); binding.snapshot = snapshot();
+        const collection = { type: "FeatureCollection", name: "Watersheds", features: [{ properties: { name: "Keep my polygon" } }] };
+        local.push({ id: "local", collection }); binding.sent = JSON.stringify(collection);
+        const before = structuredClone(local);
+        controller.editContributorName("local");
+        assert.deepEqual(events.at(-1), ["open", "rename", "local", "Rich"]);
+        await controller.renameContributor("local", "Richard");
+        assert.deepEqual(calls[0], [`/${ID}/profile`, "PATCH", { name: "Richard" }]);
+        assert.equal(events.filter(event => event[0] === "display").at(-1)[2].contributors.find(person => person.own).name, "Richard");
+        assert.equal(binding.contributorId, "me");
+        assert.equal(binding.snapshot.contributors[0].color, "#FFBE0B");
+        assert.deepEqual(local, before);
+        assert.equal(calls.some(([, method]) => method === "PUT" || method === "POST"), false);
+    } finally { controller.destroy(); }
+});
+
+test("duplicate names do not create a polygon revision conflict or change the current name", async () => {
+    const { controller, events } = setup(async () => { throw Object.assign(new Error("That name is already used"), { status: 409 }); });
+    try {
+        bind(controller); const binding = controller.bindings.get("local"); binding.snapshot = snapshot();
+        await controller.renameContributor("local", "Maria");
+        assert.deepEqual(events.at(-1), ["error", "That name is already used"]);
+        assert.equal(binding.snapshot.contributors[0].name, "Rich");
+        assert.equal(binding.conflict, undefined);
+        assert.equal(controller.connecting, false);
+        binding.contributorId = null;
+        const count = events.length;
+        controller.editContributorName("local");
+        await controller.renameContributor("local", "Visitor");
+        assert.equal(events.length, count, "unjoined visitors cannot rename contributors");
+    } finally { controller.destroy(); }
+});
+
 test("invited visitors see live polygons without joining; first drawing joins only that layer", async () => {
     const metadata = snapshot(); metadata.contributorId = null;
     metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
