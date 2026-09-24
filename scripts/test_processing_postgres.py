@@ -88,6 +88,7 @@ def build_image(application_image: str | None) -> str:
                 ]
                 paths += list((ROOT / "tests").rglob("*.py"))
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-v1.json")
+                paths.append(ROOT / "tests" / "fixtures" / "saved-map-v2.json")
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]
                 if not application_image:
                     paths += list((ROOT / "src").rglob("*.py"))
