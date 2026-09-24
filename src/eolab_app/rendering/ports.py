@@ -11,11 +11,18 @@ class MapRenderQueue(Protocol):
 
     async def run(
         self, request: Callable[[], Awaitable[httpx2.Response]],
+        *,
+        request_key: str | None = None,
     ) -> httpx2.Response:
         """Wait for rendering capacity and then send the supplied request.
 
         Args:
             request: Deferred upstream GetMap HTTP operation.
+            request_key: Full authorized upstream request identity. Matching keys
+                share outstanding work; None requests an independent operation.
+                Every caller must authorize before joining. Canceling the last
+                caller removes queued work; running work retains its slot and
+                remains available to matching callers until it finishes.
 
         Returns:
             Completed HTTP response, including upstream error responses.

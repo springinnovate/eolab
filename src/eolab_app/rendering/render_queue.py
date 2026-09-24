@@ -3,6 +3,7 @@
 import asyncio
 import math
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import httpx2
 
@@ -15,11 +16,27 @@ class RenderExecutionTimeoutError(Exception):
     """Report that GeoServer did not finish within the execution deadline."""
 
 
+@dataclass
+class _SharedRender:
+    """Track a render's callers and whether it has reached GeoServer.
+
+    Attributes:
+        task: Shared queue wait and upstream response operation.
+        callers: Requests still waiting for this result.
+        started: Whether the render has acquired an upstream slot.
+    """
+
+    task: asyncio.Task[httpx2.Response]
+    callers: int = 0
+    started: bool = False
+
+
 class GeoServerRenderQueue:
     """Schedule distinct WMS requests in FIFO order across both tile routes.
 
-    Composite callers coalesce identical tiles before entering this queue.
-    Cancelling a queued caller removes its work. A started HTTP operation drains
+    Requests with the same caller-supplied key share one queued or running render.
+    Composite callers also cache and coalesce tiles before entering this queue.
+    Cancelling the last queued caller removes its work. A started operation drains
     to its response or deadline, retaining its slot even if its caller leaves:
     closing a connection does not establish that GeoServer stopped rendering.
     """
@@ -61,16 +78,23 @@ class GeoServerRenderQueue:
         self._execution_seconds = execution_seconds
         self._waiting: set[asyncio.Task[object]] = set()
         self._running: set[asyncio.Task[httpx2.Response]] = set()
+        self._shared: dict[str, _SharedRender] = {}
         self._closed = False
 
     async def run(
         self,
         request: Callable[[], Awaitable[httpx2.Response]],
+        *,
+        request_key: str | None = None,
     ) -> httpx2.Response:
-        """Wait for capacity, then send one deferred GeoServer request.
+        """Share an outstanding matching render or queue a new GeoServer request.
 
         Args:
             request: Authorized HTTP operation, created only after admission.
+            request_key: Identity of the fully authorized upstream request,
+                including representation-affecting parameters and headers.
+                None gives this caller its own operation. Completed results
+                are not cached. Each caller must authorize before joining.
 
         Returns:
             Completed upstream response, including non-success responses.
@@ -80,6 +104,69 @@ class GeoServerRenderQueue:
             RenderExecutionTimeoutError: If the upstream deadline expires.
             httpx2.RequestError: If the upstream HTTP transport fails.
             asyncio.CancelledError: If the caller cancels or the queue closes.
+        """
+        if self._closed:
+            raise RenderQueueUnavailableError("Map rendering is shutting down")
+        if request_key is None:
+            return await self._wait_and_render(request)
+        work = self._shared.get(request_key)
+        if work is None or work.task.done():
+            task = asyncio.create_task(self._wait_and_render(request, request_key))
+            work = _SharedRender(task)
+            self._shared[request_key] = work
+            task.add_done_callback(
+                lambda finished: self._forget_shared_render(request_key, finished)
+            )
+        work.callers += 1
+        try:
+            return await asyncio.shield(work.task)
+        finally:
+            work.callers -= 1
+            if work.callers == 0 and not work.started and not work.task.done():
+                if self._shared.get(request_key) is work:
+                    del self._shared[request_key]
+                work.task.cancel()
+                await asyncio.gather(work.task, return_exceptions=True)
+
+    def _forget_shared_render(
+        self,
+        request_key: str,
+        task: asyncio.Task[httpx2.Response],
+    ) -> None:
+        """Remove finished shared work without removing a newer matching request.
+
+        Args:
+            request_key: Identity used to find the shared render.
+            task: Completed operation, possibly with no remaining callers.
+
+        Returns:
+            None after releasing the key and retrieving abandoned errors.
+        """
+        work = self._shared.get(request_key)
+        if work is not None and work.task is task:
+            del self._shared[request_key]
+        if not task.cancelled():
+            task.exception()
+
+    async def _wait_and_render(
+        self,
+        request: Callable[[], Awaitable[httpx2.Response]],
+        request_key: str | None = None,
+    ) -> httpx2.Response:
+        """Acquire one slot and retain it until the upstream operation finishes.
+
+        Args:
+            request: Deferred authorized GeoServer request.
+            request_key: Shared-work identity, or None for independent work.
+
+        Returns:
+            Completed upstream response, including error responses.
+
+        Raises:
+            RenderQueueUnavailableError: If closed, full, or the wait expires.
+            RenderExecutionTimeoutError: If the upstream deadline expires.
+            httpx2.RequestError: If the upstream transport fails.
+            asyncio.CancelledError: If queued work is abandoned or shutdown occurs.
         """
         if self._closed:
             raise RenderQueueUnavailableError("Map rendering is shutting down")
@@ -101,6 +188,8 @@ class GeoServerRenderQueue:
                 ) from error
         finally:
             self._waiting.discard(caller)
+        if request_key is not None:
+            self._shared[request_key].started = True
         operation = asyncio.create_task(self._send_request(request))
         self._running.add(operation)
         operation.add_done_callback(self._finish_request)
@@ -152,7 +241,11 @@ class GeoServerRenderQueue:
             None once every owned operation has settled.
         """
         self._closed = True
-        tasks = tuple(self._waiting | self._running)
+        tasks = tuple(
+            self._waiting
+            | self._running
+            | {work.task for work in self._shared.values()}
+        )
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
