@@ -10,16 +10,12 @@ class MapRenderQueue(Protocol):
     """Admit an authorized HTTP render without exposing queue implementation."""
 
     async def run(
-        self,
-        request: Callable[[], Awaitable[httpx2.Response]],
-        *,
-        tile_key: str = "unspecified",
+        self, request: Callable[[], Awaitable[httpx2.Response]],
     ) -> httpx2.Response:
         """Wait for rendering capacity and then send the supplied request.
 
         Args:
             request: Deferred upstream GetMap HTTP operation.
-            tile_key: Opaque diagnostic identity; does not change scheduling.
 
         Returns:
             Completed HTTP response, including upstream error responses.

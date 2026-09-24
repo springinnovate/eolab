@@ -1,7 +1,6 @@
 """HTTP delivery for authorized GeoServer-composed map tiles."""
 
 import asyncio
-import hashlib
 import math
 import re
 from collections import OrderedDict
@@ -483,10 +482,7 @@ def create_composite_map_router(
 
         return await forward_geoserver_get_map(
             request,
-            tile_cache.get(tile_key, lambda: render_queue.run(
-                load_tile,
-                tile_key="composite:" + hashlib.sha256(repr(tile_key).encode()).hexdigest(),
-            )),
+            tile_cache.get(tile_key, lambda: render_queue.run(load_tile)),
             get_map_request_tracker,
         )
 

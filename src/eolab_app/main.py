@@ -101,7 +101,7 @@ def create_app(
     ),
     jobs_transport: httpx2.AsyncBaseTransport | None = None,
 ) -> FastAPI:
-    """Create the HTTP application and enable rendering queue diagnostics.
+    """Create an application from the deployment environment.
 
     Args:
         version_file_path: File containing the Git-derived application version.
@@ -131,8 +131,6 @@ def create_app(
         KeyError: If a required environment variable is missing.
         ValueError: If an environment value violates the settings contract.
     """
-    logging.basicConfig()
-    logging.getLogger("eolab_app.rendering.render_queue").setLevel(logging.INFO)
     app_global_configuration = load_settings(version_file_path)
     catalog_client = httpx2.AsyncClient(
         transport=catalog_transport,
