@@ -244,8 +244,13 @@ the deployed workload. The main controls are:
 
 Composite cache misses and direct WMS GetMap requests share one FIFO queue per
 app process, using `EOLAB_GEOSERVER_WMS_RENDER_COUNT` upstream slots. Successful
-composite cache hits bypass the queue; identical composite misses share one
-queued or running request. The default allows 64 additional requests to wait up
+composite cache hits bypass the queue. Identical composite misses and identical
+ordinary WMS requests each share one queued or running request within their
+respective route. Every WMS caller is authorized before joining; all prepared
+query parameters (including server-owned filters) and forwarded headers must
+match, ignoring query order and parameter-name case. Ordinary WMS sharing retains
+no completed responses; GeoWebCache remains responsible for cached tiles.
+The default allows 64 additional distinct requests to wait up
 to 60 seconds, followed by at most 30 seconds for the upstream response. Configure
 the reverse proxy to allow this combined wait. Full or expired queues return 503
 with `Retry-After: 1`; the upstream execution deadline returns 504. GeoServer's
@@ -253,7 +258,10 @@ own admission limit remains a final guard for traffic outside this app process.
 Use one app process per GeoServer with these limits; independent replicas do not
 share this queue or its cache.
 
-Disconnecting removes unused queued work. A started HTTP request keeps its slot
+Disconnecting one caller does not cancel another caller's render. Once every
+caller leaves, unused queued work is removed. An ordinary WMS caller can join
+an identical render still running after earlier callers left.
+A started HTTP request keeps its slot
 until its response or deadline, even after its last viewer leaves, because closing
 the connection does not prove GeoServer stopped rendering. At timeout or shutdown
 the transport is cancelled; native GeoServer work may continue. Capabilities,

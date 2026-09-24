@@ -183,3 +183,146 @@ def test_shutdown_cancels_active_and_queued_work() -> None:
             await queue.run(second)
 
     asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
+def test_duplicate_burst_uses_one_waiting_slot_and_cancels_individually() -> None:
+    """A hundred identical requests share capacity without canceling one another."""
+
+    async def scenario() -> None:
+        """Hold the worker, fill its queue with duplicates, then release it."""
+        queue = GeoServerRenderQueue(1, capacity=1)
+        starts: list[str] = []
+        blocker = ControlledRender("blocker", starts)
+        shared = ControlledRender("shared", starts)
+        other = ControlledRender("other", starts)
+        active = asyncio.create_task(queue.run(blocker))
+        await blocker.started.wait()
+        duplicates = [
+            asyncio.create_task(queue.run(shared, request_key="same tile"))
+            for _ in range(100)
+        ]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        with pytest.raises(RenderQueueUnavailableError, match="busy"):
+            await queue.run(other, request_key="different tile")
+        duplicates[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await duplicates[0]
+        blocker.release.set()
+        await active
+        await shared.started.wait()
+        shared.release.set()
+        responses = await asyncio.gather(*duplicates[1:])
+        assert all(response.content == b"shared" for response in responses)
+        assert starts == ["blocker", "shared"]
+        # Completed results are not a new application-level tile cache.
+        await queue.run(shared, request_key="same tile")
+        assert starts == ["blocker", "shared", "shared"]
+        await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
+def test_last_queued_caller_cancellation_frees_slot_for_new_work() -> None:
+    """Removing every duplicate prevents dispatch and releases queue capacity."""
+
+    async def scenario() -> None:
+        """Cancel both queued callers and reuse their key before the worker frees."""
+        queue = GeoServerRenderQueue(1, capacity=1)
+        starts: list[str] = []
+        blocker = ControlledRender("blocker", starts)
+        abandoned = ControlledRender("abandoned", starts)
+        replacement = ControlledRender("replacement", starts)
+        active = asyncio.create_task(queue.run(blocker))
+        await blocker.started.wait()
+        callers = [
+            asyncio.create_task(queue.run(abandoned, request_key="tile"))
+            for _ in range(2)
+        ]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        for caller in callers:
+            caller.cancel()
+        await asyncio.gather(*callers, return_exceptions=True)
+        fresh = asyncio.create_task(queue.run(replacement, request_key="tile"))
+        blocker.release.set()
+        await active
+        await replacement.started.wait()
+        replacement.release.set()
+        await fresh
+        assert starts == ["blocker", "replacement"]
+        await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
+def test_late_caller_rejoins_abandoned_running_render() -> None:
+    """A render keeps its identity and slot after its initial callers leave."""
+
+    async def scenario() -> None:
+        """Join the same running operation even when waiting capacity is zero."""
+        queue = GeoServerRenderQueue(1, capacity=0)
+        starts: list[str] = []
+        render = ControlledRender("tile", starts)
+        original = asyncio.create_task(queue.run(render, request_key="tile"))
+        await render.started.wait()
+        original.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await original
+        late = asyncio.create_task(queue.run(render, request_key="tile"))
+        await asyncio.sleep(0)
+        assert not late.done()
+        assert not render.cancelled
+        render.release.set()
+        assert (await late).content == b"tile"
+        assert starts == ["tile"]
+        await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
+@pytest.mark.parametrize("failure", ["queue_timeout", "execution_timeout", "shutdown"])
+def test_shared_renders_release_all_callers_on_failure(failure: str) -> None:
+    """Every caller observes the shared lifecycle failure; retries can start fresh.
+
+    Args:
+        failure: Queue lifecycle failure to exercise.
+    """
+
+    async def scenario() -> None:
+        """Hold a render until its chosen deadline or shutdown interrupts it."""
+        queue = GeoServerRenderQueue(
+            1,
+            wait_seconds=0.05 if failure == "queue_timeout" else 60,
+            execution_seconds=0.05 if failure == "execution_timeout" else 30,
+        )
+        starts: list[str] = []
+        blocker = ControlledRender("blocker", starts)
+        render = ControlledRender("shared", starts)
+        active = None
+        if failure == "queue_timeout":
+            active = asyncio.create_task(queue.run(blocker))
+            await blocker.started.wait()
+        callers = [
+            asyncio.create_task(queue.run(render, request_key="tile"))
+            for _ in range(2)
+        ]
+        if failure == "shutdown":
+            await render.started.wait()
+            await queue.close()
+        outcomes = await asyncio.gather(*callers, return_exceptions=True)
+        expected = {
+            "queue_timeout": RenderQueueUnavailableError,
+            "execution_timeout": RenderExecutionTimeoutError,
+            "shutdown": asyncio.CancelledError,
+        }[failure]
+        assert all(isinstance(outcome, expected) for outcome in outcomes)
+        if active is not None:
+            blocker.release.set()
+            await active
+        if failure != "shutdown":
+            render.release.set()
+            assert (await queue.run(render, request_key="tile")).content == b"shared"
+        await queue.close()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
