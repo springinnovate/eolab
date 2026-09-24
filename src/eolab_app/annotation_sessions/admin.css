@@ -1,0 +1,22 @@
+:root { font: 16px/1.5 system-ui, sans-serif; color: #202b33; background: #f7f8fa; }
+body { margin: 0; }
+main { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+h1 { margin-bottom: .25rem; }
+a { color: #005f94; }
+button { font: inherit; padding: .3rem .65rem; border: 1px solid #8a969e; border-radius: 4px; background: white; cursor: pointer; }
+button + button { margin-left: .5rem; }
+button:disabled { cursor: wait; opacity: .6; }
+button:focus-visible, a:focus-visible { outline: 3px solid #008bc5; outline-offset: 3px; }
+.delete { color: #a32121; }
+#status { min-height: 1.5em; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: white; text-align: left; }
+caption { text-align: left; font-weight: 600; padding-bottom: .5rem; }
+th, td { padding: .65rem; border-bottom: 1px solid #d7dde1; vertical-align: top; }
+th:first-child { min-width: 10rem; overflow-wrap: anywhere; }
+td:last-child { white-space: nowrap; }
+code { font-size: 1rem; user-select: all; }
+.deleted { background: #edf0f2; }
+small { display: block; font-size: .8rem; overflow-wrap: anywhere; font-weight: normal; color: #53606a; }
+dialog { max-width: 30rem; border: 1px solid #8a969e; border-radius: 6px; padding: 1.5rem; }
+dialog::backdrop { background: #0006; }

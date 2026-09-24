@@ -93,7 +93,7 @@ class AnnotationSessionStore:
             )
 
     def list_sessions(self, browser: str) -> list[dict[str, Any]]:
-        """Find shared layers this browser has joined.
+        """Find active shared layers this browser has joined, excluding deleted layers.
 
         Args:
             browser: Hash of the browser's private cookie.
@@ -106,10 +106,58 @@ class AnnotationSessionStore:
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT s.id, s.name, s.join_code AS "joinCode" FROM shared_annotation_layers.sessions s JOIN shared_annotation_layers.contributors c ON c.session_id=s.id WHERE c.browser_hash=%s ORDER BY s.name, s.id',
+                'SELECT s.id, s.name, s.join_code AS "joinCode" FROM shared_annotation_layers.sessions s JOIN shared_annotation_layers.contributors c ON c.session_id=s.id WHERE c.browser_hash=%s AND s.deleted_at IS NULL ORDER BY s.name, s.id',
                 (browser,),
             )
             return cursor.fetchall()
+
+    def list_layers_for_administration(self) -> list[dict[str, Any]]:
+        """List active and deleted shared layers without loading their polygons.
+
+        Returns:
+            Layer names, share codes, deletion times and contributor/polygon counts.
+            Contributor credentials and polygon contents are never returned.
+
+        Raises:
+            SessionError: If the database is unavailable.
+        """
+        with self.transaction() as cursor:
+            cursor.execute(
+                '''SELECT s.id, s.name, s.join_code AS "joinCode",
+                          s.deleted_at AS "deletedAt",
+                          count(DISTINCT c.id) AS "contributorCount",
+                          coalesce(sum(jsonb_array_length(l.collection->'features')), 0)
+                              AS "polygonCount"
+                   FROM shared_annotation_layers.sessions s
+                   LEFT JOIN shared_annotation_layers.contributors c ON c.session_id=s.id
+                   LEFT JOIN shared_annotation_layers.layers l ON l.contributor_id=c.id
+                   GROUP BY s.id ORDER BY s.deleted_at NULLS FIRST, lower(s.name), s.id'''
+            )
+            return cursor.fetchall()
+
+    def set_layer_deleted(self, session_id: UUID, *, deleted: bool) -> None:
+        """Hide a shared layer or restore it, retaining its code and contributions.
+
+        This serializes with contribution writes and joins. Requests authorized before
+        deletion may finish; subsequent reads and writes reject the deleted layer.
+        Retained data still counts toward capacity limits. Repeated calls are safe.
+
+        Args:
+            session_id: Shared layer to delete or restore.
+            deleted: True to make the layer unavailable; False to undo deletion.
+
+        Raises:
+            SessionError: If the layer does not exist or storage is unavailable.
+        """
+        with self.transaction(write=True) as cursor:
+            cursor.execute(
+                """UPDATE shared_annotation_layers.sessions
+                   SET deleted_at=CASE WHEN %s THEN coalesce(deleted_at, now()) ELSE NULL END
+                   WHERE id=%s RETURNING id""",
+                (deleted, session_id),
+            )
+            if not cursor.fetchone():
+                raise SessionError(404, "This shared layer does not exist.")
 
     def create_session(self, browser: str, name: str, contributor_name: str) -> UUID:
         """Create a shared layer and give its first contributor a palette color.
@@ -207,7 +255,7 @@ class AnnotationSessionStore:
             raise SessionError(429, "Too many join attempts. Try again in a minute.")
         with self.transaction(write=True) as cursor:
             cursor.execute(
-                "SELECT id, joins_open FROM shared_annotation_layers.sessions WHERE join_code=%s",
+                "SELECT id, joins_open FROM shared_annotation_layers.sessions WHERE join_code=%s AND deleted_at IS NULL",
                 (code,),
             )
             session = cursor.fetchone()
@@ -271,10 +319,10 @@ class AnnotationSessionStore:
             The caller's contributor record, without the cookie hash.
 
         Raises:
-            SessionError: If this browser has not joined the shared layer.
+            SessionError: If this browser has not joined the shared layer or it is deleted.
         """
         cursor.execute(
-            "SELECT c.id,c.name FROM shared_annotation_layers.contributors c JOIN shared_annotation_layers.sessions s ON s.id=c.session_id WHERE s.id=%s AND c.browser_hash=%s",
+            "SELECT c.id,c.name FROM shared_annotation_layers.contributors c JOIN shared_annotation_layers.sessions s ON s.id=c.session_id WHERE s.id=%s AND c.browser_hash=%s AND s.deleted_at IS NULL",
             (session_id, browser),
         )
         member = cursor.fetchone()
@@ -332,12 +380,12 @@ class AnnotationSessionStore:
             Existing contributor, or None for an invited visitor. Never creates a member.
 
         Raises:
-            SessionError: If membership or the supplied invitation is invalid.
+            SessionError: If membership or the invitation is invalid, or the layer is deleted.
         """
         if join_code is None:
             return self.require_contributor(cursor, session_id, browser)
         cursor.execute(
-            "SELECT id FROM shared_annotation_layers.sessions WHERE id=%s AND join_code=%s",
+            "SELECT id FROM shared_annotation_layers.sessions WHERE id=%s AND join_code=%s AND deleted_at IS NULL",
             (session_id, join_code),
         )
         if not cursor.fetchone():

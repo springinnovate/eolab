@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared layers · EOLab administration</title>
+  <link rel="stylesheet" href="/admin-eolab/admin.css">
+  <script type="module" src="/admin-eolab/admin.js"></script>
+</head>
+<body>
+<main>
+  <h1>Shared layers</h1>
+  <p>Administration for this site. <a href="/">Open map</a></p>
+  <p>Delete stops access to a shared layer. Undo restores its polygons, contributors and
+    share code. Deleted data stays stored and counts toward capacity; local copies are not removed.</p>
+  <button id="refresh" type="button">Refresh list</button>
+  <p id="status" role="status" aria-live="polite">Loading shared layers…</p>
+  <div class="table-scroll">
+    <table>
+      <caption>Active and deleted shared layers</caption>
+      <thead><tr><th scope="col">Layer</th><th scope="col">Contributors</th>
+        <th scope="col">Polygons</th><th scope="col">Share code</th>
+        <th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
+      <tbody id="layers"></tbody>
+    </table>
+  </div>
+</main>
+<dialog id="confirm-delete" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+  <h2 id="confirm-title">Delete shared layer?</h2>
+  <p id="confirm-description"></p>
+  <p>You can undo this here. Local copies are not removed.</p>
+  <button id="cancel-delete" type="button" autofocus>Cancel</button>
+  <button id="accept-delete" type="button" class="delete">Delete layer</button>
+</dialog>
+</body>
+</html>

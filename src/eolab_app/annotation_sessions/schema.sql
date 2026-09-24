@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS shared_annotation_layers.sessions (
     join_code text UNIQUE NOT NULL,
     joins_open boolean NOT NULL DEFAULT true
 );
+ALTER TABLE shared_annotation_layers.sessions
+    ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE TABLE IF NOT EXISTS shared_annotation_layers.contributors (
     id uuid PRIMARY KEY,
     session_id uuid NOT NULL REFERENCES shared_annotation_layers.sessions ON DELETE CASCADE,

@@ -12,10 +12,124 @@ import pytest
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.annotation_sessions.models import ShareLayer, SessionError
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
+from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from test_annotation_sessions import collection
 
 BASE = "/api/annotation-sessions"
 HEADERS = {"X-EOLab-Annotations": "1"}
+
+
+def test_admin_delete_and_undo_preserve_data_and_block_all_access(
+    store: AnnotationSessionStore,
+) -> None:
+    """Deletion gates existing contributors and invitations; Undo restores exact contents.
+
+    Args:
+        store: Isolated PostgreSQL store using the real schema and write lock.
+    """
+    app = FastAPI()
+    app.include_router(create_annotation_sessions_router(store))
+    app.include_router(
+        create_shared_layer_admin_router(store, "test-admin-password-519")
+    )
+    admin = TestClient(app, headers={"X-EOLab-Admin": "1"})
+    admin.auth = ("admin", "test-admin-password-519")
+    author = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    visitor = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    layer = author.post(
+        BASE, json={"name": "Admin review", "contributorName": "Author"}
+    ).json()
+    path = f"{BASE}/{layer['id']}"
+    invitation = f"{BASE}/invitations/{layer['id']}/{layer['joinCode']}"
+    contribution = f"/contributors/{layer['contributorId']}/layers/{layer['id']}"
+    upload = {"revision": 0, "collection": collection()}
+    assert author.put(path + f"/layers/{layer['id']}", json=upload).status_code == 200
+    original = author.get(path + contribution).json()
+    before = author.get(path).json()
+    management = f"/api/admin/shared-layers/{layer['id']}"
+    listing = admin.get("/api/admin/shared-layers").json()
+    assert len(listing) == 1
+    assert listing[0] == {
+        "id": layer["id"],
+        "name": "Admin review",
+        "joinCode": layer["joinCode"],
+        "deletedAt": None,
+        "contributorCount": 1,
+        "polygonCount": 1,
+    }
+    assert author.delete(management).status_code == 401
+    assert admin.delete(management).status_code == 204
+    deleted = admin.get("/api/admin/shared-layers").json()[0]
+    assert deleted["deletedAt"]
+    assert admin.delete(management).status_code == 204
+    assert admin.get("/api/admin/shared-layers").json()[0] == deleted
+    assert author.get(BASE).json() == []
+    for url in [
+        path,
+        path + contribution,
+        path + "/export",
+        invitation,
+        invitation + contribution,
+    ]:
+        assert author.get(url).status_code == 404
+    assert author.put(path + f"/layers/{layer['id']}", json=upload).status_code == 404
+    assert author.patch(path + "/profile", json={"name": "Changed"}).status_code == 404
+    assert author.patch(path + "/color", json={"color": "#abcdef"}).status_code == 404
+    for client in [author, visitor]:
+        assert (
+            client.post(
+                BASE + "/join",
+                json={"joinCode": layer["joinCode"], "contributorName": "Visitor"},
+            ).status_code
+            == 404
+        )
+    assert admin.post(management + "/restore").status_code == 204
+    assert admin.post(management + "/restore").status_code == 204
+    assert author.get(path).json() == before
+    assert author.get(path + contribution).json() == original
+    assert visitor.get(invitation + contribution).json() == original
+    assert visitor.put(path + f"/layers/{layer['id']}", json=upload).status_code == 404
+    assert admin.delete(f"/api/admin/shared-layers/{uuid4()}").status_code == 404
+
+
+def test_admin_schema_upgrade_retains_existing_layers(
+    store: AnnotationSessionStore,
+) -> None:
+    """Upgrade an older table in place and keep deletion state across repeated startups.
+
+    Args:
+        store: Isolated disposable database where schema alterations are safe.
+    """
+    identifier = store.create_session("owner", "Existing layer", "Owner")
+    before = store.get_session_snapshot(identifier, "owner")
+    with store.transaction(write=True) as cursor:
+        cursor.execute(
+            "ALTER TABLE shared_annotation_layers.sessions DROP COLUMN deleted_at"
+        )
+    store.initialize_and_clean_join_attempts()
+    assert store.get_session_snapshot(identifier, "owner") == before
+    store.set_layer_deleted(identifier, deleted=True)
+    store.initialize_and_clean_join_attempts()
+    assert store.list_layers_for_administration()[0]["deletedAt"] is not None
+    store.set_layer_deleted(identifier, deleted=False)
+    assert store.get_session_snapshot(identifier, "owner") == before
+
+
+def test_deleted_layers_still_count_toward_capacity(
+    store: AnnotationSessionStore,
+) -> None:
+    """Undo cannot bypass the browser membership limit by reviving retained records.
+
+    Args:
+        store: Isolated disposable store.
+    """
+    for number in range(10):
+        identifier = store.create_session("owner", f"Layer {number}", "Owner")
+        store.set_layer_deleted(identifier, deleted=True)
+    with pytest.raises(SessionError) as rejected:
+        store.create_session("owner", "Over capacity", "Owner")
+    assert rejected.value.status == 429
+    assert len(store.list_layers_for_administration()) == 10
 
 
 def test_map_invitation_reads_live_layers_without_granting_write_access(
