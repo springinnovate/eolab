@@ -266,6 +266,7 @@ services:
     environment:
       - "JOBS_TOKEN=${EOLAB_JOBS_TOKEN-}"
       - "SAVED_MAP_CAPACITY=${EOLAB_SAVED_MAP_CAPACITY-1000}"
+      - "ADMIN_PASSWORD=${EOLAB_ADMIN_PASSWORD-}"
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
       - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"

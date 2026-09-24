@@ -17,6 +17,7 @@ from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.routes.saved_maps import create_saved_maps_router
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
+from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
 from eolab_app.catalog.reconciliation import MissingItemReconciler
@@ -298,8 +299,12 @@ def create_app(
         version=app_global_configuration.app_version,
         lifespan=lifespan,
     )
+    annotation_sessions = AnnotationSessionStore()
+    application.include_router(create_annotation_sessions_router(annotation_sessions))
     application.include_router(
-        create_annotation_sessions_router(AnnotationSessionStore())
+        create_shared_layer_admin_router(
+            annotation_sessions, app_global_configuration.admin_password
+        )
     )
     catalog_database = PgStacCatalogDatabase()
     application.include_router(

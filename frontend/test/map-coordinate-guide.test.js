@@ -6,7 +6,10 @@ import {FakeRasterControlDocument} from "../test-support/raster/fake-controls-do
 
 test("degree ticks adapt from world to street scale without wrapping or rounding away precision", () => {
     assert.equal(coordinateTickInterval(360, 800), 50);
-    assert.equal(coordinateTickInterval(0.001, 800), 0.0002);
+    const streetInterval = coordinateTickInterval(0.001, 800);
+    // Exponentiation can round the last binary digit differently across runtimes.
+    assert.ok(Math.abs(streetInterval - 0.0002) <= 4 * Number.EPSILON * 0.0002,
+        `street-scale interval should be approximately 0.0002, got ${streetInterval}`);
     assert.deepEqual(coordinateTicks(-210, 230, 50, 180), [-150, -100, -50, 0, 50, 100, 150]);
     assert.deepEqual(coordinateTicks(90, 95, 1, 85.0511287798066), []);
     assert.equal(formatCoordinate(-73.567, "longitude", 0.01), "73.57°W");

@@ -142,6 +142,8 @@ class Settings:
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
         saved_map_capacity: Maximum named maps retained on this site.
+        admin_password: Optional server-only password for /admin-eolab (user admin).
+            Blank disables administration; never included in browser configuration.
         processing_data_path: Persistent private clip volume shared with the worker.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
@@ -183,6 +185,7 @@ class Settings:
     initial_zoom: float
     processing_data_path: Path = Path("/processing-data").absolute()
     jobs_token: str = field(default="", repr=False)
+    admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
     maptiler_api_key: str = field(default="", repr=False)
     raster_statistics_queue_capacity: int = 32
@@ -196,9 +199,18 @@ class Settings:
         """Validate the application settings contract.
 
         Raises:
-            ValueError: If required text is blank, the Jobs credential is invalid,
+            ValueError: If required text is blank, an administrator or Jobs credential is invalid,
                 or a resource, path or map setting violates its contract.
         """
+        if self.admin_password and (
+            not 16 <= len(self.admin_password) <= 256
+            or not self.admin_password.isascii()
+            or any(character.isspace() for character in self.admin_password)
+            or not self.admin_password.isprintable()
+        ):
+            raise ValueError(
+                "ADMIN_PASSWORD must be blank or 16-256 printable ASCII characters without whitespace"
+            )
         required_text_settings = {
             "APP_TITLE": self.app_title,
             "APP_SUBTITLE": self.app_subtitle,
@@ -446,6 +458,7 @@ def load_settings(
     return Settings(
         saved_map_capacity=int(os.environ.get("SAVED_MAP_CAPACITY", "1000")),
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
+        admin_password=os.environ.get("ADMIN_PASSWORD", ""),
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
