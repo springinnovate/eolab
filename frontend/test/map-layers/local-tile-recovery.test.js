@@ -71,7 +71,7 @@ test("annotation interleaving tracks both catalog grids and recovers a failed im
     f.layers.get("a").emit("load"); await flush();
     assert.deepEqual(f.status(), { phase: "retrying", total: 2, loaded: 1, failed: 0 });
     assert.equal(f.set.hasTileRecovery("annotation"), false);
-    context.mock.timers.tick(250);
+    context.mock.timers.tick(1000);
     assert.deepEqual(failed.assignments, ["/tiles/a/0"]);
     f.layers.get("a").emit("tileload", { tile: failed }); await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 2, loaded: 2, failed: 0 });
@@ -91,7 +91,7 @@ test("exhausted independent tiles offer targeted retry and clear their layer war
     context.mock.timers.enable({ apis: ["setTimeout"] });
     const f = fixture(), failed = f.tile("a"), good = f.tile("b");
     f.layers.get("b").emit("tileload", { tile: good });
-    for (const delay of [250, 1000, 5000]) {
+    for (const delay of [1000, 4000, 10000, 15000, 30000, 5000]) {
         f.layers.get("a").emit("tileerror", { tile: failed });
         f.layers.get("a").emit("load"); context.mock.timers.tick(delay);
     }
@@ -99,7 +99,7 @@ test("exhausted independent tiles offer targeted retry and clear their layer war
     assert.deepEqual(f.status(), { phase: "incomplete", total: 2, loaded: 1, failed: 1 });
     assert.equal(f.layerStatuses.get("a").failed, 1);
     f.set.retryFailedTiles(); f.set.retryFailedTiles(); await flush();
-    assert.equal(failed.assignments.length, 3);
+    assert.equal(failed.assignments.length, 6);
     assert.equal(good.assignments.length, 0);
     f.layers.get("a").emit("tileload", { tile: failed }); await flush();
     assert.equal(f.layerStatuses.get("a").failed, 0);
@@ -112,21 +112,60 @@ test("zoom changes, hiding and composite transitions cancel obsolete independent
     const f = fixture(), old = f.tile("a");
     f.layers.get("a").emit("tileerror", { tile: old });
     f.map.zoom = 2; f.map.emit("zoomend");
-    context.mock.timers.tick(250); await flush();
+    context.mock.timers.tick(60000); await flush();
     assert.equal(old.assignments.length, 0);
     const hidden = f.tile("a");
     f.layers.get("a").emit("tileerror", { tile: hidden });
     f.rendering[0].visible = false; f.set.render(f.rendering);
-    context.mock.timers.tick(1000); await flush();
+    context.mock.timers.tick(60000); await flush();
     assert.equal(hidden.assignments.length, 0);
     assert.equal(f.set.hasTileRecovery("a"), false);
     const removed = f.tile("b");
     f.layers.get("b").emit("tileerror", { tile: removed });
     f.rendering[1].visible = false; f.set.render(f.rendering);
     f.layers.get("b").emit("tileerror", { tile: removed });
-    context.mock.timers.tick(1000); await flush();
+    context.mock.timers.tick(60000); await flush();
     assert.equal(removed.assignments.length, 0);
     assert.equal(f.set.hasTileRecovery("b"), false);
+    f.set.clear();
+});
+
+test("a busy tile can recover after a minute without reloading its successful neighbor", async context => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(), busy = f.tile("a"), good = f.tile("b");
+    f.layers.get("b").emit("tileload", { tile: good });
+    for (const delay of [1000, 4000, 10000, 15000]) {
+        f.layers.get("a").emit("tileerror", { tile: busy });
+        context.mock.timers.tick(delay);
+    }
+    f.layers.get("a").emit("tileerror", { tile: busy });
+    context.mock.timers.tick(29999); await flush();
+    assert.deepEqual(f.status(), { phase: "retrying", total: 2, loaded: 1, failed: 0 });
+    assert.equal(busy.assignments.length, 4);
+    context.mock.timers.tick(1);
+    assert.equal(busy.assignments.length, 5);
+    f.layers.get("a").emit("tileload", { tile: busy }); await flush();
+    assert.deepEqual(f.status(), { phase: "complete", total: 2, loaded: 2, failed: 0 });
+    assert.equal(good.assignments.length, 0);
+    f.set.clear();
+});
+
+test("zooming during a long retry wait preserves the new view and drops the old timer", async context => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(), old = f.tile("a");
+    for (const delay of [1000, 4000, 10000, 15000]) {
+        f.layers.get("a").emit("tileerror", { tile: old });
+        context.mock.timers.tick(delay);
+    }
+    f.layers.get("a").emit("tileerror", { tile: old });
+    f.map.zoom = 2; f.map.emit("zoomend");
+    f.layers.get("a").emit("tileunload", { tile: old });
+    const current = f.tile("a");
+    f.layers.get("a").emit("tileload", { tile: current });
+    context.mock.timers.tick(60000); await flush();
+    assert.equal(old.assignments.length, 4, "obsolete tile never retries again");
+    assert.equal(current.assignments.length, 0);
+    assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
     f.set.clear();
 });
 
