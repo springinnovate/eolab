@@ -1,5 +1,7 @@
 /** Track and retry visible images in one Leaflet tile grid. */
 
+// One browser retry schedule for both individual and composite WMS layers.
+// Server queue wait limits are configured separately through environment variables.
 // Immediate busy responses retry at 1, 5, 15, 30, and 60 seconds.
 // Time spent awaiting each HTTP response is additional to these delays.
 const RETRY_DELAYS_MILLISECONDS = Object.freeze([1000, 4000, 10000, 15000, 30000]);
