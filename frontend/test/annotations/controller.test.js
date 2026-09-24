@@ -22,6 +22,41 @@ function controller() {
     return annotations;
 }
 
+test("contributor zoom uses current saved geometry for that person and layer without changing filters or ownership", () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    layer.polygons = [{ id: "own-polygon", vertices: [[10, 20], [12, 20], [10, 22]] }];
+    layer.filter = "matches nothing";
+    layer.visible = false;
+    annotations.model.createLayer().polygons = [{ id: "unrelated", vertices: [[-100, -50]] }];
+    const contributors = [{ id: "own", own: true }, { id: "peer", own: false }, { id: "empty", own: false }];
+    const peer = { id: "peer-polygon", contributorId: "peer", vertices: [[30, 40], [32, 40], [30, 42]] };
+    annotations.shared.set(layer.id, { contributors, polygons: [peer], canContribute: false });
+    const fits = [];
+    annotations.leaflet = { latLngBounds: () => ({ points: [], extend(point) { this.points.push(point); }, isValid() { return this.points.length > 0; } }) };
+    annotations.map = { fitBounds: (bounds, options) => fits.push({ points: bounds.points, options }) };
+    const before = structuredClone(layer);
+    annotations.zoomToContributorPolygons(layer.id, "own");
+    assert.deepEqual(fits[0], { points: [[20, 10], [20, 12], [22, 10]], options: { padding: [40, 40], maxZoom: 12 } });
+    annotations.zoomToContributorPolygons(layer.id, "peer");
+    assert.deepEqual(fits[1].points, [[40, 30], [40, 32], [42, 30]], "read-only viewers can zoom to peers");
+    assert.deepEqual(layer, before, "zoom leaves visibility, filters, polygons and ownership unchanged");
+    peer.vertices = [[35, 45], [36, 45], [35, 46]];
+    annotations.zoomToContributorPolygons(layer.id, "peer");
+    assert.deepEqual(fits[2].points, [[45, 35], [45, 36], [46, 35]], "later clicks use updated geometry");
+    annotations.model.draft = { layerId: layer.id, polygon: { vertices: [[-80, -40]] } };
+    annotations.zoomToContributorPolygons(layer.id, "own");
+    assert.deepEqual(fits[3].points, fits[0].points, "unfinished edits are excluded");
+    annotations.zoomToContributorPolygons(layer.id, "empty");
+    annotations.zoomToContributorPolygons(layer.id, "unknown");
+    annotations.zoomToContributorPolygons("removed-layer", "peer");
+    annotations.shared.get(layer.id).polygons = [];
+    annotations.zoomToContributorPolygons(layer.id, "peer");
+    layer.polygons = [];
+    annotations.zoomToContributorPolygons(layer.id, "own");
+    assert.equal(fits.length, 4, "empty, unloaded, removed or unknown contributions leave the map unchanged");
+});
+
 test("shared viewer keeps private layers stored but never attaches or exposes them as summary targets", async () => {
     const annotations = controller();
     const privateLayer = annotations.model.createLayer("Private notes");

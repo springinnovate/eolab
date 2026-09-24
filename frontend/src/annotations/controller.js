@@ -225,6 +225,29 @@ export class AnnotationController {
     }
 
     /**
+     * Fit the map to one contributor's saved polygons in this shared layer.
+     * Uses current local polygons for you and loaded shared polygons for others,
+     * including polygons hidden by filters. Unfinished edits are excluded.
+     * Missing contributors or empty/unavailable geometry leave the map unchanged.
+     * @param {string} layerId Local shared-layer identifier.
+     * @param {string} contributorId Contributor whose polygons should fit in view.
+     * @return {void}
+     */
+    zoomToContributorPolygons(layerId, contributorId) {
+        const layer = this.model.layers.find(candidate => candidate.id === layerId);
+        const sharing = this.shared.get(layerId);
+        const contributor = sharing?.contributors.find(person => person.id === contributorId);
+        if (!layer || !contributor) return;
+        const polygons = contributor.own ? layer.polygons
+            : sharing.polygons.filter(polygon => polygon.contributorId === contributorId);
+        const bounds = this.leaflet.latLngBounds([]);
+        for (const polygon of polygons) {
+            for (const [longitude, latitude] of polygon.vertices) bounds.extend([latitude, longitude]);
+        }
+        if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+    }
+
+    /**
      * Import a local GeoJSON file as one new layer after validating the whole file.
      * File errors appear in the annotation panel without changing the map. Persistence errors use the existing save/retry controls.
      * @param {File} file File chosen in the annotation panel.
@@ -314,6 +337,7 @@ export class AnnotationController {
             share: () => this.onShare(layer.id),
             color: color => this.onColor(layer.id, color),
             renameContributor: () => this.onRenameContributor(layer.id),
+            zoomToContributor: id => this.zoomToContributorPolygons(layer.id, id),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
             edit: (id, field) => this.beginPolygon(layer.id, id, field),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),
