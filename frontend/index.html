@@ -435,12 +435,12 @@
                       aria-hidden="false"
                     >
                     <details class="annotation-layer-tools">
-                      <summary>Annotations</summary>
-                      <div class="annotation-layer-actions" role="group" aria-label="Annotations">
-                      <button class="secondary-button" id="create-shared-annotation-layer" type="button" aria-label="Create shared annotation layer">Create shared</button>
-                      <button class="secondary-button" id="join-shared-annotation-layer" type="button" aria-label="Join shared annotation layer">Join</button>
+                      <summary>Shared layers</summary>
+                      <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
+                      <button class="secondary-button" id="create-shared-annotation-layer" type="button" aria-label="Create layer">Create layer</button>
+                      <button class="secondary-button" id="join-shared-annotation-layer" type="button" aria-label="Join layer">Join layer</button>
                       <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
-                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
+                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
                       </div>
                     </details>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map layer controls">
@@ -468,7 +468,7 @@
                     ></p>
                     </section>
                     <p class="map-layers-empty-state">
-                      No map layers yet. Add an item from Catalog or create an annotation layer to draw on the map.
+                      No map layers yet. Add an item from Catalog or create a shared layer to draw on the map.
                     </p>
                     <div
                       class="raster-layer-stack"
@@ -593,7 +593,7 @@
             aria-label="Open map tools">
             <button id="map-inspection-tab-raster-series" class="map-inspection-tab" type="button" role="tab"
               aria-controls="raster-series" aria-selected="false" tabindex="-1" hidden>Raster series</button>
-            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Annotation layer</button>
+            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Shared layer</button>
             <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Summarize</button>
             <button id="map-inspection-tab-downloads" class="map-inspection-tab"
               type="button" role="tab" aria-controls="downloads-panel"
@@ -630,7 +630,7 @@
                 <label>Area <select id="raster-series-area"><option value="selection">Current sampling area</option><option value="whole">Whole raster</option></select></label>
                 <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
               </div>
-              <p class="raster-series-help">Use the same box, imported annotation polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
+              <p class="raster-series-help">Use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
               <div id="raster-series-formulas"></div>
               <div class="raster-series-controls">
                 <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="mean">Mean</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
@@ -679,18 +679,18 @@
             </details>
           </section>
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
-            <header class="map-histogram-toolbar"><h2>Annotation layer</h2><button id="close-annotations" class="secondary-button" type="button" aria-label="Close annotations">&times;</button></header>
+            <header class="map-histogram-toolbar"><h2>Shared layer</h2><button id="close-annotations" class="secondary-button" type="button" aria-label="Close shared layer">&times;</button></header>
             <div class="annotation-layer-actions">
               <button class="secondary-button" id="undo-annotation-delete" type="button" hidden>Undo deletion</button>
               <button class="secondary-button" id="retry-annotation-save" type="button" hidden>Retry saving</button>
             </div>
-            <p id="annotation-save-status" role="status" aria-live="polite">Opening local annotations…</p>
+            <p id="annotation-save-status" role="status" aria-live="polite">Opening local polygons…</p>
             <p id="annotation-file-status" role="status" aria-live="polite"></p>
-            <p id="annotation-panel-empty">Choose an annotation layer in Map layers to edit its polygons, names and notes.</p>
+            <p id="annotation-panel-empty">Choose a shared layer in Map layers to edit its polygons, names and notes.</p>
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
-              <p>Local annotations are saved on this device. Shared annotation layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Export GeoJSON to keep a file. Map links include live shared layers, but not private annotations or editing credentials.</p>
+              <p>Local layers are saved on this device. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Export GeoJSON to keep a file. Map links include live shared layers, but not private polygons or editing credentials.</p>
               <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
@@ -1662,7 +1662,7 @@
           <label>Map subtitle (optional)<input id="publish-map-subtitle" maxlength="240" autocomplete="off"></label>
           <label>Link name<input id="publish-map-slug" required maxlength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off" spellcheck="false" aria-describedby="publish-map-preview"></label>
           <p id="publish-map-preview" class="publish-map-url"></p>
-          <p>Shared annotations stay live. Published maps cannot be edited or deleted yet.</p>
+          <p>Shared layers stay live. Published maps cannot be edited or deleted yet.</p>
         </fieldset>
         <div id="publish-map-result" hidden>
           <label>Shared map link<input id="publish-map-url" readonly></label>

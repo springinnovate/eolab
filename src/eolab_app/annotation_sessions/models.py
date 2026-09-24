@@ -128,7 +128,7 @@ class ShareLayer(SessionInput):
             ValueError: If its serialized GeoJSON exceeds 8 MiB.
         """
         if len(json.dumps(self.collection.model_dump()).encode()) > MAX_LAYER_BYTES:
-            raise ValueError("A shared annotation layer must fit within 8 MiB.")
+            raise ValueError("A shared layer must fit within 8 MiB.")
         return self
 
 

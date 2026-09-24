@@ -31,7 +31,7 @@ export class AnnotationLayerControls {
         this.inspection.hidden = true;
         this.root.append(this.inspection);
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
-            layer.name = value.trim() || "Annotations";
+            layer.name = value.trim() || "Shared layer";
             actions.change(false);
         }, 160);
         this.root.append(this.name);
@@ -54,14 +54,14 @@ export class AnnotationLayerControls {
         this.members.append(this.renameContributor);
         this.sharedStatus = document.createElement("span"); this.sharedStatus.className = "shared-annotation-status"; this.sharedStatus.setAttribute("role", "status");
         this.drawing.append(this.draw, this.members, this.sharedStatus);
-        this.share = this.button("Share", actions.share);
-        this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
+        this.share = this.button("Share layer", actions.share);
+        this.share.title = "Copy the code so other contributors can join this shared layer.";
         buttons.append(this.share);
         const exportButton = this.button("Export GeoJSON", actions.exportGeoJSON);
         exportButton.title = "Download all saved polygons, names and notes in this layer, including filtered-out polygons. Save unfinished edits first to include them.";
         buttons.append(exportButton);
         this.root.append(buttons);
-        this.appearance = this.details("Annotation style");
+        this.appearance = this.details("Layer style");
         this.sharedAppearance = document.createElement("fieldset");
         this.localAppearance = document.createElement("fieldset");
         for (const [group, label] of [[this.sharedAppearance, "Shared with everyone"], [this.localAppearance, "Your view only"]]) {

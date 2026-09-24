@@ -61,7 +61,7 @@ class AnnotationSessionRoute(APIRoute):
                 async for chunk in request.stream():
                     if len(body) + len(chunk) > MAX_LAYER_BYTES:
                         raise HTTPException(
-                            413, "Annotation requests must fit within 8 MiB."
+                            413, "Shared layer requests must fit within 8 MiB."
                         )
                     body.extend(chunk)
                 delivered = False

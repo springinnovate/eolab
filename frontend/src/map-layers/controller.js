@@ -682,7 +682,7 @@ export class MapLayerController {
             "name-descending": { compare: (a, b) => names.compare(b.label, a.label), label: "Name Z–A" },
             "visible-first": { compare: (a, b) => Number(b.visible) - Number(a.visible), label: "Visible first" },
             "layer-type": { compare: (a, b) => (types[a.datasetKind] ?? 3) - (types[b.datasetKind] ?? 3),
-                label: "Annotations, vectors, then rasters" },
+                label: "Shared layers, vectors, then rasters" },
         };
         if (!Object.hasOwn(actions, order)) throw new TypeError("Unsupported map layer sort action.");
         const action = actions[order];
@@ -953,7 +953,7 @@ export class MapLayerController {
      */
     renameLayer(key, name) {
         const record = this.#requireRecord(key);
-        if (record.entry.item === null) throw new TypeError("Use the annotation editor to rename this layer.");
+        if (record.entry.item === null) throw new TypeError("Use the layer editor to rename this layer.");
         const customName = normalizeCustomLayerName(name);
         record.entry.customName = customName;
         record.entry.label = customName ?? record.adapter.label(record.entry.item);

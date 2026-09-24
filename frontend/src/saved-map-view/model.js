@@ -146,7 +146,7 @@ function validateSavedMapView(candidate) {
     }
     const layers = candidate.layers.map(layer => {
         if (layer?.sharedAnnotation !== undefined) {
-            if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared annotations require saved-map version two.");
+            if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
         }
         return validateLayer(layer);
@@ -182,24 +182,24 @@ function validateSavedMapView(candidate) {
  * @throws {SavedMapViewValidationError} If any field is unsupported or invalid.
  */
 function validateAnnotationReference(candidate) {
-    requirePlainObject(candidate, "Shared annotation layer");
-    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance"], "Shared annotation layer");
+    requirePlainObject(candidate, "Shared layer");
+    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance"], "Shared layer");
     const reference = candidate.sharedAnnotation;
-    requirePlainObject(reference, "Shared annotation reference");
-    requireExactKeys(reference, ["id", "joinCode"], "Shared annotation reference");
+    requirePlainObject(reference, "Shared layer reference");
+    requireExactKeys(reference, ["id", "joinCode"], "Shared layer reference");
     if (typeof reference.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(reference.id) ||
         typeof reference.joinCode !== "string" || !/^[A-Z2-9]{8}$/.test(reference.joinCode)) {
-        throw new SavedMapViewValidationError("Shared annotation invitation is invalid.");
+        throw new SavedMapViewValidationError("Shared layer invitation is invalid.");
     }
     const appearance = candidate.appearance;
-    requirePlainObject(appearance, "Annotation appearance");
-    requireExactKeys(appearance, ["outline", "weight", "fillOpacity", "labels", "notes"], "Annotation appearance");
+    requirePlainObject(appearance, "Layer appearance");
+    requireExactKeys(appearance, ["outline", "weight", "fillOpacity", "labels", "notes"], "Layer appearance");
     if (typeof candidate.visible !== "boolean" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 1 ||
         typeof appearance.outline !== "string" || !/^#[0-9a-f]{6}$/i.test(appearance.outline) ||
         !Number.isFinite(appearance.weight) || appearance.weight < 0 || appearance.weight > 10 ||
         !Number.isFinite(appearance.fillOpacity) || appearance.fillOpacity < 0 || appearance.fillOpacity > 1 ||
         typeof appearance.labels !== "boolean" || typeof appearance.notes !== "boolean") {
-        throw new SavedMapViewValidationError("Shared annotation appearance is invalid.");
+        throw new SavedMapViewValidationError("Shared layer appearance is invalid.");
     }
     return Object.freeze(structuredClone(candidate));
 }

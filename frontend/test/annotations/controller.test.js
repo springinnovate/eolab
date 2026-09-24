@@ -342,7 +342,7 @@ test("successful startup leaves panel closed but a storage load failure reveals 
     assert.equal(failed.panel.open, true);
     assert.equal(failed.loaded, false);
     assert.equal(failed.importButton.disabled, true);
-    assert.match(failed.status.textContent, /Cannot open saved annotations/);
+    assert.match(failed.status.textContent, /Cannot open saved polygons/);
 });
 
 test("action and export errors open the panel while draft errors stay in the map editor", () => {

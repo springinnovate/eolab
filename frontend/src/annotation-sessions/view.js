@@ -55,7 +55,7 @@ export class AnnotationSessionsView {
         this.layerName.hidden = mode !== "create"; this.layerName.input.disabled = mode !== "create";
         this.code.hidden = mode !== "join"; this.code.input.disabled = mode !== "join";
         const field = mode === "create" ? this.layerName.input : this.code.input; field.value = value;
-        this.heading.textContent = mode === "create" ? "Create shared annotation layer" : mode === "contribute" ? "Your name for this annotation layer" : "Join shared annotation layer";
+        this.heading.textContent = mode === "create" ? "Create layer" : mode === "contribute" ? "Your name for this shared layer" : "Join layer";
         this.submit.textContent = mode === "create" ? "Create layer" : mode === "contribute" ? "Join and draw polygon" : "Join layer";
         this.help.textContent = mode === "rename" ? "Changes your name only in this shared layer. Your polygons and editing access stay the same."
             : "Everyone with the code can join and see all polygons. You can edit only your own polygons.";

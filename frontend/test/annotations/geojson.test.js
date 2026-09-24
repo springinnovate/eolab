@@ -180,14 +180,14 @@ test("model refuses imports during edits or beyond capacity without mutating exi
     annotations.cancelPolygon();
     while (annotations.layers.length < MAX_ANNOTATION_LAYERS) annotations.createLayer();
     const before = annotations.document();
-    assert.throws(() => annotations.importLayer(imported), /32 annotation layers/);
+    assert.throws(() => annotations.importLayer(imported), /32 shared layers/);
     assert.deepEqual(annotations.document(), before);
     const full = model();
     const existing = full.createLayer();
     const polygon = imported.polygons[0];
     existing.polygons = Array.from({ length: MAX_POLYGONS_PER_LAYER }, (_, i) => ({ ...polygon, id: `old-${i}`, note: "a".repeat(10000) }));
     const large = { name: "Another", polygons: existing.polygons.map(({ id, ...polygon }) => polygon) };
-    assert.throws(() => full.importLayer(large), /8 MiB annotation storage limit/);
+    assert.throws(() => full.importLayer(large), /8 MiB polygon storage limit/);
     assert.equal(full.layers.length, 1);
 });
 
