@@ -88,7 +88,7 @@ test("Leaflet load following tileerror cannot claim completion; transient failur
     const layer = f.grids[0], tile = f.tile();
     layer.emit("tileerror", { tile }); layer.emit("load"); await flush();
     assert.equal(f.status().phase, "retrying");
-    context.mock.timers.tick(250);
+    context.mock.timers.tick(1000);
     assert.equal(tile.assignments.length, 1);
     layer.emit("tileload", { tile }); layer.emit("load"); await flush();
     assert.equal(f.status().phase, "complete");
@@ -109,15 +109,15 @@ test("exhausted retries stay incomplete; explicit retry preserves successful nei
     const f = fixture(); f.renderer.update([{}]); await flush();
     const layer = f.grids[0], failed = f.tile(), good = f.tile(1);
     layer.emit("tileload", { tile: good });
-    for (const delay of [250, 1000, 5000]) {
+    for (const delay of [1000, 4000, 10000, 15000, 30000, 5000]) {
         layer.emit("tileerror", { tile: failed }); layer.emit("load");
         context.mock.timers.tick(delay);
     }
     await flush();
     assert.deepEqual(f.status(), { phase: "incomplete", total: 2, loaded: 1, failed: 1 });
-    assert.equal(failed.assignments.length, 2);
+    assert.equal(failed.assignments.length, 5);
     f.renderer.retryFailedTiles(); f.renderer.retryFailedTiles();
-    assert.equal(failed.assignments.length, 3, "double click does not restart in-flight retry");
+    assert.equal(failed.assignments.length, 6, "double click does not restart in-flight retry");
     assert.equal(good.assignments.length, 0);
     layer.emit("tileload", { tile: failed }); layer.emit("load"); await flush();
     assert.equal(f.status().phase, "complete");
@@ -132,13 +132,13 @@ test("pan/zoom excludes buffered tiles and cancels obsolete retries, including t
     layer.emit("tileabort", { tile: aborted });
     layer.emit("tileload", { tile: next }); layer.emit("load");
     f.map.bounds = { min: { x: 512, y: 0 }, max: { x: 768, y: 256 } };
-    f.map.emit("moveend"); context.mock.timers.tick(250); await flush();
+    f.map.emit("moveend"); context.mock.timers.tick(60000); await flush();
     assert.equal(old.assignments.length, 0); assert.equal(aborted.assignments.length, 0);
     assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
     f.map.zoom = 2; f.map.emit("zoomend");
     const zoomed = f.tile(2, 2);
     layer.emit("tileerror", { tile: zoomed }); layer.emit("tileunload", { tile: zoomed });
-    context.mock.timers.tick(250); await flush();
+    context.mock.timers.tick(60000); await flush();
     assert.equal(zoomed.assignments.length, 0); assert.equal(f.status().total, 0);
     f.renderer.destroy();
 });
@@ -151,7 +151,7 @@ test("replacement removes old pixels immediately and ignores their events/retrie
     f.renderer.update([{ layerName: "second" }]);
     assert.equal(f.map.attached.size, 0); await flush();
     previous.emit("tileload", { tile }); previous.emit("load");
-    context.mock.timers.tick(1000); await flush();
+    context.mock.timers.tick(60000); await flush();
     assert.equal(tile.assignments.length, 0); assert.equal(f.status().loaded, 0);
     assert.deepEqual([...f.map.attached], [f.grids[1]]);
     f.renderer.clear(); await flush();
