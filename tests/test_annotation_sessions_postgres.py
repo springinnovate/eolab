@@ -118,18 +118,24 @@ def test_admin_schema_upgrade_retains_existing_layers(
 def test_deleted_layers_still_count_toward_capacity(
     store: AnnotationSessionStore,
 ) -> None:
-    """Undo cannot bypass the browser membership limit by reviving retained records.
+    """Retained deleted layers still occupy the configured site capacity.
 
     Args:
         store: Isolated disposable store.
     """
-    for number in range(10):
-        identifier = store.create_session("owner", f"Layer {number}", "Owner")
+    limited = AnnotationSessionStore(store.conninfo, layer_capacity=2)
+    for number in range(2):
+        identifier = limited.create_session("owner", f"Layer {number}", "Owner")
         store.set_layer_deleted(identifier, deleted=True)
     with pytest.raises(SessionError) as rejected:
-        store.create_session("owner", "Over capacity", "Owner")
+        limited.create_session("owner", "Over capacity", "Owner")
     assert rejected.value.status == 429
-    assert len(store.list_layers_for_administration()) == 10
+    assert "EOLAB_SHARED_LAYER_CAPACITY" in str(rejected.value)
+    assert rejected.value.retry_after_seconds is None
+    assert len(store.list_layers_for_administration()) == 2
+    AnnotationSessionStore(store.conninfo, layer_capacity=3).create_session(
+        "owner", "Raised capacity", "Owner"
+    )
 
 
 def test_map_invitation_reads_live_layers_without_granting_write_access(
@@ -355,7 +361,116 @@ def store(request: pytest.FixtureRequest) -> AnnotationSessionStore:
         cursor.execute(
             "TRUNCATE shared_annotation_layers.sessions, shared_annotation_layers.contributors, shared_annotation_layers.layers, shared_annotation_layers.join_attempts"
         )
+        cursor.execute("UPDATE shared_annotation_layers.creation_rate SET creations=0")
     return result
+
+
+def test_layers_and_memberships_can_exceed_old_limits(
+    store: AnnotationSessionStore,
+) -> None:
+    """Retain over 100 layers and let one browser create and join over ten.
+
+    Args:
+        store: Disposable store using default capacity and creation rate.
+    """
+    assert store.layer_capacity == 10000
+    for number in range(101):
+        if number == 100:
+            # Advance the burst window, not memberships or retained layers.
+            with store.transaction(write=True) as cursor:
+                cursor.execute(
+                    "UPDATE shared_annotation_layers.creation_rate SET started_at=clock_timestamp()-interval '61 seconds'"
+                )
+        store.create_session("author", f"Layer {number}", "Author")
+    assert len(store.list_sessions("author")) == 101
+    for number, layer in enumerate(store.list_sessions("author")[:12]):
+        if number == 10:
+            # The existing ten join attempts/minute protection remains separate.
+            with store.transaction(write=True) as cursor:
+                cursor.execute(
+                    "UPDATE shared_annotation_layers.join_attempts SET started_at=clock_timestamp()-interval '61 seconds'"
+                )
+        store.join_session("visitor", layer["joinCode"], "Visitor")
+    assert len(store.list_sessions("visitor")) == 12
+
+
+@pytest.mark.parametrize("limited_setting", ["layer_capacity", "creation_limit"])
+def test_creation_admission_is_atomic_across_store_instances(
+    store: AnnotationSessionStore, limited_setting: str
+) -> None:
+    """Concurrent app processes admit only one creation when either budget is one.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+        limited_setting: Site layer capacity or creation-window allowance.
+    """
+
+    def create(number: int) -> int:
+        """Create through an independent store and return its HTTP-equivalent outcome.
+
+        Args:
+            number: Unique caller and layer suffix.
+
+        Returns:
+            Success or capacity/rate rejection status.
+        """
+        instance = AnnotationSessionStore(store.conninfo, **{limited_setting: 1})
+        try:
+            instance.create_session(f"browser-{number}", f"Layer {number}", "Author")
+            return 201
+        except SessionError as error:
+            assert (error.retry_after_seconds is not None) == (
+                limited_setting == "creation_limit"
+            )
+            return error.status
+
+    with ThreadPoolExecutor(2) as pool:
+        assert sorted(pool.map(create, [1, 2])) == [201, 429]
+    assert len(store.list_layers_for_administration()) == 1
+
+
+def test_creation_rate_recovery_and_retry_header(store: AnnotationSessionStore) -> None:
+    """A shared fixed window survives restart and expires without losing memberships.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    limited = AnnotationSessionStore(
+        store.conninfo, creation_limit=1, creation_window_seconds=120
+    )
+    first = limited.create_session("author", "First", "Author")
+    limited.set_layer_deleted(first, deleted=True)
+    limited.initialize_and_clean_join_attempts()
+    app = FastAPI()
+    app.include_router(
+        create_annotation_sessions_router(
+            AnnotationSessionStore(
+                store.conninfo, creation_limit=1, creation_window_seconds=120
+            )
+        )
+    )
+    client = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    response = client.post(BASE, json={"name": "Second", "contributorName": "Visitor"})
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["Retry-After"]) <= 120
+    assert "120-second window" in response.json()["detail"]
+    assert "private, no-store" == response.headers["Cache-Control"]
+    with store.transaction(write=True) as cursor:
+        cursor.execute(
+            "UPDATE shared_annotation_layers.creation_rate SET started_at=clock_timestamp()-interval '121 seconds'"
+        )
+    assert (
+        client.post(
+            BASE, json={"name": "Second", "contributorName": "Visitor"}
+        ).status_code
+        == 201
+    )
+    assert len(store.list_layers_for_administration()) == 2
+    with store.transaction() as cursor:
+        cursor.execute(
+            "SELECT count(*) AS rows, sum(creations) AS creations FROM shared_annotation_layers.creation_rate"
+        )
+        assert cursor.fetchone() == {"rows": 1, "creations": 1}
 
 
 def test_two_browsers_share_with_equal_controls_and_author_only_writes(
@@ -497,14 +612,23 @@ def test_failed_join_attempts_are_counted(store: AnnotationSessionStore) -> None
     assert failed.value.status == 429
 
 
+@pytest.mark.parametrize(
+    "budget,message",
+    [("SESSION_BYTES", "32 MiB per shared layer"), ("TOTAL_BYTES", "256 MiB")],
+)
 def test_storage_capacity_rejects_growth_without_losing_previous_copy(
-    store: AnnotationSessionStore, monkeypatch: pytest.MonkeyPatch
+    store: AnnotationSessionStore,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: str,
+    message: str,
 ) -> None:
-    """Enforce session storage bounds and leave the last accepted contribution intact.
+    """Distinguish layer and site storage exhaustion without losing accepted polygons.
 
     Args:
         store: Empty disposable PostgreSQL store.
-        monkeypatch: Set a small session budget for this boundary test.
+        monkeypatch: Set a small byte budget for this boundary test.
+        budget: Layer or site byte limit to exhaust.
+        message: Text distinguishing this limit in the response.
     """
     from eolab_app.annotation_sessions import store as storage_module
 
@@ -515,7 +639,7 @@ def test_storage_capacity_rejects_growth_without_losing_previous_copy(
     )
     author = store.get_session_snapshot(session, "owner")["contributorId"]
     original = store.read_shared_layer(session, "owner", author, layer)
-    monkeypatch.setattr(storage_module, "SESSION_BYTES", 1)
+    monkeypatch.setattr(storage_module, budget, 1)
     with pytest.raises(SessionError) as failed:
         store.save_shared_layer(
             session,
@@ -524,7 +648,24 @@ def test_storage_capacity_rejects_growth_without_losing_previous_copy(
             ShareLayer(revision=1, collection=collection("Larger name")),
         )
     assert failed.value.status == 413
+    assert message in str(failed.value)
     assert store.read_shared_layer(session, "owner", author, layer) == original
+
+
+def test_layer_contributor_limit_still_applies(store: AnnotationSessionStore) -> None:
+    """Removing browser membership quotas preserves each layer's contributor bound.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    identifier = store.create_session("author", "Workshop", "Author")
+    code = store.get_session_snapshot(identifier, "author")["joinCode"]
+    for number in range(63):
+        store.join_session(f"guest-{number}", code, f"Guest {number}")
+    with pytest.raises(SessionError, match="64 contributors"):
+        store.join_session("extra-guest", code, "Extra guest")
+    store.join_session("author", code, "Renamed author")
+    assert len(store.get_session_snapshot(identifier, "author")["contributors"]) == 64
 
 
 def test_unique_names_and_returning_credentials(store: AnnotationSessionStore) -> None:

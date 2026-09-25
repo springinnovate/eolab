@@ -142,6 +142,9 @@ class Settings:
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
         saved_map_capacity: Maximum named maps retained on this site.
+        shared_layer_capacity: Maximum retained shared layers, including deleted layers.
+        shared_layer_creation_limit: Successful layer creations per site in one window.
+        shared_layer_creation_window_seconds: Duration of a site-wide creation window.
         admin_password: Optional server-only password for /admin-eolab (user admin).
             Blank disables administration; never included in browser configuration.
         processing_data_path: Persistent private clip volume shared with the worker.
@@ -194,6 +197,9 @@ class Settings:
     map_render_queue_capacity: int = 64
     map_render_queue_wait_seconds: float = 60
     saved_map_capacity: int = 1000
+    shared_layer_capacity: int = 10000
+    shared_layer_creation_limit: int = 100
+    shared_layer_creation_window_seconds: int = 60
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -238,6 +244,16 @@ class Settings:
             raise ValueError("INITIAL_LATITUDE must be between -90 and 90")
         if self.saved_map_capacity < 1:
             raise ValueError("SAVED_MAP_CAPACITY must be greater than zero")
+        for name, value in (
+            ("SHARED_LAYER_CAPACITY", self.shared_layer_capacity),
+            ("SHARED_LAYER_CREATION_LIMIT", self.shared_layer_creation_limit),
+            (
+                "SHARED_LAYER_CREATION_WINDOW_SECONDS",
+                self.shared_layer_creation_window_seconds,
+            ),
+        ):
+            if value < 1:
+                raise ValueError(f"{name} must be greater than zero")
         if not self.processing_data_path.is_absolute():
             raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
         if not -180 <= self.initial_longitude <= 180:
@@ -457,6 +473,13 @@ def load_settings(
 
     return Settings(
         saved_map_capacity=int(os.environ.get("SAVED_MAP_CAPACITY", "1000")),
+        shared_layer_capacity=int(os.environ.get("SHARED_LAYER_CAPACITY", "10000")),
+        shared_layer_creation_limit=int(
+            os.environ.get("SHARED_LAYER_CREATION_LIMIT", "100")
+        ),
+        shared_layer_creation_window_seconds=int(
+            os.environ.get("SHARED_LAYER_CREATION_WINDOW_SECONDS", "60")
+        ),
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
         admin_password=os.environ.get("ADMIN_PASSWORD", ""),
         app_title=os.environ["APP_TITLE"].strip(),

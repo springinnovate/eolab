@@ -697,7 +697,7 @@ another EOLab site are not opened.
 
 Shared layers have no automatic expiration. They are stored in the existing
 PostgreSQL database under `shared_annotation_layers`; back up that database to
-preserve them. No new container or environment variable is required. This version
+preserve them. No new container is required; optional capacity settings are below. This version
 adds a nullable color column to current memberships automatically; older members
 without saved colors receive a stable palette color derived from their membership
 ID until they choose another color. Existing polygons are not rewritten. This version
@@ -705,8 +705,26 @@ does not migrate or display the former `annotation_sessions` records; existing
 local polygon copies remain available. Future administrative cleanup is tracked
 separately.
 
-Limits remain 10 memberships per browser, 100 shared layers per site, 64
-contributors per shared layer, 8 MiB per contributor, 32 MiB per shared layer and
+There is no per-browser limit on how many shared layers someone can create or join.
+These positive integer environment variables configure site-wide admission in Coolify;
+redeploy after changing them:
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `EOLAB_SHARED_LAYER_CAPACITY` | 10000 | Retained shared layers, including soft-deleted layers |
+| `EOLAB_SHARED_LAYER_CREATION_LIMIT` | 100 | Successful creations across all browsers in one time window |
+| `EOLAB_SHARED_LAYER_CREATION_WINDOW_SECONDS` | 60 | Duration of that creation window in seconds |
+
+The creation window starts with its first admitted creation. Its single PostgreSQL
+counter is shared across app processes and survives restarts. A full window returns
+429 with `Retry-After` and a message saying how many seconds to wait. Failed creations
+do not consume the allowance. Changing browsers does not bypass this site-wide rate.
+Joining an existing layer does not use creation capacity; the existing protection of
+10 join attempts per browser per minute remains. Site capacity errors instead name
+the setting to raise; deleting a layer does not free capacity because Undo retains it.
+Direct app launches use the same variable names without the `EOLAB_` prefix.
+
+Data limits remain 64 contributors per shared layer, 8 MiB per contributor, 32 MiB per shared layer and
 256 MiB of shared polygon JSON per site. Each contributor can provide up to 500
 polygons, with 2,000 vertices per polygon and no holes. Metadata refreshes every
 five seconds and backs off to 30 seconds after failures. Only changed peer

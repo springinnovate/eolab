@@ -88,7 +88,13 @@ class AnnotationSessionRoute(APIRoute):
                 response = await handler(request)
             except SessionError as error:
                 response = JSONResponse(
-                    {"detail": str(error)}, status_code=error.status
+                    {"detail": str(error)},
+                    status_code=error.status,
+                    headers=(
+                        {"Retry-After": str(error.retry_after_seconds)}
+                        if error.retry_after_seconds is not None
+                        else None
+                    ),
                 )
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"

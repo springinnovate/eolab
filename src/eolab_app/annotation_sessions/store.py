@@ -29,13 +29,36 @@ TOTAL_BYTES = 256 * 1024 * 1024
 class AnnotationSessionStore:
     """Keep shared-layer membership and each contributor's latest polygons."""
 
-    def __init__(self, conninfo: str = "") -> None:
-        """Configure PostgreSQL without opening a connection.
+    def __init__(
+        self,
+        conninfo: str = "",
+        *,
+        layer_capacity: int = 10000,
+        creation_limit: int = 100,
+        creation_window_seconds: int = 60,
+    ) -> None:
+        """Configure storage and site-wide layer creation limits.
 
         Args:
             conninfo: Test connection string; production uses the existing PG environment.
+            layer_capacity: Maximum retained shared layers, including deleted layers.
+            creation_limit: Successful new layers allowed per site in one time window.
+            creation_window_seconds: Fixed-window duration, measured by PostgreSQL.
+
+        Raises:
+            ValueError: If a capacity or rate setting is not a positive integer.
         """
+        for name, value in (
+            ("layer_capacity", layer_capacity),
+            ("creation_limit", creation_limit),
+            ("creation_window_seconds", creation_window_seconds),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
         self.conninfo = conninfo
+        self.layer_capacity = layer_capacity
+        self.creation_limit = creation_limit
+        self.creation_window_seconds = creation_window_seconds
 
     @contextmanager
     def transaction(self, write: bool = False) -> Iterator[psycopg.Cursor]:
@@ -171,22 +194,20 @@ class AnnotationSessionStore:
             New session identifier.
 
         Raises:
-            SessionError: If the site or browser already has too many sessions.
+            SessionError: If site capacity or the creation rate is exceeded, or storage fails.
         """
         with self.transaction(write=True) as cursor:
             cursor.execute(
                 "SELECT count(*) AS total FROM shared_annotation_layers.sessions"
             )
-            total = cursor.fetchone()["total"]
-            cursor.execute(
-                "SELECT count(*) AS total FROM shared_annotation_layers.contributors WHERE browser_hash=%s",
-                (browser,),
-            )
-            if total >= 100 or cursor.fetchone()["total"] >= 10:
+            if cursor.fetchone()["total"] >= self.layer_capacity:
                 raise SessionError(
                     429,
-                    "The shared layer limit has been reached. Contact the site administrator to free storage.",
+                    f"This site's shared-layer capacity ({self.layer_capacity:,} retained layers) is full. "
+                    "Contact the site administrator to raise EOLAB_SHARED_LAYER_CAPACITY. "
+                    "Deleted layers still count because they can be restored.",
                 )
+            self._record_layer_creation(cursor)
             while True:
                 code = "".join(
                     secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)
@@ -213,6 +234,46 @@ class AnnotationSessionStore:
                 ),
             )
             return identifier
+
+    def _record_layer_creation(self, cursor: psycopg.Cursor[dict[str, Any]]) -> None:
+        """Reserve one creation in the site's current time window or report when to retry.
+
+        Call inside the shared-layer write transaction, after capacity admission.
+        Its existing advisory lock serializes the counter across app processes.
+        The singleton row bounds storage; rolling back creation also rolls back
+        the reservation. A window starts with its first admitted creation.
+
+        Args:
+            cursor: Cursor holding the shared-layer write lock.
+
+        Raises:
+            SessionError: If this site's creation window is full, with a retry delay.
+        """
+        cursor.execute(
+            """UPDATE shared_annotation_layers.creation_rate
+               SET started_at=clock_timestamp(), creations=0
+               WHERE creations=0 OR started_at + %s * interval '1 second' <= clock_timestamp()""",
+            (self.creation_window_seconds,),
+        )
+        cursor.execute(
+            """SELECT creations,
+                      greatest(1, ceil(extract(epoch FROM
+                        started_at + %s * interval '1 second' - clock_timestamp())))::integer AS retry_after
+               FROM shared_annotation_layers.creation_rate""",
+            (self.creation_window_seconds,),
+        )
+        rate = cursor.fetchone()
+        if rate["creations"] >= self.creation_limit:
+            retry_after = rate["retry_after"]
+            raise SessionError(
+                429,
+                f"This site has created {self.creation_limit} shared layers in its current "
+                f"{self.creation_window_seconds}-second window. Try again in {retry_after} seconds.",
+                retry_after_seconds=retry_after,
+            )
+        cursor.execute(
+            "UPDATE shared_annotation_layers.creation_rate SET creations=creations+1"
+        )
 
     def join_session(self, browser: str, code: str, name: str) -> UUID:
         """Join a session using the supplied display name, including when returning.
@@ -281,14 +342,10 @@ class AnnotationSessionStore:
                 (session["id"],),
             )
             count = cursor.fetchone()["total"]
-            cursor.execute(
-                "SELECT count(*) AS total FROM shared_annotation_layers.contributors c JOIN shared_annotation_layers.sessions s ON s.id=c.session_id WHERE c.browser_hash=%s",
-                (browser,),
-            )
-            if count >= 64 or cursor.fetchone()["total"] >= 10:
+            if count >= 64:
                 raise SessionError(
                     429,
-                    "This shared layer or browser has reached its contributor limit.",
+                    "This shared layer has reached its limit of 64 contributors.",
                 )
             cursor.execute(
                 "SELECT id,color FROM shared_annotation_layers.contributors WHERE session_id=%s",
@@ -563,10 +620,14 @@ class AnnotationSessionStore:
                 (session_id,),
             )
             growth = size - (previous["bytes"] if previous else 0)
-            if (
-                total + growth > TOTAL_BYTES
-                or cursor.fetchone()["total"] + growth > SESSION_BYTES
-            ):
+            session_total = cursor.fetchone()["total"]
+            if total + growth > TOTAL_BYTES:
+                raise SessionError(
+                    413,
+                    "This site's shared polygon storage is full (256 MiB). "
+                    "Contact the site administrator; your previous contribution is unchanged.",
+                )
+            if session_total + growth > SESSION_BYTES:
                 raise SessionError(
                     413,
                     "Shared layer storage is full (32 MiB per shared layer). Contact the site administrator; your previous contribution is unchanged.",
