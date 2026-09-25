@@ -65,7 +65,7 @@ def test_healthz(
     assert response.json() == {
         "status": "ok",
         "service": "eolab",
-        "version": "0.6.0-2-gabcdef0",
+        "version": "0.8.0-2-gabcdef0",
     }
 
 
@@ -84,7 +84,7 @@ def test_configuration_endpoint_reads_environment(
     assert response.json() == {
         "appTitle": "WWF EOLab",
         "appSubtitle": "Explore, visualize, and analyze Earth observation data",
-        "appVersion": "0.6.0-2-gabcdef0",
+        "appVersion": "0.8.0-2-gabcdef0",
         "catalogUrl": "https://catalog.example.test",
         "wmsUrl": "/geoserver/eolab/wms",
         "scanDisplayPathPrefix": "bigboi -- Z:\\bigbucket",

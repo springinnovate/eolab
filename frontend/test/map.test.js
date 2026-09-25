@@ -55,6 +55,9 @@ test("application map is bounded to one strict WGS 84 world", () => {
       maxBounds: SINGLE_WORLD_BOUNDS,
       maxBoundsViscosity: 1,
       worldCopyJump: false,
+      updateWhenIdle: true,
+      updateWhenZooming: false,
+      wheelDebounceTime: 120,
     },
   });
   assert.deepEqual(calls.setView, {
