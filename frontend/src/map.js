@@ -76,7 +76,10 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration) {
         maxZoom: 22,
         maxBounds: SINGLE_WORLD_BOUNDS,
         maxBoundsViscosity: 1,
-        worldCopyJump: false
+        worldCopyJump: false,
+        updateWhenIdle: true,
+        updateWhenZooming: false,
+        wheelDebounceTime: 120,
     }).setView(
         [
             appGlobalConfiguration.initialView.latitude,
