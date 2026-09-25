@@ -35,6 +35,7 @@ export function vectorMapBounds(bbox) {
 
 /**
  * Create one bounded WMS tile layer, retaining both sides of crossing extents.
+ * Render through the map's maximum zoom of 22 instead of Leaflet's default 18.
  *
  * @param {Object} leaflet Leaflet namespace with a WMS factory.
  * @param {string} wmsUrl Browser-facing restricted WMS endpoint.
@@ -58,6 +59,7 @@ export function createVectorWmsLayer(
         tilesorigin: "-20037508.342789244,-20037508.342789244",
         version: "1.3.0",
         noWrap: true,
+        maxZoom: 22,
         bounds: vectorMapBounds(publishedVector.bbox),
     });
     layer.once("tileerror", onTileError);

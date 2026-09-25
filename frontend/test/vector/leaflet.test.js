@@ -47,6 +47,7 @@ test("vector WMS uses one bounded layer and no raster environment", () => {
             tilesorigin: "-20037508.342789244,-20037508.342789244",
             version: "1.3.0",
             noWrap: true,
+            maxZoom: 22,
             bounds: [[48, -123], [49, -122]],
         },
     });

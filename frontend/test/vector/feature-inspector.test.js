@@ -295,6 +295,7 @@ test("identified features use a filtered WMS highlight without geometry", async 
     transparent: true,
     version: "1.1.1",
     featureid: "parcels.42",
+    maxZoom: 22,
   });
   h.controller.clearResults();
   assert.deepEqual(h.removedLayers, [h.wmsHighlights[0]]);

@@ -817,6 +817,7 @@ export class VectorFeatureInspectorController {
 
     /**
      * Present one result and replace its map highlight.
+     * WMS highlights remain visible through the map's maximum zoom of 22.
      *
      * @param {number} index Zero-based result index.
      * @return {void}
@@ -878,6 +879,7 @@ export class VectorFeatureInspectorController {
                 transparent: true,
                 version: "1.1.1",
                 featureid: feature.id,
+                maxZoom: 22,
             });
             this.highlightLayer = highlightLayer.addTo(this.map);
         } else if (feature.geometry !== null) {

@@ -103,7 +103,7 @@ export class CompositeLeafletRenderer {
     }
 
     /**
-     * Attach the current plan and observe public Leaflet tile events.
+     * Attach the current plan through map zoom 22 and observe Leaflet tile events.
      * @param {{wmsUrl:string}} plan Authorized WMS plan.
      * @return {void}
      */
@@ -111,6 +111,7 @@ export class CompositeLeafletRenderer {
         const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
             layers: "composite", styles: "", format: "image/png",
             transparent: true, version: "1.1.1", noWrap: true,
+            maxZoom: 22,
         });
         const recovery = new TileRecovery(this.leafletMap, layer, this.onStatus);
         this.grid = { layer, recovery };

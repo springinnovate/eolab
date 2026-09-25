@@ -87,6 +87,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       tilesorigin: "-20037508.342789244,-20037508.342789244",
       version: "1.3.0",
       noWrap: true,
+      maxZoom: 22,
       bounds: [[-5, -10], [15, 20]],
     },
   });
