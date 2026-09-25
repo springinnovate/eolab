@@ -135,14 +135,27 @@ export class AnnotationMapEditor {
     }
 
     /**
+     * Move the draft label with the polygon, using the current contributor's display name.
+     * The display name never changes the editable draft or its ownership.
+     * @param {Object} shape Leaflet polygon whose geometry was updated.
+     * @return {void}
+     */
+    updateDraftLabel(shape) {
+        const polygon = { ...this.draft.polygon, contributor: this.contributor ?? this.draft.polygon.contributor };
+        updatePolygonLabel(shape, polygon, this.style, this.document, "tooltipPane");
+    }
+
+    /**
      * Draw editable vertices and a draggable polygon interior; leave outside-map gestures available.
      * @param {import("./model.js").PolygonDraft|null} draft Polygon draft, or null to return to inspection.
      * @param {string} [message=""] Validation error to show beside the controls.
      * @param {import("./model.js").AnnotationStyle|null} [style=this.style] Draft fill color and label appearance; the editing border remains distinct.
      * @param {string} [layerName=this.layerName] Destination layer's display name.
+     * @param {string|null} [contributor=this.contributor] Current contributor display name; null uses imported metadata.
      * @return {void}
      */
-    render(draft, message = "", style = this.style, layerName = this.layerName) {
+    render(draft, message = "", style = this.style, layerName = this.layerName, contributor = this.contributor) {
+        this.contributor = contributor;
         this.style = style;
         this.layerName = layerName;
         const entering = !this.draft && !!draft;
@@ -190,7 +203,7 @@ export class AnnotationMapEditor {
             const shape = draggable ? this.leaflet.polygon(latlngs, options) : this.leaflet.polyline(latlngs, options);
             shape.addTo(this.drawing);
             if (draggable) {
-                updatePolygonLabel(shape, draft.polygon, style, this.document, "tooltipPane");
+                this.updateDraftLabel(shape);
                 const element = shape.getElement();
                 element.addEventListener("pointerdown", event => this.startPolygonDrag(event, shape));
                 element.addEventListener("pointermove", event => this.movePolygon(event));
@@ -241,7 +254,7 @@ export class AnnotationMapEditor {
                 if (layer.setLatLngs) {
                     layer.setLatLngs(this.draft.polygon.vertices.map(([lng, lat]) => [lat, lng]));
                     if (this.draft.polygon.vertices.length >= 3) {
-                        updatePolygonLabel(layer, this.draft.polygon, this.style, this.document, "tooltipPane");
+                        this.updateDraftLabel(layer);
                     }
                 }
             });
@@ -313,7 +326,7 @@ export class AnnotationMapEditor {
         const positions = drag.projected.map(point => this.map.unproject(point.add(offset), drag.zoom));
         this.draft.polygon.vertices = positions.map(point => [point.lng, point.lat]);
         drag.shape.setLatLngs(positions);
-        updatePolygonLabel(drag.shape, this.draft.polygon, this.style, this.document, "tooltipPane");
+        this.updateDraftLabel(drag.shape);
         this.labelLayout.schedule();
         positions.forEach((point, index) => this.vertexMarkers[index].setLatLng(point));
     }
@@ -417,7 +430,7 @@ export class AnnotationMapEditor {
         if (!this.draft) return;
         this.drawing.eachLayer(layer => {
             if (layer.setLatLngs && this.draft.polygon.vertices.length >= 3) {
-                updatePolygonLabel(layer, this.draft.polygon, this.style, this.document, "tooltipPane");
+                this.updateDraftLabel(layer);
             }
         });
         this.labelLayout.schedule();

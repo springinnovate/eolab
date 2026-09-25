@@ -102,7 +102,6 @@ test("storage round trip preserves layer appearance, text filter and notes", () 
     layer.visible = false;
     layer.style.color = "#123456";
     layer.style.labels = false;
-    layer.style.notes = true;
     const restored = readAnnotationLayers(annotations.document());
     assert.deepEqual(restored, annotations.layers);
     assert.deepEqual(matchingAnnotationPolygons(restored[0]), [polygon]);
@@ -127,16 +126,36 @@ test("stored identities, appearance and drawing limits are validated", () => {
     assert.throws(() => annotations.beginPolygon(layer.id), /Save or cancel/);
 });
 
-test("existing saved annotation styles keep notes hidden and reject invalid note settings", () => {
+test("legacy name and note preferences become one persistent label preference", () => {
     const annotations = model();
     annotations.createLayer();
     const saved = annotations.document();
-    delete saved.layers[0].style.notes;
     const restored = readAnnotationLayers(saved);
     assert.equal(restored[0].style.labels, true);
-    assert.equal(restored[0].style.notes, false);
+    assert.equal("notes" in restored[0].style, false);
+    for (const labels of [true, false]) {
+        for (const notes of [true, false, undefined]) {
+            Object.assign(saved.layers[0].style, { labels, notes });
+            const migrated = readAnnotationLayers(saved);
+            assert.equal(migrated[0].style.labels, labels || notes === true);
+            assert.equal("notes" in migrated[0].style, false);
+            assert.deepEqual(readAnnotationLayers({ version: 1, layers: migrated }), migrated);
+        }
+    }
     saved.layers[0].style.notes = "yes";
     assert.throws(() => readAnnotationLayers(saved), /style/);
+});
+
+test("stored contributor names must be bounded text before label rendering", () => {
+    const annotations = model();
+    const layer = annotations.createLayer();
+    const polygon = triangle(annotations, layer.id);
+    polygon.contributor = "";
+    assert.equal(readAnnotationLayers(annotations.document())[0].polygons[0].contributor, "");
+    polygon.contributor = 123;
+    assert.throws(() => readAnnotationLayers(annotations.document()), /text/);
+    polygon.contributor = "x".repeat(161);
+    assert.throws(() => readAnnotationLayers(annotations.document()), /text/);
 });
 
 
@@ -242,7 +261,6 @@ test("layer restoration keeps committed geometry, notes, names, filter and appea
     const model = new AnnotationModel();
     const layer = model.createLayer();
     layer.name = "Workshop"; layer.filter = "river"; layer.position = 3; layer.visible = false; layer.opacity = 0.4;
-    layer.style.notes = true;
     model.beginPolygon(layer.id);
     [[0, 0], [2, 0], [1, 2]].forEach(point => model.addVertex(point));
     const polygon = model.savePolygon(); polygon.name = "River"; polygon.note = "Flooding";

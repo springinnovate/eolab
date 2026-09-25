@@ -75,7 +75,7 @@ export class AnnotationLayerControls {
         }
         this.styleInputs = {};
         for (const [key, label, type] of [["color", "Fill color", "color"], ["outline", "Outline color", "color"],
-            ["weight", "Outline width", "number"], ["fillOpacity", "Fill opacity", "number"], ["labels", "Show names", "checkbox"], ["notes", "Show notes", "checkbox"]]) {
+            ["weight", "Outline width", "number"], ["fillOpacity", "Fill opacity", "number"], ["labels", "Show label", "checkbox"]]) {
             const wrapper = this.createLabeledInput(label, type, layer.style[key], value => {
                 if (key === "color" && this.collaborating) { actions.color(value); return; }
                 layer.style[key] = type === "number" ? Number(value) : value;
@@ -84,7 +84,7 @@ export class AnnotationLayerControls {
             });
             const input = wrapper.querySelector("input");
             if (type === "number") { input.min = "0"; input.max = key === "weight" ? "10" : "1"; input.step = key === "weight" ? "0.5" : "0.05"; }
-            if (key === "notes") wrapper.title = "Show notes on the map. Long notes show the first six lines; the complete note stays in the polygon list.";
+            if (key === "labels") wrapper.title = "Show contributor, polygon name and notes on your map. Long notes show the first six lines; the complete note stays in the editor.";
             this.styleInputs[key] = input;
             (key === "color" ? this.sharedAppearance : this.localAppearance).append(wrapper);
         }

@@ -3,7 +3,7 @@ import { annotationFilterRules, filterAnnotationPolygons } from "./summary-area.
 import { polygonValidationMessage } from "./geometry.js";
 
 /**
- * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean,notes:boolean}} AnnotationStyle
+ * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean}} AnnotationStyle
  * @typedef {{id:string,name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} AnnotationPolygon
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
  * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string|Object,polygons:AnnotationPolygon[]}} AnnotationLayer
@@ -22,11 +22,12 @@ export const MAX_ANNOTATION_DOCUMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_ANNOTATION_NAME_LENGTH = 160;
 /** Maximum characters in a polygon note. @type {number} */
 export const MAX_ANNOTATION_NOTE_LENGTH = 10000;
-export const DEFAULT_ANNOTATION_STYLE = Object.freeze({ color: "#1686b0", outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false });
+export const DEFAULT_ANNOTATION_STYLE = Object.freeze({ color: "#1686b0", outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true });
 
 /**
- * Validate annotation appearance; older saved styles without notes keep notes hidden.
- * @param {Omit<AnnotationStyle,"notes"> & {notes?:boolean}} style Fill, outline, width, fill opacity and text visibility.
+ * Validate appearance, combining legacy name/note switches into one label switch.
+ * Either old switch being on keeps the combined label visible; both off keeps it hidden.
+ * @param {AnnotationStyle & {notes?:boolean}} style Fill, outline, width, fill opacity and text visibility.
  * @return {AnnotationStyle} Independent validated appearance.
  * @throws {Error} If any appearance setting is invalid.
  */
@@ -35,7 +36,7 @@ export function validateAnnotationStyle(style) {
         !Number.isFinite(style.weight) || style.weight < 0 || style.weight > 10 ||
         !Number.isFinite(style.fillOpacity) || style.fillOpacity < 0 || style.fillOpacity > 1 ||
         typeof style.labels !== "boolean" || (style.notes !== undefined && typeof style.notes !== "boolean")) throw new Error("Layer style is invalid.");
-    return { color: style.color, outline: style.outline, weight: style.weight, fillOpacity: style.fillOpacity, labels: style.labels, notes: style.notes ?? false };
+    return { color: style.color, outline: style.outline, weight: style.weight, fillOpacity: style.fillOpacity, labels: style.labels || style.notes === true };
 }
 
 /**
@@ -64,6 +65,7 @@ export function readAnnotationLayers(document) {
             requireIdentifier(polygon.id, identifiers);
             requireText(polygon.name, MAX_ANNOTATION_NAME_LENGTH, false);
             requireText(polygon.note, MAX_ANNOTATION_NOTE_LENGTH, true);
+            if (polygon.contributor !== undefined) requireText(polygon.contributor, MAX_ANNOTATION_NAME_LENGTH, true);
             if (polygon.contributorColor !== undefined) {
                 requireText(polygon.contributor, MAX_ANNOTATION_NAME_LENGTH, false);
                 if (!/^#[\da-f]{6}$/i.test(polygon.contributorColor)) throw new Error("Saved contributor color is invalid.");

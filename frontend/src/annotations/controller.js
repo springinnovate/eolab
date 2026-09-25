@@ -167,7 +167,7 @@ export class AnnotationController {
      */
     restoreMapAppearance(id, savedLayer) {
         const layer = this.model.layers.find(layer => layer.id === id);
-        Object.assign(layer.style, savedLayer.appearance);
+        layer.style = validateAnnotationStyle({ ...layer.style, ...savedLayer.appearance });
         const key = `local:annotation:${id}`;
         this.mapLayers.setVisible(key, savedLayer.visible);
         this.mapLayers.setOpacity(key, savedLayer.opacity);
@@ -212,14 +212,15 @@ export class AnnotationController {
                 contributorId: collection.features[index].properties.contributorId }));
         }) : previous.polygons;
         this.shared.set(id, { ...data, signature, polygons });
-        const color = data.contributors.find(person => person.own)?.color;
-        const ownColorChanged = color && color !== layer.style.color;
+        const own = data.contributors.find(person => person.own);
+        const previousOwn = previous?.contributors.find(person => person.own);
+        const color = own?.color;
         if (color) layer.style.color = color;
         this.controls.get(id).setCollaboration(data, polygons);
         if (renamed) this.refreshLayer(id, false);
         const colorsChanged = JSON.stringify(data.contributors) !== JSON.stringify(previous?.contributors);
         if (changed || colorsChanged) { this.layers.get(id).refresh(); this.mapLayers.render(); }
-        if (ownColorChanged && this.model.draft?.layerId === id) this.renderEditor();
+        if ((own?.name !== previousOwn?.name || own?.color !== previousOwn?.color) && this.model.draft?.layerId === id) this.renderEditor();
         // Peer IDs currently describe positions within a contribution. A replacement
         // collection must not silently select the polygon that took a deleted one's place.
         if (changed && this.inspectedPolygon?.layerId === id
@@ -561,14 +562,15 @@ export class AnnotationController {
     }
 
     /**
-     * Show the current draft with its layer's name/note settings and any validation message.
+     * Show the draft with its contributor name, local label visibility and any validation message.
      * @param {string} [message=""] Error shown next to the editing controls.
      * @return {void}
      */
     renderEditor(message = "") {
         const draft = this.model.draft;
         const layer = draft ? this.model.layer(draft.layerId) : null;
-        this.editor.render(draft, message, layer?.style ?? null, layer?.name ?? "");
+        const contributor = this.shared.get(layer?.id)?.contributors.find(person => person.own)?.name;
+        this.editor.render(draft, message, layer?.style ?? null, layer?.name ?? "", contributor ?? null);
     }
 
     /**
