@@ -612,7 +612,7 @@ test("neutral classified legends render as compact layer disclosures", () => {
   assert.equal(elementsByClass(doc.querySelector("#raster-layer-list"), "map-layer-legend")[0].open, false);
 });
 
-test("fixed symbols stay visible beside names without an empty legend disclosure", () => {
+test("fixed symbols retain their compact key and expose on-map inclusion in Legend", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   for (const [shape, tag] of [["polygon", "RECT"], ["line", "PATH"], ["point", "CIRCLE"]]) {
@@ -627,7 +627,8 @@ test("fixed symbols stay visible beside names without an empty legend disclosure
     assert.equal(symbol.getAttribute("fill"), shape === "line" ? "none" : "#ff00ff");
     assert.equal(symbol.getAttribute("stroke-opacity"), "0.2");
     assert.equal(key.getAttribute("role"), "img");
-    assert.equal(elementsByClass(row, "map-layer-legend").length, 0);
+    assert.equal(elementsByClass(row, "map-layer-legend").length, 1);
+    assert.equal(actionControl(row, "legend-inclusion").checked, true);
   }
 });
 
@@ -1138,4 +1139,55 @@ test("layer provenance precedes its title and its primary action retains focus",
   assert.ok(row.children.includes(primaryControl));
   draw.focus(); view.render([layer], null);
   assert.equal(documentContext.activeElement, draw);
+});
+
+test("both legend presentations share all colors, selection, ordering and disclosure state", async () => {
+  const { OnMapLegend } = await import("../../src/map-layers/on-map-legend.js");
+  const doc = new FakeLayerStackDocument(), toggleButton = doc.createElement("button"), more = doc.createElement("details");
+  toggleButton.closest = () => more;
+  let changes = 0, removed = false;
+  const map = { getContainer: () => ({ ownerDocument: doc }), getSize: () => ({ x: 800, y: 720 }), on() {}, off() {} };
+  const leaflet = { DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} },
+    control: () => ({ addTo() {}, remove() { removed = true; } }) };
+  let layers = LAYERS.map(layer => ({ ...layer, visible: true }));
+  layers[0].label = "<b>Literal layer name</b>";
+  const view = new MapLayerStackView(doc);
+  const setIncluded = (key, included) => {
+    layers = layers.map(layer => layer.key === key ? { ...layer, legendIncluded: included } : layer);
+    view.render(layers, null);
+    legend.update(layers);
+  };
+  view.bind({ onLegendInclusion: setIncluded });
+  const legend = new OnMapLegend(leaflet, map, { toggleButton, onInclusion: setIncluded, onChange: () => changes++ });
+  view.render(layers, null);
+  legend.update(layers);
+  assert.equal(legend.contents.children.length, layers.length);
+  assert.equal(legend.contents.children[0].children[0].textContent, layers[0].label);
+  const input = legend.choices.children[0].children[0];
+  input.focus(); input.checked = false; input.dispatchEvent(new Event("change"));
+  assert.equal(legend.contents.children.length, layers.length - 1);
+  assert.equal(doc.activeElement, legend.choices.children[0].children[0]);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const inclusion = actionControl(row, "legend-inclusion");
+  assert.equal(inclusion.checked, false);
+  inclusion.checked = true; inclusion.dispatchEvent(new Event("change"));
+  assert.equal(legend.contents.children.length, layers.length);
+  layers.reverse(); layers[0].visible = false;
+  legend.update(layers);
+  assert.equal(legend.choices.children.length, layers.length);
+  assert.equal(legend.contents.children[0].children[0].textContent, layers[1].label);
+  legend.collapse.dispatchEvent(new Event("click"));
+  assert.equal(legend.body.hidden, true);
+  assert.equal(legend.collapse.getAttribute("aria-expanded"), "false");
+  legend.root.children[0].children[1].dispatchEvent(new Event("click"));
+  assert.equal(legend.root.hidden, true);
+  assert.equal(toggleButton.textContent, "Show legend");
+  assert.equal(doc.activeElement, toggleButton);
+  toggleButton.dispatchEvent(new Event("click"));
+  assert.equal(legend.root.hidden, false);
+  assert.equal(legend.body.hidden, true, "restoring does not discard collapse preference");
+  legend.restore({ visible: false, collapsed: false });
+  assert.deepEqual(legend.snapshot(), { visible: false, collapsed: false });
+  assert.equal(changes, 3);
+  legend.remove(); assert.equal(removed, true);
 });

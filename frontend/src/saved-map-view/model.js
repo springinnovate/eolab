@@ -115,7 +115,8 @@ function validateSavedMapView(candidate) {
     requireExactKeys(
         candidate,
         ["format", "schemaVersion", "viewer", "createdAt", "viewport", "layers",
-            ...(candidate.schemaVersion === 3 ? ["basemap"] : [])],
+            ...(candidate.schemaVersion === 3 ? ["basemap"] : []),
+            ...(Object.hasOwn(candidate, "mapLegend") ? ["mapLegend"] : [])],
         "Saved map"
     );
     if (candidate.format !== SAVED_MAP_VIEW_FORMAT) {
@@ -144,7 +145,18 @@ function validateSavedMapView(candidate) {
             `Saved maps may contain at most ${MAX_SAVED_MAP_VIEW_LAYERS} layers.`
         );
     }
+    if (Object.hasOwn(candidate, "mapLegend")) {
+        requirePlainObject(candidate.mapLegend, "Map legend");
+        requireExactKeys(candidate.mapLegend, ["visible", "collapsed"], "Map legend");
+        if (typeof candidate.mapLegend.visible !== "boolean" || typeof candidate.mapLegend.collapsed !== "boolean") {
+            throw new SavedMapViewValidationError("Map legend visibility and collapse state must be boolean.");
+        }
+    }
     const layers = candidate.layers.map(layer => {
+        requirePlainObject(layer, "Saved layer");
+        if (Object.hasOwn(layer, "legendIncluded") && typeof layer.legendIncluded !== "boolean") {
+            throw new SavedMapViewValidationError("Layer legend inclusion must be boolean.");
+        }
         if (layer?.sharedAnnotation !== undefined) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
@@ -172,6 +184,7 @@ function validateSavedMapView(candidate) {
         viewport,
         ...(candidate.schemaVersion === 3 ? { basemap: candidate.basemap } : {}),
         layers: Object.freeze(layers),
+        ...(candidate.mapLegend ? { mapLegend: Object.freeze({ ...candidate.mapLegend }) } : {}),
     });
 }
 
@@ -183,7 +196,7 @@ function validateSavedMapView(candidate) {
  */
 function validateAnnotationReference(candidate) {
     requirePlainObject(candidate, "Shared layer");
-    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance"], "Shared layer");
+    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance", ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : [])], "Shared layer");
     const reference = candidate.sharedAnnotation;
     requirePlainObject(reference, "Shared layer reference");
     requireExactKeys(reference, ["id", "joinCode"], "Shared layer reference");
@@ -215,6 +228,7 @@ function validateLayer(candidate) {
     requireExactKeys(
         candidate,
         ["catalogItem", "sourceRevision", "visible", "opacity", "style",
+            ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
@@ -288,6 +302,7 @@ function validateLayer(candidate) {
         catalogItem,
         ...(customName === undefined ? {} : { customName }),
         sourceRevision: candidate.sourceRevision,
+        ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
         visible: candidate.visible,
         opacity: candidate.opacity,
         style: structuredClone(candidate.style),

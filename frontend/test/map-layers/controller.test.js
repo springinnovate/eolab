@@ -856,3 +856,22 @@ test("dismissing an in-flight Undo prevents its delayed response from restoring 
     assert.equal(controller.snapshots().length, 0);
     assert.equal(view.removal.label, null);
 });
+
+test("legend inclusion changes presentation without changing visibility or requesting map tiles", async () => {
+    const view = createView();
+    let latest;
+    const controller = new MapLayerController({ leafletMap: createMap(), view, onLayersChange: layers => { latest = layers; } });
+    const item = catalogItem("legend"), key = getCatalogItemKey(item);
+    await controller.show(item, createAdapter("Vector"));
+    const render = controller.leafletLayers.render;
+    controller.leafletLayers.render = () => { throw new Error("Legend changes must not restart rendering"); };
+    controller.setLegendIncluded(key, false);
+    assert.equal(latest[0].legendIncluded, false);
+    assert.equal(latest[0].visible, true);
+    assert.equal(view.layers[0].legendIncluded, false);
+    assert.throws(() => controller.setLegendIncluded(key, "false"), /boolean/);
+    controller.setLegendIncluded(key, true);
+    assert.equal(latest[0].legendIncluded, true);
+    controller.leafletLayers.render = render;
+    controller.destroy();
+});

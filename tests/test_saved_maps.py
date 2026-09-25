@@ -284,3 +284,26 @@ def test_capacity_environment(
     monkeypatch.setenv("SAVED_MAP_CAPACITY", "0")
     with pytest.raises(ValueError, match="SAVED_MAP_CAPACITY"):
         load_settings(version_file_path)
+
+
+def test_map_legend_preferences_round_trip() -> None:
+    """Persist optional legend choices for both layer types without weakening validation."""
+    candidate = map_request()
+    candidate["view"] = json.loads(
+        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+    )
+    candidate["view"]["mapLegend"] = {"visible": False, "collapsed": True}
+    for layer in candidate["view"]["layers"]:
+        layer["legendIncluded"] = False
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    for value in (None, "false", 0, {}):
+        invalid = deepcopy(candidate)
+        invalid["view"]["mapLegend"] = value
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+        for index in range(len(candidate["view"]["layers"])):
+            invalid = deepcopy(candidate)
+            invalid["view"]["layers"][index]["legendIncluded"] = value
+            with pytest.raises(ValidationError):
+                CreateSavedMap.model_validate(invalid)

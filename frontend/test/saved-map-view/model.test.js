@@ -129,3 +129,18 @@ test("source revisions are exported only as SHA-256 fingerprints", async () => {
   assert.equal(fingerprint.includes("secret"), false);
   assert.equal(await hashSavedMapSourceRevision(null), null);
 });
+
+test("map legend preferences round-trip for catalog and shared layers without changing older maps", () => {
+  const candidate = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
+  candidate.mapLegend = { visible: false, collapsed: true };
+  for (const layer of candidate.layers) layer.legendIncluded = false;
+  assert.deepEqual(parseSavedMapView(JSON.stringify(candidate)), candidate);
+  for (const value of [null, "false", 0, {}]) {
+    assert.throws(() => parseSavedMapView(JSON.stringify({ ...candidate, mapLegend: value })));
+    assert.throws(() => parseSavedMapView(JSON.stringify({ ...candidate, mapLegend: { visible: value, collapsed: true } })));
+    for (let index = 0; index < candidate.layers.length; index++) {
+      const invalid = structuredClone(candidate); invalid.layers[index].legendIncluded = value;
+      assert.throws(() => parseSavedMapView(JSON.stringify(invalid)), /inclusion/);
+    }
+  }
+});

@@ -946,6 +946,33 @@ h5 {
 }
 .map-layer-legend-swatch svg { width: 100%; height: 100%; }
 
+.map-legend-inclusion { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
+.on-map-legend {
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  box-shadow: 0 1px 5px #0002;
+  padding: 6px 9px;
+  font: 12px/1.35 var(--font-body, sans-serif);
+  max-width: min(660px, calc(100vw - 80px));
+}
+.on-map-legend[hidden], .on-map-legend [hidden] { display: none; }
+.on-map-legend header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.on-map-legend button { padding: 3px 5px; border: 0; background: transparent; color: var(--brand); font: inherit; cursor: pointer; }
+.on-map-legend .on-map-legend-heading { font-weight: 700; color: var(--text-1); }
+.on-map-legend button:focus-visible, .on-map-legend summary:focus-visible { outline: 2px solid var(--brand); }
+.on-map-legend summary { cursor: pointer; color: var(--brand); margin: 4px 0 6px; }
+.on-map-legend-entries { column-gap: 16px; }
+.on-map-legend-layer { break-inside: avoid; padding-bottom: 10px; overflow-wrap: anywhere; }
+.on-map-legend-layer > strong { display: block; margin-top: 4px; }
+.on-map-legend .map-layer-legend-field { white-space: normal; overflow: visible; }
+.on-map-legend .map-layer-legend-value-label { font-size: 10px; }
+.on-map-legend .map-layer-legend-list { gap: 2px; }
+.on-map-legend-choices { display: grid; gap: 4px; margin-bottom: 10px; }
+.on-map-legend-choices label { display: flex; align-items: start; gap: 6px; overflow-wrap: anywhere; }
+.on-map-legend-entries > p { max-width: 200px; margin: 5px 0; }
+
 .raster-layer-error,
 .raster-layer-stack-status {
   margin: 0;
