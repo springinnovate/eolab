@@ -94,28 +94,31 @@ test("text edits retain the same polygon and label instead of restarting tooltip
     assert.equal(members.size, 0);
 });
 
-test("names and notes can each be shown alone, together, or hidden without blank labels", () => {
+test("combined labels show each contributor, title and optional plain-text notes", () => {
     const { annotation, members, rendering } = setup();
     const shape = [...members][0];
     let label = shape.getTooltip().getContent();
-    assert.equal(label.querySelector(".annotation-polygon-name").hidden, false);
-    assert.equal(label.querySelector(".annotation-polygon-note").hidden, true);
-    annotation.style.notes = true;
+    assert.equal(label.querySelector(".annotation-polygon-name").textContent, "Riverbank");
+    assert.equal(label.querySelector(".annotation-polygon-note").hidden, false);
+    annotation.polygons[0].contributor = "<b>Rich</b>";
     annotation.polygons[0].note = "<script>plain text</script>";
     rendering.refresh();
+    assert.equal(label.querySelector(".annotation-polygon-name").textContent, "<b>Rich</b>: Riverbank");
     assert.equal(label.querySelector(".annotation-polygon-note").textContent, "<script>plain text</script>");
-    assert.equal(label.querySelector(".annotation-polygon-note").hidden, false);
     annotation.style.labels = false;
     rendering.refresh();
-    assert.equal(label.querySelector(".annotation-polygon-name").hidden, true);
-    assert.equal(label.querySelector(".annotation-polygon-note").hidden, false);
-    annotation.style.notes = false;
-    rendering.refresh();
     assert.equal(shape.getTooltip(), undefined);
-    annotation.style.notes = true;
+    annotation.style.labels = true;
     annotation.polygons[0].note = "   ";
     rendering.refresh();
-    assert.equal(shape.getTooltip(), undefined);
+    label = shape.getTooltip().getContent();
+    assert.equal(label.querySelector(".annotation-polygon-note").hidden, true);
+    annotation.polygons.push({ ...annotation.polygons[0], id: "peer", contributor: "Maria", name: "Forest" });
+    rendering.refresh();
+    assert.equal([...members][1].getTooltip().getContent().querySelector(".annotation-polygon-name").textContent, "Maria: Forest");
+    annotation.polygons[0].contributor = "";
+    rendering.refresh();
+    assert.equal(label.querySelector(".annotation-polygon-name").textContent, "Riverbank");
 });
 
 test("geometry updates relocate labels and editing hides only the saved copy", () => {

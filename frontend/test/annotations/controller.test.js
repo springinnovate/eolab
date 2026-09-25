@@ -323,6 +323,43 @@ test("contributor colors update rendering and legends without changing summary g
     assert.equal(layer.polygons.length, 1); assert.throws(() => annotations.model.beginPolygon(layer.id, "peer"));
 });
 
+test("saved-map legacy label switches restore as one local preference", async () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    const changes = [];
+    annotations.mapLayers = { setVisible: (...args) => changes.push(args), setOpacity: (...args) => changes.push(args) };
+    annotations.refreshLayer = () => {};
+    const appearance = { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: false, notes: true };
+    annotations.restoreMapAppearance(layer.id, { visible: true, opacity: 0.5, appearance });
+    await annotations.savePromise;
+    assert.equal(layer.style.labels, true);
+    assert.equal("notes" in layer.style, false);
+    assert.equal(appearance.labels, false, "the published map is not modified");
+    annotations.restoreMapAppearance(layer.id, { visible: true, opacity: 0.5, appearance: { ...appearance, notes: false } });
+    await annotations.savePromise;
+    assert.equal(layer.style.labels, false);
+    assert.equal(changes.length, 4);
+});
+
+test("draft rendering receives current contributor names without writing them into the draft", () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    annotations.model.beginPolygon(layer.id);
+    const before = structuredClone(annotations.model.draft);
+    const calls = [];
+    annotations.editor = { render: (...args) => calls.push(args) };
+    annotations.shared.set(layer.id, { contributors: [{ own: true, name: "Rich" }] });
+    annotations.renderEditor();
+    assert.equal(calls.at(-1)[4], "Rich");
+    annotations.shared.get(layer.id).contributors[0].name = "Richard";
+    annotations.renderEditor();
+    assert.equal(calls.at(-1)[4], "Richard");
+    annotations.shared.clear();
+    annotations.renderEditor();
+    assert.equal(calls.at(-1)[4], null, "an imported draft must not inherit the previous shared contributor");
+    assert.deepEqual(annotations.model.draft, before);
+});
+
 test("combined shared polygons are filterable summary inputs but never become editable or uploaded as mine", async () => {
     const annotations = controller();
     const layer = annotations.model.createLayer();

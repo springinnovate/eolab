@@ -122,6 +122,8 @@
     box-shadow: none; padding: 2px 4px; color: #222;
     width: max-content; max-width: 18rem; white-space: normal; overflow-wrap: anywhere;
     visibility: hidden;
+    /* Measure newly enabled labels at their final position, even with reduced-motion durations. */
+    transition: none;
 }
 .annotation-polygon-label::before { display: none; }
 .annotation-polygon-name { display: block; }

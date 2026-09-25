@@ -104,6 +104,30 @@ test("interior dragging translates the draft as a whole and leaves saved geometr
     assert.deepEqual(model.savePolygon().vertices, [[3, 4], [5, 4], [4, 6]]);
 });
 
+test("draft labels use current contributor metadata and retain full notes without changing saved text", () => {
+    const { editor, model } = setup();
+    const longNote = "Habitat notes\n".repeat(500);
+    editor.draft.polygon.note = longNote;
+    editor.draft.polygon.contributor = "Imported author";
+    editor.contributor = "Rich";
+    editor.style.labels = true;
+    const before = model.document();
+    const children = [];
+    const content = { append: element => children.push(element), querySelector: selector => children.find(child => `.${child.className}` === selector) };
+    editor.document = { createElement: tag => tag === "div" ? content : { textContent: "" } };
+    let tooltip;
+    const shape = { getTooltip: () => tooltip, isTooltipOpen: () => false,
+        bindTooltip: label => { tooltip = { getContent: () => label, update() {} }; } };
+    editor.updateDraftLabel(shape);
+    assert.equal(children[0].textContent, "Rich: Polygon 1");
+    assert.equal(children[1].textContent, longNote);
+    editor.contributor = null;
+    editor.updateDraftLabel(shape);
+    assert.equal(children[0].textContent, "Imported author: Polygon 1");
+    assert.deepEqual(model.document(), before);
+    assert.equal(editor.draft.polygon.contributor, "Imported author");
+});
+
 test("canceling a drag restores its starting vertices without enabling disabled map panning", () => {
     const { model, editor, shape, event, panEnabled } = setup(false);
     const original = structuredClone(model.draft.polygon.vertices);
