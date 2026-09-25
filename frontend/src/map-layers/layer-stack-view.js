@@ -187,15 +187,26 @@ export class MapLayerStackView {
     }
 
     /**
-     * Render all retained rows from topmost to bottommost.
+     * Render rows while keeping the visible portion of an unchanged layer order stationary.
+     * Restore control focus without scrolling during refreshes and visibility changes;
+     * explicit focus after reordering or removal may still bring its target into view.
      *
      * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; primaryControl supplies a retained main action, attribution describes provenance above the title, typeLabel describes origin and stylePanelId identifies the owning style panel.
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
-     * focus target after a reorder or removal.
+     * focus target after a layer action, such as toggling visibility, reordering or removal.
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        const preserveViewport = (requestedFocus === null || requestedFocus.action === "visibility") &&
+            layers.length === this.layers.length &&
+            layers.every((layer, index) => layer.key === this.layers[index].key);
+        const scrollTop = this.scrollContainer.scrollTop;
+        const viewportTop = this.scrollContainer.getBoundingClientRect().top;
+        const anchor = preserveViewport ? [...this.list.children].find(row =>
+            row.dataset.layerKey && row.getBoundingClientRect().bottom > viewportTop
+        ) : null;
+        const anchorTop = anchor?.getBoundingClientRect().top;
         this.layers = layers;
         this.activeKey = activeKey;
         const retainedKeys = new Set(layers.map(layer => layer.key));
@@ -227,6 +238,15 @@ export class MapLayerStackView {
         ));
         this.list.replaceChildren(...rows);
         this.#placeRemovalRow();
+        if (preserveViewport) {
+            const replacement = rows.find(row => row.dataset.layerKey === anchor?.dataset.layerKey);
+            if (replacement) {
+                const offset = replacement.getBoundingClientRect().top - anchorTop;
+                this.scrollContainer.scrollTop += offset;
+            } else {
+                this.scrollContainer.scrollTop = scrollTop;
+            }
+        }
         if (retainRemovalFocus && !requestedFocus) focusedControl.focus({ preventScroll: true });
         else if (retainLocalFocus) focusedControl.focus({ preventScroll: true });
         else if (retainedFocus !== null) {
@@ -241,7 +261,7 @@ export class MapLayerStackView {
             if (focusTarget === undefined && layers.length === 0) {
                 focusTarget = this.documentContext.querySelector("#toggle-map-layers") ?? this.status;
             }
-            focusTarget?.focus();
+            focusTarget?.focus({ preventScroll: preserveViewport });
         }
     }
 
