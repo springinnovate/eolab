@@ -6,7 +6,7 @@ import { fetchVectorFeatureInfo } from "./feature-info.js";
  * entire lookup has a 2.5 second deadline and uses the click inspector's bounded
  * feature query. A failure leaves identification to explicit click inspection.
  * @param {Object} options Query inputs supplied by browser composition.
- * @param {import("./feature-inspector.js").VectorFeatureInspectionTarget[]} options.targets Visible layers, top first.
+ * @param {import("./feature-info.js").VectorFeatureInspectionTarget[]} options.targets Visible layers, top first.
  * @param {import("./feature-info.js").VectorFeatureInfoViewport} options.viewport Projected pointer and viewport.
  * @param {string} options.wmsUrl Restricted WMS endpoint.
  * @param {AbortSignal} options.signal Superseded-pointer cancellation.

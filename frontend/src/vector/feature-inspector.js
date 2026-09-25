@@ -149,19 +149,6 @@ function vectorFeatureFocus({ feature, inspectionPosition }) {
     });
 }
 
-/**
- * @typedef {Object} VectorFeatureInspectionTarget
- * @property {string} sourceId Opaque retained-source identity from composition.
- * @property {string} label User-facing retained-layer label.
- * @property {number} [opacity] Display opacity; hover skips fully transparent layers.
- * @property {number[]} bbox Authoritative Catalog Item west, south, east, north
- * bounds.
- * @property {{layerName:string,styleName:string}} publication Authorized WMS
- * publication identity.
- * @property {"point"|"line"|"polygon"} geometryKind Geometry style family.
- * @property {string[]} propertyNames Catalog-declared non-geometry fields.
- * @property {string|null} primaryGeometry Catalog-declared geometry field.
- */
 
 /**
  * Return an immutable scalar-only observation for sibling analysis tools.
@@ -170,7 +157,7 @@ function vectorFeatureFocus({ feature, inspectionPosition }) {
  * boundary contains only chart fields and the small geometry-neutral map focus
  * needed to navigate back to an inspected row.
  *
- * @param {{feature:Object,target:VectorFeatureInspectionTarget,
+ * @param {{feature:Object,target:import("./feature-info.js").VectorFeatureInspectionTarget,
  * inspectionPosition:{lng:number,lat:number}}} result Result.
  * @return {Readonly<Object>} Closed inspection-observation contract.
  */
@@ -277,7 +264,7 @@ export class VectorFeatureInspectorController {
      * @param {Object} configuration Collaborators.
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Initialized Leaflet map.
-     * @param {() => VectorFeatureInspectionTarget[]}
+     * @param {() => import("./feature-info.js").VectorFeatureInspectionTarget[]}
      * configuration.getVisibleTargets Current visible vectors from composition.
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
@@ -456,7 +443,7 @@ export class VectorFeatureInspectorController {
     /**
      * Return validated visible vector targets in top-first map order.
      *
-     * @return {VectorFeatureInspectionTarget[]} Current inspection targets.
+     * @return {import("./feature-info.js").VectorFeatureInspectionTarget[]} Current inspection targets.
      * @throws {TypeError} If composition violates the target contract.
      */
     visibleTargets() {
@@ -752,7 +739,7 @@ export class VectorFeatureInspectorController {
 
     /**
      * Update retained result labels from current visible targets without changing their identities.
-     * @param {VectorFeatureInspectionTarget[]} targets Current map-layer presentation.
+     * @param {import("./feature-info.js").VectorFeatureInspectionTarget[]} targets Current map-layer presentation.
      * @return {boolean} Whether any result name changed.
      */
     #refreshResultNames(targets) {
@@ -771,7 +758,7 @@ export class VectorFeatureInspectorController {
     /**
      * Return a stable set identity independent of drawing order and styling.
      *
-     * @param {VectorFeatureInspectionTarget[]} targets Visible vector targets.
+     * @param {import("./feature-info.js").VectorFeatureInspectionTarget[]} targets Visible vector targets.
      * @return {string} Stable visible-publication signature.
      */
     #targetSignature(targets) {

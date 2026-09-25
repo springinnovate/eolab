@@ -1130,7 +1130,7 @@ async function initializeCatalog(
     });
     /**
      * Supply the same top-first published vector targets to click and hover queries.
-     * @return {import("./vector/feature-inspector.js").VectorFeatureInspectionTarget[]} Visible targets.
+     * @return {import("./vector/feature-info.js").VectorFeatureInspectionTarget[]} Visible targets.
      */
     function visibleVectorInspectionTargets() {
         return mapLayerController.retainedRecords
