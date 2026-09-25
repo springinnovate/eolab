@@ -4,6 +4,20 @@ History
 Unreleased
 ----------
 
+0.8.0 (2026-09-24)
+------------------
+
+* Publish named maps at stable URLs with custom titles, subtitles, styles, layer names, basemaps, and a simplified recipient interface without the catalog.
+* Edit and delete published maps through a password-protected administration page while preserving their URLs and contributors' polygons. Manage shared layers, retrieve join codes, and undo deletion there too.
+* Replace facilitator-based annotation sessions with collaborative shared layers. Contributors see each other's polygons, choose their own colors, change their display names, and zoom to each contributor's polygons.
+* Keep shared-layer membership separate from the layers loaded in a map, restore the root app's last layer selection, and raise shared-layer capacity without a per-browser membership limit.
+* Edit polygon geometry, names, and notes together with explicit saving. Improve drawing controls, label readability and stacking, combined contributor/name/note labels, and immediate label visibility updates.
+* Identify catalog vectors and shared polygons on hover, inspect clicked polygons, and make editing controls for the selected polygon easier to find.
+* Rename and sort map layers, preserve list scroll position when toggling visibility, and show clearer color keys and an optional on-map legend with configurable layer inclusion.
+* Add MapTiler satellite basemaps, viewport coordinate guides and a pointer crosshair, and keep map tools positioned around the available viewport.
+* Queue map rendering, share identical in-flight WMS requests, report tile progress, recover failed current tiles, and debounce requests during navigation. Restore the saved viewport before requesting tiles.
+* Keep WMS vectors, rasters, composite maps, and selected-feature highlights visible through the map's maximum zoom of 22.
+
 0.6.0 (2026-09-20)
 ------------------
 
