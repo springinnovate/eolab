@@ -39,6 +39,21 @@ const MAP_INSPECTION_SOURCE = readFileSync(
   "utf8",
 );
 
+test("hover shares presentation through composition without annotation/vector sibling imports", () => {
+  const hover = readFileSync(new URL("../../src/map-feature-hover.js", import.meta.url), "utf8");
+  const query = readFileSync(new URL("../../src/vector/feature-hover.js", import.meta.url), "utf8");
+  const annotations = readFileSync(new URL("../../src/annotations/controller.js", import.meta.url), "utf8");
+  assert.doesNotMatch(hover, /^import\s/m);
+  assert.doesNotMatch(hover, /GetFeatureInfo|polygonsAt|retainedRecords/);
+  assert.doesNotMatch(query, /from ["'].*(?:annotations|raster|main|feature-inspector)\.js["']/);
+  assert.doesNotMatch(annotations, /from ["'].*vector\//);
+  assert.match(COMPOSITION_SOURCE, /new MapFeatureHover/);
+  assert.match(COMPOSITION_SOURCE, /annotations\.polygonsAt\(event.latlng\)/);
+  assert.match(COMPOSITION_SOURCE, /targets: visibleVectorInspectionTargets\(\)\.filter\(target => target.opacity > 0\)/);
+  assert.match(COMPOSITION_SOURCE, /mapFeatureHover\?\.setEnabled\(!editing\)/);
+  assert.match(COMPOSITION_SOURCE, /onHoverInvalidated: \(\) => mapFeatureHover\?\.hide\(\)/);
+});
+
 test("map-tool docking remains a presentation-only peer coordinator", () => {
   assert.doesNotMatch(MAP_INSPECTION_SOURCE, /^import\s/m);
   for (const forbiddenSubsystemKnowledge of [

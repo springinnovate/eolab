@@ -4812,3 +4812,12 @@ summary:hover > .raster-disclosure-chevron {
 .coordinate-guide-toggle { padding: 3px 6px; font-size: 0.75rem; }
 .coordinate-guide-toggle[aria-pressed="true"] { border-color: var(--brand); }
 .has-coordinate-guide .map-position { display: none; }
+
+.map-feature-hover-card {
+    position: absolute; z-index: 850; pointer-events: none;
+    padding: 0.3rem 0.5rem; border: 1px solid #777; border-radius: 4px;
+    background: rgb(255 255 255 / 95%); color: #222;
+    font-size: 0.8rem; line-height: 1.35; white-space: pre-line;
+    max-width: min(18rem, calc(100% - 8px)); overflow-wrap: anywhere;
+}
+.map-feature-hover-card[hidden] { display: none; }

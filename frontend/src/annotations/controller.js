@@ -7,7 +7,6 @@ import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
 import { PolygonLabelLayout } from "./polygon-label-layout.js";
-import { AnnotationHoverCard } from "./hover-card.js";
 
 /** Own local layers, isolated polygon drafts, annotation controls and autosave. */
 export class AnnotationController {
@@ -19,6 +18,7 @@ export class AnnotationController {
      * @param {Object} options.mapLayers Neutral layer controller.
      * @param {import("./panel-view.js").AnnotationPanelView} options.panel Annotation editor presentation.
      * @param {(editing:boolean)=>void} options.onEditingChange Composition-owned mode change.
+     * @param {()=>void} [options.onHoverInvalidated] Clear composed hover after polygon changes.
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
@@ -28,7 +28,7 @@ export class AnnotationController {
      * @param {(id:string)=>boolean} [options.requestEditing] Permit editing or open the owning membership prompt.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -47,7 +47,7 @@ export class AnnotationController {
         this.layers = new Map();
         this.inspectionMatches = [];
         this.inspectedPolygon = null;
-        this.hoverCard = new AnnotationHoverCard(map, position => this.polygonsAt(position));
+        this.onHoverInvalidated = onHoverInvalidated;
         this.loaded = false;
         this.savedSharingLayers = [];
         this.orderRestored = false;
@@ -551,7 +551,6 @@ export class AnnotationController {
     /** Synchronize map editing presentation and notify composition of the mode. @return {void} */
     updateEditor() {
         this.clearInspection();
-        this.hoverCard.setEnabled(!this.model.draft);
         this.onEditingChange(!!this.model.draft);
         for (const [layerId, rendering] of this.layers) {
             rendering.setEditingPolygon(this.model.draft?.layerId === layerId ? this.model.draft.polygon.id : null);
@@ -663,7 +662,7 @@ export class AnnotationController {
 
     /** Clear temporary hover, highlight and details without deleting any polygon. @return {void} */
     clearInspection() {
-        this.hoverCard.hide();
+        this.onHoverInvalidated();
         for (const controls of this.controls.values()) controls.clearPolygonInspection();
         for (const rendering of this.layers.values()) rendering.setInspectedPolygon(null);
         this.inspectionMatches = [];
@@ -676,7 +675,7 @@ export class AnnotationController {
      * @return {void}
      */
     refreshInspection() {
-        this.hoverCard.hide();
+        this.onHoverInvalidated();
         if (!this.inspectedPolygon) return;
         this.inspectionMatches = this.inspectionMatches.flatMap(hit => {
             const layer = this.model.layers.find(item => item.id === hit.layerId);

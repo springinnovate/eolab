@@ -1,5 +1,20 @@
 /** Bounded WMS feature-information requests for published vector layers. */
 
+/**
+ * @typedef {Object} VectorFeatureInspectionTarget
+ * @property {string} sourceId Opaque retained-source identity from composition.
+ * @property {string} label User-facing retained-layer label.
+ * @property {number} [opacity] Display opacity; hover skips fully transparent layers.
+ * @property {number[]} bbox Authoritative Catalog Item west, south, east, north
+ * bounds.
+ * @property {{layerName:string,styleName:string}} publication Authorized WMS
+ * publication identity.
+ * @property {"point"|"line"|"polygon"} geometryKind Geometry style family.
+ * @property {string[]} propertyNames Catalog-declared non-geometry fields.
+ * @property {string|null} primaryGeometry Catalog-declared geometry field.
+ */
+
+
 export const VECTOR_FEATURE_INFO_LIMIT = 5;
 export const VECTOR_FEATURE_INFO_BUFFER_PIXELS = 8;
 const MAX_WMS_VIEWPORT_EDGE = 2048;
