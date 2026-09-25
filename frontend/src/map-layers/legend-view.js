@@ -55,9 +55,10 @@ export function buildLegendGradient(documentContext, legend, opacity) {
  * @param {Document} documentContext Owning document.
  * @param {LayerLegend} legend Layer-owned legend snapshot.
  * @param {number} opacity Effective whole-layer opacity.
+ * @param {boolean} [compactValues=false] Round displayed numbers for narrow on-map columns; retain exact values in tooltips.
  * @return {HTMLDivElement} All legend entries, without disclosure or styling controls.
  */
-export function buildLegendContents(documentContext, legend, opacity) {
+export function buildLegendContents(documentContext, legend, opacity, compactValues = false) {
     const details = documentContext.createElement("div");
     details.className = "map-layer-legend-contents";
     const field = documentContext.createElement("span");
@@ -73,9 +74,10 @@ export function buildLegendContents(documentContext, legend, opacity) {
             const text = documentContext.createElement("span");
             const caption = documentContext.createElement("span");
             caption.className = "map-layer-legend-value-label";
-            caption.textContent = ["Minimum", "Midpoint", "Maximum"][index];
+            caption.textContent = (compactValues ? ["Min", "Mid", "Max"] : ["Minimum", "Midpoint", "Maximum"])[index];
             const number = documentContext.createElement("span");
-            number.textContent = String(value);
+            number.textContent = compactValues ? formatLegendNumber(value) : String(value);
+            number.title = String(value);
             text.append(caption, number);
             labels.append(text);
         }
@@ -97,4 +99,16 @@ export function buildLegendContents(documentContext, legend, opacity) {
     }
     details.append(list);
     return details;
+}
+
+/**
+ * Format a raster legend value to four significant digits, using scientific notation at large or tiny magnitudes.
+ * @param {number} value Raster style threshold.
+ * @return {string} Short readable number; the caller retains the exact value in a tooltip.
+ */
+function formatLegendNumber(value) {
+    const magnitude = Math.abs(value);
+    return magnitude !== 0 && (magnitude < 0.001 || magnitude >= 10000)
+        ? value.toExponential(3)
+        : String(Number(value.toPrecision(4)));
 }

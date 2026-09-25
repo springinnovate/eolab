@@ -1151,6 +1151,7 @@ test("both legend presentations share all colors, selection, ordering and disclo
     control: () => ({ addTo() {}, remove() { removed = true; } }) };
   let layers = LAYERS.map(layer => ({ ...layer, visible: true }));
   layers[0].label = "<b>Literal layer name</b>";
+  layers[0].legend = { ...layers[0].legend, labels: [0.013103712815791368, 12345.678, 0.000012345] };
   const view = new MapLayerStackView(doc);
   const setIncluded = (key, included) => {
     layers = layers.map(layer => layer.key === key ? { ...layer, legendIncluded: included } : layer);
@@ -1163,6 +1164,9 @@ test("both legend presentations share all colors, selection, ordering and disclo
   legend.update(layers);
   assert.equal(legend.contents.children.length, layers.length);
   assert.equal(legend.contents.children[0].children[0].textContent, layers[0].label);
+  const values = elementsByClass(legend.contents.children[0], "map-layer-legend-values")[0];
+  assert.deepEqual(values.children.map(value => value.children[1].textContent), ["0.0131", "1.235e+4", "1.234e-5"]);
+  assert.equal(values.children[0].children[1].title, "0.013103712815791368");
   const input = legend.choices.children[0].children[0];
   input.focus(); input.checked = false; input.dispatchEvent(new Event("change"));
   assert.equal(legend.contents.children.length, layers.length - 1);

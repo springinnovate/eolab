@@ -112,7 +112,7 @@ export class OnMapLegend {
             section.className = "on-map-legend-layer";
             const title = this.document.createElement("strong");
             title.textContent = layer.label;
-            section.append(title, buildLegendContents(this.document, layer.legend, layer.opacity));
+            section.append(title, buildLegendContents(this.document, layer.legend, layer.opacity, true));
             legends.push(section);
         }
         this.choices.replaceChildren(...choices);
