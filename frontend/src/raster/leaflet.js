@@ -49,6 +49,7 @@ export function rasterSampleBoundsToLeaflet(bounds) {
 }
 /**
  * Create the Leaflet WMS layer for one published Catalog raster.
+ * Render through the map's maximum zoom of 22 instead of Leaflet's default 18.
  *
  * @param {Object} leaflet Leaflet namespace with a WMS tile-layer factory.
  * @param {string} wmsUrl Browser-facing GeoServer WMS endpoint.
@@ -76,6 +77,7 @@ export function createRasterWmsLayer(
         tilesorigin: "-20037508.342789244,-20037508.342789244",
         version: "1.3.0",
         noWrap: true,
+        maxZoom: 22,
         bounds: [
             [south, west],
             [north, east]

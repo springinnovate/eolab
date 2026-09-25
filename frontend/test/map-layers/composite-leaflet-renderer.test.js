@@ -77,6 +77,7 @@ test("delayed tiles remain loading; transparent PNG counts as successfully loade
     layer.emit("tileload", { tile: transparent }); layer.emit("load"); await flush();
     assert.deepEqual(f.status(), { phase: "complete", total: 2, loaded: 2, failed: 0 });
     assert.equal(layer.options.transparent, true);
+    assert.equal(layer.options.maxZoom, 22, "composite tiles cover the full map zoom range");
     f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
     assert.equal(f.calls.length, 1);
     f.renderer.destroy();
