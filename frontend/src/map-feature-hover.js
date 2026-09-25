@@ -67,7 +67,8 @@ export class MapFeatureHover {
     }
 
     /**
-     * Show plain text beside the pointer, keeping it inside the map.
+     * Show plain text above the pointer, keeping it inside the map and away from
+     * the pixel values below it. Near the top edge, use the pointer's left side.
      * @param {{containerPoint:{x:number,y:number}}} event Map pointer event.
      * @param {string} text Layer identity and optional feature details.
      * @return {void}
@@ -77,8 +78,10 @@ export class MapFeatureHover {
         this.card.hidden = false;
         const container = this.map.getContainer();
         const { x, y } = event.containerPoint;
-        this.card.style.left = `${Math.max(4, Math.min(x + 16, container.clientWidth - this.card.offsetWidth - 4))}px`;
-        this.card.style.top = `${Math.max(4, Math.min(y + 16, container.clientHeight - this.card.offsetHeight - 4))}px`;
+        const above = y - this.card.offsetHeight - 16;
+        const left = above >= 4 ? x + 16 : x - this.card.offsetWidth - 16;
+        this.card.style.left = `${Math.max(4, Math.min(left, container.clientWidth - this.card.offsetWidth - 4))}px`;
+        this.card.style.top = `${Math.max(4, Math.min(above, container.clientHeight - this.card.offsetHeight - 4))}px`;
     }
 
     /** Cancel pending queries and clear visible feedback. @return {void} */

@@ -35,7 +35,9 @@ test("waits 80 ms once, then follows and switches polygons immediately as plain 
     h.results.hits[0].polygon.name = "<b>Plain text</b>";
     h.move(490, 390);
     assert.equal(h.card.textContent, "Habitats\n<b>Plain text</b> — Lee");
-    assert.equal(h.card.style.left, "376px"); assert.equal(h.card.style.top, "356px");
+    assert.equal(h.card.style.left, "376px"); assert.equal(h.card.style.top, "334px");
+    h.move(300, 20);
+    assert.equal(h.card.style.left, "164px"); assert.equal(h.card.style.top, "4px");
     h.results.hits = []; h.move();
     assert.equal(h.card.hidden, true);
     h.hover.dispose();
