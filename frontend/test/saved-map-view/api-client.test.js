@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SavedMapApiClient, namedMapSlugFromPath, suggestMapLinkName } from "../../src/saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, suggestMapLinkName } from "../../src/saved-map-view/api-client.js";
 import { createSavedMapView } from "../../src/saved-map-view/model.js";
 
 const view = createSavedMapView({
@@ -9,6 +9,27 @@ const view = createSavedMapView({
   basemap: "none", layers: [],
 });
 const record = { slug: "amazon", title: "Amazon", subtitle: "Priorities", view };
+
+test("admin editing uses a separate authenticated API, fixed slug and revision", async () => {
+  const calls = [];
+  const client = new SavedMapApiClient(async (url, options) => {
+    calls.push({ url, ...options });
+    return new Response(JSON.stringify({ ...record, revision: options.method === "PUT" ? 2 : 1 }));
+  });
+  assert.equal(editableMapSlugFromPath("/admin-eolab/maps/amazon/edit"), "amazon");
+  assert.equal(editableMapSlugFromPath("/maps/amazon"), null);
+  assert.equal(editableMapSlugFromPath("/?edit=amazon"), null);
+  assert.equal((await client.getForEditing("amazon")).revision, 1);
+  assert.equal((await client.update("amazon", { ...record, slug: "cannot-rename", revision: 1 })).revision, 2);
+  assert.equal(calls[0].url, "/api/admin/saved-maps/amazon");
+  assert.equal(calls[1].method, "PUT");
+  assert.equal(calls[1].headers["X-EOLab-Admin"], "1");
+  assert.equal(JSON.parse(calls[1].body).slug, "amazon");
+  assert.equal(JSON.parse(calls[1].body).revision, 1);
+  const malformed = new SavedMapApiClient(async () => new Response(JSON.stringify(record)));
+  await assert.rejects(malformed.getForEditing("amazon"), /revision/);
+  await assert.rejects(client.update("amazon", record), /Reload/);
+});
 
 test("browser fetch is called without rebinding its receiver to the API client", async () => {
   const client = new SavedMapApiClient(function (url) {

@@ -73,6 +73,9 @@ function viewFixture() {
     querySelector: (selector) => selectors.get(selector),
     createElement: () => element(),
   };
+  for (const name of ["editor", "editor-heading", "edit-title", "edit-subtitle", "edit-url", "save", "cancel", "edit-status"]) {
+    selectors.set(`#published-map-${name}`, element());
+  }
   for (const name of ["dialog", "form", "fields", "title", "subtitle", "slug", "preview", "status", "submit", "close", "result", "url", "open", "copy"]) {
     selectors.set(`#publish-map-${name}`, element());
   }
@@ -87,6 +90,31 @@ function viewFixture() {
     }),
   };
 }
+
+test("published-map editing shows fixed URL, explicit save, busy state and retained errors", () => {
+  const { view, elements } = viewFixture();
+  const el = name => elements.get(`#published-map-${name}`);
+  let submitted;
+  view.bind({ onSavePublishedMap: fields => { submitted = fields; } });
+  view.showPublishedMapEditor({ title: "Amazon", subtitle: "Habitat", slug: "amazon" }, true);
+  assert.equal(el("editor").hidden, false);
+  assert.match(el("editor-heading").textContent, /Amazon/);
+  assert.equal(el("edit-url").href, "/maps/amazon");
+  el("edit-title").value = "New title";
+  el("editor").dispatch("submit", { preventDefault() {} });
+  assert.deepEqual(submitted, { title: "New title", subtitle: "Habitat" });
+  view.setPublishedMapSaving(true);
+  assert.equal(el("cancel").hidden, true);
+  assert.equal(el("edit-title").disabled, true);
+  view.showPublishedMapEditStatus("Save failed");
+  view.setPublishedMapSaving(false);
+  assert.equal(el("edit-title").value, "New title");
+  assert.equal(el("edit-status").textContent, "Save failed");
+  view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon" }, false);
+  assert.equal(el("save").disabled, false);
+  assert.match(el("edit-status").textContent, /unavailable layers will be omitted/);
+  view.unbind();
+});
 
 test("publication dialog suggests editable names, keeps errors inline and exposes the canonical link", async () => {
   const { view, elements } = viewFixture();

@@ -549,8 +549,8 @@ GET that URL to retrieve it. POSTing the same slug returns **409** and preserves
 the original. Missing maps return **404**, invalid input **422**, oversized uploads
 **413**, and unavailable storage or full site capacity **503**.
 
-Maps have no automatic expiry and are immutable in this version. There is no
-list, update, or delete endpoint yet. They live in `saved_maps.maps` in the existing
+Maps have no automatic expiry. Administrators can list and update them as described
+below; public creation never overwrites an existing map. They live in `saved_maps.maps` in the existing
 PostgreSQL database; include that schema in backups. Schema setup retries after
 database outages without preventing other application routes from starting.
 
@@ -576,6 +576,44 @@ password prompt with username **admin** and that password. This is HTTP Basic
 authentication: the browser may retain the login until its session is closed. Use a
 private browser window on shared computers; changing the configured password and
 redeploying invalidates the old credential.
+
+### Editing published maps
+
+The **Published maps** table on `/admin-eolab` provides **Open** and **Edit** links.
+Edit opens the full map builder with the published configuration, without loading or
+overwriting your browser's remembered map. Change layers, names, styles, basemap,
+view, title or subtitle, then choose **Save changes for everyone**. The URL stays
+fixed. **Cancel** returns to administration without saving the map draft.
+
+**Delete** makes a published map unavailable after confirmation. **Undo delete**
+restores the same URL and configuration. Both actions leave referenced shared layers
+and polygons untouched. Deleted maps remain listed indefinitely, reserve their URL
+names and still count toward saved-map capacity. There is no automatic purge.
+An already-open visitor keeps its current view until reload. An editor opened before
+deletion cannot save over the deleted or restored map without reloading.
+
+Shared polygons are independent: changing which shared layers the map includes does
+not replace their contributions. Edits made to actual shared polygons still follow
+their normal save behavior and are not undone by cancelling a map draft.
+
+Visitors see the updated configuration on their next open or reload. A failed save
+keeps the draft available to retry. If any initial layers or settings failed to restore,
+you can still save the current map. The editor explains that unavailable layers will
+be omitted and the currently displayed settings will be published. If another administrator saved
+first, your save returns a conflict rather than overwriting their changes.
+
+The editor lives at `/admin-eolab/maps/{slug}/edit`. Authenticated
+`GET /api/admin/saved-maps` lists map titles, URL names and `deletedAt` timestamps;
+`GET /{slug}` loads an active map's draft;
+`PUT /{slug}` replaces its configuration with a matching `revision`. The PUT has the
+same document and upload limits as creation, requires `X-EOLab-Admin: 1`, and rejects
+cross-origin writes and URL renaming. `DELETE /{slug}` hides a map and
+`POST /{slug}/restore` restores it, using the same authentication and write protections.
+Startup adds revision and deletion timestamp columns to existing maps.
+No additional environment variables are required. Public viewers omit the copy-link
+and restore-map buttons; the main map builder retains its publishing/reset controls.
+
+### Managing shared layers
 
 The independent page lists this deployment's active and deleted shared layers, their
 contributor/polygon counts and share codes. **Copy code** copies an active layer's

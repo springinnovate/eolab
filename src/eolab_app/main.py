@@ -9,13 +9,18 @@ import signal
 import sys
 
 import httpx2
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
 from eolab_app.saved_maps.store import SavedMapStore
-from eolab_app.routes.saved_maps import create_saved_maps_router
+from eolab_app.routes.saved_maps import (
+    create_saved_maps_router,
+    create_saved_maps_admin_router,
+)
+from eolab_app.routes.admin_auth import create_administrator_dependency
+from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
@@ -307,10 +312,10 @@ def create_app(
         )
     )
     catalog_database = PgStacCatalogDatabase()
+    saved_maps = SavedMapStore(capacity=app_global_configuration.saved_map_capacity)
+    application.include_router(create_saved_maps_router(saved_maps))
     application.include_router(
-        create_saved_maps_router(
-            SavedMapStore(capacity=app_global_configuration.saved_map_capacity)
-        )
+        create_saved_maps_admin_router(saved_maps, app_global_configuration.admin_password)
     )
     application.include_router(
         create_catalog_router(catalog_database.random_matching_item)
@@ -416,6 +421,26 @@ def create_app(
     )
 
     static_directory = Path(__file__).parent / "static"
+
+    @application.get(
+        "/admin-eolab/maps/{slug}/edit",
+        include_in_schema=False,
+        dependencies=[
+            Depends(create_administrator_dependency(app_global_configuration.admin_password))
+        ],
+    )
+    def edit_published_map(slug: Slug) -> FileResponse:
+        """Open the full map editor after administrator authentication.
+
+        Args:
+            slug: Fixed URL name; the editor loads its configuration through the admin API.
+
+        Returns:
+            Existing application HTML without caching the authenticated entry page.
+        """
+        return FileResponse(
+            static_directory / "index.html", headers={"Cache-Control": "private, no-store"}
+        )
 
     @application.get("/maps/{slug:path}", include_in_schema=False)
     def open_named_map(slug: str) -> FileResponse:

@@ -11,6 +11,80 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
+test("published drafts ignore personal autosave and only write on explicit save", async () => {
+  const view = createView(), storage = createStorage("private"), submissions = [], headings = [];
+  view.showPublishedMapEditor = (saved, complete) => { view.editor = { saved, complete }; };
+  view.showPublishedMapEditStatus = message => { view.editStatus = message; };
+  view.setPublishedMapSaving = saving => { view.saving = saving; };
+  let position = emptySavedMap(10, 20, 6).viewport;
+  const loaded = { slug: "amazon", title: "Original", subtitle: "", revision: 1, view: emptySavedMap(10, 20, 6) };
+  const controller = new SavedMapViewController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
+    viewerVersion: "0.6.0", viewerOrigin: loaded.view.viewer.origin,
+    publicationApi: {
+      async getForEditing(slug) { assert.equal(slug, "amazon"); return loaded; },
+      async update(slug, request) {
+        submissions.push({ slug, request });
+        if (submissions.length === 1) throw new Error("Storage unavailable");
+        return { ...request, slug, revision: request.revision + 1 };
+      },
+    },
+    applyMapHeading: (...values) => headings.push(values),
+    viewport: { snapshot: () => position, restore(value) { position = value; } },
+    catalogVisualization: { clear() {} }, mapLayers: { retainedRecords: [], commitStaged() {} },
+  });
+  await controller.restoreStartupView("#view=ignored");
+  assert.equal(view.editor.complete, true);
+  position = emptySavedMap(30, 40, 8).viewport;
+  controller.scheduleRemember();
+  assert.equal(storage.reads, 0);
+  assert.deepEqual(storage.writes, []);
+  assert.equal(submissions.length, 0);
+  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited" });
+  assert.match(view.editStatus, /Storage unavailable/);
+  assert.equal(view.saving, false);
+  await controller.savePublishedMapChanges({ title: "Changed", subtitle: "Edited" });
+  assert.equal(submissions[1].request.revision, 1);
+  assert.deepEqual(submissions[1].request.view.viewport, position);
+  await controller.savePublishedMapChanges({ title: "Changed again", subtitle: "" });
+  assert.equal(submissions[2].request.revision, 2);
+  assert.deepEqual(headings.at(-1), ["Changed again", ""]);
+  assert.match(view.editStatus, /Saved/);
+  controller.destroy();
+  assert.deepEqual(storage.writes, []);
+});
+
+for (const keepAvailableLayer of [true, false]) test(`published map saves current layers after restoration failures (available layer: ${keepAvailableLayer})`, async () => {
+  const view = createView(), submissions = [], records = [];
+  view.showPublishedMapEditor = (saved, complete) => { view.complete = complete; };
+  view.showPublishedMapEditStatus = message => { view.editStatus = message; };
+  view.setPublishedMapSaving = () => {};
+  const available = { catalogItem: { collection: "c", id: "available" }, sourceRevision: null,
+    visible: false, opacity: 0.5, style: { kind: "vector", definition: {} } };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [
+    ...(keepAvailableLayer ? [available] : []), { ...available, catalogItem: { collection: "c", id: "gone" } },
+  ] };
+  const controller = new SavedMapViewController({ view, editPublishedMap: true, namedMapSlug: "amazon",
+    viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
+    publicationApi: { getForEditing: async () => ({ title: "Map", subtitle: "", revision: 1, view: saved }),
+      async update(slug, request) { submissions.push({ slug, request }); return { ...request, slug, revision: 2 }; } },
+    viewport: { restore() {}, snapshot: () => saved.viewport },
+    mapLayers: { retainedRecords: records, commitStaged(staged) { records.push(...staged.map(layer => layer.record)); } },
+    catalogVisualization: { clear() {}, prepare: async item => item, sourceRevision: () => null,
+      async stage(item, presentation) { return { record: { entry: { item, ...presentation },
+        adapter: { applySavedState() {}, exportSavedState: () => available.style } } }; } },
+    catalogItems: { async get(item) { if (item.id === "gone") throw new Error("unavailable"); return item; } },
+  });
+  await controller.openNamedMap();
+  assert.equal(view.complete, false);
+  assert.equal(submissions.length, 0, "partial restoration must not save automatically");
+  await controller.savePublishedMapChanges({ title: "Map", subtitle: "" });
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].slug, "amazon");
+  assert.equal(submissions[0].request.revision, 1);
+  assert.deepEqual(submissions[0].request.view.layers, keepAvailableLayer ? [available] : []);
+  assert.match(view.editStatus, /Saved/);
+});
+
 test("publication captures once and preserves that view while correcting a duplicate name", async () => {
   const view = createView(), submissions = [];
   let current = emptySavedMap(10, 20, 6).viewport;

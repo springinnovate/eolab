@@ -79,7 +79,7 @@ import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
-import { SavedMapApiClient, namedMapSlugFromPath } from "./saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath } from "./saved-map-view/api-client.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
@@ -136,9 +136,10 @@ const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
  * Read the named-map URL before choosing authoring or recipient controls.
  * @type {string|null}
  */
-const namedMapSlug = namedMapSlugFromPath(globalThis.location.pathname);
+const editableMapSlug = editableMapSlugFromPath(globalThis.location.pathname);
+const namedMapSlug = editableMapSlug ?? namedMapSlugFromPath(globalThis.location.pathname);
 /** @type {boolean} Named maps and older shared links use recipient controls. */
-const isSharedViewer = namedMapSlug !== null || new URL(globalThis.location.href).searchParams.get("viewer") === "shared";
+const isSharedViewer = editableMapSlug === null && (namedMapSlug !== null || new URL(globalThis.location.href).searchParams.get("viewer") === "shared");
 /** @type {Object|null} Public basemap selection interface supplied by the map owner. */
 let basemapControl = null;
 
@@ -1048,11 +1049,12 @@ async function initializeCatalog(
         catalogItems: catalogItemClient,
         viewerVersion: appGlobalConfiguration.appVersion,
         viewerOrigin: globalThis.location.origin,
-        storage: isSharedViewer ? null : new SavedMapViewLocalStorage(),
+        storage: isSharedViewer || editableMapSlug !== null ? null : new SavedMapViewLocalStorage(),
         restoreSharedMap: isSharedViewer,
         publicationApi: new SavedMapApiClient(),
         namedMapSlug,
-        allowPublishing: !isSharedViewer,
+        editPublishedMap: editableMapSlug !== null,
+        allowPublishing: !isSharedViewer && editableMapSlug === null,
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: appGlobalConfiguration.appSubtitle },
         applyMapHeading,
         basemap: basemapControl,
@@ -1264,12 +1266,12 @@ async function initializeCatalog(
                 if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
-        const startupAnnotations = annotations.load({ attachSavedLayers: !isSharedViewer });
+        const startupAnnotations = annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null });
         void startupAnnotations.then(async () => {
             summarySampling.refresh();
-            await annotationSessions.start({ restoreBindings: !isSharedViewer, refreshImmediately: false });
+            await annotationSessions.start({ restoreBindings: !isSharedViewer && editableMapSlug === null, refreshImmediately: false });
             await savedMapViewController.restoreStartupView(globalThis.location.hash);
-            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && !globalThis.location.hash });
+            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash });
             void annotationSessions.refresh();
         });
     }
@@ -2030,10 +2032,11 @@ async function startApplication() {
     );
     document.querySelector(".annotation-layer-tools").hidden = isSharedViewer;
     document.querySelector("#summary-performance").hidden = isSharedViewer;
-    if (isSharedViewer) {
-        document.querySelector("#reset-map-view .panel-header-action-label").textContent = "Restore shared map";
-        document.querySelector("#reset-map-view").title = "Restore the shared map's starting layers, styles and location; retry any layers that could not load";
-        document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Use Restore shared map to retry, or ask the author for a complete map link.";
+    if (isSharedViewer || editableMapSlug !== null) {
+        document.querySelector("#reset-map-view").hidden = true;
+        document.querySelector("#copy-map-link").hidden = true;
+        if (isSharedViewer) document.querySelector(".map-layers-empty-state").textContent = "No layers loaded. Reload to retry, or ask the author for a complete map link.";
+        if (editableMapSlug !== null) document.querySelector("#published-map-editor").hidden = false;
     } else {
         document.querySelector("#copy-map-link-label").textContent = "Publish map";
         document.querySelector("#copy-map-link").title = "Publish a map for others to explore";

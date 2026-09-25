@@ -42,6 +42,7 @@ export class SavedMapViewController {
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
      * @param {string|null} [configuration.namedMapSlug] URL name to load instead of fragments or private autosave.
+     * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
      * @param {boolean} [configuration.allowPublishing=false] Offer publishing in the authoring app.
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
@@ -68,6 +69,7 @@ export class SavedMapViewController {
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
         publicationApi = null,
         namedMapSlug = null,
+        editPublishedMap = false,
         allowPublishing = false,
         publicationDefaults = { title: "", subtitle: "" },
         applyMapHeading = () => {},
@@ -96,7 +98,7 @@ export class SavedMapViewController {
         this.catalogItems = catalogItems;
         this.viewerVersion = viewerVersion;
         this.viewerOrigin = viewerOrigin;
-        this.storage = restoreSharedMap ? null : storage;
+        this.storage = restoreSharedMap || editPublishedMap ? null : storage;
         this.restoreSharedMap = restoreSharedMap;
         this.startingFragment = null;
         this.beforeRestore = beforeRestore;
@@ -104,6 +106,8 @@ export class SavedMapViewController {
         this.restoreAnnotation = restoreAnnotation;
         this.publicationApi = publicationApi;
         this.namedMapSlug = namedMapSlug;
+        this.editPublishedMap = editPublishedMap;
+        this.editRevision = null;
         this.allowPublishing = allowPublishing;
         this.publicationDefaults = publicationDefaults;
         this.applyMapHeading = applyMapHeading;
@@ -136,6 +140,7 @@ export class SavedMapViewController {
             onPublish: fields => void this.publishMap(fields),
             onReset: () => void this.resetView(),
             onUndo: () => void this.undoReset(),
+            onSavePublishedMap: fields => void this.savePublishedMapChanges(fields),
         });
     }
 
@@ -215,20 +220,56 @@ export class SavedMapViewController {
      */
     async openNamedMap() {
         if (this.busy || this.destroyed) return;
+        this.editRevision = null;
         this.#cancelScheduledRemember();
         const generation = ++this.restoreGeneration;
         this.#setBusy(true);
         this.view.showLoading(0);
         try {
-            const saved = await this.publicationApi.get(this.namedMapSlug);
+            const saved = await (this.editPublishedMap
+                ? this.publicationApi.getForEditing(this.namedMapSlug)
+                : this.publicationApi.get(this.namedMapSlug));
             if (this.destroyed || generation !== this.restoreGeneration) return;
             this.applyMapHeading(saved.title, saved.subtitle);
             this.view.showLoading(saved.view.layers.length);
             const report = await this.#restore(saved.view, generation);
             if (report !== null) this.view.showResults(report);
+            if (this.editPublishedMap && report !== null) {
+                const complete = report.loaded === report.total && report.details.length === 0;
+                this.editRevision = saved.revision;
+                this.view.showPublishedMapEditor(saved, complete);
+            }
         } catch (error) {
             this.view.showError(asError(error), "open");
+            if (this.editPublishedMap) this.view.showPublishedMapEditStatus(asError(error).message);
         } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Capture current map settings and save the draft at its existing published URL.
+     * Failures preserve the draft and revision; no shared polygon writes are performed.
+     * @param {{title:string,subtitle:string}} fields Administrator's edited headings.
+     * @return {Promise<void>} Completion after saved confirmation or an actionable error.
+     */
+    async savePublishedMapChanges(fields) {
+        if (!this.editPublishedMap || this.editRevision === null || this.busy || this.destroyed) return;
+        this.#setBusy(true);
+        this.view.setPublishedMapSaving(true);
+        try {
+            const view = await this.#snapshotCurrentView();
+            const saved = await this.publicationApi.update(this.namedMapSlug, {
+                ...fields, view, revision: this.editRevision,
+            });
+            this.editRevision = saved.revision;
+            this.applyMapHeading(saved.title, saved.subtitle);
+            this.view.showPublishedMapEditor(saved, true);
+            this.view.showPublishedMapEditStatus("Saved. Visitors will see these changes when they open or reload the map.");
+        } catch (error) {
+            this.view.showPublishedMapEditStatus(asError(error).message);
+        } finally {
+            this.view.setPublishedMapSaving(false);
             this.#setBusy(false);
         }
     }
