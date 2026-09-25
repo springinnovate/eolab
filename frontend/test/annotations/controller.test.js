@@ -12,7 +12,7 @@ function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
-        controls: new Map(), inspectionMatches: [], inspectedPolygon: null, hoverCard: { hide() {}, setEnabled() {} },
+        controls: new Map(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },

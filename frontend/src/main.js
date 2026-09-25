@@ -1,3 +1,6 @@
+import { MapFeatureHover } from "./map-feature-hover.js";
+import { findVectorLayerAtPointer } from "./vector/feature-hover.js";
+import { getFeatureInfoViewport } from "./vector/feature-info-viewport.js";
 import { annotationSummaryPolygons } from "./annotations/summary-area.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 /**
@@ -768,6 +771,7 @@ async function initializeCatalog(
     let savedMapViewController = null;
     let calculations = null;
     let vectorFeatureInspector = null;
+    let mapFeatureHover = null;
     let vectorFilterControls = null;
     let vectorSampling = null;
     let summarySampling = null;
@@ -802,6 +806,7 @@ async function initializeCatalog(
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
+            mapFeatureHover?.hide();
             vectorFilterControls?.refresh();
             vectorSampling?.refresh();
             summarySampling?.refresh();
@@ -815,7 +820,7 @@ async function initializeCatalog(
             }
             savedMapViewController?.scheduleRemember();
         },
-        onOrderChange: layers => annotations?.observeLayerOrder(layers, true),
+        onOrderChange: layers => { annotations?.observeLayerOrder(layers, true); mapFeatureHover?.hide(); },
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
@@ -1123,16 +1128,19 @@ async function initializeCatalog(
             vectorFeatureInspector?.navigateResult(direction),
         onFeatureZoom: zoomInspectedVectorFeature,
     });
-    vectorFeatureInspector = new VectorFeatureInspectorController({
-        leaflet: L,
-        leafletMap,
-        getVisibleTargets: () => mapLayerController.retainedRecords
+    /**
+     * Supply the same top-first published vector targets to click and hover queries.
+     * @return {import("./vector/feature-inspector.js").VectorFeatureInspectionTarget[]} Visible targets.
+     */
+    function visibleVectorInspectionTargets() {
+        return mapLayerController.retainedRecords
             .filter((record) =>
                 record.entry.visible && record.adapter === vectorMapLayerAdapter
             )
             .map((record) => ({
                 sourceId: record.entry.key,
                 label: record.entry.label,
+                opacity: record.entry.opacity,
                 bbox: [...record.entry.item.bbox],
                 publication: {
                     layerName: record.publication.layerName,
@@ -1144,7 +1152,12 @@ async function initializeCatalog(
                 ),
                 primaryGeometry:
                     record.state.item.properties?.["table:primary_geometry"] ?? null,
-            })),
+            }));
+    }
+    vectorFeatureInspector = new VectorFeatureInspectorController({
+        leaflet: L,
+        leafletMap,
+        getVisibleTargets: () => visibleVectorInspectionTargets(),
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
             if (visible) mapInspection.showFeatureInspector({ activate: false });
@@ -1250,7 +1263,9 @@ async function initializeCatalog(
             requestEditing: id => annotationSessions.requestDrawing(id),
             onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
             onFilter: key => vectorFilterControls.open(key),
+            onHoverInvalidated: () => mapFeatureHover?.hide(),
             onEditingChange: editing => {
+                mapFeatureHover?.setEnabled(!editing);
                 mapInteractionMode = editing ? "layer-editing" : "inspection";
                 document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
                 rasterVisualization.setPointerInspectionEnabled(!editing);
@@ -1278,6 +1293,18 @@ async function initializeCatalog(
             void annotationSessions.refresh();
         });
     }
+    mapFeatureHover = new MapFeatureHover(leafletMap, {
+        findLocalText: event => {
+            const hit = annotations.polygonsAt(event.latlng)[0];
+            return hit ? `${hit.layerName}\n${hit.polygon.name}${hit.polygon.contributor ? ` — ${hit.polygon.contributor}` : ""}` : null;
+        },
+        findRemoteText: (event, signal) => findVectorLayerAtPointer({
+            targets: visibleVectorInspectionTargets().filter(target => target.opacity > 0),
+            viewport: getFeatureInfoViewport(leafletMap, event.containerPoint),
+            wmsUrl: appGlobalConfiguration.wmsUrl,
+            signal,
+        }),
+    });
     leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);
     document.querySelector("#open-analysis-tools").addEventListener(

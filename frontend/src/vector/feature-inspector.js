@@ -1,5 +1,7 @@
 /** One-shot feature inspection for visible published vector layers. */
 
+import { getFeatureInfoViewport } from "./feature-info-viewport.js";
+
 import {
     fetchVectorFeatureInfo,
     VectorFeatureInfoError,
@@ -151,6 +153,7 @@ function vectorFeatureFocus({ feature, inspectionPosition }) {
  * @typedef {Object} VectorFeatureInspectionTarget
  * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} label User-facing retained-layer label.
+ * @property {number} [opacity] Display opacity; hover skips fully transparent layers.
  * @property {number[]} bbox Authoritative Catalog Item west, south, east, north
  * bounds.
  * @property {{layerName:string,styleName:string}} publication Authorized WMS
@@ -534,38 +537,6 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Describe the map bounds and click in the same projection for WMS picking.
-     *
-     * Convert world pixels directly to CRS coordinates so a zoomed-out viewport
-     * extending beyond the projection's latitude limits is not clamped.
-     *
-     * @param {{x:number,y:number}} containerPoint Click position in map pixels.
-     * @return {import("./feature-info.js").VectorFeatureInfoViewport}
-     * Projected viewport bounds, CRS code, and click position in viewport pixels.
-     */
-    mapViewport(containerPoint) {
-        const size = this.map.getSize();
-        const pixelBounds = this.map.getPixelBounds();
-        const crs = this.map.options.crs;
-        const scale = crs.scale(this.map.getZoom());
-        const northwest = crs.transformation.untransform(pixelBounds.min, scale);
-        const southeast = crs.transformation.untransform(pixelBounds.max, scale);
-        return {
-            crs: crs.code,
-            bbox: [
-                northwest.x,
-                southeast.y,
-                southeast.x,
-                northwest.y,
-            ],
-            width: size.x,
-            height: size.y,
-            x: containerPoint.x,
-            y: containerPoint.y,
-        };
-    }
-
-    /**
      * Convert optional WMS result geometry from the map CRS to longitude/latitude.
      *
      * Attribute-only requests normally return null geometry. Layers without
@@ -668,7 +639,7 @@ export class VectorFeatureInspectorController {
         );
         const containerPoint = event.containerPoint ??
             this.map.latLngToContainerPoint(event.latlng);
-        const viewport = this.mapViewport(containerPoint);
+        const viewport = getFeatureInfoViewport(this.map, containerPoint);
         await Promise.all(targets.map(async (target, targetIndex) => {
             let results = [];
             let failure = null;
