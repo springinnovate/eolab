@@ -30,3 +30,10 @@ CREATE TABLE IF NOT EXISTS shared_annotation_layers.join_attempts (
     started_at timestamptz NOT NULL DEFAULT now(),
     attempts integer NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS shared_annotation_layers.creation_rate (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    creations integer NOT NULL DEFAULT 0 CHECK (creations >= 0)
+);
+INSERT INTO shared_annotation_layers.creation_rate (singleton)
+VALUES (true) ON CONFLICT DO NOTHING;

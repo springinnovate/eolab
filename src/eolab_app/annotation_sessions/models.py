@@ -135,15 +135,19 @@ class ShareLayer(SessionInput):
 class SessionError(Exception):
     """An actionable annotation-session failure safe to display in the browser."""
 
-    def __init__(self, status: int, message: str) -> None:
-        """Attach an HTTP status to a user-facing explanation.
+    def __init__(
+        self, status: int, message: str, *, retry_after_seconds: int | None = None
+    ) -> None:
+        """Attach an HTTP status and optional retry delay to a user-facing explanation.
 
         Args:
             status: HTTP error status.
             message: Explanation that contains no credentials or database details.
+            retry_after_seconds: Seconds until rate-limited work may be tried again.
         """
         super().__init__(message)
         self.status = status
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SessionSummary(SessionInput):

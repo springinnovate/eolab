@@ -304,7 +304,11 @@ def create_app(
         version=app_global_configuration.app_version,
         lifespan=lifespan,
     )
-    annotation_sessions = AnnotationSessionStore()
+    annotation_sessions = AnnotationSessionStore(
+        layer_capacity=app_global_configuration.shared_layer_capacity,
+        creation_limit=app_global_configuration.shared_layer_creation_limit,
+        creation_window_seconds=app_global_configuration.shared_layer_creation_window_seconds,
+    )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
     application.include_router(
         create_shared_layer_admin_router(

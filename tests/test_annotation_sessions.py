@@ -1,6 +1,7 @@
 """Request validation and browser ownership tests for annotation-session routes."""
 
 from typing import Any
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -16,6 +17,88 @@ from eolab_app.routes.annotation_sessions import (
     COOKIE,
     create_annotation_sessions_router,
 )
+from eolab_app.settings import load_settings
+
+
+@pytest.mark.parametrize(
+    "variable,attribute,default",
+    [
+        ("SHARED_LAYER_CAPACITY", "shared_layer_capacity", 10000),
+        ("SHARED_LAYER_CREATION_LIMIT", "shared_layer_creation_limit", 100),
+        (
+            "SHARED_LAYER_CREATION_WINDOW_SECONDS",
+            "shared_layer_creation_window_seconds",
+            60,
+        ),
+    ],
+)
+def test_shared_layer_limits_are_configurable_positive_integers(
+    configured_environment: None,
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    attribute: str,
+    default: int,
+) -> None:
+    """Accept runtime limits and reject values that cannot define a positive budget.
+
+    Args:
+        configured_environment: Required app environment.
+        version_file_path: Disposable version file.
+        monkeypatch: Isolated environment changes.
+        variable: Runtime environment variable being checked.
+        attribute: Matching Settings field.
+        default: Expected value when the variable is absent.
+    """
+    monkeypatch.delenv(variable, raising=False)
+    assert getattr(load_settings(version_file_path), attribute) == default
+    monkeypatch.setenv(variable, "250")
+    assert getattr(load_settings(version_file_path), attribute) == 250
+    for invalid in ("0", "-1", "1.5", "", "unlimited"):
+        monkeypatch.setenv(variable, invalid)
+        with pytest.raises(ValueError):
+            load_settings(version_file_path)
+
+
+def test_app_passes_shared_layer_settings_to_store(
+    configured_environment: None,
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connect deployment overrides to the shared-layer store used by the API.
+
+    Args:
+        configured_environment: Required app environment.
+        version_file_path: Disposable version file.
+        monkeypatch: Capture the composed store without opening PostgreSQL.
+    """
+    from eolab_app.annotation_sessions.store import AnnotationSessionStore
+    from eolab_app.main import create_app
+
+    stores: list[AnnotationSessionStore] = []
+
+    def capture_store(**kwargs: int) -> AnnotationSessionStore:
+        """Retain the real store constructed by application composition.
+
+        Args:
+            kwargs: Configured capacity and rate limits.
+
+        Returns:
+            Unconnected shared-layer store.
+        """
+        store = AnnotationSessionStore(**kwargs)
+        stores.append(store)
+        return store
+
+    monkeypatch.setenv("SHARED_LAYER_CAPACITY", "50000")
+    monkeypatch.setenv("SHARED_LAYER_CREATION_LIMIT", "300")
+    monkeypatch.setenv("SHARED_LAYER_CREATION_WINDOW_SECONDS", "30")
+    monkeypatch.setattr("eolab_app.main.AnnotationSessionStore", capture_store)
+    create_app(version_file_path)
+    assert len(stores) == 1
+    assert stores[0].layer_capacity == 50000
+    assert stores[0].creation_limit == 300
+    assert stores[0].creation_window_seconds == 30
 
 
 def collection(name: str = "Priority areas") -> dict[str, Any]:
