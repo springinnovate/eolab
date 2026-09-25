@@ -111,7 +111,8 @@ test("published-map editing shows fixed URL, explicit save, busy state and retai
   assert.equal(el("edit-title").value, "New title");
   assert.equal(el("edit-status").textContent, "Save failed");
   view.showPublishedMapEditor({ title: "Amazon", subtitle: "", slug: "amazon" }, false);
-  assert.equal(el("save").disabled, true);
+  assert.equal(el("save").disabled, false);
+  assert.match(el("edit-status").textContent, /unavailable layers will be omitted/);
   view.unbind();
 });
 

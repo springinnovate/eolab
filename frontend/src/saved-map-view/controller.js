@@ -236,7 +236,7 @@ export class SavedMapViewController {
             if (report !== null) this.view.showResults(report);
             if (this.editPublishedMap && report !== null) {
                 const complete = report.loaded === report.total && report.details.length === 0;
-                this.editRevision = complete ? saved.revision : null;
+                this.editRevision = saved.revision;
                 this.view.showPublishedMapEditor(saved, complete);
             }
         } catch (error) {

@@ -590,8 +590,9 @@ not replace their contributions. Edits made to actual shared polygons still foll
 their normal save behavior and are not undone by cancelling a map draft.
 
 Visitors see the updated configuration on their next open or reload. A failed save
-keeps the draft available to retry. Saving is disabled if any initial layers or settings
-failed to restore; reload after resolving that problem. If another administrator saved
+keeps the draft available to retry. If any initial layers or settings failed to restore,
+you can still save the current map. The editor explains that unavailable layers will
+be omitted and the currently displayed settings will be published. If another administrator saved
 first, your save returns a conflict rather than overwriting their changes.
 
 The editor lives at `/admin-eolab/maps/{slug}/edit`. Authenticated

@@ -125,7 +125,7 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Display a loaded administrative draft and its fixed public URL.
+     * Display an administrative draft, including any notice about omitted layers.
      * @param {{slug:string,title:string,subtitle:string}} saved Loaded map labels.
      * @param {boolean} complete Whether every saved layer and style restored successfully.
      * @return {void}
@@ -138,8 +138,8 @@ export class SavedMapViewDomView {
         const link = this.document.querySelector("#published-map-edit-url");
         link.href = `/maps/${encodeURIComponent(saved.slug)}`;
         link.textContent = link.href;
-        this.document.querySelector("#published-map-save").disabled = !complete;
-        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some layers or settings could not load. Reload before saving to avoid losing them.");
+        this.document.querySelector("#published-map-save").disabled = false;
+        this.showPublishedMapEditStatus(complete ? "Ready to edit." : "Some layers or settings could not load. Saving will publish the layers and settings currently on this map; unavailable layers will be omitted.");
     }
 
     /**
