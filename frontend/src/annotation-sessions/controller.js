@@ -172,12 +172,15 @@ export class AnnotationSessionsController {
                 this.view.connected(); this.revealLayer(existing.localId); await this.refresh(); return;
             }
             const own = snapshot.layers.find(layer => layer.contributorId === snapshot.contributorId);
+            const bookmark = this.savedBindings.find(item => item.sessionId === snapshot.id && item.contributorId === snapshot.contributorId
+                && this.getLayers().some(layer => layer.id === item.localId));
             const data = own ? await this.api.request(`/${snapshot.id}/contributors/${own.contributorId}/layers/${own.layerId}`)
                 : { revision: 0, collection: { type: "FeatureCollection", name: snapshot.name, features: [] } };
             if (this.closed) return;
             if (existing) localId = await this.createLayer(snapshot.name, data.collection, { localId: existing.localId, replacePolygons: true });
-            else if (!localId) localId = await this.createLayer(snapshot.name, data.collection);
-            const binding = { localId, sessionId: snapshot.id, joinCode: snapshot.joinCode, contributorId: snapshot.contributorId, revision: data.revision, remote: new Map(), snapshot, retryDelay: 5000 };
+            else if (!localId) localId = await this.createLayer(snapshot.name, data.collection, { localId: bookmark?.localId });
+            const binding = { ...bookmark, localId, sessionId: snapshot.id, joinCode: snapshot.joinCode, contributorId: snapshot.contributorId,
+                revision: bookmark?.revision ?? data.revision, remote: new Map(), snapshot, retryDelay: 5000 };
             this.bindings.set(localId, binding); this.saveBindings();
             this.display(binding, "Sharing…"); this.view.connected(); this.revealLayer(localId);
             await this.refresh();

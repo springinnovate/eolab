@@ -68,6 +68,12 @@ test("memberships stay off-map until added, reuse cached edits, and stop refresh
         assert.equal(requests.length, count, "cached off-map data does not cause polling or uploads");
         await controller.showYourLayers();
         assert.equal(events.filter(([event]) => event === "memberships").at(-1)[1][0].onMap, false);
+        controller.bindings.clear();
+        await controller.connect("join", reference.joinCode, "Rich");
+        assert.equal(local.length, 1, "entering a known code also reuses the inactive bookmark");
+        assert.equal(local[0].collection.features[0].properties.name, "Unsent edit");
+        assert.deepEqual([...attached], ["cached"]);
+        assert.equal(requests.filter(([, method]) => method === "PUT").at(-1)[2].revision, 2);
     } finally { controller.destroy(); }
 });
 
