@@ -47,6 +47,7 @@ export class SavedMapViewController {
      * @param {{title:string,subtitle:string}} [configuration.publicationDefaults] Initial publication labels.
      * @param {(title:string,subtitle:string)=>void} [configuration.applyMapHeading] Display a loaded map's identity.
      * @param {{snapshot:()=>string,restore:(id:string)=>Promise<string|null>}} [configuration.basemap] Public basemap interface.
+     * @param {{snapshot:()=>{visible:boolean,collapsed:boolean},restore:(state:Object)=>void}|null} [configuration.mapLegend] Map legend presentation preferences.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
      * @param {SubtleCrypto} [configuration.subtleCrypto] Revision hasher.
      * @param {(handler:()=>void,delay:number)=>unknown} [configuration.setTimer]
@@ -74,6 +75,7 @@ export class SavedMapViewController {
         publicationDefaults = { title: "", subtitle: "" },
         applyMapHeading = () => {},
         basemap = { snapshot: () => "detailed", restore: async () => null },
+        mapLegend = null,
         clock = () => new Date(),
         subtleCrypto = globalThis.crypto?.subtle,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
@@ -112,6 +114,7 @@ export class SavedMapViewController {
         this.publicationDefaults = publicationDefaults;
         this.applyMapHeading = applyMapHeading;
         this.basemap = basemap;
+        this.mapLegend = mapLegend;
         this.publishingView = null;
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
@@ -462,8 +465,10 @@ export class SavedMapViewController {
         const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
         const layers = await Promise.all(
-            records.map(async (record) => record.entry.item === null
-                ? this.exportAnnotation(record) : this.#exportLayer(record))
+            records.map(async (record) => {
+                const layer = record.entry.item === null ? this.exportAnnotation(record) : await this.#exportLayer(record);
+                return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
+            })
         );
         return createSavedMapView({
             viewer: {
@@ -473,6 +478,7 @@ export class SavedMapViewController {
             createdAt: this.clock().toISOString(),
             viewport,
             basemap: this.basemap.snapshot(),
+            ...(this.mapLegend ? { mapLegend: this.mapLegend.snapshot() } : {}),
             layers: layers.filter(layer => layer !== null),
         });
     }
@@ -544,6 +550,11 @@ export class SavedMapViewController {
         const basemapWarning = savedMapView.basemap === undefined ? null : await this.basemap.restore(savedMapView.basemap);
         if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        for (const [index, result] of preparations.entries()) {
+            const key = result.key ?? result.staged?.record.entry.key;
+            if (key) this.mapLayers.setLegendIncluded(key, savedMapView.layers[index].legendIncluded !== false);
+        }
+        this.mapLegend?.restore(savedMapView.mapLegend ?? { visible: true, collapsed: false });
         const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
         // Older callers may expose only catalog staging; mixed maps require explicit ordering.
         if (preparations.some(result => result.key)) {

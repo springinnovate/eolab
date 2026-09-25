@@ -62,6 +62,7 @@ import { addMapCoordinateGuide } from "./map-coordinate-guide.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
+import { OnMapLegend } from "./map-layers/on-map-legend.js";
 import { LeafletLayerSet } from "./map-layers/leaflet-layer-set.js";
 import { CompositeMapPlanClient } from "./map-layers/composite-api.js";
 import {
@@ -779,6 +780,11 @@ async function initializeCatalog(
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
+    const mapLegend = new OnMapLegend(L, leafletMap, {
+        toggleButton: document.querySelector("#toggle-map-legend"),
+        onInclusion: (key, included) => mapLayerController.setLegendIncluded(key, included),
+        onChange: () => savedMapViewController?.scheduleRemember(),
+    });
     const mapRenderStatus = addMapRenderStatus(
         L, leafletMap, () => {
             compositeLeafletRenderer.retryFailedTiles();
@@ -800,6 +806,7 @@ async function initializeCatalog(
         view: mapLayerStackView,
         leafletLayers,
         onLayersChange: (layers) => {
+            mapLegend.update(layers);
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
             rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.datasetKind === "raster"));
@@ -1063,6 +1070,7 @@ async function initializeCatalog(
         publicationDefaults: { title: appGlobalConfiguration.appTitle, subtitle: appGlobalConfiguration.appSubtitle },
         applyMapHeading,
         basemap: basemapControl,
+        mapLegend,
         initialViewport: {
             center: {
                 latitude: appGlobalConfiguration.initialView.latitude,

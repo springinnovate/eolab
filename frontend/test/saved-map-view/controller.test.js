@@ -156,18 +156,21 @@ test("missing named maps never fall back to fragments or private maps", async ()
 
 test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
   const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
-    visible: true, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
+    visible: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
   const catalog = { catalogItem: { collection: "vectors", id: "included" }, sourceRevision: null,
-    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
-  const saved = { ...emptySavedMap(10, 20, 6), layers: [catalog, annotation] };
+    visible: true, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
+  const saved = { ...emptySavedMap(10, 20, 6), mapLegend: { visible: false, collapsed: true }, layers: [catalog, annotation] };
   const fragment = await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 });
   const view = createView(), records = [], restorations = [], ordered = [];
   const annotationRecord = { entry: { key: "local:annotation:mine", item: null }, polygons: ["private polygon"] };
+  let legendPreferences;
   const controller = new SavedMapViewController({ view, restoreSharedMap: true,
     viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
       commitStaged(staged) { records.unshift(...staged.map(s => s.record)); }, restoreOrder(keys) { ordered.push(keys); } },
+    mapLegend: { snapshot: () => legendPreferences, restore(value) { legendPreferences = value; } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.splice(0, records.length, ...records.filter(r => r.entry.item === null)); },
       prepare: async item => item, sourceRevision: () => null,
@@ -183,11 +186,14 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
   });
   await controller.restoreStartupView(fragment);
   assert.equal(view.result.loaded, 2);
+  assert.deepEqual(legendPreferences, saved.mapLegend);
+  assert.ok(records.every(record => record.entry.legendIncluded === false));
   assert.deepEqual(ordered.at(-1), ["catalog", "local:annotation:mine"]);
   records.push({ entry: { key: "local:private", item: null }, polygons: ["do not share"] });
   await controller.copyMapLink();
   const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
   assert.deepEqual(exported.layers, saved.layers);
+  assert.deepEqual(exported.mapLegend, saved.mapLegend);
   assert.equal(JSON.stringify(exported).includes("private polygon"), false);
   await controller.resetView();
   assert.deepEqual(restorations, [annotation, annotation]);

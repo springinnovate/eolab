@@ -159,6 +159,7 @@ export class MapLayerController {
             },
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
+            onLegendInclusion: (key, included) => this.setLegendIncluded(key, included),
             onVisibility: (key, visible) => this.setVisible(key, visible),
             onAllVisibility: (visible) => this.setAllVisible(visible),
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
@@ -495,6 +496,23 @@ export class MapLayerController {
     }
 
     /**
+     * Include or omit a layer's legend without changing its map visibility or style.
+     * @param {string} key Retained layer identity.
+     * @param {boolean} included Whether its legend should appear on the map.
+     * @return {void}
+     * @throws {TypeError|RangeError} If the value is not boolean or the layer is absent.
+     */
+    setLegendIncluded(key, included) {
+        if (typeof included !== "boolean") throw new TypeError("Legend inclusion must be boolean.");
+        const entry = this.#requireRecord(key).entry;
+        if (entry.legendIncluded === included) return;
+        entry.legendIncluded = included;
+        const layers = this.snapshots();
+        this.view.render(layers, this.presentationActiveKey);
+        this.onLayersChange(layers);
+    }
+
+    /**
      * Show or hide all currently retained layers, publishing the final state once.
      * Pending additions and the basemap are outside the retained stack.
      *
@@ -771,6 +789,7 @@ export class MapLayerController {
                 key, label: entry.label, customName: entry.customName ?? null,
                 index: this.stack.entries.findIndex(candidate => candidate.key === key),
                 visible: entry.visible, opacity: entry.opacity,
+                ...(entry.legendIncluded === false ? { legendIncluded: false } : {}),
                 item: entry.item === null ? null : { collection: entry.item.collection, id: entry.item.id },
                 ...(entry.item === null
                     ? { local: adapter.copyLayerForUndo(record) }
@@ -820,6 +839,7 @@ export class MapLayerController {
         try {
             await this.restoreRemovedLayer(snapshot, isCurrent);
             if (isCurrent()) {
+                this.#requireRecord(snapshot.key).entry.legendIncluded = snapshot.legendIncluded !== false;
                 this.removedLayer = null;
                 this.view.showRemoval?.(null, false, null);
                 this.view.setStatus(`Restored ${snapshot.label}.`);

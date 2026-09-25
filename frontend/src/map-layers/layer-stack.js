@@ -16,6 +16,7 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
  * @property {string|null} [customName] Optional map-specific catalog name; source metadata is unchanged.
  * @property {number} retentionOrder Monotonic add-intent order.
  * @property {boolean} visible Whether the layer is attached to the map.
+ * @property {boolean} legendIncluded Whether this layer appears in the on-map legend.
  * @property {number} opacity Ordinary-overlay opacity from zero through one.
  */
 
@@ -100,6 +101,7 @@ export class MapLayerStack {
             label,
             retentionOrder,
             visible: true,
+            legendIncluded: true,
             opacity: 1,
         };
         const insertionIndex = this.entries.findIndex(

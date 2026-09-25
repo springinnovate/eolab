@@ -106,16 +106,18 @@ class MapVectorStyle(MapDocumentPart):
 
 
 class MapLayer(MapDocumentPart):
-    """Catalog reference and map appearance, including an optional display name.
+    """Catalog reference and map appearance, including name and legend inclusion.
 
     customName is presentation text; it never replaces the catalog identity or
     source metadata. Omitted or null means to display the original source name.
+    Omitted legendIncluded means to include a visible layer in the map legend.
     """
 
     catalogItem: MapCatalogItem
     customName: Title | None = None
     sourceRevision: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None
     visible: bool
+    legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]
     style: Annotated[MapRasterStyle | MapVectorStyle, Field(discriminator="kind")]
     filter: dict[str, JsonValue] | None = None
@@ -164,16 +166,32 @@ class MapAnnotationAppearance(MapDocumentPart):
 
 
 class MapAnnotationLayer(MapDocumentPart):
-    """Live layer invitation and local appearance, without polygons or membership."""
+    """Live layer invitation, appearance and legend inclusion, without polygons.
+
+    Omitted legendIncluded includes the visible layer in the map legend. These
+    preferences do not change a contributor's polygons or shared colors.
+    """
 
     sharedAnnotation: MapAnnotationReference
     visible: bool
+    legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]
     appearance: MapAnnotationAppearance
 
 
+class MapLegendAppearance(MapDocumentPart):
+    """Whether the on-map legend is shown and whether its contents are collapsed."""
+
+    visible: bool
+    collapsed: bool
+
+
 class SavedMapView(MapDocumentPart):
-    """Portable map JSON; version three adds the basemap provider identifier."""
+    """Portable map JSON with optional legend visibility and collapse preferences.
+
+    Version three includes a basemap provider. Older maps without mapLegend
+    open with the legend visible and expanded.
+    """
 
     format: Literal["eolab-map-view"]
     schemaVersion: Annotated[int, Field(ge=1, le=3)]
@@ -181,6 +199,7 @@ class SavedMapView(MapDocumentPart):
     createdAt: str
     viewport: MapViewport
     basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
+    mapLegend: MapLegendAppearance | None = None
     layers: Annotated[list[MapLayer | MapAnnotationLayer], Field(max_length=50)]
 
     @field_validator("createdAt")
@@ -222,6 +241,8 @@ class SavedMapView(MapDocumentPart):
                 raise ValueError("Saved-map version three requires a basemap provider.")
         elif "basemap" in self.model_fields_set:
             raise ValueError("Basemap selection requires saved-map version three.")
+        if "mapLegend" in self.model_fields_set and self.mapLegend is None:
+            raise ValueError("Map legend preferences must be an object when supplied.")
         identities = []
         for layer in self.layers:
             if isinstance(layer, MapAnnotationLayer):
