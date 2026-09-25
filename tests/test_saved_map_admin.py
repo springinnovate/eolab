@@ -16,6 +16,35 @@ PASSWORD = "test-administrator-password-561"
 BASE = "/api/admin/saved-maps"
 
 
+@pytest.mark.parametrize("method,suffix", [("DELETE", ""), ("POST", "/restore")])
+def test_map_deletion_requires_admin_and_same_origin(method: str, suffix: str) -> None:
+    """Protect both reversible deletion endpoints before they reach storage.
+
+    Args:
+        method: Mutation HTTP method.
+        suffix: Restore suffix, or empty for deletion.
+    """
+    app = FastAPI()
+    app.include_router(create_saved_maps_admin_router(SavedMapStore(), PASSWORD))
+    client = TestClient(app)
+    url = BASE + "/amazon-priorities" + suffix
+    assert client.request(method, url).status_code == 401
+    assert client.request(method, url, auth=("admin", "wrong")).status_code == 401
+    client.auth = ("admin", PASSWORD)
+    for headers in (
+        {},
+        {"X-EOLab-Admin": "1", "Origin": "https://elsewhere.example"},
+        {"X-EOLab-Admin": "1", "Sec-Fetch-Site": "cross-site"},
+    ):
+        assert client.request(method, url, headers=headers).status_code == 403
+    disabled = FastAPI()
+    disabled.include_router(create_saved_maps_admin_router(SavedMapStore(), ""))
+    assert (
+        TestClient(disabled).request(method, url, auth=("admin", PASSWORD)).status_code
+        == 404
+    )
+
+
 def test_edit_api_requires_admin_and_rejects_invalid_writes() -> None:
     """Reject unauthorized, cross-origin, oversized and malformed updates before storage."""
     app = FastAPI()

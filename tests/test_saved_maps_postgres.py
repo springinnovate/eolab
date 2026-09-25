@@ -105,7 +105,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     loaded = client.get(url).json()
     assert loaded["revision"] == 1
     assert client.get("/api/admin/saved-maps").json() == [
-        {"slug": original.slug, "title": original.title}
+        {"slug": original.slug, "title": original.title, "deletedAt": None}
     ]
     changes = {
         **request,
@@ -142,7 +142,7 @@ def test_admin_edit_preserves_identity_and_checks_revision(
     assert client.put(url, json=invalid).status_code == 422
     assert client.get(BASE + "/amazon-priorities").json() == saved
     assert store.list_published_maps() == [
-        {"slug": original.slug, "title": "Corrected map"}
+        {"slug": original.slug, "title": "Corrected map", "deletedAt": None}
     ]
     assert SavedMapStore(store.conninfo).get_saved_map(original.slug).revision == 2
     assert (
@@ -189,6 +189,57 @@ def test_only_one_concurrent_admin_update_wins(store: SavedMapStore) -> None:
     assert store.get_saved_map("amazon-priorities").revision == 1
 
 
+def test_admin_delete_and_restore_preserve_map_and_reserve_url(
+    store: SavedMapStore,
+) -> None:
+    """Hide a map, reject stale edits and restore its exact content at the same URL.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    original = store.create_saved_map(CreateSavedMap.model_validate(map_request()))
+    app = FastAPI()
+    app.include_router(create_saved_maps_router(store))
+    app.include_router(create_saved_maps_admin_router(store, "test-admin-password-561"))
+    client = TestClient(app, headers={"X-EOLab-Admin": "1"})
+    client.auth = ("admin", "test-admin-password-561")
+    url = "/api/admin/saved-maps/amazon-priorities"
+    changes = {**map_request(), "revision": 1}
+    assert client.delete(url).status_code == 204
+    deleted = client.get("/api/admin/saved-maps").json()[0]
+    assert deleted["deletedAt"] is not None
+    assert client.delete(url).status_code == 204
+    assert client.get("/api/admin/saved-maps").json()[0] == deleted
+    assert client.get(BASE + "/amazon-priorities").status_code == 404
+    assert client.get(url).status_code == 404
+    assert client.put(url, json=changes).status_code == 404
+    # Deleted maps retain their data and URL; neither can be replaced by publishing.
+    with pytest.raises(SavedMapError) as duplicate:
+        store.create_saved_map(CreateSavedMap.model_validate(map_request()))
+    assert duplicate.value.status == 409
+    with pytest.raises(SavedMapError) as full:
+        SavedMapStore(store.conninfo, capacity=1).create_saved_map(
+            CreateSavedMap.model_validate(map_request("another-map"))
+        )
+    assert full.value.status == 503
+    restarted = SavedMapStore(store.conninfo)
+    restarted.initialize_schema()
+    assert restarted.list_published_maps()[0]["deletedAt"] is not None
+    assert client.post(url + "/restore").status_code == 204
+    restored = client.get(BASE + "/amazon-priorities").json()
+    assert restored == {
+        **original.model_dump(mode="json", exclude_unset=True),
+        "revision": 3,
+    }
+    assert client.post(url + "/restore").status_code == 204
+    assert client.get(BASE + "/amazon-priorities").json() == restored
+    assert client.get("/api/admin/saved-maps").json()[0]["deletedAt"] is None
+    assert client.put(url, json=changes).status_code == 409
+    assert client.put(url, json={**changes, "revision": 3}).status_code == 200
+    assert client.delete("/api/admin/saved-maps/missing").status_code == 404
+    assert client.post("/api/admin/saved-maps/missing/restore").status_code == 404
+
+
 def test_subtitle_migration_preserves_existing_maps(store: SavedMapStore) -> None:
     """Upgrade an existing saved-map table without changing its records.
 
@@ -198,8 +249,10 @@ def test_subtitle_migration_preserves_existing_maps(store: SavedMapStore) -> Non
     store.create_saved_map(CreateSavedMap.model_validate(map_request()))
     with store.transaction() as cursor:
         cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN subtitle")
+        cursor.execute("ALTER TABLE saved_maps.maps DROP COLUMN deleted_at")
     store.initialize_schema()
     assert store.get_saved_map("amazon-priorities").subtitle == ""
+    assert store.list_published_maps()[0]["deletedAt"] is None
     request = map_request("with-subtitle")
     request["subtitle"] = "Explore habitat"
     store.create_saved_map(CreateSavedMap.model_validate(request))

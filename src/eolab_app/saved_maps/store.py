@@ -112,7 +112,7 @@ class SavedMapStore:
             return SavedMap.model_validate(cursor.fetchone())
 
     def get_saved_map(self, slug: str) -> SavedMap:
-        """Read one stored map by its exact URL name.
+        """Read an active map by its exact URL name; deleted maps are unavailable.
 
         Args:
             slug: Validated lowercase URL name.
@@ -125,7 +125,7 @@ class SavedMapStore:
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s',
+                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" FROM saved_maps.maps WHERE slug=%s AND deleted_at IS NULL',
                 (slug,),
             )
             row = cursor.fetchone()
@@ -133,23 +133,53 @@ class SavedMapStore:
                 raise SavedMapError(404, "Saved map not found.")
             return SavedMap.model_validate(row)
 
-    def list_published_maps(self) -> list[dict[str, str]]:
-        """List titles and fixed URL names without loading map documents.
+    def list_published_maps(self) -> list[dict[str, Any]]:
+        """List active and deleted maps for administration without loading documents.
 
         Returns:
-            All maps on this site, ordered by title and URL name.
+            Titles, fixed URL names and deletion times, ordered by title and URL name.
 
         Raises:
             SavedMapError: If storage is unavailable.
         """
         with self.transaction() as cursor:
             cursor.execute(
-                "SELECT slug, title FROM saved_maps.maps ORDER BY lower(title), slug"
+                'SELECT slug, title, deleted_at AS "deletedAt" FROM saved_maps.maps ORDER BY lower(title), slug'
             )
             return cursor.fetchall()
 
+    def set_map_deleted(self, slug: str, *, deleted: bool) -> None:
+        """Hide or restore a published map while retaining its URL and configuration.
+
+        Actual state changes advance the revision so an older editor cannot save
+        over a restored map. Repeated requests for the same state do nothing.
+        Deleted maps keep their URL reserved and still count toward site capacity.
+        Referenced shared layers and their polygons are never modified.
+
+        Args:
+            slug: Fixed URL name of the map.
+            deleted: True to hide the map; False to restore it.
+
+        Raises:
+            SavedMapError: If the map does not exist or storage is unavailable.
+        """
+        with self.transaction() as cursor:
+            cursor.execute(
+                "SELECT deleted_at FROM saved_maps.maps WHERE slug=%s FOR UPDATE",
+                (slug,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise SavedMapError(404, "Saved map not found.")
+            if (row["deleted_at"] is not None) == deleted:
+                return
+            cursor.execute(
+                "UPDATE saved_maps.maps SET deleted_at=CASE WHEN %s THEN clock_timestamp() ELSE NULL END, revision=revision+1 WHERE slug=%s",
+                (deleted, slug),
+            )
+
     def update_saved_map(self, slug: str, request: UpdateSavedMap) -> SavedMap:
-        """Replace a published configuration only if its opened revision is current.
+        """Replace an active map's configuration only if its opened revision is current.
 
         Args:
             slug: Existing map's fixed URL name.
@@ -166,7 +196,7 @@ class SavedMapStore:
         with self.transaction() as cursor:
             cursor.execute(
                 "UPDATE saved_maps.maps SET title=%s, subtitle=%s, view=%s, revision=revision+1 "
-                "WHERE slug=%s AND revision=%s "
+                "WHERE slug=%s AND revision=%s AND deleted_at IS NULL "
                 'RETURNING slug, title, subtitle, view, revision, created_at AS "createdAt"',
                 (
                     request.title,
@@ -179,7 +209,10 @@ class SavedMapStore:
             row = cursor.fetchone()
             if row is not None:
                 return SavedMap.model_validate(row)
-            cursor.execute("SELECT 1 FROM saved_maps.maps WHERE slug=%s", (slug,))
+            cursor.execute(
+                "SELECT 1 FROM saved_maps.maps WHERE slug=%s AND deleted_at IS NULL",
+                (slug,),
+            )
             if cursor.fetchone() is None:
                 raise SavedMapError(404, "Saved map not found.")
             raise SavedMapError(

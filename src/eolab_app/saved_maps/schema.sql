@@ -7,3 +7,4 @@ CREATE TABLE IF NOT EXISTS saved_maps.maps (
 );
 ALTER TABLE saved_maps.maps ADD COLUMN IF NOT EXISTS subtitle text NOT NULL DEFAULT '';
 ALTER TABLE saved_maps.maps ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1;
+ALTER TABLE saved_maps.maps ADD COLUMN IF NOT EXISTS deleted_at timestamptz;

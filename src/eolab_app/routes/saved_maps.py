@@ -227,7 +227,7 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
 
 
 def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRouter:
-    """Expose authenticated listing, draft loading and updates of published maps.
+    """Expose authenticated editing and reversible deletion of published maps.
 
     Args:
         store: Saved-map storage initialized by the existing public router.
@@ -244,11 +244,11 @@ def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRo
     )
 
     @router.get("")
-    def list_maps() -> list[dict[str, str]]:
-        """List published map titles and URL names for the admin page.
+    def list_maps() -> list[dict[str, Any]]:
+        """List active and deleted published maps for the admin page.
 
         Returns:
-            Site's published maps without their layer documents.
+            Map titles, URL names and deletion times, without layer documents.
 
         Raises:
             SavedMapError: If storage is unavailable.
@@ -295,5 +295,37 @@ def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRo
                 422, "Shared annotation references must belong to this EOLab site."
             )
         return store.update_saved_map(slug, payload)
+
+    @router.delete("/{slug}", status_code=204)
+    def delete_map(slug: Slug) -> Response:
+        """Make a published map unavailable while keeping its configuration for Undo.
+
+        Args:
+            slug: Fixed URL name of the map to hide.
+
+        Returns:
+            Empty success response, including when already deleted.
+
+        Raises:
+            SavedMapError: If the map does not exist or storage is unavailable.
+        """
+        store.set_map_deleted(slug, deleted=True)
+        return Response(status_code=204)
+
+    @router.post("/{slug}/restore", status_code=204)
+    def restore_map(slug: Slug) -> Response:
+        """Restore a deleted map at its original URL without changing shared polygons.
+
+        Args:
+            slug: Fixed URL name of the map to restore.
+
+        Returns:
+            Empty success response, including when already active.
+
+        Raises:
+            SavedMapError: If the map does not exist or storage is unavailable.
+        """
+        store.set_map_deleted(slug, deleted=False)
+        return Response(status_code=204)
 
     return router
