@@ -10,6 +10,7 @@ export class AnnotationSessionsController {
      * @param {Object} options Dependencies and layer callbacks.
      * @param {Document} options.document Browser document.
      * @param {()=>Object[]} options.getLayers Device-saved own polygon collections.
+     * @param {(id:string)=>boolean} options.isLayerOnMap Whether a locally stored layer is currently attached to this map.
      * @param {(name:string,collection:Object,options?:Object)=>Promise<string>} options.createLayer Restore an author's polygons, optionally reusing a device layer.
      * @param {(id:string,data:Object)=>void} options.present Display collaborators and sharing status on one layer.
      * @param {(id:string)=>void} options.revealLayer Focus drawing controls.
@@ -18,12 +19,13 @@ export class AnnotationSessionsController {
      * @param {AnnotationSessionsApi} [options.api] Same-origin session API.
      * @param {Function} [options.createView] Dialog factory for presentation tests.
      */
-    constructor({ document, getLayers, createLayer, present, revealLayer, drawAfterJoining = () => {}, storage = globalThis.localStorage,
+    constructor({ document, getLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining = () => {}, storage = globalThis.localStorage,
         api = new AnnotationSessionsApi(), createView = (doc, actions) => new AnnotationSessionsView(doc, actions) }) {
-        Object.assign(this, { getLayers, createLayer, present, revealLayer, drawAfterJoining, storage, api });
+        Object.assign(this, { getLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining, storage, api });
         this.savedBindings = [];
         this.bindings = new Map(); this.closed = false; this.running = null; this.connecting = false;
-        this.view = createView(document, { connect: (...args) => this.connect(...args), rename: (id, name) => this.renameContributor(id, name) });
+        this.view = createView(document, { connect: (...args) => this.connect(...args), rename: (id, name) => this.renameContributor(id, name),
+            listLayers: () => this.showYourLayers(), addLayer: reference => this.addJoinedLayer(reference) });
     }
 
     /** Restore bindings only for layers still on this map, then resume synchronization.
@@ -40,10 +42,46 @@ export class AnnotationSessionsController {
                 if (!item || !/^[\da-f-]{36}$/i.test(item.sessionId) || typeof item.localId !== "string" || !Number.isSafeInteger(item.revision) || item.revision < 0) continue;
                 if (item.pendingColor !== undefined && !/^#[\da-f]{6}$/i.test(item.pendingColor)) continue;
                 this.savedBindings.push(item);
-                if (restoreBindings && this.getLayers().some(layer => layer.id === item.localId)) this.bindings.set(item.localId, { ...item, remote: new Map(), retryDelay: 5000 });
+                if (restoreBindings && this.isLayerOnMap(item.localId)) this.bindings.set(item.localId, { ...item, remote: new Map(), retryDelay: 5000 });
             }
         } catch (error) { this.view.message(`Could not restore shared layers: ${error.message}`); }
         if (refreshImmediately) await this.refresh();
+    }
+
+    /** Identify stored shared layers without making them part of the current map.
+     * @return {string[]} Local layer IDs with saved sharing bookmarks.
+     */
+    bookmarkedLayerIds() { return this.savedBindings.map(binding => binding.localId); }
+
+    /** List this browser's memberships on demand without opening or synchronizing them.
+     * @return {Promise<void>} Completion, including a visible loading, empty or failure state.
+     */
+    async showYourLayers() {
+        if (this.connecting || this.closed) return;
+        this.connecting = true;
+        this.view.open("library"); this.view.busy(true); this.view.message("Loading your layers…");
+        try {
+            const memberships = await this.api.request("");
+            if (this.closed) return;
+            this.view.showLayers(memberships.map(layer => ({ ...layer,
+                onMap: [...this.bindings.values()].some(binding => binding.sessionId === layer.id && this.isLayerOnMap(binding.localId)) })));
+            this.view.message(memberships.length ? "Add a layer without joining again. Removing it from the map keeps your membership." : "You have not created or joined any shared layers on this browser yet.");
+        } catch (error) { this.view.message(`Could not load your layers: ${error.message} Close this dialog and try again.`); }
+        finally { this.connecting = false; this.view.busy(false); }
+    }
+
+    /** Reopen a membership using its invitation and existing contributor credentials.
+     * @param {{id:string,joinCode:string}} reference Layer returned by the membership list.
+     * @return {Promise<void>} Completion, with failures retained in the dialog for retry.
+     */
+    async addJoinedLayer(reference) {
+        if (this.connecting || this.closed) return;
+        this.connecting = true; this.view.busy(true); this.view.message("Adding layer…");
+        try {
+            const id = await this.openMapReference(reference);
+            if (id && !this.closed) { this.view.connected(); this.revealLayer(id); }
+        } catch (error) { this.view.message(error.message); }
+        finally { this.connecting = false; this.view.busy(false); }
     }
 
     /** Persist layer identities and acknowledged revisions for safe reloads.
@@ -79,7 +117,7 @@ export class AnnotationSessionsController {
         const path = `/invitations/${reference.id}/${reference.joinCode}`;
         const snapshot = await this.api.request(path);
         if (this.closed || !isCurrent()) return null;
-        const existing = [...this.bindings.values()].find(binding => binding.sessionId === reference.id && this.getLayers().some(layer => layer.id === binding.localId));
+        const existing = [...this.bindings.values()].find(binding => binding.sessionId === reference.id && this.isLayerOnMap(binding.localId));
         if (existing) {
             if (existing.contributorId !== snapshot.contributorId) throw new Error("This browser's contributor changed. Reload the map before editing.");
             return existing.localId;
@@ -127,15 +165,22 @@ export class AnnotationSessionsController {
             const existing = [...this.bindings.values()].find(item => item.sessionId === snapshot.id && this.getLayers().some(layer => layer.id === item.localId));
             if (existing?.contributorId) {
                 if (existing.contributorId !== snapshot.contributorId) throw new Error("This device's saved layer belongs to a different contributor. Export it before removing it and joining again.");
+                if (!this.isLayerOnMap(existing.localId)) {
+                    const saved = this.getLayers().find(layer => layer.id === existing.localId);
+                    await this.createLayer(snapshot.name, saved.collection, { localId: existing.localId });
+                }
                 this.view.connected(); this.revealLayer(existing.localId); await this.refresh(); return;
             }
             const own = snapshot.layers.find(layer => layer.contributorId === snapshot.contributorId);
+            const bookmark = this.savedBindings.find(item => item.sessionId === snapshot.id && item.contributorId === snapshot.contributorId
+                && this.getLayers().some(layer => layer.id === item.localId));
             const data = own ? await this.api.request(`/${snapshot.id}/contributors/${own.contributorId}/layers/${own.layerId}`)
                 : { revision: 0, collection: { type: "FeatureCollection", name: snapshot.name, features: [] } };
             if (this.closed) return;
             if (existing) localId = await this.createLayer(snapshot.name, data.collection, { localId: existing.localId, replacePolygons: true });
-            else if (!localId) localId = await this.createLayer(snapshot.name, data.collection);
-            const binding = { localId, sessionId: snapshot.id, joinCode: snapshot.joinCode, contributorId: snapshot.contributorId, revision: data.revision, remote: new Map(), snapshot, retryDelay: 5000 };
+            else if (!localId) localId = await this.createLayer(snapshot.name, data.collection, { localId: bookmark?.localId });
+            const binding = { ...bookmark, localId, sessionId: snapshot.id, joinCode: snapshot.joinCode, contributorId: snapshot.contributorId,
+                revision: bookmark?.revision ?? data.revision, remote: new Map(), snapshot, retryDelay: 5000 };
             this.bindings.set(localId, binding); this.saveBindings();
             this.display(binding, "Sharing…"); this.view.connected(); this.revealLayer(localId);
             await this.refresh();
@@ -257,20 +302,20 @@ export class AnnotationSessionsController {
      * @return {Promise<void>} Completion with per-layer status, including failures.
      */
     async refreshLayers() {
-        const local = new Map(this.getLayers().map(layer => [layer.id, layer]));
+        const local = new Map(this.getLayers().filter(layer => this.isLayerOnMap(layer.id)).map(layer => [layer.id, layer]));
         for (const [id, binding] of this.bindings) {
             if (!local.has(id) || binding.nextAttempt > Date.now()) continue;
             try {
                 const readPath = binding.contributorId ? `/${binding.sessionId}` : `/invitations/${binding.sessionId}/${binding.joinCode}`;
                 const snapshot = await this.api.request(readPath);
-                if (this.closed || this.bindings.get(id) !== binding || !this.getLayers().some(layer => layer.id === id)) continue;
+                if (this.closed || this.bindings.get(id) !== binding || !this.isLayerOnMap(id)) continue;
                 if (snapshot.contributorId !== binding.contributorId) throw new Error("This layer belongs to a different contributor. Your local polygons have not been shared.");
                 binding.snapshot = snapshot;
                 binding.joinCode = snapshot.joinCode;
                 if (binding.pendingColor) {
                     const color = binding.pendingColor;
                     const saved = await this.api.request(`/${snapshot.id}/color`, "PATCH", { color });
-                    if (this.closed || !this.getLayers().some(layer => layer.id === id)) continue;
+                    if (this.closed || !this.isLayerOnMap(id)) continue;
                     snapshot.contributors.find(person => person.id === snapshot.contributorId).color = saved.color;
                     if (binding.pendingColor === color) delete binding.pendingColor;
                     else this.again = true;
@@ -290,7 +335,7 @@ export class AnnotationSessionsController {
                             properties: { ...feature.properties, contributor: author?.name ?? "Contributor", contributorId: layer.contributorId } })) } });
                 }
                 for (const key of binding.remote.keys()) if (!keys.has(key)) binding.remote.delete(key);
-                if (this.bindings.get(id) !== binding) continue;
+                if (this.bindings.get(id) !== binding || !this.isLayerOnMap(id)) continue;
                 if (!binding.contributorId) {
                     binding.retryDelay = 5000; binding.nextAttempt = 0;
                     this.display(binding, "Choose Draw polygon to add your contribution.");

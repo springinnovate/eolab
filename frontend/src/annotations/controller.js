@@ -117,13 +117,17 @@ export class AnnotationController {
      * Restore local layers without opening their editor; reveal the panel if loading fails.
      * @param {Object} [options] Startup presentation policy.
      * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them stored but off the shared map.
+     * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
      * @return {Promise<void>} Completion, including a visible storage error if needed.
      */
-    async load({ attachSavedLayers = true } = {}) {
+    async load({ attachSavedLayers = true, sharedLayerIds = [] } = {}) {
         try {
             this.model.layers = await this.storage.load();
             this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
-            if (attachSavedLayers) for (const layer of [...this.model.layers].reverse()) this.attachLayer(layer);
+            const shared = new Set(sharedLayerIds);
+            if (attachSavedLayers) for (const layer of [...this.model.layers].reverse()) {
+                if (!shared.has(layer.id)) this.attachLayer(layer);
+            }
             this.loaded = true;
             this.importButton.disabled = false;
             this.status.textContent = "";
@@ -494,6 +498,12 @@ export class AnnotationController {
         return this.savedSharingLayers;
     }
 
+    /** Check map inclusion independently of stored polygons or server membership.
+     * @param {string} id Local annotation layer identifier.
+     * @return {boolean} Whether the layer is currently attached, including hidden layers.
+     */
+    isLayerOnMap(id) { return this.layers.has(id); }
+
     /** Focus a local layer's drawing action in Map layers without entering editing mode.
      * Composition reveals Map layers before calling this method.
      * @param {string} id Local annotation layer identifier. @return {void}
@@ -701,16 +711,18 @@ export class AnnotationController {
      * shorten the stack; annotation positions then stop at its end, retaining their relative order.
      * @param {Object} [options] Startup order policy.
      * @param {boolean} [options.useSavedPositions=true] Restore device positions; false retains the portable map's order.
+     * @param {string[]} [options.mapOrderedLayerIds=[]] Layers already ordered by the saved map; only insert other private layers around them.
      * @return {void}
      */
-    restoreLayerOrder({ useSavedPositions = true } = {}) {
+    restoreLayerOrder({ useSavedPositions = true, mapOrderedLayerIds = [] } = {}) {
         if (!this.loaded || this.orderRestored) return;
         if (!useSavedPositions) {
             this.orderRestored = true;
             this.observeLayerOrder(this.mapLayers.snapshots());
             return;
         }
-        const attached = this.model.layers.filter(layer => this.layers.has(layer.id));
+        const mapOrdered = new Set(mapOrderedLayerIds);
+        const attached = this.model.layers.filter(layer => this.layers.has(layer.id) && !mapOrdered.has(layer.id));
         const annotationKeys = new Set(attached.map(layer => `local:annotation:${layer.id}`));
         const keys = this.mapLayers.snapshots().map(layer => layer.key).filter(key => !annotationKeys.has(key));
         let nextIndex = 0;

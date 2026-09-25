@@ -80,6 +80,17 @@ test("unavailable Catalog layers clamp saved positions while preserving annotati
     assert.deepEqual(context.saved.at(-1).layers.map(layer => [layer.id, layer.position]), [[first.id, 0], [second.id, 1]]);
 });
 
+test("remembered map order wins over shared-layer positions changed in a published map", () => {
+    const model = new AnnotationModel();
+    const first = model.createLayer(), imported = model.createLayer(), last = model.createLayer();
+    first.position = 9; imported.position = 1; last.position = 0;
+    const context = fixture();
+    loadAnnotations(context, model.document());
+    context.layers.restoreOrder([first, last, imported].map(layer => `local:annotation:${layer.id}`));
+    context.annotations.restoreLayerOrder({ mapOrderedLayerIds: [first.id, last.id] });
+    assert.deepEqual(context.layers.snapshots().map(layer => layer.key), [first, imported, last].map(layer => `local:annotation:${layer.id}`));
+});
+
 test("a user reorder before startup finishes replaces the saved annotation position", async () => {
     const model = new AnnotationModel();
     const annotation = model.createLayer();
