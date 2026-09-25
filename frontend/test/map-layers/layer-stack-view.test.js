@@ -127,9 +127,14 @@ class FakeLayerStackElement extends EventTarget {
     return this.attributes.get(name) ?? null;
   }
 
-  /** Give this control fake document focus. */
-  focus() {
+  /**
+   * Give this control fake document focus and record its scrolling policy.
+   * @param {{preventScroll?:boolean}} [options] Browser focus options.
+   * @return {void}
+   */
+  focus(options = {}) {
     this.ownerDocument.activeElement = this;
+    this.lastFocusOptions = options;
   }
 
   /** Capture subsequent synthetic pointer events. */
@@ -854,6 +859,45 @@ test("the layer list leaves Escape to its owning workspace", () => {
   view.unbind();
 });
 
+test("visibility and background updates keep the visible row stationary across layout changes", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const list = doc.querySelector("#raster-layer-list"), scroller = doc.layerScrollContainer;
+  let extraHeight = 0;
+  const createElement = doc.createElement.bind(doc);
+  doc.createElement = (tag) => {
+    const element = createElement(tag);
+    if (tag === "li") element.getBoundingClientRect = () => {
+      const top = Number(element.dataset.layerIndex) * 100 + extraHeight - scroller.scrollTop;
+      return { top, bottom: top + 100, height: 100 };
+    };
+    return element;
+  };
+  view.render(LAYERS, null);
+  scroller.scrollTop = 120;
+  const originalTop = list.children[1].getBoundingClientRect().top;
+  const replaceChildren = list.replaceChildren.bind(list);
+  list.replaceChildren = (...rows) => {
+    replaceChildren(...rows);
+    scroller.scrollTop = 0; // Detached content can change the browser's scroll range.
+  };
+  for (const visible of [false, true, false]) {
+    actionControl(list.children[1], "visibility").focus();
+    view.render(LAYERS.map(layer => ({ ...layer, visible })), null,
+      { key: LAYERS[1].key, action: "visibility" });
+    assert.equal(scroller.scrollTop, 120);
+    assert.equal(list.children[1].getBoundingClientRect().top, originalTop);
+    assert.equal(doc.activeElement.dataset.layerAction, "visibility");
+    assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
+  }
+  // A status row above the viewport grows during rebuilding; preserve the row, not just scrollTop.
+  list.replaceChildren = (...rows) => { replaceChildren(...rows); extraHeight = 20; scroller.scrollTop = 0; };
+  view.render(LAYERS.map((layer, index) => ({ ...layer, error: index === 0 ? "Rendering failed" : null })), null);
+  assert.equal(scroller.scrollTop, 140);
+  assert.equal(list.children[1].getBoundingClientRect().top, originalTop);
+  assert.equal(doc.activeElement.dataset.layerKey, LAYERS[1].key);
+  assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
+});
+
 test("MapLayerStackView announces status and retains stable action focus", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
@@ -875,6 +919,7 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
   );
   assert.equal(documentContext.activeElement.dataset.layerKey, "vegetation");
   assert.equal(documentContext.activeElement.dataset.layerAction, "reorder");
+  assert.deepEqual(documentContext.activeElement.lastFocusOptions, { preventScroll: false });
 
   view.render(
     [LAYERS[1], LAYERS[0]],
