@@ -1262,16 +1262,18 @@ async function initializeCatalog(
             revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
             drawAfterJoining: id => annotations.beginPolygon(id),
             getLayers: () => annotations.sharableLayers(),
+            isLayerOnMap: id => annotations.isLayerOnMap(id),
             present: (id, data) => {
                 if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
             },
         });
-        const startupAnnotations = annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null });
-        void startupAnnotations.then(async () => {
+        void annotationSessions.start({ restoreBindings: false, refreshImmediately: false }).then(async () => {
+            await annotations.load({ attachSavedLayers: !isSharedViewer && editableMapSlug === null,
+                sharedLayerIds: annotationSessions.bookmarkedLayerIds() });
             summarySampling.refresh();
-            await annotationSessions.start({ restoreBindings: !isSharedViewer && editableMapSlug === null, refreshImmediately: false });
             await savedMapViewController.restoreStartupView(globalThis.location.hash);
-            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash });
+            annotations.restoreLayerOrder({ useSavedPositions: !isSharedViewer && editableMapSlug === null && !globalThis.location.hash,
+                mapOrderedLayerIds: annotationSessions.bookmarkedLayerIds() });
             void annotationSessions.refresh();
         });
     }

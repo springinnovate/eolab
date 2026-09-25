@@ -12,8 +12,9 @@ function snapshot() {
 /** @param {Function} request API boundary. @return {Object} Controller and observable layer state. */
 function setup(request = async () => snapshot()) {
     const local = []; const events = []; const stored = new Map();
-    const view = { busy() {}, connected() {}, open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
+    const view = { busy() {}, connected() {}, showLayers: layers => events.push(["memberships", layers]), open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
     const controller = new AnnotationSessionsController({ document: {}, api: { request }, getLayers: () => local,
+        isLayerOnMap: id => local.some(layer => layer.id === id),
         createLayer: async (name, collection, options = {}) => {
             const existing = local.find(layer => layer.id === options.localId);
             if (existing) { if (options.replacePolygons) existing.collection = structuredClone(collection); return existing.id; }
@@ -28,6 +29,60 @@ function setup(request = async () => snapshot()) {
 function bind(controller) {
     controller.bindings.set("local", { localId: "local", sessionId: ID, contributorId: "me", revision: 0, remote: new Map(), retryDelay: 0 });
 }
+
+test("memberships stay off-map until added, reuse cached edits, and stop refreshing when removed", async () => {
+    const requests = [];
+    const reference = { id: ID, name: "Watersheds", joinCode: "ABCDEFGH" };
+    const { controller, local, events, stored } = setup(async (path, method, body) => {
+        requests.push([path, method, body]);
+        if (path === "") return [reference];
+        if (method === "PUT") return { revision: 2 };
+        return snapshot();
+    });
+    const attached = new Set();
+    controller.isLayerOnMap = id => attached.has(id);
+    const create = controller.createLayer;
+    controller.createLayer = async (...args) => { const id = await create(...args); attached.add(id); return id; };
+    local.push({ id: "cached", collection: { type: "FeatureCollection", name: "Watersheds", features: [{ properties: { name: "Unsent edit" } }] } });
+    stored.set("eolab-shared-annotation-layers-v1", JSON.stringify([{ sessionId: ID, localId: "cached", contributorId: "me", revision: 1 }]));
+    try {
+        await controller.start({ restoreBindings: false, refreshImmediately: false });
+        assert.deepEqual(controller.bookmarkedLayerIds(), ["cached"]);
+        await controller.showYourLayers();
+        assert.deepEqual(requests.map(([path]) => path), [""]);
+        assert.equal(events.find(([event]) => event === "memberships")[1][0].onMap, false);
+        assert.equal(attached.size, 0);
+        await Promise.all([controller.addJoinedLayer(reference), controller.addJoinedLayer(reference)]);
+        assert.deepEqual([...attached], ["cached"]);
+        assert.equal(local.length, 1);
+        const upload = requests.find(([, method]) => method === "PUT")[2];
+        assert.equal(upload.collection.features[0].properties.name, "Unsent edit");
+        assert.equal(upload.revision, 1);
+        assert.equal(requests.some(([, method]) => method === "POST"), false);
+        assert.equal(requests.filter(([path]) => path.startsWith("/invitations/")).length, 1);
+        await controller.showYourLayers();
+        assert.equal(events.filter(([event]) => event === "memberships").at(-1)[1][0].onMap, true);
+        attached.clear();
+        const count = requests.length;
+        await controller.refresh();
+        assert.equal(requests.length, count, "cached off-map data does not cause polling or uploads");
+        await controller.showYourLayers();
+        assert.equal(events.filter(([event]) => event === "memberships").at(-1)[1][0].onMap, false);
+    } finally { controller.destroy(); }
+});
+
+test("membership loading reports empty and failed requests without attaching layers", async () => {
+    const { controller, local, events } = setup(async () => []);
+    try {
+        await controller.showYourLayers();
+        assert.match(events.at(-1)[1], /not created or joined/);
+        controller.api.request = async () => { throw new Error("Offline"); };
+        await controller.showYourLayers();
+        assert.match(events.at(-1)[1], /Could not load your layers: Offline/);
+        assert.equal(controller.connecting, false);
+        assert.equal(local.length, 0);
+    } finally { controller.destroy(); }
+});
 
 test("renaming uses the existing profile endpoint and preserves membership and polygons", async () => {
     const metadata = snapshot(); const calls = [];

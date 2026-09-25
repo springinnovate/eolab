@@ -36,9 +36,35 @@ function setup() {
     const buttons = new Map();
     document.querySelector = key => { if (!buttons.has(key)) buttons.set(key, document.createElement("button")); return buttons.get(key); };
     const calls = [];
-    const view = new AnnotationSessionsView(document, { connect: (...args) => calls.push(args), rename: (...args) => calls.push(["rename", ...args]) });
+    const view = new AnnotationSessionsView(document, { connect: (...args) => calls.push(args), rename: (...args) => calls.push(["rename", ...args]),
+        listLayers: () => calls.push(["list"]), addLayer: layer => calls.push(["add", layer]) });
     return { view, document, calls };
 }
+
+test("Your layers lists explicit Add actions with busy and already-on-map states", () => {
+    const { view, document, calls } = setup();
+    document.querySelector("#open-joined-annotation-layers").dispatchEvent(new Event("click"));
+    assert.deepEqual(calls, [["list"]]);
+    view.open("library");
+    assert.equal(view.name.hidden, true);
+    assert.equal(view.submit.hidden, true);
+    assert.equal(view.code.input.disabled, true);
+    assert.equal(view.cancel.textContent, "Close");
+    view.showLayers([{ id: "one", name: "<Layer>", joinCode: "ABCDEFGH", onMap: false },
+        { id: "two", name: "Already here", joinCode: "BCDEFGHJ", onMap: true }]);
+    assert.equal(view.library.children[0].children[0].textContent, "<Layer>");
+    view.busy(true);
+    assert.equal(view.layerButtons.every(({ button }) => button.disabled), true);
+    view.busy(false);
+    assert.equal(view.layerButtons[0].button.disabled, false);
+    assert.equal(view.layerButtons[1].button.disabled, true);
+    view.layerButtons[0].button.dispatchEvent(new Event("click"));
+    assert.deepEqual(calls.at(-1), ["add", { id: "one", joinCode: "ABCDEFGH" }]);
+    view.open("join");
+    assert.equal(view.library.hidden, true);
+    assert.equal(view.name.input.disabled, false);
+    assert.equal(view.submit.hidden, false);
+});
 
 test("first drawing asks only for a name and submits the map's fixed invitation", () => {
     const { view, document, calls } = setup();

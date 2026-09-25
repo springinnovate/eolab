@@ -75,6 +75,24 @@ test("shared viewer keeps private layers stored but never attaches or exposes th
     assert.equal(annotations.summaryTargets().length, 1);
 });
 
+test("root startup retains cached polygons but attaches shared layers only when its saved map asks for them", async () => {
+    const annotations = controller();
+    const root = annotations.model.createLayer("Root layer");
+    const visited = annotations.model.createLayer("Published-map layer");
+    const imported = annotations.model.createLayer("Imported polygons");
+    const original = annotations.model.document();
+    annotations.storage.load = async () => structuredClone(original.layers);
+    const attached = [];
+    annotations.attachLayer = layer => { attached.push(layer.id); annotations.layers.set(layer.id, {}); };
+    await annotations.load({ sharedLayerIds: [root.id, visited.id] });
+    assert.deepEqual(attached, [imported.id]);
+    assert.equal(annotations.sharableLayers().length, 3, "cached edits remain available off-map");
+    await annotations.restoreSharedContribution(root.name, exportAnnotationGeoJSON(root), { localId: root.id });
+    assert.equal(annotations.isLayerOnMap(root.id), true);
+    assert.equal(annotations.isLayerOnMap(visited.id), false);
+    assert.deepEqual(annotations.model.layer(visited.id), visited);
+});
+
 /** Connect the drawing lifecycle to the real model and recorded presentation/save boundaries.
  * @return {Object} Controller, layer and observed UI transitions.
  */

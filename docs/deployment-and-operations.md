@@ -681,8 +681,14 @@ Raster summaries use the combined layer and its current filter.
 
 Finished edits and changes to names or notes are saved locally first, then shared
 automatically. Unfinished drawings remain local. Removing a layer from your map
-does not delete its shared contents; join again with the same browser credentials
-to restore your contribution. **Import GeoJSON** adds a private layer from a file. Their **Share** action creates a
+does not delete its shared contents or end your membership. Under **Shared layers**,
+choose **Your layers**, then **Add to map** to reopen a layer without joining again.
+The root app restores shared layers from its last remembered map, not from the full
+list of memberships or cached polygons. Opening a published map does not add its
+layers to the root map. Published maps restore only their configured layers.
+Layers already included in an older remembered root map remain until removed;
+the app does not guess which existing layers you meant to keep.
+**Import GeoJSON** adds a private layer from a file. Their **Share** action creates a
 new shared layer. **Export GeoJSON** saves the combined polygons with contributor
 names and colors. EOLab exports mark this metadata with `eolabAnnotations: 1` and
 per-feature `contributor` and `contributorColor` properties. Reimporting retains

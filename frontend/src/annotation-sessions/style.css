@@ -6,6 +6,10 @@
 .shared-annotation-dialog input { box-sizing: border-box; width: 100%; font: inherit; padding: 0.4rem; }
 .shared-annotation-dialog button { font: inherit; margin-right: 0.5rem; }
 .shared-annotation-dialog p { font-size: 0.85rem; }
+.shared-layer-library { max-height: 50vh; overflow: auto; }
+.shared-layer-library-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.4rem 0; }
+.shared-layer-library-row span { min-width: 0; overflow-wrap: anywhere; }
+.shared-layer-library-row button { flex: none; font-size: 0.85rem; margin: 0; }
 .shared-annotation-members { font-size: 0.85rem; width: 100%; }
 .shared-annotation-members ul { margin: 0.4rem 0; padding-left: 1.2rem; }
 .shared-annotation-members .annotation-contributor-zoom { font-size: inherit; padding: 0.1rem 0.3rem; margin-left: 0.4rem; }
