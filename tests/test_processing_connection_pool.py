@@ -3,12 +3,109 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from threading import Barrier
+from threading import Event
+import time
 import psycopg
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore, PROCESSING_ADVISORY_LOCK_ID
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.models import PreparedJobPlan
+from eolab_app.processing.request_timings import request_timings
 from test_processing_jobs import store
+
+
+def test_submission_timing_partitions_transaction_and_preserves_result(
+    store: PostgresJobStore,
+) -> None:
+    """Report disjoint transaction stages without counting pipelined SQL twice.
+
+    Args:
+        store: Migrated disposable PostgreSQL adapter.
+    """
+    timings: dict[str, float] = {}
+    token = request_timings.set(timings)
+    try:
+        row = store.submit("owner", "timed", PreparedJobPlan({}, {}, 0), "hash")
+    finally:
+        request_timings.reset(token)
+    assert row["status"] == "queued"
+    assert store.find_request("owner", "timed")["id"] == row["id"]
+    assert timings["admissionSql"] > 0
+    assert timings["admissionBody"] >= timings["admissionSql"]
+    components = sum(
+        timings[f"admission{stage}"]
+        for stage in ("Connection", "Lock", "Body", "Commit")
+    )
+    assert 0 <= timings["admissionTotal"] - components < 0.1
+    assert "admissionRollback" not in timings
+    assert request_timings.get() is None
+
+
+@pytest.mark.parametrize("blocked_stage", ["Connection", "Lock"])
+def test_wait_measurements_identify_pool_and_lock_contention(
+    store: PostgresJobStore, blocked_stage: str
+) -> None:
+    """Measure a deliberately occupied pool separately from an advisory lock.
+
+    Args:
+        store: Migrated disposable PostgreSQL adapter.
+        blocked_stage: Resource held until the measured caller has begun waiting.
+    """
+    entered = Event()
+
+    def submit() -> dict[str, float]:
+        """Submit an ordinary job and return only this thread's measurements.
+
+        Returns:
+            Per-request transaction durations in seconds.
+        """
+        timings: dict[str, float] = {}
+        token = request_timings.set(timings)
+        try:
+            entered.set()
+            store.submit("owner", "waiting", PreparedJobPlan({}, {}, 0), "hash")
+            return timings
+        finally:
+            request_timings.reset(token)
+
+    with ThreadPoolExecutor(max_workers=1) as clients:
+        with ExitStack() as held:
+            if blocked_stage == "Connection":
+                for _ in range(8):
+                    held.enter_context(store._pool.connection())
+            else:
+                connection = held.enter_context(psycopg.connect(store.conninfo))
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(%s)", (PROCESSING_ADVISORY_LOCK_ID,)
+                )
+            result = clients.submit(submit)
+            assert entered.wait(2)
+            time.sleep(0.15)
+        timings = result.result(timeout=5)
+    assert timings[f"admission{blocked_stage}"] >= 0.1
+    assert request_timings.get() is None
+
+
+def test_failed_transaction_records_rollback_and_releases_connection(
+    store: PostgresJobStore,
+) -> None:
+    """Timing a failed transaction preserves exception and rollback semantics.
+
+    Args:
+        store: Migrated disposable PostgreSQL adapter.
+    """
+    timings: dict[str, float] = {}
+    token = request_timings.set(timings)
+    try:
+        with pytest.raises(RuntimeError, match="unchanged"):
+            with store._transaction(acquire_lock=True, timing_prefix="failure"):
+                raise RuntimeError("unchanged")
+    finally:
+        request_timings.reset(token)
+    assert timings["failureRollback"] > 0
+    assert "failureCommit" not in timings
+    assert store.find_request("owner", "absent") is None
 
 
 def test_reuses_connections_and_rolls_back_before_return(

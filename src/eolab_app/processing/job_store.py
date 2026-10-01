@@ -6,10 +6,12 @@ grids, AOI geometry, or any other operation-specific input fields.
 """
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 from importlib.resources import files
 import json
 import logging
+import time
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -18,6 +20,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
+from eolab_app.processing.request_timings import measure_request_stage, request_timings
 
 from eolab_app.processing.models import (
     Artifact,
@@ -35,6 +38,44 @@ from eolab_app.processing.models import (
 PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 LOGGER = logging.getLogger(__name__)
 UNFINISHED = ("queued", "running", "cancelling")
+_database_timing_prefix: ContextVar[str] = ContextVar(
+    "database_timing_prefix", default="db"
+)
+
+
+class _MeasuredConnection(psycopg.Connection[dict[str, Any]]):
+    """Measure Psycopg transaction completion without replacing its behavior."""
+
+    @staticmethod
+    def check_connection(connection: psycopg.Connection[dict[str, Any]]) -> None:
+        """Time the existing health check within connection acquisition.
+
+        Args:
+            connection: Pooled connection whose usability Psycopg verifies.
+
+        Raises:
+            psycopg.Error: If the health check fails, allowing pool replacement.
+        """
+        with measure_request_stage(f"{_database_timing_prefix.get()}ConnectionCheck"):
+            ConnectionPool.check_connection(connection)
+
+    def commit(self) -> None:
+        """Commit normally and record its round trip in the active request.
+
+        Raises:
+            psycopg.Error: If Psycopg cannot commit the transaction.
+        """
+        with measure_request_stage(f"{_database_timing_prefix.get()}Commit"):
+            super().commit()
+
+    def rollback(self) -> None:
+        """Roll back normally and record its round trip in the active request.
+
+        Raises:
+            psycopg.Error: If Psycopg cannot roll back the transaction.
+        """
+        with measure_request_stage(f"{_database_timing_prefix.get()}Rollback"):
+            super().rollback()
 
 
 class PostgresJobStore:
@@ -55,6 +96,7 @@ class PostgresJobStore:
         self.conninfo = conninfo
         self._pool: ConnectionPool[psycopg.Connection[dict[str, Any]]] = ConnectionPool(
             conninfo,
+            connection_class=_MeasuredConnection,
             kwargs={
                 "connect_timeout": 3,
                 "row_factory": dict_row,
@@ -64,7 +106,7 @@ class PostgresJobStore:
             max_size=8,
             timeout=3,
             max_waiting=64,
-            check=ConnectionPool.check_connection,
+            check=_MeasuredConnection.check_connection,
             open=False,
             name="processing",
         )
@@ -91,7 +133,7 @@ class PostgresJobStore:
 
     @contextmanager
     def _transaction(
-        self, acquire_lock: bool = False
+        self, acquire_lock: bool = False, timing_prefix: str = "db"
     ) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
         """Borrow a connection for one optionally locked transaction.
 
@@ -100,6 +142,7 @@ class PostgresJobStore:
 
         Args:
             acquire_lock: Acquire Processing's database-wide transaction advisory lock.
+            timing_prefix: Internal metric prefix separating admission from other reads.
 
         Yields:
             Dictionary-row cursor; all operations are committed or rolled back.
@@ -108,21 +151,34 @@ class PostgresJobStore:
             ProcessingError: If the pool is closed, saturated or unavailable,
                 or a database operation fails or times out.
         """
+        token = _database_timing_prefix.set(timing_prefix)
         try:
-            with self._pool.connection() as connection:
-                with connection.cursor() as cursor:
-                    if acquire_lock:
-                        cursor.execute(
-                            "SELECT pg_advisory_xact_lock(%s)",
-                            (PROCESSING_ADVISORY_LOCK_ID,),
+            with measure_request_stage(f"{timing_prefix}Total"):
+                started = time.perf_counter()
+                with self._pool.connection() as connection:
+                    timings = request_timings.get()
+                    if timings is not None:
+                        key = f"{timing_prefix}Connection"
+                        timings[key] = (
+                            timings.get(key, 0.0) + time.perf_counter() - started
                         )
-                    yield cursor
+                    with connection.cursor() as cursor:
+                        if acquire_lock:
+                            with measure_request_stage(f"{timing_prefix}Lock"):
+                                cursor.execute(
+                                    "SELECT pg_advisory_xact_lock(%s)",
+                                    (PROCESSING_ADVISORY_LOCK_ID,),
+                                )
+                        with measure_request_stage(f"{timing_prefix}Body"):
+                            yield cursor
         except psycopg.Error as error:
             raise ProcessingError(
                 "processing_unavailable",
                 "Job processing is temporarily unavailable. Try again shortly.",
                 503,
             ) from error
+        finally:
+            _database_timing_prefix.reset(token)
 
     def migrate(self) -> None:
         """Idempotently install the owned schema under the processing mutex.
@@ -285,6 +341,8 @@ class PostgresJobStore:
         Each subscriber consumes a record and its owner's waiting allowance;
         disk reservations belong to shared work and are admitted after preparation.
         Metadata is bounded by record counts and individual request limits.
+        Diagnostic admissionSql covers SQL round trips and row decoding, including
+        pipeline synchronization; admissionBody also includes Python bookkeeping.
 
         Args:
             owner: Current browser session hash.
@@ -301,12 +359,13 @@ class PostgresJobStore:
         """
         if not request_hash:
             raise ValueError("Direct jobs require a request hash")
-        with self._transaction(acquire_lock=True) as cursor:
-            cursor.execute(
-                "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND request_key=%s",
-                (owner, request_key),
-            )
-            existing = cursor.fetchone()
+        with self._transaction(acquire_lock=True, timing_prefix="admission") as cursor:
+            with measure_request_stage("admissionSql"):
+                cursor.execute(
+                    "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND request_key=%s",
+                    (owner, request_key),
+                )
+                existing = cursor.fetchone()
             if existing:
                 if (
                     existing["request_hash"] != request_hash
@@ -318,20 +377,23 @@ class PostgresJobStore:
                         409,
                     )
                 return existing
-            cursor.execute(
-                "SELECT id,status FROM processing.jobs WHERE work_key=%s AND status IN ('queued','running') "
-                "AND (status='queued' OR (lease_until>now() AND deadline_at>now()))",
-                (expected.work_key,),
-            )
-            shared = cursor.fetchone()
+            with measure_request_stage("admissionSql"):
+                cursor.execute(
+                    "SELECT id,status FROM processing.jobs WHERE work_key=%s AND status IN ('queued','running') "
+                    "AND (status='queued' OR (lease_until>now() AND deadline_at>now()))",
+                    (expected.work_key,),
+                )
+                shared = cursor.fetchone()
             # A lease-lost running attempt still owns its slot and work key until
             # its deadline. Do not join it or create a conflicting replacement.
             if expected.work_key and not shared:
-                cursor.execute(
-                    "SELECT 1 FROM processing.jobs WHERE work_key=%s AND status='running'",
-                    (expected.work_key,),
-                )
-                if cursor.fetchone():
+                with measure_request_stage("admissionSql"):
+                    cursor.execute(
+                        "SELECT 1 FROM processing.jobs WHERE work_key=%s AND status='running'",
+                        (expected.work_key,),
+                    )
+                    stopping = cursor.fetchone()
+                if stopping:
                     raise ProcessingError(
                         "previous_attempt_stopping",
                         "Waiting for the previous attempt to stop. Retrying shortly.",
@@ -339,19 +401,20 @@ class PostgresJobStore:
                     )
             # Send both independent aggregates before waiting for their results.
             # Both cursors use this transaction's connection and advisory lock.
-            with cursor.connection.cursor() as subscriber_cursor:
-                with cursor.connection.pipeline():
-                    cursor.execute(
-                        "SELECT count(*) FILTER (WHERE status='queued') AS waiting, "
-                        "COALESCE(sum(reserved_bytes),0) AS bytes FROM processing.jobs"
-                    )
-                    subscriber_cursor.execute(
-                        "SELECT count(*) AS records, count(*) FILTER (WHERE owner=%s AND status='queued') AS owned "
-                        "FROM processing.subscribed_jobs",
-                        (owner,),
-                    )
-                count = cursor.fetchone()
-                subscribers = subscriber_cursor.fetchone()
+            with measure_request_stage("admissionSql"):
+                with cursor.connection.cursor() as subscriber_cursor:
+                    with cursor.connection.pipeline():
+                        cursor.execute(
+                            "SELECT count(*) FILTER (WHERE status='queued') AS waiting, "
+                            "COALESCE(sum(reserved_bytes),0) AS bytes FROM processing.jobs"
+                        )
+                        subscriber_cursor.execute(
+                            "SELECT count(*) AS records, count(*) FILTER (WHERE owner=%s AND status='queued') AS owned "
+                            "FROM processing.subscribed_jobs",
+                            (owner,),
+                        )
+                    count = cursor.fetchone()
+                    subscribers = subscriber_cursor.fetchone()
             if (not shared or shared["status"] == "queued") and subscribers[
                 "owned"
             ] >= self.limits.max_owner_waiting_jobs:
@@ -377,38 +440,41 @@ class PostgresJobStore:
                         429,
                     )
                 job_id = identifier
+                with measure_request_stage("admissionSql"):
+                    cursor.execute(
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s)",
+                        (
+                            job_id,
+                            self.limits.result_ttl_seconds,
+                            Jsonb(expected.specification),
+                            expected.reserved_bytes,
+                            Jsonb(expected.summary),
+                            expected.operation,
+                            expected.work_key,
+                        ),
+                    )
+                    cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
+            with measure_request_stage("admissionSql"):
                 cursor.execute(
-                    "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key) "
-                    "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s)",
+                    "INSERT INTO processing.job_subscribers(id,job_id,owner,request_key,request_hash,presentation) VALUES (%s,%s,%s,%s,%s,%s)",
                     (
+                        identifier,
                         job_id,
-                        self.limits.result_ttl_seconds,
-                        Jsonb(expected.specification),
-                        expected.reserved_bytes,
-                        Jsonb(expected.summary),
-                        expected.operation,
-                        expected.work_key,
+                        owner,
+                        request_key,
+                        request_hash,
+                        (
+                            Jsonb(expected.presentation)
+                            if expected.presentation is not None
+                            else None
+                        ),
                     ),
                 )
-                cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
-            cursor.execute(
-                "INSERT INTO processing.job_subscribers(id,job_id,owner,request_key,request_hash,presentation) VALUES (%s,%s,%s,%s,%s,%s)",
-                (
-                    identifier,
-                    job_id,
-                    owner,
-                    request_key,
-                    request_hash,
-                    (
-                        Jsonb(expected.presentation)
-                        if expected.presentation is not None
-                        else None
-                    ),
-                ),
-            )
-            cursor.execute(
-                "SELECT count(DISTINCT owner) AS owners FROM processing.subscribed_jobs WHERE status='queued'"
-            )
+                cursor.execute(
+                    "SELECT count(DISTINCT owner) AS owners FROM processing.subscribed_jobs WHERE status='queued'"
+                )
+                owners = cursor.fetchone()["owners"]
             LOGGER.info(
                 "Processing admission: waiting=%s/%s session_waiting=%s/%s "
                 "waiting_sessions=%s records=%s/%s reserved_bytes=%s/%s shared=%s",
@@ -416,17 +482,20 @@ class PostgresJobStore:
                 self.limits.max_waiting_jobs,
                 subscribers["owned"] + (not shared or shared["status"] == "queued"),
                 self.limits.max_owner_waiting_jobs,
-                cursor.fetchone()["owners"],
+                owners,
                 subscribers["records"] + 1,
                 self.limits.max_job_records,
                 count["bytes"] + (0 if shared else expected.reserved_bytes),
                 self.limits.max_stored_bytes,
                 bool(shared),
             )
-            cursor.execute(
-                "SELECT * FROM processing.subscribed_jobs WHERE id=%s", (identifier,)
-            )
-            return cursor.fetchone()
+            with measure_request_stage("admissionSql"):
+                cursor.execute(
+                    "SELECT * FROM processing.subscribed_jobs WHERE id=%s",
+                    (identifier,),
+                )
+                row = cursor.fetchone()
+            return row
 
     def save_prepared_job(
         self,
