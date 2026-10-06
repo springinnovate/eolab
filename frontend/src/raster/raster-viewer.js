@@ -67,6 +67,10 @@ import {
 } from "./style.js";
 import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } from "./wms.js";
 import { normalizeRasterAppearanceState } from "./appearance-state.js";
+import {
+    buildCategoricalRasterLegend,
+    presentRasterPixelSnapshot,
+} from "./categorical-presentation.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
@@ -188,7 +192,8 @@ function canRetryRasterStatistics(error) {
  * => Promise<Object>} [sampleCursorPixel=samplePixel] Samples one transient
  * cursor participant independently from retained click analysis.
  * @property {{render:(snapshot:Object)=>void,clear:()=>void,move?:Function,
- * setEnabled?:Function,bind?:Function,unbind?:Function}|null}
+ * setEnabled?:Function,bind?:Function,unbind?:Function,
+ * refreshPresentation?:(projectSnapshot:(snapshot:Object)=>Object)=>void}|null}
  * [cursorValuesView=null] Transient pixel-picker presentation adapter.
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
  * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
@@ -304,6 +309,7 @@ export function initializeRasterViewer(
     let pixelPickerEnabled = true;
     let pointerInspectionEnabled = true;
     let rasterCursorPosition = null;
+    let latestPointSampleSnapshot = null;
     let rasterStyleCommitTimeout = null;
     let rasterSampleWindowResizeTimeout = null;
     let rasterStyleWasEdited = false;
@@ -2020,10 +2026,9 @@ export function initializeRasterViewer(
          * @param {Object} record Retained raster entry and interaction state.
          * @return {{datasetKind:"raster",opacityLocked:boolean,effectiveOpacity:number,
          * roleBadge:({label:"X"|"Y",description:string}|null),
-         * legend:({kind:"fixed",label:string}|{kind:"gradient",gradient:string,
-         * description:string,label:string,labels:number[]})}}
+         * legend:import("../map-layers/layer-stack-view.js").LayerLegend}}
          * Opacity in [0, 1], an optional paired-axis badge, and either a
-         * categorical legend placeholder or a continuous gradient legend.
+         * discrete categorical legend or a continuous gradient legend.
          */
         snapshot(record) {
             if (activeLayerKey === record.entry.key) {
@@ -2035,10 +2040,7 @@ export function initializeRasterViewer(
                     datasetKind: "raster", opacityLocked: false,
                     effectiveOpacity: record.entry.opacity,
                     roleBadge: null,
-                    legend: {
-                        kind: "fixed",
-                        label: "Categorical legend is not available yet.",
-                    },
+                    legend: buildCategoricalRasterLegend(record.state.categoricalStyle),
                 };
             }
             const opacityLocked = bivariateMode.contains(record.entry.key);
@@ -2837,7 +2839,8 @@ export function initializeRasterViewer(
 
     /**
      * Apply a style to the target's renderer and session, not its list position.
-     * Also synchronizes shared state if this target owns active analysis.
+     * Synchronize owned analysis controls and re-present retained pixel values
+     * using the committed appearance without requesting new samples.
      *
      * @param {Object} session Retained WMS raster session.
      * @param {Object} style Numeric range and color stops to validate and apply.
@@ -2868,6 +2871,7 @@ export function initializeRasterViewer(
             saveActiveLayerSession();
         }
         syncBivariateCandidate(session);
+        refreshRasterPixelPresentation();
     }
 
     /**
@@ -3685,7 +3689,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Present one immutable exact-value snapshot in Analysis tools.
+     * Retain a raw exact-value snapshot and present it in Analysis tools.
      *
      * When both bivariate axes have finite values, the same snapshot also
      * identifies their cell in the existing paired histogram. Presentation
@@ -3696,11 +3700,12 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderRasterPointSamples(snapshot) {
+        latestPointSampleSnapshot = snapshot;
         if (snapshot === null) {
             controlsView.clearPointSamples();
             return;
         }
-        controlsView.renderPointSamples(snapshot);
+        controlsView.renderPointSamples(projectRasterPixelPresentation(snapshot));
         if (!bivariateMode.active) {
             return;
         }
@@ -3724,7 +3729,47 @@ export function initializeRasterViewer(
             return;
         }
         if (!pixelPickerEnabled || !pointerInspectionEnabled) return;
-        cursorValuesView.render(snapshot);
+        cursorValuesView.render(projectRasterPixelPresentation(snapshot));
+    }
+
+    /**
+     * Resolve only the committed map-specific categorical presentation for a key.
+     * Detached analysis and continuous layers retain ordinary numeric display.
+     * This lookup never controls sampling membership, authorization, or requests.
+     *
+     * @param {string} key Catalog participant's retained map-layer key.
+     * @return {Readonly<import("./categorical-style.js").CategoricalRasterStyle>|null}
+     * Normalized immutable category table, or no categorical presentation.
+     */
+    function categoricalStyleForPixelPresentation(key) {
+        const record = mapLayers.getRecord(key);
+        return record?.adapter === rasterMapLayerAdapter &&
+            record.state.appearanceMode === "categorical"
+            ? record.state.categoricalStyle : null;
+    }
+
+    /**
+     * Attach immutable display text to numeric results without altering values.
+     *
+     * @param {Readonly<Object>|null} snapshot Point or cursor result snapshot.
+     * @return {Readonly<Object>|null} Prepared presentation preserving raw results.
+     */
+    function projectRasterPixelPresentation(snapshot) {
+        return presentRasterPixelSnapshot(snapshot, categoricalStyleForPixelPresentation);
+    }
+
+    /**
+     * Re-present retained point and cursor values after a committed style change.
+     * The cursor view owns the displayed location while another read is pending;
+     * its refresh port preserves that location and never invokes a sample request.
+     *
+     * @return {void}
+     */
+    function refreshRasterPixelPresentation() {
+        if (latestPointSampleSnapshot !== null) {
+            controlsView.renderPointSamples(projectRasterPixelPresentation(latestPointSampleSnapshot));
+        }
+        cursorValuesView.refreshPresentation?.(projectRasterPixelPresentation);
     }
 
     /**
@@ -3823,10 +3868,11 @@ export function initializeRasterViewer(
         }
         if (session.key === activeLayerKey) presentCategoricalHistogramUnavailable();
         syncBivariateCandidate(session);
+        refreshRasterPixelPresentation();
         renderBivariateAvailability();
         refreshStyle();
         renderLayerStack();
-        controlsView.setAppearanceStatus("Applied categorical styling. Category legends and labeled pixel results are coming in the next update.");
+        controlsView.setAppearanceStatus("Applied categorical styling.");
     }
 
     /**

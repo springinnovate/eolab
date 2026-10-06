@@ -1032,9 +1032,16 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     assert.deepEqual(JSON.parse(record.state.layer.wmsParams.raster_style), style);
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "env"), false);
     assert.deepEqual(record.adapter.exportSavedState(record).continuous, continuous);
-    assert.deepEqual(h.mapLayers.snapshots().find((layer) => layer.key === key).legend, {
-        kind: "fixed", label: "Categorical legend is not available yet.",
-    });
+    h.mapLayers.setOpacity(key, 0.4);
+    const categoricalSnapshot = h.mapLayers.snapshots().find((layer) => layer.key === key);
+    assert.equal(categoricalSnapshot.legend.kind, "categories");
+    assert.deepEqual(categoricalSnapshot.legend.entries.map((entry) => entry.label),
+        ["Forest (41)", "Background (0)", "Other (-1)", "Unmapped"]);
+    assert.deepEqual(categoricalSnapshot.legend.entries.map((entry) => entry.symbol.fill),
+        ["#228b22", "#000000", "#aabbcc", "#808080"]);
+    assert.deepEqual(categoricalSnapshot.legend.entries.map((entry) => entry.symbol.fillOpacity),
+        [0.75, 0, 1, 0.25]);
+    assert.equal(categoricalSnapshot.effectiveOpacity, 0.4);
 
     h.controlsView.handlers.onAppearanceModeChange("continuous");
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
@@ -1056,6 +1063,138 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     assert.match(h.controlsView.appearanceStatus, /Applied categorical styling/);
     assert.match(h.controlsView.statisticsStatus, /Categorical/);
     h.destroy();
+});
+
+test("committed categories refresh retained pixels and clipboard without resampling pending locations", async () => {
+    const timers = new Map();
+    let timerId = 0;
+    const clock = {
+        /** @param {()=>void} callback Timer work. @return {number} Timer identity. */
+        setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
+        /** @param {number} id Timer to cancel. @return {void} */
+        clearTimeout(id) { timers.delete(id); },
+        /** Run the next scheduled cursor dwell. @return {void} */
+        runNext() {
+            const [id, callback] = timers.entries().next().value;
+            timers.delete(id);
+            callback();
+        },
+    };
+    const documentContext = new FakeRasterControlDocument();
+    const copied = [];
+    const cursorValuesView = new RasterCursorValuesView(documentContext, {
+        /** @param {string} text Clipboard output. @return {Promise<void>} */
+        async writeText(text) { copied.push(text); },
+    });
+    const cursorRequests = [];
+    let pointReads = 0;
+    const h = visibleLayerFixture(undefined, {
+        clock, cursorValuesView,
+        /** Return the original numeric code. @return {Promise<Object>} Exact result. */
+        samplePixel: async () => { pointReads += 1; return { inBounds: true, value: 41 }; },
+        /**
+         * Retain a numeric cursor request for controlled completion.
+         * @param {Object} item Catalog source.
+         * @param {Object} point Geographic position.
+         * @param {AbortSignal} signal Cancellation boundary.
+         * @return {Promise<Object>} Exact pixel result.
+         */
+        sampleCursorPixel: (item, point, signal) => {
+            const deferred = createDeferred();
+            cursorRequests.push({ ...deferred, item, point, signal });
+            return deferred.promise;
+        },
+    });
+    await h.viewer.show(createRasterItem("category-pixel-refresh"));
+    await flushPromises();
+    const record = h.mapLayers.retainedRecords[0];
+    const key = record.entry.key;
+    editCategoricalAppearance(h, key);
+    h.mapLayers.setOpacity(key, 0);
+    h.viewer.exploreAt({ lng: 1, lat: 1 });
+    await flushPromises();
+    assert.equal(h.controlsView.pointSamples.samples[0].value, 41);
+    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Forest (41)");
+    assert.equal(Object.isFrozen(h.controlsView.pointSamples.samples[0]), true);
+
+    h.leafletMap.emit("mousemove", {
+        latlng: { lng: 1, lat: 1 }, originalEvent: { clientX: 101, clientY: 100 },
+    });
+    clock.runNext();
+    cursorRequests[0].resolve({ inBounds: true, value: 41 });
+    await flushPromises();
+    const list = documentContext.querySelector("#raster-cursor-value-list");
+    const marker = documentContext.querySelector("#raster-cursor-marker");
+    const root = documentContext.querySelector("#raster-cursor-values");
+    const position = documentContext.querySelector("#raster-cursor-position");
+    const pending = documentContext.querySelector("#raster-cursor-pending");
+    assert.equal(list.children[0].children[1].textContent, "Forest (41)");
+
+    h.leafletMap.emit("mousemove", {
+        latlng: { lng: 2, lat: 1 }, originalEvent: { clientX: 202, clientY: 100 },
+    });
+    clock.runNext();
+    const renamed = categoricalAppearance();
+    renamed.categories[0] = { value: 41, label: "Woodland", color: "#115511", opacity: 0 };
+    renamed.categories.reverse();
+    h.controlsView.categoricalStyle = renamed;
+    h.controlsView.handlers.onCategoricalStyleChange();
+    assert.equal(pointReads, 1);
+    assert.equal(cursorRequests.length, 2);
+    assert.equal(cursorRequests[1].signal.aborted, false);
+    assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
+    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
+    assert.equal(h.controlsView.pointSamples.samples[0].value, 41);
+    assert.equal(marker.style.left, "101px");
+    assert.equal(position.textContent, "Lat 1.00000 · Lng 1.00000");
+    assert.equal(pending.hidden, false);
+    assert.equal(root.getAttribute("aria-busy"), "true");
+    const legend = h.mapLayers.snapshots().find((layer) => layer.key === key).legend;
+    assert.deepEqual(legend.entries.map((entry) => entry.label),
+        ["Other (-1)", "Background (0)", "Woodland (41)", "Unmapped"]);
+    assert.equal(legend.entries[2].symbol.fill, "#115511");
+    assert.equal(legend.entries[2].symbol.fillOpacity, 0);
+
+    const copyEvent = new Event("keydown", { cancelable: true });
+    Object.assign(copyEvent, { key: "c", ctrlKey: true });
+    documentContext.dispatchEvent(copyEvent);
+    await flushPromises();
+    assert.match(copied.at(-1), /Longitude\t1\n/);
+    assert.match(copied.at(-1), /Woodland \(41\)/);
+
+    h.controlsView.categoricalStyle = { ...renamed, categories: [] };
+    h.controlsView.handlers.onCategoricalStyleChange();
+    assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
+    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
+    h.controlsView.categoricalStyle = renamed;
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.equal(list.children[0].children[1].textContent, "4.100e+1");
+    assert.equal(Object.hasOwn(h.controlsView.pointSamples.samples[0], "displayValue"), false);
+    h.controlsView.handlers.onAppearanceModeChange("categorical");
+    assert.equal(h.mapLayers.copyStyle(key), true);
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.equal(await h.mapLayers.pasteStyle(key), true);
+    assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
+    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
+    assert.equal(cursorRequests.length, 2);
+    assert.equal(pointReads, 1);
+    assert.equal(marker.style.left, "101px");
+    assert.equal(pending.hidden, false);
+
+    cursorRequests[1].resolve({ inBounds: true, value: 42.5 });
+    await flushPromises();
+    assert.equal(list.children[0].children[1].textContent, "Unmapped (42.5)");
+    assert.equal(marker.style.left, "202px");
+    assert.equal(pending.hidden, true);
+    h.leafletMap.emit("mousemove", {
+        latlng: { lng: 3, lat: 1 }, originalEvent: { clientX: 303, clientY: 100 },
+    });
+    clock.runNext();
+    cursorRequests[2].resolve({ inBounds: true, value: null });
+    await flushPromises();
+    assert.equal(list.children[0].children[1].textContent, "No data");
+    h.destroy();
+    assert.equal(root.hidden, true);
 });
 
 test("empty and invalid category drafts never replace the last valid rendering or saved appearance", async () => {

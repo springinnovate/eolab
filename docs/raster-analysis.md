@@ -10,6 +10,30 @@ summary reports these separately and lets you switch between them. Automatic
 histograms use the top two visible rasters. Histogram results describe the sampling
 area, not just the clicked pixel or the features returned by feature inspection.
 
+## Categorical raster values
+
+Choose **Categorical** in a raster's **Style** panel to define exact integer codes,
+labels, colors, and opacities. The settings belong to that map layer and travel
+with saved maps. The layer-list and on-map legends show the categories in table
+order, followed by the configured Unmapped appearance. See the
+[categorical appearance contract](categorical-raster-contract.md) for editing and
+persistence details. CSV import is a later increment.
+
+For a styled categorical layer, the pixel picker and raster values at a click
+show labels with their exact codes, such as **Forest (41)**. Copying picker values
+uses the same presentation. An undefined valid value appears as **Unmapped (42)**;
+**No data** remains a missing source value. Matching is exact, so fractional
+samples are not rounded into a category. Transparent categories still report their
+labels and values. Committed label edits update retained results without reading
+the pixel again.
+
+Categorical distributions and proportional category areas are not available yet.
+Distribution panels show that limitation instead of a continuous chart for the
+category codes. Percentile stretches and 2D comparisons require continuous
+layers. Numeric analysis and raster calculations continue to use unchanged source
+values. Catalog analysis without a styled map-layer context keeps its ordinary
+numeric presentation.
+
 ## Plot values across raster layers
 
 Choose **Plot raster stack** beneath a histogram or in the map's **More** menu.

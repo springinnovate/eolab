@@ -28,6 +28,7 @@ class FakeLayerStackElement extends EventTarget {
     this.type = "";
     this.name = "";
     this.scrollTop = 0;
+    this.offsetHeight = 0;
     this.capturedPointerId = null;
     this._classNames = new Set();
     this.classList = {
@@ -1229,4 +1230,85 @@ test("both legend presentations share all colors, selection, ordering and disclo
     assert.equal(elementsByClass(presentation, "map-layer-legend-gradient").length, 0);
   }
   legend.remove(); assert.equal(removed, true);
+});
+
+test("large neutral legends retain every entry in a bounded keyboard-accessible region", async () => {
+  const { OnMapLegend } = await import("../../src/map-layers/on-map-legend.js");
+  const doc = new FakeLayerStackDocument();
+  const toggleButton = doc.createElement("button");
+  const more = doc.createElement("details");
+  toggleButton.closest = () => more;
+  let size = { x: 390, y: 640 };
+  const listeners = new Map();
+  const map = {
+    getContainer: () => ({ ownerDocument: doc }), getSize: () => size,
+    on: (name, handler) => listeners.set(name, handler),
+    off: (name, handler) => { if (listeners.get(name) === handler) listeners.delete(name); },
+  };
+  const leaflet = { DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} },
+    control: () => ({ addTo() {}, remove() {} }) };
+  const entries = Array.from({ length: 256 }, (_, index) => ({
+    label: `${index === 255 ? "L".repeat(128) : `Category ${index}`} (${index - 128})`,
+    symbol: { shape: "polygon", fill: "#228b22", fillOpacity: index === 0 ? 0 : 0.5,
+      stroke: "#000000", strokeOpacity: 0, strokeWidth: 0 },
+  }));
+  entries.push({ label: "Unmapped", symbol: { ...entries[1].symbol, fill: "#808080" } });
+  const layer = { ...LAYERS[0], visible: true, opacity: 0.4,
+    legend: { kind: "categories", label: "Categories", entries } };
+  const original = structuredClone(layer);
+  const legend = new OnMapLegend(leaflet, map, {
+    toggleButton, onInclusion() {}, onChange() {},
+  });
+  const view = new MapLayerStackView(doc);
+  view.render([layer], null);
+  legend.update([layer]);
+  legend.contents.children[0].offsetHeight = 8000;
+  listeners.get("resize")();
+
+  assert.equal(legend.body.tabIndex, 0);
+  assert.equal(legend.body.getAttribute("role"), "region");
+  assert.equal(legend.body.getAttribute("aria-label"), "Legend entries and layer choices");
+  assert.ok(parseFloat(legend.root.style.maxHeight) + parseFloat(legend.root.style.marginTop) < size.y);
+  assert.ok(parseFloat(legend.root.style.width) < size.x);
+  assert.equal(legend.contents.style.columnCount, "1", "one long layer does not create empty columns");
+  for (const presentation of [legend.contents, doc.querySelector("#raster-layer-list")]) {
+    const list = elementsByClass(presentation, "map-layer-legend-list")[0];
+    assert.equal(list.children.length, 257);
+    assert.deepEqual(list.children.map(row => row.children[1].textContent), entries.map(entry => entry.label));
+    assert.ok(list.children[255].children[1].textContent.endsWith("(127)"));
+    const swatches = elementsByClass(list, "map-layer-legend-swatch");
+    assert.equal(swatches[0].children[0].children[0].getAttribute("fill-opacity"), "0");
+    assert.equal(swatches[1].children[0].children[0].getAttribute("fill-opacity"), "0.2");
+    assert.ok(list.children.every(row => row.style.opacity === undefined && row.children[1].style.opacity === undefined));
+  }
+  const body = legend.body;
+  body.focus();
+  body.scrollTop = 3000;
+  legend.update([{ ...layer, opacity: 0.8 }]);
+  assert.equal(legend.body, body);
+  assert.equal(doc.activeElement, body);
+  assert.equal(body.scrollTop, 3000);
+  assert.deepEqual(layer, original, "presentation does not mutate the supplied legend");
+
+  size = { x: 1400, y: 900 };
+  legend.update([layer, { ...layer, key: "second" }, { ...layer, key: "third" }]);
+  for (const section of legend.contents.children) section.offsetHeight = 600;
+  listeners.get("resize")();
+  assert.equal(legend.contents.style.columnCount, "3", "separate layers keep the existing multi-column layout");
+  legend.collapse.dispatchEvent(new Event("click"));
+  assert.equal(legend.body.hidden, true);
+  assert.equal(legend.root.style.width, "auto");
+  legend.collapse.dispatchEvent(new Event("click"));
+  assert.equal(legend.body.hidden, false);
+  assert.equal(legend.contents.style.columnCount, "3");
+  size = { x: 390, y: 360 };
+  listeners.get("resize")();
+  assert.equal(legend.contents.style.columnCount, "1");
+  assert.ok(parseFloat(legend.root.style.maxHeight) + parseFloat(legend.root.style.marginTop) < size.y);
+  legend.update([{ ...layer, legendIncluded: false }]);
+  assert.equal(legend.choices.children.length, 1);
+  assert.equal(legend.choices.children[0].children[0].checked, false);
+  assert.equal(elementsByClass(legend.contents, "map-layer-legend-list").length, 0);
+  legend.remove();
+  assert.equal(listeners.has("resize"), false);
 });

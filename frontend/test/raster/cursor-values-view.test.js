@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { formatRasterCursorValuesForClipboard } from "../../src/raster/cursor-values-view.js";
+import { presentRasterPixelSnapshot } from "../../src/raster/categorical-presentation.js";
+import { normalizeCategoricalRasterStyle } from "../../src/raster/categorical-style.js";
 import {
   FakeRasterControlDocument,
 } from "../../test-support/raster/fake-controls-document.js";
@@ -67,6 +69,99 @@ test("cursor-value view hides when every server result is outside", () => {
   });
 
   assert.equal(documentContext.querySelector("#raster-cursor-values").hidden, true);
+});
+
+test("cursor values and clipboard consume literal prepared text without changing NoData", () => {
+  const documentContext = new FakeRasterControlDocument();
+  const view = new RasterCursorValuesView(documentContext);
+  const displayValue = '<img src=x onerror="alert(1)"> (0)';
+  const snapshot = {
+    position: { latitude: 1, longitude: 2 }, omittedCount: 0,
+    samples: [
+      { key: "category", label: "Classes", state: "value", value: 0, displayValue, errorMessage: "" },
+      { key: "nodata", label: "Missing", state: "nodata", value: null, displayValue: "Ignored", errorMessage: "" },
+      { key: "continuous", label: "Continuous", state: "value", value: 7, errorMessage: "" },
+    ],
+  };
+  view.render(snapshot);
+  const list = documentContext.querySelector("#raster-cursor-value-list");
+  assert.equal(list.children[0].children[1].textContent, displayValue);
+  assert.equal(list.children[0].children[1].children.length, 0);
+  assert.equal(list.children[1].children[1].textContent, "No data");
+  assert.equal(list.children[2].children[1].textContent, "7.000e+0");
+  assert.equal(formatRasterCursorValuesForClipboard(snapshot),
+    `Latitude\t1\nLongitude\t2\nClasses\t${displayValue}\nMissing\tNo data\nContinuous\t7.000e+0`);
+});
+
+test("presentation refresh preserves a retained pick during new loading and updates its clipboard", async () => {
+  const documentContext = new FakeRasterControlDocument();
+  const copied = [];
+  const view = new RasterCursorValuesView(documentContext, {
+    async writeText(text) { copied.push(text); },
+  });
+  view.bind({ onHide() {}, onShow() {} });
+  const root = documentContext.querySelector("#raster-cursor-values");
+  const marker = documentContext.querySelector("#raster-cursor-marker");
+  const pending = documentContext.querySelector("#raster-cursor-pending");
+  const list = documentContext.querySelector("#raster-cursor-value-list");
+  const raw = {
+    position: { latitude: 1, longitude: 2 }, omittedCount: 0,
+    samples: [{ key: "land", label: "Land cover", state: "value", value: 7, errorMessage: "" }],
+  };
+  view.move({ clientX: 100, clientY: 100 });
+  view.render(raw);
+  view.move({ clientX: 200, clientY: 200 });
+  view.render({ ...raw, position: { latitude: 3, longitude: 4 }, samples: [
+    { ...raw.samples[0], state: "loading", value: null },
+  ] });
+  const style = normalizeCategoricalRasterStyle({
+    mode: "categorical", categories: [{ value: 7, label: "Forest", color: "#008800", opacity: 0 }],
+  });
+  view.refreshPresentation(snapshot => presentRasterPixelSnapshot(snapshot, () => style));
+  assert.equal(list.children[0].children[1].textContent, "Forest (7)");
+  assert.equal(marker.style.left, "100px");
+  assert.equal(root.style.left, "114px");
+  assert.equal(pending.hidden, false);
+  assert.equal(root.getAttribute("aria-busy"), "true");
+  assert.equal(documentContext.querySelector("#raster-cursor-position").textContent,
+    "Lat 1.00000 · Lng 2.00000");
+  const copy = new Event("keydown", { cancelable: true });
+  Object.assign(copy, { key: "c", ctrlKey: true });
+  documentContext.dispatchEvent(copy);
+  await Promise.resolve();
+  assert.equal(copied[0], "Latitude\t1\nLongitude\t2\nLand cover\tForest (7)");
+  view.refreshPresentation(snapshot => presentRasterPixelSnapshot(snapshot, () => null));
+  assert.equal(list.children[0].children[1].textContent, "7.000e+0");
+  assert.equal(pending.hidden, false);
+  assert.equal(root.getAttribute("aria-busy"), "true");
+  documentContext.dispatchEvent(copy);
+  await Promise.resolve();
+  assert.equal(copied[1], "Latitude\t1\nLongitude\t2\nLand cover\t7.000e+0");
+  view.render({ ...raw, position: { latitude: 3, longitude: 4 } });
+  assert.equal(marker.style.left, "200px");
+  assert.equal(pending.hidden, true);
+  assert.equal(root.getAttribute("aria-busy"), "false");
+  view.clear();
+  view.refreshPresentation(() => assert.fail("Cleared picker must stay cleared"));
+  view.unbind();
+});
+
+test("presentation refresh rejects changing the sampled point or numeric result", () => {
+  const documentContext = new FakeRasterControlDocument();
+  const view = new RasterCursorValuesView(documentContext);
+  const raw = {
+    position: { latitude: 1, longitude: 2 }, omittedCount: 0,
+    samples: [{ key: "land", label: "Land", state: "value", value: 7, errorMessage: "" }],
+  };
+  view.render(raw);
+  assert.throws(() => view.refreshPresentation(snapshot => ({
+    ...snapshot, position: { latitude: 3, longitude: 4 },
+  })), /preserve the retained sample/);
+  assert.throws(() => view.refreshPresentation(snapshot => ({
+    ...snapshot, samples: [{ ...snapshot.samples[0], value: 8 }],
+  })), /preserve the retained sample/);
+  assert.equal(documentContext.querySelector("#raster-cursor-value-list").children[0].children[1].textContent,
+    "7.000e+0");
 });
 
 test("pixel picker anchors its marker and readout inside the viewport", () => {

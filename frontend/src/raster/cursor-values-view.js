@@ -7,6 +7,21 @@ const VIEWPORT_EDGE_PIXELS = 8;
 const COPY_FEEDBACK_MILLISECONDS = 1200;
 
 /**
+ * @typedef {Object} RasterCursorValueSample
+ * @property {string} key Stable raster identity.
+ * @property {string} label Readable raster name.
+ * @property {"loading"|"value"|"nodata"|"outside"|"error"} state Raw result state.
+ * @property {number|null} value Finite value only in value state.
+ * @property {string} errorMessage Read failure detail.
+ * @property {string} [displayValue] Optional owner-prepared value text.
+ *
+ * @typedef {Object} RasterCursorValueSnapshot
+ * @property {Readonly<{latitude:number,longitude:number}>} position Sample point.
+ * @property {ReadonlyArray<Readonly<RasterCursorValueSample>>} samples Results.
+ * @property {number} omittedCount Participants omitted by the sampling limit.
+ */
+
+/**
  * Return whether a keyboard event belongs to an editable control.
  *
  * @param {EventTarget|null} target Event target.
@@ -31,7 +46,7 @@ function formatPosition(position) {
 /**
  * Produce a tab-separated clipboard representation of one picker snapshot.
  *
- * @param {{position:Object,samples:Object[],omittedCount:number}} snapshot
+ * @param {Readonly<RasterCursorValueSnapshot>} snapshot
  * Current immutable pixel-picker snapshot.
  * @return {string} Geographic position followed by visible raster values.
  */
@@ -43,7 +58,7 @@ export function formatRasterCursorValuesForClipboard(snapshot) {
     for (const sample of snapshot.samples) {
         if (sample.state === "outside") continue;
         const value = sample.state === "value"
-            ? formatRasterPixelValue(sample.value)
+            ? sample.displayValue ?? formatRasterPixelValue(sample.value)
             : sample.state === "nodata"
                 ? "No data"
                 : sample.state === "loading"
@@ -178,9 +193,10 @@ export class RasterCursorValuesView {
      * during replacement loading, then commit the new position and values
      * together on the first available result. Outside-only results disappear.
      *
-     * @param {{position:Object,samples:Object[],omittedCount:number}} snapshot
-     * Pixel-picker snapshot.
+     * @param {Readonly<RasterCursorValueSnapshot>} snapshot Pixel-picker
+     * snapshot with optional owner-prepared display text for value results.
      * @return {void}
+     * @throws {TypeError} If position, sample list, or omitted count is invalid.
      */
     render(snapshot) {
         if (
@@ -218,7 +234,7 @@ export class RasterCursorValuesView {
             value.textContent = sample.state === "loading"
                 ? "Reading…"
                 : sample.state === "value"
-                    ? formatRasterPixelValue(sample.value)
+                    ? sample.displayValue ?? formatRasterPixelValue(sample.value)
                     : sample.state === "nodata"
                         ? "No data"
                         : `Unavailable: ${sample.errorMessage}`;
@@ -246,6 +262,43 @@ export class RasterCursorValuesView {
         );
         this.root.hidden = false;
         this.#applyPointerPosition();
+    }
+
+    /**
+     * Re-present the retained pick without accepting a newer pending position.
+     * Composition supplies only a display projection of the same raw results.
+     * The accepted geographic point, marker, pending indicator, and busy state
+     * remain intact; subsequent clipboard writes use the updated presentation.
+     * A cleared picker is a no-op and does not invoke the callback.
+     *
+     * @param {(snapshot:Readonly<RasterCursorValueSnapshot>)=>Readonly<RasterCursorValueSnapshot>}
+     * projectSnapshot Pure projection preserving point, participants and values.
+     * @return {void}
+     * @throws {TypeError} If the projection changes the retained sample identity.
+     * @throws {Error} If the injected projection fails.
+     */
+    refreshPresentation(projectSnapshot) {
+        if (this.snapshot === null) return;
+        const snapshot = projectSnapshot(this.snapshot);
+        if (
+            snapshot?.position?.latitude !== this.snapshot.position.latitude ||
+            snapshot?.position?.longitude !== this.snapshot.position.longitude ||
+            snapshot.omittedCount !== this.snapshot.omittedCount ||
+            !Array.isArray(snapshot.samples) ||
+            snapshot.samples.length !== this.snapshot.samples.length ||
+            snapshot.samples.some((sample, index) => {
+                const previous = this.snapshot.samples[index];
+                return sample?.key !== previous.key || sample?.state !== previous.state ||
+                    sample?.value !== previous.value;
+            })
+        ) {
+            throw new TypeError("Pixel presentation must preserve the retained sample");
+        }
+        const pendingHidden = this.pending.hidden;
+        const busy = this.root.getAttribute("aria-busy");
+        this.render(snapshot);
+        this.pending.hidden = pendingHidden;
+        this.root.setAttribute("aria-busy", busy);
     }
 
     /** Hide and empty the transient pixel-picker readout. @return {void} */
