@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
     RasterStyleHistogramView,
@@ -70,4 +71,15 @@ test("style histogram owns candidate markers, state, and analysis navigation", (
         .dispatchEvent(new Event("click"));
     assert.deepEqual(opened, ["histogram"]);
     assert.equal(root.hidden, true);
+});
+
+test("style distribution markup is outside mode-specific control groups", () => {
+    const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    const mode = markup.indexOf('id="raster-appearance-mode"');
+    const distribution = markup.indexOf('id="raster-style-histogram"');
+    const continuous = markup.indexOf('id="raster-continuous-controls"');
+    const categorical = markup.indexOf('id="raster-categorical-editor"');
+    assert.ok(mode >= 0 && distribution > mode);
+    assert.ok(continuous > distribution && categorical > continuous);
+    assert.doesNotMatch(markup, /Categorical distributions and area proportions are not available yet/);
 });

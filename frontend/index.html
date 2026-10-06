@@ -1469,11 +1469,6 @@
                               <option value="categorical">Categorical</option>
                             </select>
                           </label>
-                          <div id="raster-continuous-controls" class="raster-continuous-controls">
-                          <label class="raster-palette" for="raster-palette">
-                            <span>Color palette</span>
-                            <select id="raster-palette"></select>
-                          </label>
                           <section
                             class="raster-style-histogram"
                             id="raster-style-histogram"
@@ -1482,7 +1477,7 @@
                             hidden
                           >
                             <div class="raster-style-histogram-heading">
-                              <h4 id="raster-style-histogram-heading">Distribution and color stretch</h4>
+                              <h4 id="raster-style-histogram-heading">Distribution</h4>
                               <span id="raster-style-histogram-scope"></span>
                             </div>
                             <svg
@@ -1499,6 +1494,11 @@
                               aria-atomic="true"
                             ></p>
                           </section>
+                          <div id="raster-continuous-controls" class="raster-continuous-controls">
+                          <label class="raster-palette" for="raster-palette">
+                            <span>Color palette</span>
+                            <select id="raster-palette"></select>
+                          </label>
                           <div
                             class="raster-percentile-controls"
                             id="raster-percentile-controls"
@@ -1647,7 +1647,6 @@
                               </div>
                             </fieldset>
                             <p class="raster-style-error" id="raster-category-error" role="status" aria-live="polite" aria-atomic="true"></p>
-                            <p class="raster-category-guidance">Categorical distributions and area proportions are not available yet.</p>
                           </section>
                           <p
                             class="raster-appearance-status"
