@@ -1604,6 +1604,26 @@
                           <section id="raster-categorical-editor" class="raster-categorical-editor" aria-labelledby="raster-category-heading" hidden>
                             <h4 id="raster-category-heading">Categories</h4>
                             <p class="raster-category-guidance">Match exact whole-number values. Add at least one category to apply categorical styling. Incomplete edits keep the last valid style on the map.</p>
+                            <div id="raster-category-csv-import" class="raster-category-csv-import" aria-busy="false">
+                              <label for="raster-category-csv-file">Import categories from CSV</label>
+                              <input id="raster-category-csv-file" type="file" accept=".csv,text/csv" aria-describedby="raster-category-csv-guidance raster-category-csv-status" />
+                              <p id="raster-category-csv-guidance" class="raster-category-guidance">Headers: value, label, color; optional opacity from 0 to 1 (default 1). Use #RRGGBB colors. Up to 256 categories and 128 KiB. Preview before replacing the current table; unmapped settings are preserved.</p>
+                              <p id="raster-category-csv-status" class="raster-category-guidance" role="status" aria-live="polite" aria-atomic="true"></p>
+                              <div id="raster-category-csv-preview" class="raster-category-csv-preview" role="region" aria-label="CSV import preview" aria-describedby="raster-category-csv-status" tabindex="-1" hidden>
+                                <p id="raster-category-csv-summary" class="raster-category-guidance"></p>
+                                <div id="raster-category-csv-table" class="raster-category-csv-table" role="region" aria-label="Imported category rows" tabindex="0" hidden>
+                                  <table>
+                                    <caption>CSV category preview</caption>
+                                    <thead><tr><th scope="col">Category</th><th scope="col">Value</th><th scope="col">Label</th><th scope="col">Color</th><th scope="col">Opacity (0–1)</th></tr></thead>
+                                    <tbody id="raster-category-csv-rows"></tbody>
+                                  </table>
+                                </div>
+                                <div class="raster-category-csv-actions">
+                                  <button id="apply-raster-category-csv" class="secondary-button" type="button" disabled>Replace categories</button>
+                                  <button id="cancel-raster-category-csv" class="secondary-button" type="button" disabled>Cancel import</button>
+                                </div>
+                              </div>
+                            </div>
                             <div id="raster-category-rows" class="raster-category-rows"></div>
                             <div class="raster-category-add">
                               <button id="add-raster-category" class="secondary-button" type="button">Add category</button>

@@ -2791,13 +2791,15 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Flush any pending valid edit and release the explicit editing target.
+     * Flush any pending valid edit, cancel an uncommitted category import, and
+     * release the explicit editing target.
      * The floating editor's DOM lifecycle is owned by MapLayerStyleEditor.
      *
      * @return {void}
      */
     function closeStyle() {
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
+        controlsView.cancelCategoricalImport?.();
         editingLayerKey = null;
         editingAppearanceMode = "continuous";
         controlsView.clearStyleHistogram?.();
@@ -2805,7 +2807,7 @@ export function initializeRasterViewer(
 
     /**
      * Refresh style availability and percentile feedback for the editing target.
-     * Cancels pending edits and clears the target if its session was removed;
+     * Cancels pending edits/imports and clears the target if its session was removed;
      * otherwise preserves input values while applying current 2D restrictions.
      *
      * @return {void}
@@ -2818,6 +2820,7 @@ export function initializeRasterViewer(
                 clock.clearTimeout(rasterStyleCommitTimeout);
                 rasterStyleCommitTimeout = null;
             }
+            controlsView.cancelCategoricalImport?.();
             editingLayerKey = null;
             return;
         }
@@ -4197,12 +4200,14 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Remove every retained raster and interaction.
+     * Remove every retained raster and interaction, including pending category
+     * imports that must not outlive their editing target.
      *
      * @return {void}
      */
     function clear() {
         clearing = true;
+        controlsView.cancelCategoricalImport?.();
         editingLayerKey = null;
         cancelRasterSampleWindowResize();
         if (rasterStyleCommitTimeout !== null) {

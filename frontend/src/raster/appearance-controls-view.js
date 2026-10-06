@@ -162,12 +162,13 @@ export class RasterAppearanceControlsView {
 
     /**
      * Show appearance controls for a styleable raster, or hide them when no
-     * raster owns the shared controls.
+     * raster owns the shared controls and cancel its transient CSV import.
      *
      * @param {boolean} isAvailable Whether an active raster can be styled.
      * @return {void}
      */
     setActiveRasterAvailable(isAvailable) {
+        if (!isAvailable) this.cancelCategoricalImport();
         this.#root.hidden = !isAvailable;
         this.#root.setAttribute("aria-hidden", String(!isAvailable));
     }
@@ -234,12 +235,14 @@ export class RasterAppearanceControlsView {
     /**
      * Select the editor presentation without deciding which style is rendered.
      * A categorical draft may be shown while the last valid style remains active.
+     * Leaving categorical mode cancels its preview and any pending CSV read.
      * @param {"continuous"|"categorical"} mode Selected appearance editor.
      * @return {void}
      */
     setAppearanceMode(mode) {
         this.appearanceMode.value = mode;
         const categorical = mode === "categorical";
+        if (!categorical) this.cancelCategoricalImport();
         this.continuousControls.hidden = categorical;
         this.categoricalEditor.root.hidden = !categorical;
         this.resetStyleButton.hidden = categorical;
@@ -253,6 +256,14 @@ export class RasterAppearanceControlsView {
      */
     setCategoricalStyle(style) {
         this.categoricalEditor.setStyle(style);
+    }
+
+    /**
+     * Discard a pending CSV preview or read without changing category drafts.
+     * @return {void}
+     */
+    cancelCategoricalImport() {
+        this.categoricalEditor.cancelCategoricalImport();
     }
 
     /**

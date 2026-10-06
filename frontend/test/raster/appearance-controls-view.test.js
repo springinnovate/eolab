@@ -173,3 +173,30 @@ test("appearance mode switches editors without erasing retained continuous or ca
     mode.dispatchEvent(new Event("change"));
     assert.deepEqual(events, ["categorical"]);
 });
+
+test("appearance mode and target availability discard pending CSV reads", async t => {
+    for (const [name, transition] of [
+        ["continuous mode", view => view.setAppearanceMode("continuous")],
+        ["unavailable target", view => view.setActiveRasterAvailable(false)],
+        ["explicit cancellation", view => view.cancelCategoricalImport()],
+    ]) {
+        await t.test(name, async () => {
+            const doc = new FakeRasterControlDocument();
+            const view = new RasterAppearanceControlsView(doc);
+            view.bind({ onCategoricalStyleChange: () => assert.fail("Late import cannot commit") });
+            view.setAppearanceMode("categorical");
+            let resolveRead;
+            const fileRead = new Promise(resolve => { resolveRead = resolve; });
+            const input = doc.querySelector("#raster-category-csv-file");
+            input.files = [{ name: "pending.csv", size: 100, arrayBuffer: () => fileRead }];
+            input.dispatchEvent(new Event("change"));
+            transition(view);
+            resolveRead(new TextEncoder().encode("value,label,color\n1,Forest,#112233").buffer);
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(doc.querySelector("#raster-category-csv-preview").hidden, true);
+            assert.equal(doc.querySelector("#raster-category-csv-status").textContent, "");
+            assert.equal(doc.querySelector("#apply-raster-category-csv").disabled, true);
+            assert.throws(() => view.readCategoricalStyle(), /Category 1 value/);
+        });
+    }
+});
