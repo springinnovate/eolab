@@ -18,6 +18,7 @@ from pydantic import (
 
 MAX_VIEW_BYTES = 512 * 1024
 MAX_REQUEST_BYTES = MAX_VIEW_BYTES + 4096
+MAX_APPEARANCE_DEFINITION_BYTES = 65_536
 Slug = Annotated[
     str,
     StringConstraints(
@@ -90,12 +91,117 @@ class MapCatalogItem(MapDocumentPart):
     id: CatalogIdentity
 
 
+def validate_appearance_definition_size(definition: dict[str, JsonValue]) -> None:
+    """Bound an opaque appearance definition without interpreting its semantics.
+
+    Args:
+        definition: Owner-specific JSON object from a portable appearance.
+
+    Raises:
+        ValueError: If serialized content exceeds 65,536 UTF-8 bytes.
+    """
+    serialized = json.dumps(
+        definition, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
+    if len(serialized.encode("utf-8")) > MAX_APPEARANCE_DEFINITION_BYTES:
+        raise ValueError("Saved appearance definition exceeds 65,536 UTF-8 bytes.")
+
+
+class MapRasterContinuousAppearance(MapDocumentPart):
+    """Retained continuous configuration whose definition stays raster-owned.
+
+    Attributes:
+        definition: Bounded opaque continuous style definition.
+        paletteName: Raster-owned palette identifier.
+        styleWasEdited: Whether automatic initial styling may replace the range.
+    """
+
+    definition: dict[str, JsonValue]
+    paletteName: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    styleWasEdited: bool
+
+    @field_validator("definition")
+    @classmethod
+    def require_bounded_definition(
+        cls, definition: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        """Keep a retained definition within the portable appearance limit.
+
+        Args:
+            definition: Opaque continuous style JSON.
+
+        Returns:
+            The unchanged definition.
+
+        Raises:
+            ValueError: If serialized content exceeds 65,536 UTF-8 bytes.
+        """
+        validate_appearance_definition_size(definition)
+        return definition
+
+
 class MapRasterStyle(MapDocumentPart):
-    """Raster style JSON whose meaning is validated by raster styling on restore."""
+    """Legacy or versioned raster appearance, with owner-validated definitions.
+
+    A legacy envelope contains only kind, definition, and paletteName. Version
+    one contains only kind, appearanceVersion, mode, continuous, and categorical.
+    Both definitions survive a mode change; the raster owner validates their
+    meaning when restoring a layer. Legacy content is preserved for migration.
+
+    Attributes:
+        kind: Raster layer appearance discriminator.
+        definition: Legacy opaque continuous definition.
+        paletteName: Legacy opaque palette value.
+        appearanceVersion: Version of the dual-configuration appearance.
+        mode: Active retained configuration.
+        continuous: Retained continuous definition and editing state.
+        categorical: Retained category definition, absent before configuration.
+    """
 
     kind: Literal["raster"]
-    definition: dict[str, JsonValue]
-    paletteName: JsonValue
+    definition: dict[str, JsonValue] | None = None
+    paletteName: JsonValue = None
+    appearanceVersion: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
+    mode: Literal["continuous", "categorical"] | None = None
+    continuous: MapRasterContinuousAppearance | None = None
+    categorical: dict[str, JsonValue] | None = None
+
+    @model_validator(mode="after")
+    def require_complete_appearance_envelope(self) -> Self:
+        """Reject mixed envelopes and preserve the storage/appearance boundary.
+
+        Returns:
+            This unchanged legacy or versioned appearance envelope.
+
+        Raises:
+            ValueError: If fields are missing, modes conflict, or a definition
+                exceeds the portable appearance limit.
+        """
+        if "appearanceVersion" not in self.model_fields_set:
+            if self.model_fields_set != {"kind", "definition", "paletteName"}:
+                raise ValueError("Legacy raster appearance has unsupported fields.")
+            if self.definition is None:
+                raise ValueError("Legacy raster definition must be an object.")
+            return self
+        if self.model_fields_set != {
+            "kind",
+            "appearanceVersion",
+            "mode",
+            "continuous",
+            "categorical",
+        }:
+            raise ValueError(
+                "Raster appearance contains missing or unsupported fields."
+            )
+        if self.appearanceVersion != 1 or self.mode is None or self.continuous is None:
+            raise ValueError(
+                "Raster appearance version, mode, and continuous state are required."
+            )
+        if self.categorical is not None:
+            validate_appearance_definition_size(self.categorical)
+        elif self.mode == "categorical":
+            raise ValueError("Categorical mode requires a category table.")
+        return self
 
 
 class MapVectorStyle(MapDocumentPart):

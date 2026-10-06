@@ -220,6 +220,77 @@ test("pending and failed summaries do not present cached charts as the current s
     assert.equal(list.children[0].children[1].textContent, "Histogram unavailable: No finite pixels in this sample.");
 });
 
+test("unavailable presentation replaces continuous charts without changing lifecycle or actions", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const actions = [];
+    view.bind({
+        onStyleHistogram: (key) => actions.push(["style", key]),
+        onCalculateHistogram: (key) => actions.push(["summarize", key]),
+        onDownloadHistogram: (key) => actions.push(["download", key]),
+    });
+    const unavailableMessage = "Categorical area summaries are not available yet.";
+    const list = doc.querySelector("#raster-histogram-list");
+    for (const automatic of [false, true]) {
+        for (const state of ["idle", "loading", "ready", "error"]) {
+            const summary = Object.freeze({
+                key: "landcover", label: "landcover.tif", scope: "Whole raster",
+                automatic, state, counts: RASTER_STATISTICS.histogram.counts,
+                statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE,
+                unavailableMessage,
+            });
+            view.renderLayerHistograms([summary], "landcover");
+            const row = list.children[0];
+            const content = automatic ? row : row.children[0];
+            assert.equal(content.children[1].textContent, unavailableMessage);
+            assert.equal(content.children[1].hidden, false);
+            assert.equal(content.children[1].getAttribute("role"), "status");
+            assert.equal(content.children.some((child) =>
+                child.classList.contains("raster-histogram-chart") ||
+                child.classList.contains("raster-histogram-summary-preview")
+            ), false);
+            assert.equal(view.summaryAxisControls.length, 0);
+            assert.equal(summary.state, state);
+        }
+    }
+    for (const button of list.children[0].children.at(-1).children) {
+        button.dispatchEvent(new Event("click"));
+    }
+    assert.deepEqual(actions, [
+        ["style", "landcover"], ["summarize", "landcover"], ["download", "landcover"],
+    ]);
+    view.unbind();
+});
+
+test("unavailable presentation releases previous chart observers and can resume ordinary charts", () => {
+    const doc = new FakeRasterControlDocument();
+    const { ResizeObserver, instances } = createFakeResizeObservers();
+    doc.defaultView = { ResizeObserver };
+    const view = new RasterHistogramControlsView(doc);
+    const summary = {
+        key: "landcover", label: "landcover.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE,
+    };
+    view.renderLayerHistograms([summary], "landcover");
+    const previousChart = instances[0].target;
+    view.renderLayerHistograms([{
+        ...summary, counts: null, statistics: null,
+        unavailableMessage: "Categorical area summaries are not available yet.",
+    }], "landcover");
+    assert.equal(instances[0].disconnected, true);
+    instances[0].resize(391);
+    assert.equal(previousChart.children.length, 0);
+    assert.equal(instances.length, 1);
+    view.renderLayerHistograms([summary], "landcover");
+    assert.equal(instances.length, 2);
+    assert.equal(view.summaryAxisControls.length, 1);
+    assert.throws(() => view.renderLayerHistograms([{
+        ...summary, unavailableMessage: false,
+    }], "landcover"), /summary is invalid/);
+    view.unbind();
+});
+
 test("only paired mode shows a shared scope; 1D retains each layer's own scope", () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);

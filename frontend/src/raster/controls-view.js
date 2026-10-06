@@ -24,6 +24,9 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * @typedef {Object} RasterControlHandlers
  * @property {(isColor: boolean) => void} onStyleInput Handles style edits.
  * @property {() => void} onStyleChange Commits a completed style edit.
+ * @property {(mode:"continuous"|"categorical")=>void} onAppearanceModeChange Selects the appearance editor.
+ * @property {()=>void} onCategoricalStyleInput Validates category drafts.
+ * @property {()=>void} onCategoricalStyleChange Commits a valid category draft.
  * @property {() => void} onPaletteChange Applies a selected color palette.
  * @property {() => void} onResetStyle Restores the initial raster style.
  * @property {() => void} onPercentileInput Updates percentile estimates.
@@ -176,6 +179,42 @@ export class RasterControlsView {
      */
     setStyle(style, paletteName) {
         this.#appearanceView.setStyle(style, paletteName);
+    }
+
+    /**
+     * Select the appearance editor without changing committed layer state.
+     * @param {"continuous"|"categorical"} mode Editor mode.
+     * @return {void}
+     */
+    setAppearanceMode(mode) {
+        this.#appearanceView.setAppearanceMode(mode);
+    }
+
+    /**
+     * Hydrate a category draft when the editing target changes.
+     * @param {Object|null} style Validated category table, or a new empty draft.
+     * @return {void}
+     */
+    setCategoricalStyle(style) {
+        this.#appearanceView.setCategoricalStyle(style);
+    }
+
+    /**
+     * Validate and read the category editor's current draft.
+     * @return {Object} Canonical immutable categorical style.
+     * @throws {Error} If any category field or table limit is invalid.
+     */
+    readCategoricalStyle() {
+        return this.#appearanceView.readCategoricalStyle();
+    }
+
+    /**
+     * Present a category field or table validation error.
+     * @param {Error|null} [error=null] Error to display or clear.
+     * @return {void}
+     */
+    renderCategoricalError(error = null) {
+        this.#appearanceView.renderCategoricalError(error);
     }
 
     /** Return the currently selected palette name. @return {string} Palette name. */

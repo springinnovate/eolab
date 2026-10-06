@@ -1,0 +1,36 @@
+{
+  "format": "eolab-map-view",
+  "schemaVersion": 3,
+  "viewer": {"version": "0.8.0", "origin": "https://viewer.example"},
+  "createdAt": "2026-10-06T12:00:00.000Z",
+  "viewport": {"center": {"latitude": -8, "longitude": -65}, "zoom": 5},
+  "basemap": "detailed",
+  "layers": [{
+    "catalogItem": {"collection": "rasters", "id": "landcover"},
+    "sourceRevision": null,
+    "visible": true,
+    "opacity": 0.75,
+    "style": {
+      "kind": "raster",
+      "appearanceVersion": 1,
+      "mode": "categorical",
+      "continuous": {
+        "definition": {
+          "minimum": 0, "midpoint": 50, "maximum": 100,
+          "minimumColor": "#2b83ba", "midpointColor": "#ffffbf", "maximumColor": "#d7191c",
+          "minimumOpacity": 1, "midpointOpacity": 0.75, "maximumOpacity": 1
+        },
+        "paletteName": "custom",
+        "styleWasEdited": false
+      },
+      "categorical": {
+        "mode": "categorical",
+        "categories": [
+          {"value": 41, "label": "Forest", "color": "#228b22", "opacity": 1},
+          {"value": 0, "label": "Water", "color": "#0000ff", "opacity": 0.5}
+        ],
+        "unmapped": {"color": "#808080", "opacity": 0}
+      }
+    }
+  }]
+}

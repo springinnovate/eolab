@@ -29,6 +29,7 @@ import {
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
     setRasterLayerAdditiveBlend,
+    setRasterWmsStyle,
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
@@ -63,48 +64,14 @@ import {
     deriveRasterStyleFromStatistics,
     RASTER_COLOR_PALETTES,
     buildRasterLegend,
-    validateRasterStyle,
 } from "./style.js";
-import { buildRasterStyleEnvironment } from "./wms.js";
+import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } from "./wms.js";
+import { normalizeRasterAppearanceState } from "./appearance-state.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
+const CATEGORICAL_HISTOGRAM_MESSAGE = "Categorical distributions and area proportions are not available yet.";
 export const RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS = 350;
-const PORTABLE_RASTER_STYLE_FIELDS = Object.freeze([
-    "minimum",
-    "midpoint",
-    "maximum",
-    "minimumColor",
-    "midpointColor",
-    "maximumColor",
-    "minimumOpacity",
-    "midpointOpacity",
-    "maximumOpacity",
-]);
-
-/**
- * Copy and strictly validate one untrusted portable raster style.
- *
- * @param {unknown} candidate Candidate saved style definition.
- * @return {Object} Canonical raster style containing only owned fields.
- */
-function normalizePortableRasterStyle(candidate) {
-    if (candidate === null || typeof candidate !== "object" ||
-        Array.isArray(candidate)) {
-        throw new TypeError("Saved raster style must be an object.");
-    }
-    const keys = Object.keys(candidate).sort();
-    if (JSON.stringify(keys) !==
-        JSON.stringify([...PORTABLE_RASTER_STYLE_FIELDS].sort())) {
-        throw new TypeError(
-            "Saved raster style contains missing or unsupported fields."
-        );
-    }
-    return validateRasterStyle(Object.fromEntries(
-        PORTABLE_RASTER_STYLE_FIELDS.map((field) => [field, candidate[field]])
-    ));
-}
-
 /**
  * Check one copied style against the portable raster appearance contract.
  *
@@ -116,13 +83,7 @@ function checkPortableRasterStyleCompatibility(savedState) {
         return "Only copied raster styles can be pasted onto raster layers.";
     }
     try {
-        normalizePortableRasterStyle(savedState.definition);
-        if (
-            savedState.paletteName !== "custom" &&
-            !Object.hasOwn(RASTER_COLOR_PALETTES, savedState.paletteName)
-        ) {
-            throw new TypeError("Copied raster palette is invalid.");
-        }
+        normalizeRasterAppearanceState(savedState);
         return null;
     } catch (error) {
         return error instanceof Error
@@ -335,6 +296,7 @@ export function initializeRasterViewer(
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
     let activePaletteName = DEFAULT_RASTER_PALETTE_NAME;
     let editingLayerKey = null;
+    let editingAppearanceMode = "continuous";
     let followsVisibleLayers = false;
     let visibleHistogramSignature = null;
     let clearing = false;
@@ -401,6 +363,8 @@ export function initializeRasterViewer(
             item: entry.item,
             label: entry.label,
             publishedRaster,
+            appearanceMode: "continuous",
+            categoricalStyle: null,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -577,6 +541,7 @@ export function initializeRasterViewer(
         }
         candidate.item = session.item;
         candidate.label = session.label;
+        candidate.appearanceMode = session.appearanceMode ?? "continuous";
         const sessionRangeResolved = !hasDefaultRasterRange(
             session.rasterStyle,
             session.rasterStyleWasEdited
@@ -629,6 +594,7 @@ export function initializeRasterViewer(
             key,
             item,
             label: liveSession?.label ?? getCatalogRasterBasename(item),
+            appearanceMode: liveSession?.appearanceMode ?? "continuous",
             rasterStyle: {
                 ...(styleSource?.rasterStyle ?? DEFAULT_RASTER_STYLE),
             },
@@ -953,6 +919,7 @@ export function initializeRasterViewer(
      */
     function buildLayerHistogramSummary(session) {
         const presentation = getLayerHistogramPresentation(session);
+        const categorical = session.appearanceMode === "categorical";
         const counts = presentation.statistics?.histogram?.counts;
         const error = session.selectedCatalogSelection !== null || session.selectedRasterBounds !== null
             ? session.selectedRasterStatisticsError : session.wholeRasterStatisticsError;
@@ -961,11 +928,12 @@ export function initializeRasterViewer(
             label: session.label,
             state: presentation.state,
             scope: presentation.scope,
-            counts: Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
+            counts: !categorical && Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
                 ? [...counts] : null,
             automatic: followsVisibleLayers,
             valueLabel: getHistogramValueLabel(session.item),
-            statistics: presentation.state === "ready" ? presentation.statistics : null,
+            statistics: !categorical && presentation.state === "ready" ? presentation.statistics : null,
+            ...(categorical ? { unavailableMessage: CATEGORICAL_HISTOGRAM_MESSAGE } : {}),
             style: session.rasterStyle,
             errorMessage: presentation.state === "error" ? error?.message ?? "" : "",
             canRetry: presentation.state === "error" && canRetryRasterStatistics(error),
@@ -1213,6 +1181,7 @@ export function initializeRasterViewer(
              */
             ({ entry, state }) => ({
                 key: entry.key, item: entry.item, label: entry.label,
+                appearanceMode: state.appearanceMode ?? "continuous",
                 rasterStyle: { ...state.rasterStyle },
                 rasterRangeResolved: !hasDefaultRasterRange(
                     state.rasterStyle, state.rasterStyleWasEdited
@@ -1220,9 +1189,9 @@ export function initializeRasterViewer(
             })
         );
         let migratedPair = false;
-        if (bivariateMode.active && records.length !== 2) {
+        if (bivariateMode.active && (records.length !== 2 || bivariateCandidates.some(candidate => candidate.appearanceMode === "categorical"))) {
             leaveBivariateMode(
-                "Show at least two raster layers to resume 2D analysis.",
+                "The 2D histogram requires two continuous raster layers.",
                 false
             );
         } else if (pairChanged) {
@@ -1379,7 +1348,7 @@ export function initializeRasterViewer(
         }
         session.rasterStatistics = statistics;
         session.rasterStatisticsIsApplicable = true;
-        if (samplingArea.kind === "wholeRaster") {
+        if (samplingArea.kind === "wholeRaster" && session.appearanceMode !== "categorical") {
             const style = deriveInitialRasterStyleFromStatistics(
                 session.rasterStyle, statistics, session.rasterStyleWasEdited
             );
@@ -1767,7 +1736,8 @@ export function initializeRasterViewer(
      */
     function renderBivariateAvailability(message = null) {
         const eligible = bivariateCandidates;
-        const canEnter = eligible.length === 2;
+        const hasCategorical = eligible.some(candidate => candidate.appearanceMode === "categorical");
+        const canEnter = eligible.length === 2 && !hasCategorical;
         const hasSuppressedLayers = mapLayers.visibleCount > 2;
         const extraGuidance = hasSuppressedLayers
             ? " Other visible layers are temporarily hidden in 2D mode."
@@ -1777,6 +1747,8 @@ export function initializeRasterViewer(
                 ? "2D analyzes the X/Y-badged rasters with coordinated colors " +
                   "and blending at 100% opacity. Reorder Map layers to change " +
                   `the pair.${extraGuidance}`
+                : hasCategorical
+                    ? "2D comparison is not available for categorical layers."
                 : canEnter
                     ? "2D analyzes the top two visible rasters. Reorder Map " +
                       `layers to choose the pair.${extraGuidance}`
@@ -1856,10 +1828,7 @@ export function initializeRasterViewer(
             const record = mapLayers.getRecord(key);
             const layer = mapLayers.getLeafletLayer(key);
             if (record === null || layer === null) continue;
-            layer.setParams({
-                styles: "dynamic-raster",
-                env: buildRasterStyleEnvironment(record.state.rasterStyle),
-            });
+            setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
             layer.setOpacity(record.entry.opacity);
             if (mapLayers.isAttached(key)) {
                 setRasterLayerAdditiveBlend(layer, false);
@@ -1893,10 +1862,9 @@ export function initializeRasterViewer(
      */
     function enterBivariateMode() {
         const eligible = bivariateCandidates;
-        if (eligible.length !== 2) {
+        if (eligible.length !== 2 || eligible.some(candidate => candidate.appearanceMode === "categorical")) {
             renderBivariateAvailability(
-                "The 2D histogram requires two selected single-band catalog " +
-                "rasters."
+                "The 2D histogram requires two continuous single-band rasters."
             );
             controlsView.renderBivariateMode?.({ active: false });
             return;
@@ -2024,22 +1992,25 @@ export function initializeRasterViewer(
                 reportTileError
             );
             record.state.layer = layer;
+            if (record.state.appearanceMode === "categorical") {
+                setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
+            }
             return layer;
         },
         /**
          * Describe the current authorized raster appearance for composition.
          *
          * @param {Object} record Retained raster publication and style state.
-         * @return {{layerName:string,styleName:string,styleEnvironment:string}}
+         * @return {{layerName:string,styleName:string,styleEnvironment?:string,styleDefinition?:Object}}
          * Complete feature-owned composite descriptor.
          */
         renderDescriptor(record) {
             return {
                 layerName: record.publication.layerName,
                 styleName: "dynamic-raster",
-                styleEnvironment: buildRasterStyleEnvironment(
-                    record.state.rasterStyle
-                ),
+                ...(record.state.appearanceMode === "categorical"
+                    ? { styleDefinition: record.state.categoricalStyle }
+                    : { styleEnvironment: buildRasterStyleEnvironment(record.state.rasterStyle) }),
             };
         },
         /**
@@ -2048,14 +2019,28 @@ export function initializeRasterViewer(
          *
          * @param {Object} record Retained raster entry and interaction state.
          * @return {{datasetKind:"raster",opacityLocked:boolean,effectiveOpacity:number,
-         * legend:Object}} Opacity in [0, 1] and a gradient legend containing
-         * its kind, CSS gradient, description, and three numeric labels.
+         * roleBadge:({label:"X"|"Y",description:string}|null),
+         * legend:({kind:"fixed",label:string}|{kind:"gradient",gradient:string,
+         * description:string,label:string,labels:number[]})}}
+         * Opacity in [0, 1], an optional paired-axis badge, and either a
+         * categorical legend placeholder or a continuous gradient legend.
          */
         snapshot(record) {
             if (activeLayerKey === record.entry.key) {
                 saveActiveLayerSession();
             }
             let presentationStyle = record.state.rasterStyle;
+            if (record.state.appearanceMode === "categorical") {
+                return {
+                    datasetKind: "raster", opacityLocked: false,
+                    effectiveOpacity: record.entry.opacity,
+                    roleBadge: null,
+                    legend: {
+                        kind: "fixed",
+                        label: "Categorical legend is not available yet.",
+                    },
+                };
+            }
             const opacityLocked = bivariateMode.contains(record.entry.key);
             if (opacityLocked) {
                 const presentation = getBivariatePresentation();
@@ -2090,21 +2075,27 @@ export function initializeRasterViewer(
             };
         },
         /**
-         * Export only this raster's validated appearance and palette identity.
+         * Export the selected mode and both validated appearance configurations.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{kind:string,definition:Object,paletteName:string}}
+         * @return {import("./appearance-state.js").RasterAppearanceState}
          * Portable raster style state.
          */
         exportSavedState(record) {
             if (activeLayerKey === record.entry.key) {
                 saveActiveLayerSession();
             }
-            return {
+            return normalizeRasterAppearanceState({
                 kind: "raster",
-                definition: { ...validateRasterStyle(record.state.rasterStyle) },
-                paletteName: record.state.paletteName,
-            };
+                appearanceVersion: 1,
+                mode: record.state.appearanceMode ?? "continuous",
+                continuous: {
+                    definition: record.state.rasterStyle,
+                    paletteName: record.state.paletteName,
+                    styleWasEdited: record.state.rasterStyleWasEdited,
+                },
+                categorical: record.state.categoricalStyle ?? null,
+            });
         },
         /**
          * Check one copied appearance before offering a raster paste action.
@@ -2124,18 +2115,17 @@ export function initializeRasterViewer(
          * @return {void}
          */
         applySavedState(record, savedState) {
-            if (savedState?.kind !== "raster") {
-                throw new TypeError("Saved style does not belong to a raster.");
+            const appearance = normalizeRasterAppearanceState(savedState);
+            const session = record.state;
+            session.appearanceMode = appearance.mode;
+            session.categoricalStyle = appearance.categorical;
+            applySessionStyle(session, appearance.continuous.definition,
+                appearance.continuous.paletteName, appearance.continuous.styleWasEdited);
+            if (bivariateMode.contains(session.key) && appearance.mode === "categorical") {
+                leaveBivariateMode("2D comparison is not available for categorical layers.");
             }
-            const style = { ...normalizePortableRasterStyle(
-                savedState.definition
-            ) };
-            const paletteName = savedState.paletteName;
-            if (paletteName !== "custom" &&
-                !Object.hasOwn(RASTER_COLOR_PALETTES, paletteName)) {
-                throw new TypeError("Saved raster palette is invalid.");
-            }
-            applySessionStyle(record.state, style, paletteName, true);
+            if (editingLayerKey === session.key) presentSessionAppearance(session);
+            renderBivariateAvailability();
         },
         /**
          * Copy matching detached analysis state before activating a renderer.
@@ -2664,6 +2654,10 @@ export function initializeRasterViewer(
             return;
         }
         const scopeLabel = styleHistogramScopeLabel(session);
+        if (editingAppearanceMode === "categorical") {
+            controlsView.renderStyleHistogramState?.(scopeLabel, CATEGORICAL_HISTOGRAM_MESSAGE);
+            return;
+        }
         if (session.rasterStatistics === null) {
             const lifecycle = styleHistogramLifecycle(session);
             const message = lifecycle.state === "loading"
@@ -2713,6 +2707,52 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Hydrate an editor and clear stale action feedback when its target or saved state changes.
+     * @param {Object} session Retained layer and both committed configurations.
+     * @return {void}
+     */
+    function presentSessionAppearance(session) {
+        editingAppearanceMode = session.appearanceMode ?? "continuous";
+        controlsView.setStyle(session.rasterStyle, session.paletteName);
+        controlsView.setCategoricalStyle?.(session.categoricalStyle ?? null);
+        controlsView.setAppearanceMode?.(editingAppearanceMode);
+        controlsView.setAppearanceStatus("");
+    }
+
+    /**
+     * Build mutually exclusive direct WMS parameters for committed appearance.
+     * @param {Object} session Layer-owned style state.
+     * @return {{env?:string,raster_style?:string}} Validated WMS parameters.
+     * @throws {Error} If the committed appearance is invalid.
+     */
+    function rasterSessionStyleParameters(session) {
+        return session.appearanceMode === "categorical"
+            ? { raster_style: buildCategoricalRasterStyleParameter(session.categoricalStyle) }
+            : { env: buildRasterStyleEnvironment(session.rasterStyle) };
+    }
+
+    /**
+     * Identify categorical presentation for the active map-layer analysis context.
+     * Detached catalog analysis keeps its independent numeric presentation.
+     * @return {boolean} Whether the active retained layer is categorical.
+     */
+    function activeAppearanceIsCategorical() {
+        return mapLayers.getRecord(activeLayerKey)?.state.appearanceMode === "categorical";
+    }
+
+    /**
+     * Replace a continuous histogram with explicit categorical availability guidance.
+     * @return {void}
+     */
+    function presentCategoricalHistogramUnavailable() {
+        controlsView.clearHistogram();
+        controlsView.setPercentileControlsVisible(false);
+        controlsView.setApplyPercentilesEnabled(false);
+        controlsView.setStatisticsBusy(false);
+        controlsView.setStatisticsStatus(CATEGORICAL_HISTOGRAM_MESSAGE);
+    }
+
+    /**
      * Select a style target without transferring histogram or click ownership.
      * Flushes any pending edit on the previous target before looking up the key.
      *
@@ -2728,7 +2768,7 @@ export function initializeRasterViewer(
         if (session === null) return false;
         saveActiveLayerSession();
         editingLayerKey = key;
-        controlsView.setStyle(session.rasterStyle, session.paletteName);
+        presentSessionAppearance(session);
         controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
         refreshStyle();
         return true;
@@ -2757,6 +2797,7 @@ export function initializeRasterViewer(
     function closeStyle() {
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
         editingLayerKey = null;
+        editingAppearanceMode = "continuous";
         controlsView.clearStyleHistogram?.();
     }
 
@@ -2781,8 +2822,13 @@ export function initializeRasterViewer(
         controlsView.setRenderingControlsAvailable(true);
         controlsView.setAppearanceEnabled(!bivariateMode.contains(editingLayerKey));
         controlsView.setPercentileControlsVisible(
-            session.rasterStatistics !== null
+            editingAppearanceMode !== "categorical" && session.rasterStatistics !== null
         );
+        if (editingAppearanceMode === "categorical") {
+            controlsView.setApplyPercentilesEnabled(false);
+            renderEditingStyleHistogram();
+            return;
+        }
         updateRasterPercentileValues();
         if (session.rasterStatistics === null) {
             renderEditingStyleHistogram(session.rasterStyle);
@@ -2802,9 +2848,9 @@ export function initializeRasterViewer(
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
         const environment = buildRasterStyleEnvironment(style);
-        session.layer?.setParams({
-            styles: "dynamic-raster", env: environment,
-        });
+        if (session.layer) setRasterWmsStyle(session.layer,
+            session.appearanceMode === "categorical"
+                ? rasterSessionStyleParameters(session) : { env: environment });
         session.rasterStyle = { ...style };
         session.paletteName = paletteName;
         session.rasterStyleWasEdited = wasEdited;
@@ -2812,8 +2858,12 @@ export function initializeRasterViewer(
             rasterStyle = { ...style };
             activePaletteName = paletteName;
             rasterStyleWasEdited = wasEdited;
-            if (rasterStatistics !== null) {
-                controlsView.renderHistogram(rasterStatistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
+            if (session.appearanceMode === "categorical") {
+                presentCategoricalHistogramUnavailable();
+            } else if (rasterStatistics !== null) {
+                renderRasterStatistics(rasterStatistics, false, rasterStatisticsIsApplicable);
+            } else {
+                controlsView.setStatisticsStatus("");
             }
             saveActiveLayerSession();
         }
@@ -2852,6 +2902,10 @@ export function initializeRasterViewer(
         }
         const session = editingSession();
         if (session === null || bivariateMode.contains(session.key)) return;
+        if (editingAppearanceMode === "categorical") {
+            commitCategoricalStyle();
+            return;
+        }
         const candidate = validateRasterStyleControls();
         if (candidate === null) return;
         try {
@@ -2874,7 +2928,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function scheduleRasterStyleCommit() {
-        const candidate = validateRasterStyleControls();
+        const candidate = editingAppearanceMode === "categorical"
+            ? null : validateRasterStyleControls();
         if (candidate !== null) {
             renderEditingStyleHistogram(candidate.style);
         }
@@ -2936,6 +2991,13 @@ export function initializeRasterViewer(
      */
     function updateRasterPercentileValues() {
         const session = editingSession();
+        if ((editingLayerKey !== null && editingAppearanceMode === "categorical") ||
+            (editingLayerKey === null && activeAppearanceIsCategorical())) {
+            controlsView.setPercentileControlsVisible(false);
+            controlsView.setApplyPercentilesEnabled(false);
+            renderEditingStyleHistogram();
+            return null;
+        }
         const statistics = editingLayerKey === null
             ? rasterStatistics : session?.rasterStatistics ?? null;
         const applicable = editingLayerKey === null
@@ -3017,6 +3079,7 @@ export function initializeRasterViewer(
      * @return {boolean} Whether the bounded initial range was applied.
      */
     function applyInitialWholeRasterStyle(statistics) {
+        if (activeAppearanceIsCategorical()) return false;
         const initialStyle = deriveInitialRasterStyleFromStatistics(
             rasterStyle,
             statistics,
@@ -3064,6 +3127,11 @@ export function initializeRasterViewer(
             );
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(false);
+        if (activeAppearanceIsCategorical()) {
+            presentCategoricalHistogramUnavailable();
+            saveActiveLayerSession();
+            return;
+        }
         controlsView.renderHistogram(statistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
         controlsView.setPercentileControlsVisible(true);
         resetRasterPercentileControls();
@@ -3199,7 +3267,9 @@ export function initializeRasterViewer(
         controlsView.setStatisticsRetryVisible(false);
         controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsStatus(
-            rasterStatistics === null
+            activeAppearanceIsCategorical()
+                ? CATEGORICAL_HISTOGRAM_MESSAGE
+            : rasterStatistics === null
                 ? selectedRasterStatisticsLoadingMessage()
                 : selectedRasterStatisticsLoadingMessage() + " " +
                   "The previous histogram remains visible for reference and " +
@@ -3260,7 +3330,9 @@ export function initializeRasterViewer(
             : `Vector selection ${selectedCatalogSelection.filename}, layer ` +
               selectedCatalogSelection.selectedDataset;
         controlsView.setStatisticsStatus(
-            rasterStatistics === null
+            activeAppearanceIsCategorical()
+                ? CATEGORICAL_HISTOGRAM_MESSAGE
+            : rasterStatistics === null
                 ? `${areaName} histogram unavailable: ${error.message} ` +
                   "Manual appearance controls remain available."
                 : `${areaName} histogram unavailable: ${error.message} ` +
@@ -3689,11 +3761,87 @@ export function initializeRasterViewer(
      */
     function handleStyleInput(isColor) {
         const session = editingSession();
-        if (session === null || bivariateMode.contains(session.key)) return;
+        if (session === null || editingAppearanceMode === "categorical" || bivariateMode.contains(session.key)) return;
         session.rasterStyleWasEdited = true;
         if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         if (isColor) {
             controlsView.setPaletteName("custom");
+        }
+        scheduleRasterStyleCommit();
+    }
+
+    /**
+     * Select the editor mode, applying only a complete valid configuration.
+     * An empty or invalid category draft leaves the last rendered mode intact.
+     * @param {"continuous"|"categorical"} mode Requested appearance editor.
+     * @return {void}
+     * @throws {TypeError} If the control supplies an unsupported mode.
+     */
+    function handleAppearanceModeChange(mode) {
+        if (mode !== "continuous" && mode !== "categorical") {
+            throw new TypeError("Unsupported raster appearance mode.");
+        }
+        const session = editingSession();
+        if (session === null || bivariateMode.contains(session.key)) return;
+        if (rasterStyleCommitTimeout !== null) commitRasterStyle();
+        editingAppearanceMode = mode;
+        controlsView.setAppearanceMode?.(mode);
+        if (mode === "categorical") {
+            commitCategoricalStyle();
+        } else {
+            session.appearanceMode = "continuous";
+            applySessionStyle(session, session.rasterStyle, session.paletteName,
+                session.rasterStyleWasEdited);
+            controlsView.setStyle(session.rasterStyle, session.paletteName);
+            renderBivariateAvailability();
+            renderLayerStack();
+            controlsView.setAppearanceStatus("Restored continuous styling with its retained palette and range.");
+        }
+        refreshStyle();
+    }
+
+    /**
+     * Validate and apply the editing layer's complete category table atomically.
+     * Invalid drafts remain in the editor and never enter rendering or persistence.
+     * @return {void}
+     */
+    function commitCategoricalStyle() {
+        const session = editingSession();
+        if (session === null || editingAppearanceMode !== "categorical" ||
+            bivariateMode.contains(session.key)) return;
+        try {
+            const style = controlsView.readCategoricalStyle();
+            const parameters = { raster_style: buildCategoricalRasterStyleParameter(style) };
+            if (session.layer) setRasterWmsStyle(session.layer, parameters);
+            session.categoricalStyle = style;
+            session.appearanceMode = "categorical";
+            controlsView.renderCategoricalError?.();
+        } catch (error) {
+            controlsView.renderCategoricalError?.(error);
+            controlsView.setAppearanceStatus("The map keeps its last valid appearance until every category is valid.");
+            return;
+        }
+        if (session.key === activeLayerKey) presentCategoricalHistogramUnavailable();
+        syncBivariateCandidate(session);
+        renderBivariateAvailability();
+        refreshStyle();
+        renderLayerStack();
+        controlsView.setAppearanceStatus("Applied categorical styling. Category legends and labeled pixel results are coming in the next update.");
+    }
+
+    /**
+     * Validate category edits immediately and debounce valid map updates.
+     * @return {void}
+     */
+    function handleCategoricalStyleInput() {
+        const session = editingSession();
+        if (session === null || editingAppearanceMode !== "categorical" ||
+            bivariateMode.contains(session.key)) return;
+        try {
+            controlsView.readCategoricalStyle();
+            controlsView.renderCategoricalError?.();
+        } catch (error) {
+            controlsView.renderCategoricalError?.(error);
         }
         scheduleRasterStyleCommit();
     }
@@ -3704,6 +3852,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handlePaletteChange() {
+        if (editingAppearanceMode === "categorical") return;
         const paletteName = controlsView.getPaletteName();
         if (paletteName === "custom") {
             return;
@@ -3735,7 +3884,7 @@ export function initializeRasterViewer(
      */
     function handleResetStyle() {
         const session = editingSession();
-        if (session === null || bivariateMode.contains(session.key)) return;
+        if (session === null || editingAppearanceMode === "categorical" || bivariateMode.contains(session.key)) return;
         session.rasterStyleWasEdited = true;
         if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         resetRasterStyle();
@@ -4204,6 +4353,9 @@ export function initializeRasterViewer(
     controlsView.bind({
         onStyleInput: handleStyleInput,
         onStyleChange: commitRasterStyle,
+        onAppearanceModeChange: handleAppearanceModeChange,
+        onCategoricalStyleInput: handleCategoricalStyleInput,
+        onCategoricalStyleChange: commitRasterStyle,
         onPaletteChange: handlePaletteChange,
         onResetStyle: handleResetStyle,
         onPercentileInput: updateRasterPercentileValues,

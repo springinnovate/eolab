@@ -4,6 +4,7 @@ import test from "node:test";
 import { MapLayerController } from "../../src/map-layers/controller.js";
 import { MapLayerStyleEditor } from "../../src/map-layers/style-editor.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
+import { CatalogVisualizationCoordinator } from "../../src/catalog-visualization.js";
 import {
     initializeRasterViewer,
     RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS,
@@ -14,6 +15,8 @@ import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-c
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { normalizeCategoricalRasterStyle } from "../../src/raster/categorical-style.js";
+import { createSavedMapView, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 import {
     EXACT_RASTER_STATISTICS,
     MOUNTED_GEOTIFF_ITEM,
@@ -125,6 +128,7 @@ function createFakeLayer(details = {}) {
     let container = { style: {} };
     return {
         ...details,
+        wmsParams: { ...details.wmsOptions },
         eventHandlers: new Map(),
         parameters: null,
         parameterUpdates: [],
@@ -150,6 +154,7 @@ function createFakeLayer(details = {}) {
             this.boundsHistory.push(bounds);
         },
         setParams(parameters) {
+            Object.assign(this.wmsParams, parameters);
             this.parameters = parameters;
             this.parameterUpdates.push(parameters);
         },
@@ -256,6 +261,26 @@ function createFakeControlsView() {
             this.style = { ...style };
             this.paletteName = paletteName;
         },
+        /** @param {"continuous"|"categorical"} mode Editor selection. @return {void} */
+        setAppearanceMode(mode) {
+            this.appearanceMode = mode;
+        },
+        /** @param {Object|null} style Committed table or empty editor. @return {void} */
+        setCategoricalStyle(style) {
+            this.categoricalStyle = structuredClone(style);
+        },
+        /**
+         * Read and validate the draft like the real categorical view boundary.
+         * @return {Object} Independent normalized categorical appearance.
+         * @throws {Error} If the current draft is invalid.
+         */
+        readCategoricalStyle() {
+            return normalizeCategoricalRasterStyle(this.categoricalStyle);
+        },
+        /** @param {Error|null} [error=null] Current draft failure. @return {void} */
+        renderCategoricalError(error = null) {
+            this.categoricalError = error;
+        },
         getPaletteName() {
             return this.paletteName;
         },
@@ -328,7 +353,10 @@ function createFakeControlsView() {
         clearHistogram() {
             this.displayedStatistics = null;
         },
-        setPercentileControlsVisible() {},
+        /** @param {boolean} visible Whether range controls may show. @return {void} */
+        setPercentileControlsVisible(visible) {
+            this.percentileControlsVisible = visible;
+        },
         setStatisticsRetryVisible(isVisible) {
             this.statisticsRetryVisible = isVisible;
         },
@@ -527,12 +555,14 @@ function flushPromises() {
  * @param {Function} [loadStatistics] Raster statistics loader.
  * @param {Object} [dependencies={}] Raster-viewer dependency overrides.
  * @param {Object} [configuration={}] Raster-viewer configuration overrides.
+ * @param {Object} [layerConfiguration={}] Neutral layer-controller dependencies.
  * @return {Object} Viewer, map, views, layers, and cleanup helper.
  */
 function visibleLayerFixture(
     loadStatistics = async (item) => createLayerStatistics(item),
     dependencies = {},
     configuration = {},
+    layerConfiguration = {},
 ) {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
@@ -540,7 +570,7 @@ function visibleLayerFixture(
     const layerStackView = createFakeLayerStackView();
     let viewer;
     const mapLayers = new MapLayerController({ leafletMap, view: layerStackView,
-        onLayersChange: () => viewer?.syncVisibleLayers() });
+        onLayersChange: () => viewer?.syncVisibleLayers(), ...layerConfiguration });
     viewer = initializeRasterViewer({
         leafletMap,
         leaflet,
@@ -557,6 +587,37 @@ function visibleLayerFixture(
     viewer.syncVisibleLayers();
     return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet, leafletMap,
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
+}
+
+/**
+ * Build a complete categorical appearance with ordered codes and independent alpha.
+ * @return {Object} Valid table suitable for an editor draft or saved state.
+ */
+function categoricalAppearance() {
+    return {
+        mode: "categorical",
+        categories: [
+            { value: 41, label: "Forest", color: "#228b22", opacity: 0.75 },
+            { value: 0, label: "Background", color: "#000000", opacity: 0 },
+            { value: -1, label: "Other", color: "#aabbcc", opacity: 1 },
+        ],
+        unmapped: { color: "#808080", opacity: 0.25 },
+    };
+}
+
+/**
+ * Configure one keyed layer through the same callbacks as the manual editor.
+ * @param {Object} harness Real viewer/controller with semantic view doubles.
+ * @param {string} key Retained style target.
+ * @param {Object} [style=categoricalAppearance()] Complete category draft.
+ * @return {void}
+ */
+function editCategoricalAppearance(harness, key, style = categoricalAppearance()) {
+    assert.equal(harness.viewer.openStyle(key), true);
+    harness.controlsView.handlers.onAppearanceModeChange("categorical");
+    harness.controlsView.categoricalStyle = structuredClone(style);
+    harness.controlsView.handlers.onCategoricalStyleInput();
+    harness.controlsView.handlers.onCategoricalStyleChange();
 }
 
 test("inspection summaries describe bounded raster participation and asynchronous results", async () => {
@@ -855,8 +916,11 @@ test("raster adapter exports and reapplies only validated portable appearance", 
 
     const exported = record.adapter.exportSavedState(record);
     assert.equal(exported.kind, "raster");
-    assert.deepEqual(exported.definition, record.state.rasterStyle);
-    assert.equal(exported.paletteName, "blue-yellow-red");
+    assert.equal(exported.appearanceVersion, 1);
+    assert.equal(exported.mode, "continuous");
+    assert.deepEqual(exported.continuous.definition, record.state.rasterStyle);
+    assert.equal(exported.continuous.paletteName, "blue-yellow-red");
+    assert.equal(exported.categorical, null);
     assert.equal(
         record.adapter.checkSavedStateCompatibility(record, exported),
         null,
@@ -871,7 +935,7 @@ test("raster adapter exports and reapplies only validated portable appearance", 
     assert.match(
         record.adapter.checkSavedStateCompatibility(record, {
             ...exported,
-            paletteName: "not-a-palette",
+            continuous: { ...exported.continuous, paletteName: "not-a-palette" },
         }),
         /palette is invalid/,
     );
@@ -934,6 +998,296 @@ test("saved style updates a staged raster before it is attached", async () => {
     h.mapLayers.commitStaged([staged], { fitToBounds: false });
     assert.equal(h.leafletMap.layers.has(staged.layer), true);
     assert.equal(staged.layer.opacity, 0.6);
+    h.destroy();
+});
+
+test("categorical editor commits exact tables to both rendering boundaries and preserves both modes", async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem("categorical-modes"));
+    await flushPromises();
+    const record = h.mapLayers.retainedRecords[0];
+    const key = record.entry.key;
+    h.viewer.openStyle(key);
+    h.controlsView.style = { ...h.controlsView.style, minimum: -5, midpoint: 0, maximum: 30 };
+    h.controlsView.paletteName = "custom";
+    h.controlsView.handlers.onStyleInput(false);
+    h.controlsView.handlers.onStyleChange();
+    const continuous = record.adapter.exportSavedState(record).continuous;
+    const style = categoricalAppearance();
+    assert.ok(h.controlsView.layerHistograms.every((summary) =>
+        !Object.hasOwn(summary, "unavailableMessage")
+    ));
+
+    editCategoricalAppearance(h, key, style);
+
+    assert.equal(h.controlsView.categoricalError, null);
+    assert.match(h.controlsView.appearanceStatus, /Applied categorical styling/);
+    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    assert.equal(record.state.appearanceMode, "categorical");
+    assert.deepEqual(record.adapter.renderDescriptor(record), {
+        layerName: record.publication.layerName,
+        styleName: "dynamic-raster",
+        styleDefinition: style,
+    });
+    assert.deepEqual(JSON.parse(record.state.layer.wmsParams.raster_style), style);
+    assert.equal(Object.hasOwn(record.state.layer.wmsParams, "env"), false);
+    assert.deepEqual(record.adapter.exportSavedState(record).continuous, continuous);
+    assert.deepEqual(h.mapLayers.snapshots().find((layer) => layer.key === key).legend, {
+        kind: "fixed", label: "Categorical legend is not available yet.",
+    });
+
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
+    assert.match(record.state.layer.wmsParams.env, /min:-5;med:0;max:30/);
+    assert.equal(Object.hasOwn(record.adapter.renderDescriptor(record), "styleDefinition"), false);
+    assert.equal(h.mapLayers.snapshots().find((layer) => layer.key === key).legend.kind, "gradient");
+    assert.deepEqual(h.controlsView.style, continuous.definition);
+    assert.deepEqual(record.adapter.exportSavedState(record).categorical, style);
+    assert.match(h.controlsView.appearanceStatus, /Restored continuous styling/);
+    assert.match(h.controlsView.statisticsStatus, /whole-raster/i);
+    assert.doesNotMatch(h.controlsView.statisticsStatus, /categorical/i);
+    assert.ok(h.controlsView.displayedStatistics);
+    assert.ok(h.controlsView.layerHistograms.every((summary) =>
+        !Object.hasOwn(summary, "unavailableMessage")
+    ));
+    h.controlsView.handlers.onAppearanceModeChange("categorical");
+    assert.deepEqual(record.adapter.renderDescriptor(record).styleDefinition, style);
+    assert.deepEqual(record.adapter.exportSavedState(record).continuous, continuous);
+    assert.match(h.controlsView.appearanceStatus, /Applied categorical styling/);
+    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    h.destroy();
+});
+
+test("empty and invalid category drafts never replace the last valid rendering or saved appearance", async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem("categorical-invalid"));
+    await flushPromises();
+    const record = h.mapLayers.retainedRecords[0];
+    h.viewer.openStyle(record.entry.key);
+    const original = record.adapter.exportSavedState(record);
+    const initialUpdates = record.state.layer.parameterUpdates.length;
+    h.controlsView.handlers.onAppearanceModeChange("categorical");
+    assert.ok(h.controlsView.categoricalError instanceof Error);
+    assert.equal(record.state.layer.parameterUpdates.length, initialUpdates);
+    assert.deepEqual(record.adapter.exportSavedState(record), original);
+
+    editCategoricalAppearance(h, record.entry.key);
+    const committed = record.adapter.exportSavedState(record);
+    const descriptor = record.adapter.renderDescriptor(record);
+    const params = structuredClone(record.state.layer.wmsParams);
+    const updates = record.state.layer.parameterUpdates.length;
+    h.controlsView.categoricalStyle.categories[1].value = 41;
+    h.controlsView.handlers.onCategoricalStyleInput();
+    h.controlsView.handlers.onCategoricalStyleChange();
+    assert.match(h.controlsView.categoricalError.message, /duplicates/);
+    assert.match(h.controlsView.appearanceStatus, /last valid appearance/);
+    assert.equal(h.controlsView.categoricalStyle.categories[1].value, 41);
+    assert.equal(record.state.layer.parameterUpdates.length, updates);
+    assert.deepEqual(record.state.layer.wmsParams, params);
+    assert.deepEqual(record.adapter.renderDescriptor(record), descriptor);
+    assert.deepEqual(record.adapter.exportSavedState(record), committed);
+    assert.equal(h.mapLayers.copyStyle(record.entry.key), true);
+    assert.deepEqual(h.mapLayers.styleClipboard.savedState, committed);
+    h.viewer.closeStyle();
+    assert.equal(record.state.layer.parameterUpdates.length, updates);
+    h.destroy();
+});
+
+test("late active and inactive whole-raster statistics cannot replace categorical appearances", async () => {
+    const first = createRasterItem("categorical-late-first");
+    const second = createRasterItem("categorical-late-second");
+    const results = new Map([[first.id, createDeferred()], [second.id, createDeferred()]]);
+    const h = visibleLayerFixture((item) => results.get(item.id).promise);
+    await h.viewer.show(first);
+    await h.viewer.show(second);
+    const records = [...h.mapLayers.retainedRecords];
+    for (const record of records) editCategoricalAppearance(h, record.entry.key);
+    const committed = records.map((record) => record.adapter.exportSavedState(record));
+    const updates = records.map((record) => record.state.layer.parameterUpdates.length);
+
+    results.get(first.id).resolve(createLayerStatistics(first));
+    results.get(second.id).resolve(createLayerStatistics(second));
+    await flushPromises();
+
+    for (const [index, record] of records.entries()) {
+        assert.equal(record.state.wholeRasterStatisticsState, "ready");
+        assert.deepEqual(record.adapter.exportSavedState(record), committed[index]);
+        assert.equal(record.state.layer.parameterUpdates.length, updates[index]);
+        assert.equal(Object.hasOwn(record.state.layer.wmsParams, "env"), false);
+    }
+    assert.equal(h.controlsView.displayedStatistics, null);
+    assert.equal(h.controlsView.styleHistogram, null);
+    assert.equal(h.controlsView.percentileControlsVisible, false);
+    assert.ok(h.controlsView.layerHistograms.every((summary) =>
+        summary.state === "ready" && summary.counts === null &&
+        summary.statistics === null && /Categorical/.test(summary.unavailableMessage)
+    ));
+    h.destroy();
+});
+
+test("categorical styles round-trip through save, copy/paste and removed-layer undo", async () => {
+    let catalog;
+    const source = createRasterItem("categorical-copy-source");
+    const target = createRasterItem("categorical-copy-target");
+    const items = new Map([[source.id, source], [target.id, target]]);
+    const h = visibleLayerFixture(undefined, {}, {}, {
+        restoreRemovedLayer: (snapshot, isCurrent) => catalog.restoreRemovedLayer(
+            snapshot, async (identity) => items.get(identity.id), isCurrent,
+        ),
+    });
+    catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
+    await h.viewer.show(source);
+    await h.viewer.show(target);
+    await flushPromises();
+    const [targetRecord, sourceRecord] = h.mapLayers.retainedRecords;
+    editCategoricalAppearance(h, sourceRecord.entry.key);
+    h.mapLayers.setOpacity(sourceRecord.entry.key, 0.4);
+    const savedAppearance = sourceRecord.adapter.exportSavedState(sourceRecord);
+    assert.equal(h.mapLayers.copyStyle(sourceRecord.entry.key), true);
+    h.viewer.openStyle(targetRecord.entry.key);
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.match(h.controlsView.appearanceStatus, /Restored continuous styling/);
+    assert.equal(await h.mapLayers.pasteStyle(targetRecord.entry.key), true);
+    assert.equal(h.controlsView.appearanceStatus, "");
+    assert.deepEqual(targetRecord.adapter.exportSavedState(targetRecord), savedAppearance);
+    assert.equal(targetRecord.entry.opacity, 0.4);
+
+    const saved = createSavedMapView({
+        viewer: { version: "test", origin: "https://example.test" },
+        createdAt: "2026-10-06T00:00:00Z",
+        viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
+        layers: [{
+            catalogItem: { collection: source.collection, id: source.id },
+            sourceRevision: null, visible: true, opacity: 0.4, style: savedAppearance,
+        }],
+    });
+    const restored = parseSavedMapView(serializeSavedMapView(saved));
+    assert.deepEqual(restored.layers[0].style, savedAppearance);
+    const staged = await h.viewer.stage(createRasterItem("categorical-saved"), {
+        visible: false, opacity: restored.layers[0].opacity,
+    });
+    staged.record.adapter.applySavedState(staged.record, restored.layers[0].style);
+    assert.deepEqual(staged.record.adapter.exportSavedState(staged.record), savedAppearance);
+    assert.equal(Object.hasOwn(staged.layer.wmsParams, "env"), false);
+    assert.deepEqual(JSON.parse(staged.layer.wmsParams.raster_style), savedAppearance.categorical);
+    assert.equal(h.leafletMap.layers.has(staged.layer), false);
+
+    const sourceKey = sourceRecord.entry.key;
+    assert.equal(h.mapLayers.removeWithUndo(sourceKey), true);
+    assert.equal(h.mapLayers.getRecord(sourceKey), null);
+    await h.mapLayers.undoLayerRemoval();
+    const undoRecord = h.mapLayers.getRecord(sourceKey);
+    assert.notEqual(undoRecord, null);
+    assert.deepEqual(undoRecord.adapter.exportSavedState(undoRecord), savedAppearance);
+    assert.equal(undoRecord.entry.opacity, 0.4);
+    assert.deepEqual(undoRecord.adapter.renderDescriptor(undoRecord).styleDefinition, savedAppearance.categorical);
+    assert.equal(h.mapLayers.removedLayer, null);
+    h.destroy();
+});
+
+test("hidden raster category edits remain independent of active analysis and visibility", async () => {
+    const reads = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        reads.push({ item, area });
+        return createLayerStatistics(item, selectedBoundsFromArea(area));
+    });
+    await h.viewer.show(createRasterItem("categorical-hidden"));
+    await h.viewer.show(createRasterItem("categorical-visible"));
+    await flushPromises();
+    const [active, hidden] = h.mapLayers.retainedRecords;
+    h.mapLayers.setVisible(hidden.entry.key, false);
+    const readCount = reads.length;
+    const activeAppearance = active.adapter.exportSavedState(active);
+    editCategoricalAppearance(h, hidden.entry.key);
+    assert.equal(hidden.entry.visible, false);
+    assert.equal(h.mapLayers.isAttached(hidden.entry.key), false);
+    assert.equal(h.mapLayers.activeKey, active.entry.key);
+    assert.deepEqual(active.adapter.exportSavedState(active), activeAppearance);
+    assert.equal(reads.length, readCount);
+    assert.deepEqual(h.controlsView.layerHistograms.map((summary) => summary.key), [active.entry.key]);
+    h.viewer.closeStyle();
+    h.viewer.openStyle(hidden.entry.key);
+    assert.equal(h.controlsView.appearanceMode, "categorical");
+    assert.deepEqual(h.controlsView.readCategoricalStyle(), categoricalAppearance());
+    h.destroy();
+});
+
+test("categorical guards prevent 2D ramps while exact samples and numerical statistics remain available", async () => {
+    const statisticsReads = [];
+    const pixelReads = [];
+    let pairedReads = 0;
+    let pendingCategoricalStatistics = null;
+    const h = visibleLayerFixture(async (item, area) => {
+        statisticsReads.push({ item, area });
+        if (area.kind !== "wholeRaster" && item.id === "geotiff-categorical-sampling" &&
+            pendingCategoricalStatistics !== null) {
+            return pendingCategoricalStatistics.promise;
+        }
+        return createLayerStatistics(item, selectedBoundsFromArea(area));
+    }, {
+        samplePixel: async (item) => {
+            pixelReads.push(item.id);
+            return { inBounds: true, value: 41 };
+        },
+        loadPairedStatistics: async () => {
+            pairedReads += 1;
+            return pairedStatistics();
+        },
+    });
+    await h.viewer.show(createRasterItem("continuous-sampling"));
+    await h.viewer.show(createRasterItem("categorical-sampling"));
+    await flushPromises();
+    const [categorical, continuous] = h.mapLayers.retainedRecords;
+    assert.equal(h.controlsView.bivariateAvailability.canEnter, true);
+    editCategoricalAppearance(h, categorical.entry.key);
+    assert.equal(h.controlsView.bivariateAvailability.canEnter, false);
+    assert.match(h.controlsView.bivariateAvailability.guidance, /categorical/i);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    assert.equal(h.controlsView.bivariateMode.active, false);
+    assert.equal(pairedReads, 0);
+    const readsBefore = statisticsReads.length;
+    assert.equal(h.viewer.exploreAt({ lng: 1, lat: 1 }), true);
+    await flushPromises();
+    assert.equal(statisticsReads.length, readsBefore + 2);
+    assert.deepEqual(new Set(pixelReads), new Set([continuous.entry.item.id, categorical.entry.item.id]));
+    assert.ok(h.controlsView.pointSamples.samples.every((sample) => sample.state === "value" && sample.value === 41));
+    assert.equal(categorical.state.rasterStatistics.scope, "selectedArea");
+    const summary = h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key);
+    assert.equal(summary.state, "ready");
+    assert.equal(summary.counts, null);
+    assert.equal(summary.statistics, null);
+    assert.match(summary.unavailableMessage, /Categorical/);
+
+    pendingCategoricalStatistics = createDeferred();
+    assert.equal(h.viewer.exploreAt({ lng: 2, lat: 2 }), true);
+    await flushPromises();
+    assert.equal(categorical.state.selectedRasterStatisticsState, "loading");
+    assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "loading");
+    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
+    assert.equal(h.controlsView.displayedStatistics, null);
+    pendingCategoricalStatistics.reject(new Error("Selected sample unavailable"));
+    await flushPromises();
+    assert.equal(categorical.state.selectedRasterStatisticsState, "error");
+    assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "error");
+    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
+    assert.equal(h.controlsView.displayedStatistics, null);
+    pendingCategoricalStatistics = null;
+    assert.equal(h.viewer.exploreAt({ lng: 3, lat: 3 }), true);
+    await flushPromises();
+    assert.equal(categorical.state.selectedRasterStatisticsState, "ready");
+
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.equal(h.controlsView.bivariateAvailability.canEnter, true);
+    const continuousSummary = h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key);
+    assert.ok(continuousSummary.statistics);
+    assert.equal(Object.hasOwn(continuousSummary, "unavailableMessage"), false);
+    assert.match(h.controlsView.appearanceStatus, /Restored continuous styling/);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.active, true);
+    assert.equal(pairedReads, 1);
     h.destroy();
 });
 

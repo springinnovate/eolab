@@ -1,9 +1,63 @@
 # Categorical raster rendering foundation
 
-Issue #645 introduces an internal rendering contract. The category editor,
-saved-map/local-storage integration, legends, pixel presentation, and CSV import
-are tracked separately in #646, #647, and #648. Existing continuous controls and
-analysis responses are unchanged.
+Issue #645 introduces the rendering contract. Issue #646 adds the manual category
+editor and map-layer persistence. Legends and pixel presentation remain in #647;
+CSV import remains in #648. Analysis responses remain numeric and independent of
+the selected appearance.
+
+## Manual editing and persistence
+
+Open a raster's Style panel and choose Categorical. Enter an exact integer value,
+label, six-digit hex color, and opacity percentage for each category. Rows can be
+added, removed, and moved with keyboard-accessible buttons. Unmapped valid values
+have a separate color and opacity; source NoData remains transparent.
+
+The empty starter row does not invent a category. A complete valid draft applies
+after a short debounce or a completed edit. Invalid rows remain editable while
+the map and persistence keep the last valid appearance. Switching to Continuous
+restores its retained palette, thresholds, and opacity stops. Switching back
+retains the category table. Closing and reopening an editor restores committed
+settings, discarding incomplete drafts.
+
+The raster owner exports a versioned appearance envelope:
+
+```json
+{
+  "kind": "raster",
+  "appearanceVersion": 1,
+  "mode": "categorical",
+  "continuous": {
+    "definition": {
+      "minimum": 0, "midpoint": 50, "maximum": 100,
+      "minimumColor": "#2b83ba", "midpointColor": "#ffffbf", "maximumColor": "#d7191c",
+      "minimumOpacity": 1, "midpointOpacity": 1, "maximumOpacity": 1
+    },
+    "paletteName": "blue-yellow-red",
+    "styleWasEdited": false
+  },
+  "categorical": {
+    "mode": "categorical",
+    "categories": [{"value": 41, "label": "Forest", "color": "#228b22", "opacity": 1}],
+    "unmapped": {"color": "#808080", "opacity": 1}
+  }
+}
+```
+
+`categorical` may be null only when the selected mode is continuous. The existing
+saved-map schema version remains 3; the style payload has its own explicit
+version. Legacy `{kind, definition, paletteName}` raster styles restore as
+continuous, with omitted legacy opacity stops set to one and the range marked
+edited as before. Saved-map transport validates the envelope and existing map
+size limits; the raster owner validates both style definitions on restoration.
+Both configurations travel through local storage, saved/shared maps, style
+copy/paste, and removal Undo. There is no catalog-wide category definition.
+
+This increment suppresses continuous gradient legends and histogram/percentile
+presentation for categorical layers. Distribution panels explain that categorical
+distributions and area proportions are not yet available. Coordinated 2D styling
+requires continuous layers. Numeric source sampling and analysis APIs remain
+available, including when rendering is unavailable. Discrete legend swatches and
+labeled pixel results are the next increment.
 
 ## Appearance definition
 

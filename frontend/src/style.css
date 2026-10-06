@@ -1081,6 +1081,105 @@ h5 {
   border-color: var(--status-danger);
 }
 
+.raster-appearance-mode,
+.raster-category-fields label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.raster-appearance-mode select,
+.raster-category-fields input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 7px 8px;
+  color: var(--text-1);
+}
+
+.raster-continuous-controls,
+.raster-categorical-editor,
+.raster-category-rows {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.raster-continuous-controls[hidden],
+.raster-categorical-editor[hidden] {
+  display: none;
+}
+
+.raster-categorical-editor h4 { margin: 0; font-size: 0.8rem; }
+
+.raster-category-guidance {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.raster-category-row,
+.raster-category-unmapped {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+}
+
+.raster-category-row legend,
+.raster-category-unmapped legend {
+  padding: 0 4px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.raster-category-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.raster-category-unmapped .raster-category-fields { margin-top: 10px; }
+
+.raster-category-color {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
+}
+
+.raster-category-fields input[type="color"] {
+  height: 32px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.raster-category-fields [aria-invalid="true"] { border-color: var(--status-danger); }
+
+.raster-category-actions,
+.raster-category-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.raster-category-actions { margin-top: 10px; }
+.raster-category-actions .secondary-button { padding: 5px 8px; }
+.raster-category-add span { color: var(--text-3); font-size: 0.7rem; }
+
+@media (max-width: 480px) {
+  .raster-category-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
 .raster-legend {
   height: 15px;
   margin-top: 13px;

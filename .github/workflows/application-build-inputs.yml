@@ -17,6 +17,22 @@ on:
       - tests/test_job_lifecycle.py
       - frontend/src/raster/categorical-style.js
       - frontend/test/raster/categorical-style.test.js
+      - frontend/src/raster/appearance-state.js
+      - frontend/src/raster/categorical-editor-view.js
+      - frontend/src/raster/appearance-controls-view.js
+      - frontend/src/raster/controls-view.js
+      - frontend/src/raster/raster-viewer.js
+      - frontend/src/raster/leaflet.js
+      - frontend/src/raster/histogram-controls-view.js
+      - frontend/test/raster/**
+      - frontend/test-support/raster/**
+      - frontend/src/saved-map-view/**
+      - frontend/test/saved-map-view/**
+      - frontend/index.html
+      - frontend/src/style.css
+      - src/eolab_app/saved_maps/**
+      - tests/test_saved_maps.py
+      - tests/fixtures/saved-map-v3-categorical.json
       - src/eolab_app/raster/categorical_sld.py
       - src/eolab_app/raster/styles.py
       - src/eolab_app/raster/wms_authorization.py

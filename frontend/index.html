@@ -1457,11 +1457,19 @@
                       >
                         <div class="raster-appearance-heading">
                           <div>
-                            <h3 id="raster-appearance-heading">Colors and range</h3>
+                            <h3 id="raster-appearance-heading">Raster appearance</h3>
                             <p class="raster-appearance-layer" id="raster-appearance-layer" hidden></p>
                           </div>
                         </div>
                         <div class="raster-appearance-body">
+                          <label class="raster-appearance-mode" for="raster-appearance-mode">
+                            <span>Style mode</span>
+                            <select id="raster-appearance-mode">
+                              <option value="continuous">Continuous</option>
+                              <option value="categorical">Categorical</option>
+                            </select>
+                          </label>
+                          <div id="raster-continuous-controls" class="raster-continuous-controls">
                           <label class="raster-palette" for="raster-palette">
                             <span>Color palette</span>
                             <select id="raster-palette"></select>
@@ -1592,6 +1600,35 @@
                               <p class="raster-style-error" id="raster-style-error" role="status"></p>
                             </div>
                           </details>
+                          </div>
+                          <section id="raster-categorical-editor" class="raster-categorical-editor" aria-labelledby="raster-category-heading" hidden>
+                            <h4 id="raster-category-heading">Categories</h4>
+                            <p class="raster-category-guidance">Match exact whole-number values. Add at least one category to apply categorical styling. Incomplete edits keep the last valid style on the map.</p>
+                            <div id="raster-category-rows" class="raster-category-rows"></div>
+                            <div class="raster-category-add">
+                              <button id="add-raster-category" class="secondary-button" type="button">Add category</button>
+                              <span id="raster-category-count"></span>
+                            </div>
+                            <fieldset class="raster-category-unmapped">
+                              <legend>Unmapped values</legend>
+                              <p class="raster-category-guidance">Valid values absent from the table use this color. Source NoData stays transparent.</p>
+                              <div class="raster-category-fields">
+                                <label for="raster-unmapped-color">
+                                  <span>Color (hex)</span>
+                                  <span class="raster-category-color">
+                                    <input id="raster-unmapped-swatch" type="color" aria-label="Choose unmapped color" aria-describedby="raster-category-error" value="#808080" />
+                                    <input id="raster-unmapped-color" type="text" maxlength="7" spellcheck="false" aria-describedby="raster-category-error" value="#808080" />
+                                  </span>
+                                </label>
+                                <label for="raster-unmapped-opacity">
+                                  <span>Opacity %</span>
+                                  <input id="raster-unmapped-opacity" type="number" min="0" max="100" step="any" aria-describedby="raster-category-error" value="100" />
+                                </label>
+                              </div>
+                            </fieldset>
+                            <p class="raster-style-error" id="raster-category-error" role="status" aria-live="polite" aria-atomic="true"></p>
+                            <p class="raster-category-guidance">Category legends and category-aware pixel labels are coming in the next update. Categorical distributions are not available yet.</p>
+                          </section>
                           <p
                             class="raster-appearance-status"
                             id="raster-appearance-status"

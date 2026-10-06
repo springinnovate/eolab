@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const FOCUSED_VIEW_IMPORTS = {
-    "appearance-controls-view.js": ["./required-control.js", "./style.js"],
+    "appearance-controls-view.js": [
+        "./categorical-editor-view.js", "./required-control.js", "./style.js",
+    ],
     "sampling-area-controls-view.js": ["./required-control.js"],
     "histogram-controls-view.js": [
         "./histogram-axis-controls.js",
@@ -141,4 +143,16 @@ test("histogram axis controls and transforms have only local presentation depend
             .map(match => match[1]).sort();
         assert.deepEqual(imports, expected);
     }
+});
+
+test("category editor depends only on its appearance contract and DOM lookup", async () => {
+    const source = await readFile(
+        new URL("../../src/raster/categorical-editor-view.js", import.meta.url), "utf8"
+    );
+    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
+        .map(match => match[1]).sort();
+    assert.deepEqual(imports, ["./categorical-style.js", "./required-control.js"]);
+    assert.match(source, /"#raster-categorical-editor"/);
+    assert.doesNotMatch(source, /"#raster-(histogram|percentile|style-controls)/);
+    assert.doesNotMatch(source, /fetch\(|localStorage|Leaflet/);
 });

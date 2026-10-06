@@ -115,7 +115,9 @@ export class FakeRasterControlElement extends EventTarget {
      * @return {void}
      */
     replaceChildren(...children) {
-        this.children = children;
+        for (const child of this.children) child.parentNode = null;
+        this.children = [];
+        this.append(...children);
     }
 
     /**
