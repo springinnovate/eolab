@@ -2093,13 +2093,16 @@ test('2D click requests both axes even when neither published extent contains th
     const h = visibleLayerFixture(undefined, {
         publishRaster: async item => ({
             layerName: `eolab:${item.id}`,
-            bbox: [-180, -85.05127083678795, -179.99835325853354, 85.05112877980659],
+            bbox: item.id.endsWith('regional')
+                ? [-90, 35, -80, 40]
+                : [-180, -85.05127083678795, -179.99835325853354, 85.05112877980659],
         }),
         samplePixel: async item => {
             requests.push(item.id);
             return { inBounds: true, value: 2.55 };
         },
     });
+    await h.viewer.show(createRasterItem('regional'));
     await h.viewer.show(createRasterItem('first'));
     await h.viewer.show(createRasterItem('second'));
     h.controlsView.handlers.onBivariateModeChange('bivariate');
@@ -3979,6 +3982,49 @@ test("click pixel requests use backend coverage independently of histogram openi
     assert.equal(controlsView.pointSamples.samples[0].value, 1);
     assert.equal(histogramPresentationRequests, 1);
     viewer.destroy();
+
+    const areaRequests = [], clickRequests = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        if (area.kind !== 'wholeRaster') areaRequests.push({ item, area });
+        return createLayerStatistics(item, selectedBoundsFromArea(area));
+    }, {
+        publishRaster: async item => ({
+            layerName: 'eolab:' + item.id,
+            bbox: item.id.endsWith('-11') ? [70, 15, 90, 30]
+                : item.id.endsWith('-0') ? [100, 15, 120, 30] : [-90, 35, -60, 55],
+        }),
+        samplePixel: async item => {
+            clickRequests.push(item.id);
+            return { inBounds: false, value: null };
+        },
+    });
+    const items = Array.from({ length: 17 }, (_, index) => createRasterItem('coverage-' + index));
+    for (const item of items) await h.viewer.show(item);
+    await flushPromises();
+    areaRequests.length = 0;
+    assert.equal(h.viewer.exploreAt({ lng: 80, lat: 20 }), true);
+    await flushPromises();
+    assert.equal(areaRequests.length, 16);
+    assert.ok(areaRequests.some(({ item }) => item.id === items[11].id));
+    assert.deepEqual(clickRequests, [items[16].id, items[15].id]);
+    assert.equal(h.controlsView.layerHistograms.length, 16);
+
+    // Even the seventeenth extent can open a box without raising the read cap.
+    areaRequests.length = 0;
+    assert.equal(h.viewer.exploreAt({ lng: 110, lat: 20 }), true);
+    await flushPromises();
+    assert.equal(areaRequests.length, 16);
+    assert.equal(areaRequests.some(({ item }) => item.id === items[0].id), false);
+    const previousArea = h.viewer.getSelectedArea();
+    const regional = h.mapLayers.snapshots().find(layer => layer.item.id === items[11].id);
+    h.mapLayers.setVisible(regional.key, false);
+    await flushPromises();
+    areaRequests.length = 0;
+    assert.equal(h.viewer.exploreAt({ lng: 80, lat: 20 }), false);
+    await flushPromises();
+    assert.equal(areaRequests.length, 0);
+    assert.deepEqual(h.viewer.getSelectedArea(), previousArea);
+    h.destroy();
 });
 
 test("explicit sampling refreshes every raster layer to one shared area", async () => {
