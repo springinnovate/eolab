@@ -627,19 +627,25 @@ test("inspection summaries describe bounded raster participation and asynchronou
         createLayerStatistics(item, selectedBoundsFromArea(area)), {}, {
         onHistogramChange: snapshot => snapshots.push(snapshot),
     });
-    for (const suffix of ["summary-a", "summary-b", "summary-c"]) {
-        await h.viewer.show(createRasterItem(suffix));
+    for (let index = 0; index < 17; index += 1) {
+        await h.viewer.show(createRasterItem(`summary-${index}`));
     }
     h.viewer.exploreAt({ lng: 78, lat: 22 });
     assert.ok(snapshots.some(snapshot => snapshot?.state === "loading"));
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
-    assert.match(snapshots.at(-1).message, /Top 2 of 3 visible rasters/);
+    assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
     assert.match(snapshots.at(-1).message, /map sample/);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
     assert.match(snapshots.at(-1).message, /2D/);
+    assert.match(snapshots.at(-1).message, /Top 2 of 17 visible rasters/);
+    assert.equal(h.controlsView.layerHistograms.length, 2);
+    h.controlsView.handlers.onBivariateModeChange("overlay");
+    await flushPromises();
+    assert.equal(h.controlsView.layerHistograms.length, 16);
+    assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
     h.viewer.clear();
     assert.equal(snapshots.at(-1), null);
     h.destroy();
@@ -1795,7 +1801,7 @@ test('sequential raster removals release analysis before a vector is added', asy
     h.destroy();
 });
 
-test('three visible rasters render while only the top two are analyzed', async () => {
+test('three visible rasters render and receive ordinary histograms', async () => {
     const requests = [];
     const pointRequests = [];
     const h = visibleLayerFixture(async (item, area) => {
@@ -1825,7 +1831,7 @@ test('three visible rasters render while only the top two are analyzed', async (
     );
     assert.deepEqual(
         h.controlsView.layerHistograms.map((summary) => summary.label),
-        ['top.tif', 'middle.tif'],
+        ['top.tif', 'middle.tif', 'bottom.tif'],
     );
 
     requests.length = 0;
@@ -1833,7 +1839,7 @@ test('three visible rasters render while only the top two are analyzed', async (
     await flushPromises();
     assert.deepEqual(
         requests.map(({ id }) => id).sort(),
-        ['middle', 'top'],
+        ['bottom', 'middle', 'top'],
     );
     assert.deepEqual(pointRequests, ['top', 'middle']);
     assert.deepEqual(
@@ -2340,26 +2346,26 @@ test('a late histogram cannot overwrite another layer editor or an edited range'
     h.destroy();
 });
 
-test('automatic samples exclude rasters below the top-two pair', async () => {
+test('automatic histograms exclude rasters below the top-16 cap', async () => {
     const requests = [];
     const h = visibleLayerFixture(async item => {
         requests.push(item.id);
         return createLayerStatistics(item);
     });
-    await h.viewer.show(createRasterItem('first'));
-    await h.viewer.show(createRasterItem('second'));
-    await h.viewer.show(createRasterItem('hidden'));
+    const items = Array.from({ length: 17 }, (_, index) => createRasterItem(`sample-${index}`));
+    for (const item of items) await h.viewer.show(item);
     await flushPromises();
     requests.length = 0;
     h.viewer.exploreAt({ lng: -74, lat: 41 });
     await flushPromises();
-    assert.equal(requests.includes('geotiff-first'), false);
-    const [, , first] = h.mapLayers.snapshots();
+    assert.equal(requests.length, 16);
+    assert.equal(requests.includes(items[0].id), false);
+    const first = h.mapLayers.snapshots().at(-1);
     h.mapLayers.reorder(first.key, 0);
     await flushPromises();
     assert.deepEqual(
         h.controlsView.layerHistograms.map(s => s.label),
-        ['first.tif', 'hidden.tif'],
+        ['sample-0.tif', ...Array.from({ length: 15 }, (_, index) => `sample-${16 - index}.tif`)],
     );
     h.destroy();
 });

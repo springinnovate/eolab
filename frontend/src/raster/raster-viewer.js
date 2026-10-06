@@ -74,6 +74,7 @@ import {
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
+const MAXIMUM_VISIBLE_RASTER_HISTOGRAMS = 16;
 const CATEGORICAL_HISTOGRAM_MESSAGE = "Categorical distributions and area proportions are not available yet.";
 export const RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS = 350;
 /**
@@ -1001,21 +1002,21 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return the bounded top-two raster-analysis inputs in map order.
+     * Return the bounded raster-histogram inputs in top-first map order.
      *
-     * Rendering remains independent: visible rasters below this pair stay on
-     * the map but never enter automatic histogram or bivariate requests.
+     * Ordinary mode includes up to 16 visible rasters; 2D mode includes only
+     * its top-two pair. Layers below the cap still render independently.
      *
-     * @return {Object[]} Zero, one, or two visible raster records.
+     * @return {Object[]} At most 16 ordinary or two 2D raster records.
      */
     function visibleRasterRecords() {
-        return allVisibleRasterRecords().slice(0, 2);
+        return allVisibleRasterRecords().slice(0, bivariateMode.active ? 2 : MAXIMUM_VISIBLE_RASTER_HISTOGRAMS);
     }
 
     /**
      * Build the bounded Catalog participants for exact click-value analysis.
      *
-     * Visible-layer mode reuses the top-two histogram order. Detached Catalog
+     * Visible-layer mode uses the top two rasters in map order. Detached Catalog
      * analysis uses its active raster without consulting rendering state. In
      * 2D mode the current axis assignment, including a swap, defines order and
      * badges without changing the Catalog identities passed to analysis.
@@ -1034,7 +1035,7 @@ export function initializeRasterViewer(
             ];
         }
         if (followsVisibleLayers) {
-            return visibleRasterRecords().map(({ entry }) => ({
+            return visibleRasterRecords().slice(0, 2).map(({ entry }) => ({
                 key: entry.key,
                 label: entry.label,
                 item: entry.item,
@@ -1108,7 +1109,7 @@ export function initializeRasterViewer(
      * Application policy: histograms follow visible map rasters. Catalog-only
      * analysis remains available to other callers of this reusable viewer.
      * Activates the top raster and starts missing statistics only for the
-     * bounded top-two analysis pair. While 2D mode is active, pair membership
+     * bounded top 16 ordinary rasters. While 2D mode is active, its top-two pair
      * migrates with visibility and order. Does nothing during clear(). Never
      * call this to choose a style target.
      *
@@ -1178,7 +1179,7 @@ export function initializeRasterViewer(
                 ({ entry }) => !bivariateMode.contains(entry.key)
             )
         );
-        bivariateCandidates = records.map(
+        bivariateCandidates = records.slice(0, 2).map(
             /**
              * Snapshot a visible raster's identity and ordinary range for 2D use.
              * @param {{entry:Object,state:Object}} record Visible raster and state.

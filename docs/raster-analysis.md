@@ -7,7 +7,8 @@ still count as data.
 
 One map click can return both vector features and raster information. The click
 summary reports these separately and lets you switch between them. Automatic
-histograms use the top two visible rasters. Histogram results describe the sampling
+1D histograms use up to the top 16 visible rasters; 2D comparisons use only the
+top two. Histogram results describe the sampling
 area, not just the clicked pixel or the features returned by feature inspection.
 
 ## Categorical raster values
