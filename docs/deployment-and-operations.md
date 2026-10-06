@@ -431,10 +431,9 @@ recovers updates if streaming is unavailable.
 Current raster summary clients submit complete inputs and a stable `requestId`
 to `POST /api/processing/raster-calculations`. The 202 response is the queued job;
 no separate plan request or later execution submission is needed. The worker
-publishes `progress.phase: preparing`, then stores the prepared `grid` and
-`preparation` timing on that job and starts calculating immediately. Job reads
-and the existing SSE hints expose these updates. Before preparation, `grid` and
-`preparation` are null. Cancellation uses the same job ID throughout. Cached
+publishes `progress.phase: preparing`, then stores the prepared `grid` on that
+job and starts calculating immediately. Job reads and the existing SSE hints
+expose these updates. Before preparation, `grid` is null. Cancellation uses the same job ID throughout. Cached
 results still enter the job queue, but skip native preparation and calculation.
 Deploy API, worker and frontend together; see the rollback procedure above.
 
@@ -533,16 +532,24 @@ that the one worker is merely busy. Existing accepted IDs/status/results and
 cancellation routes are unchanged. A cached calculation still needs its own
 bounded job record and download reservation.
 
-At INFO level, app admission logs report waiting jobs, the submitting session's
-waiting allowance, retained subscriber records and whether work was shared.
-These are counts from the admission transaction, logged after commit; they are
-not a fresh global snapshot. Admission does not sum disk reservations or count
-distinct sessions just for logging. Independent admission reads and ordered writes
+Independent admission reads and ordered writes
 use two Psycopg pipeline batches under the existing transaction advisory lock.
-Capacity checks, deduplication and insertion remain atomic. Worker claim logs
-report remaining backlog and that job's queue wait. Logs include no session
-identities or source inputs. Existing calculation timing continues to separate
-queue and execution.
+Capacity checks, deduplication and insertion remain atomic.
+
+### Removing calculation profiling
+
+Deploy the API and worker together when upgrading past the calculation profiling
+removal. The schema migration recreates the subscriber view and drops the
+diagnostic-only `processing.jobs.preparation` column. Old workers still write
+that column and must not run against the new schema. The actual prepared inputs,
+execution grid, reservations and job lifecycle remain intact.
+
+Job responses no longer expose `preparation`, `performance`, `executionTiming`
+or `queuedToReadySeconds`. The notification stream retains its `changed` hints
+without profiling frames, and Processing responses no longer include profiling
+headers. Reload existing browser tabs with the new frontend. Historical artifact
+JSON can retain its old metadata; new responses ignore it and existing downloads
+remain available.
 
 ## Troubleshooting
 

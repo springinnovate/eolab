@@ -181,7 +181,10 @@ def test_sse_route_streams_hints_then_releases_on_disconnect(monkeypatch, asgi_s
             connection.messages.put_nowait(SimpleNamespace(payload=owner))
             await asyncio.wait_for(changed.wait(), 1)
             body = b"".join(m.get("body", b"") for m in messages)
-            assert b"retry: 2000" in body
+            assert body == (
+                b"retry: 2000\nevent: changed\ndata: {}\n\n"
+                b"event: changed\ndata: {}\n\n"
+            )
             assert owner.encode() not in body and token.encode() not in body
             disconnect.set()
             await asyncio.wait_for(task, 1)

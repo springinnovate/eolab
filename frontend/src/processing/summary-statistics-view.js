@@ -2,8 +2,7 @@
 import { calculationValue, renderSavedCalculation } from "./calculation-result-view.js";
 import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
-import { describeClipArea, describeJobProgress, formatDownloadBytes } from "./presentation.js";
-import { executionDescription, performanceDescription } from "./calculation-performance.js";
+import { describeClipArea, describeJobProgress } from "./presentation.js";
 
 const RESULT_STATES = { no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
     invalid_arithmetic: "Undefined arithmetic; no numeric result.", overflow: "Numeric overflow; no finite result." };
@@ -31,7 +30,7 @@ export class SummaryStatisticsView {
         this.latestState = null;
         this.focusAfterRender = null;
         this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
-        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status", "chunk-pixels", "performance-plans"]
+        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
     /** Make a text-only card node. @param {string} tag HTML tag. @param {string} [text=""] Text. @return {HTMLElement} Node. */
@@ -46,7 +45,6 @@ export class SummaryStatisticsView {
             [e.close, "click", handlers.onClose], [e["edit-area"], "click", handlers.onEditArea],
             [e.area, "change", () => handlers.onArea(e.area.value)],
             [x.auto, "change", () => handlers.onAutomatic(x.auto.checked)],
-            [x["chunk-pixels"], "change", () => handlers.onChunkPixels(x["chunk-pixels"].value === "" ? null : Number(x["chunk-pixels"].value))],
             [e.template, "change", () => { handlers.onAdd(e.template.value); e.template.value = ""; }],
             [x["undo-button"], "click", handlers.onUndo], [e.retry, "click", handlers.onRetry],
             [e.refresh, "click", handlers.onRefresh], [x["close-saved"], "click", handlers.onCloseSaved],
@@ -115,9 +113,8 @@ export class SummaryStatisticsView {
         const details = this.element("details"); details.className = "summary-result-details";
         const detailsTitle = this.element("summary", "Value details & downloads");
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
-        const size = this.element("small"); size.className = "summary-size";
-        root.append(heading, equation, binding, size, details, remove);
-        return { root, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, size, remove };
+        root.append(heading, equation, binding, details, remove);
+        return { root, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, remove };
     }
     /** Retain current state and schedule one draw while the panel is open.
      * Closed panels update only their visible opener, when its text changes.
@@ -204,7 +201,7 @@ export class SummaryStatisticsView {
             if (row.value.textContent !== text) row.value.textContent = text;
             row.value.title = result?.row.value ?? result?.row.state ?? "";
             row.details.hidden = !result;
-            const resultSignature = JSON.stringify([result?.job.jobId, result?.row, result?.totalWaitSeconds]);
+            const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);
             const copyValue = card.current && result?.row.state === "ok" && result.row.value != null ? result.row.value : null;
             const copySignature = JSON.stringify([resultSignature, copyValue]);
             if (row.copySignature !== copySignature) {
@@ -217,9 +214,6 @@ export class SummaryStatisticsView {
             if (result && resultSignature !== row.resultSignature) {
                 this.renderValueDetails(row.detailsBody, result); row.resultSignature = resultSignature;
             }
-            const grid = card.preparedJob?.grid;
-            row.size.hidden = !card.pending || !grid;
-            row.size.textContent = grid ? `Prepared: ${grid.nativeBlocks.toLocaleString()} source blocks · ${formatDownloadBytes(grid.decodedBytes)} decoded.` : "";
         }
         const e = this.elements, x = this.extra;
         const areaSignature = state.areaChoice;
@@ -236,17 +230,6 @@ export class SummaryStatisticsView {
                 ? "Choose a polygon layer below. Edit its filter, then use the matching features."
                 : describeClipArea(state.area);
         x.auto.checked = state.automatic;
-        x["chunk-pixels"].value = state.targetChunkPixels == null ? "" : String(state.targetChunkPixels);
-        const planSignature = JSON.stringify(state.statistics.map(card => [card.label, card.plan?.grid]));
-        if (planSignature !== this.signatures.performance) {
-            x["performance-plans"].replaceChildren(...state.statistics.filter(card => card.plan?.grid.execution).map(card => {
-                const row = this.element("div");
-                row.append(this.element("strong", card.label || "Custom statistic"),
-                    ...executionDescription(card.plan.grid).map(text => this.element("p", text)));
-                return row;
-            }));
-            this.signatures.performance = planSignature;
-        }
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;
         x["undo-button"].disabled = state.statistics.length >= 5;
@@ -310,10 +293,6 @@ export class SummaryStatisticsView {
             const method = job.grid.groundArea;
             root.append(this.element("p", `Ground area: ${method.ellipsoid} ellipsoid, hectares, including partial pixels. ${method.edgeToleranceMetres} m chord-deviation target; at most ${method.maximumSegmentMetres.toLocaleString()} m per segment. Numeric functions select cell centers.`));
         }
-        const performance = this.element("details");
-        performance.append(this.element("summary", "Performance"), ...performanceDescription(job, result.totalWaitSeconds, result.stages,
-            "Measured in this tab from the calculation request until its result reaches the Summarize controller, including vector selection when requested here, debounce, queueing and result delivery; excludes earlier confirmation time and subsequent panel drawing and paint.").map(text => this.element("p", text)));
-        root.append(performance);
         const links = this.element("div"); links.className = "downloads-actions";
         for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {
             const link = this.element("a", label); link.className = "secondary-button";
@@ -322,7 +301,7 @@ export class SummaryStatisticsView {
         root.append(this.element("small", "Downloads preserve the formulas and names at the time of calculation."), links);
     }
     /** Rebuild history only when its displayed text, order or actions change.
-     * Diagnostic and other undisplayed job fields do not invalidate these rows.
+     * Undisplayed job fields do not invalidate these rows.
      * @param {Object} state Summary state containing jobs and historyError. @return {void}
      */
     renderHistory(state) {

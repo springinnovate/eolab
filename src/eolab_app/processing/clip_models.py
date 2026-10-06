@@ -196,7 +196,6 @@ class ClipJobResponse(JobResponse):
     area: ClipAreaSummary | None
     progress: ClipProgressResponse
     result: ClipResultResponse | None
-    preparation: dict[str, float] | None = None
 
 
 # The listing reuses the common envelope; adding a supported operation can extend

@@ -2067,7 +2067,6 @@ async function startApplication() {
         { detailsDialog: isSharedViewer ? document.querySelector("#shared-layer-details") : null }
     );
     document.querySelector(".annotation-layer-tools").hidden = isSharedViewer;
-    document.querySelector("#summary-performance").hidden = isSharedViewer;
     if (isSharedViewer || editableMapSlug !== null) {
         document.querySelector("#reset-map-view").hidden = true;
         document.querySelector("#copy-map-link").hidden = true;

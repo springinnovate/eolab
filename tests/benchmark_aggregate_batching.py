@@ -92,7 +92,7 @@ def measure(path: Path, output: Path, case: str, target: int | None) -> dict:
         target: Pixel budget, or legacy default.
 
     Returns:
-        Plan, measured times/calls/memory and lossless results, or admission refusal.
+        Plan, measured wall time/memory and lossless results, or admission refusal.
     """
     expressions = ["mean(a)", "sum(a,where=a>10)", "count(a>10)"]
     area = None
@@ -125,12 +125,14 @@ def measure(path: Path, output: Path, case: str, target: int | None) -> dict:
             "planSeconds": time.perf_counter() - start,
         }
     plan_seconds = time.perf_counter() - start
+    execution_started = time.perf_counter()
     result = calculate_raster_statistics_for_area(path, spec, output, LIMITS)
+    execution_seconds = time.perf_counter() - execution_started
     return {
         "planSeconds": plan_seconds,
         "estimatedMemoryBytes": spec.grid.estimatedMemoryBytes,
         "nativeBlocks": spec.grid.nativeBlocks,
-        "performance": result.performance,
+        "executionSeconds": execution_seconds,
         "rows": result.rows,
         "peakResidentBytes": peak_memory(),
     }

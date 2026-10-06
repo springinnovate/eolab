@@ -1,7 +1,7 @@
 # Raster calculations
 
 This guide is for people using EOLab to write raster formulas, interpret their
-results, and understand the reported timings and limits.
+results, and understand the calculation limits.
 
 Use **Summarize** to calculate statistics over a sampling box, a filtered
 [vector layer](vector-sampling.md), or an explicitly selected whole raster.
@@ -107,11 +107,8 @@ keys. **Recover** retries those requests without creating duplicate jobs.
 
 **Values & download** shows every statistic, including hidden or log-excluded values, and exports all formulas,
 exact scalar values, units, source IDs, area descriptors, job IDs and cache
-status and pixel location as CSV. **Calculation timings** reports each raster's request-to-result
-time and server timings. Raster requests overlap, so their durations must not be
-added. A separate whole-series time includes debounce, formula validation and any
-recovery pauses. Formula choices and series results are not saved in
-shared map links.
+status and pixel location as CSV. Formula choices and series results are not saved
+in shared map links.
 
 ## Language and numerical meaning
 
@@ -214,59 +211,6 @@ inclusion rule. API submissions using `pixelValue` require
 `pixelPoint: {longitude, latitude}`; the field is absent for ordinary area
 calculations, and existing saved requests keep their identities.
 
-## Batch size and timing
-
-**Performance tuning (experimental) → Target pixels per batch** changes how
-many native pixels are processed together, not raster resolution. Current behavior
-is the default. The other targets are 65,536, 262,144, 1,048,576 and 4,194,304 pixels.
-Larger batches can reduce read overhead but need more memory; they are not always
-faster. Changing the target waits for **Calculate**. Counts are unchanged across
-batch sizes; floating results can differ in last-place rounding.
-
-Performance details show requested and effective read/tile sizes, memory estimates
-and timings. These are wall times, including waiting within each operation:
-
-- **Total wait → result displayed** includes vector selection when initiated for the calculation in this tab,
-  debounce, planning, queueing and
-  result delivery to the browser. It excludes earlier confirmation time
-  and the time needed to draw the result on screen.
-- Browser stages divide that total. Server stages overlap them; do not add the
-  browser and server groups together.
-- **Kernel elapsed** covers source opening and calculation through the CSV
-  checksum. New results also break out source setup, selection-envelope
-  reading/projection and ground-area setup.
-- **Inside Calculation** splits polygon masking, ground-area weights, formula
-  evaluation/reductions, and remaining tile/loop work. Masking includes any vector
-  reads, projection and rasterization required for each tile. These are nested
-  parts of Calculation, not additional time.
-- **Read/decode and source mask** includes native raster I/O, decompression and
-  its validity mask. It includes waiting, so it is not pure disk time.
-- **Vector selection before calculation** is part of Before submission when that
-  selection was observed in this tab. It excludes optional display-outline work.
-  A later Calculate click starts a new measurement.
-- Kernel setup, read, calculation, CSV/checksum and the labelled remaining kernel
-  work partition Kernel elapsed. Progress writes and source closing are
-  included in that remainder. Timings describe the entire shared batch when
-  several statistic cards run together.
-- Native-process time also includes communication and cleanup. Readiness wait
-  includes any startup required for this request; earlier prewarming is excluded.
-  API process timings also record `processId`, `operationNumber`, `startReason`
-  and `recycledFor` to distinguish initial startup, the memory threshold and
-  replacement after failure or cancellation. Completed operation count does not
-  trigger recycling; historical results may still report `operation_limit`.
-  `startupSeconds` measures the entire process startup, including prewarming;
-  it overlaps readiness wait and must not be added to the per-call durations.
-- **Queued → ready** includes server queueing, preparation and execution.
-  **Calculation preparation** is included in worker preparation; it measures
-  source authorization, cache lookup, area/grid estimates and their storage on
-  the job. It is not an additional browser request or a separate queue.
-  The estimated
-  submission/delivery remainder includes request handling, transfer and result
-  observation; it is not a measurement of network time alone.
-
-Old results may lack timing fields. A fast kernel does not guarantee the same
-request-to-display time under a busy server or slow connection.
-
 ## Limits
 
 | Resource | Limit |
@@ -317,33 +261,28 @@ Input files are read-only, and temporary kernel artifacts are deleted after each
 run. Ctrl+C interrupts the direct calculation.
 
 The report includes the result, CSV checksum, file identities, grid, limits,
-library versions, checkout revision and stage timings. Each repetition plans and
+library versions, checkout revision and harness wall times. Each repetition plans and
 executes again; caches are not cleared, so a first repetition is not necessarily
 cold. Compare identical inputs and grids: the local default COG is WGS84 whereas
 the current Connectivity deployment uses a Web Mercator copy.
 
 This is an offline kernel benchmark. It supplies explicit local file capabilities
 in place of Catalog lookup and job submission. It does not measure authorization,
-HTTP, queueing, worker startup, notifications or browser display. The app's
-performance details retain those end-to-end measurements. Import time is reported
-separately; inner kernel stages overlap the execution time and must not be added
-to it.
+HTTP, queueing, worker startup, notifications or browser display. Measurement
+lives in this standalone harness; the application does not collect profiling
+data. Import time is reported separately.
 
 
 ### Large polygon selections
 
 If a calculation reports a polygon memory limit, filter the vector layer to fewer
-features or reduce the raster batch size to leave more RAM available for geometry.
+features to stay within the calculation's memory budget.
 EOLab keeps the original polygon detail; it does not simplify analysis geometry.
 
 Polygon summaries also need temporary disk space for a mask, approximately one
 byte per pixel in the selected raster window plus file overhead. If storage is
 insufficient, select a smaller area or free space on the Processing data volume.
 Temporary mask files are deleted automatically.
-
-In performance details, **Selection setup** includes reading and projecting the
-polygons. **Mask preparation** measures creating the temporary mask.
-**Mask window reads** are included in calculation's polygon-selection time.
 
 After upgrading, an older queued job may need more disk space than it originally
 reserved. If the job reports insufficient reserved space, run the calculation again.
@@ -376,13 +315,7 @@ cancellation still apply. Browser executors retain accepted handles and retry
 only capacity-rejected items; failed transport retains keys for explicit recovery.
 
 
-### Worker preparation measurements
-
-Successful uncached results also partition worker preparation into plan
-preparation (including saving its database state), persisted-input validation and
-source authorization, scratch preparation, and the final cache lookup. These
-four intervals add up to worker preparation; they are not additional elapsed
-time. Older stored results may omit them.
+### Worker scratch preparation
 
 Scratch preparation checks the filesystem's available space against the job's
 reservation plus the physical free-space floor, then creates its private attempt

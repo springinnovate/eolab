@@ -3,7 +3,6 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 import math
-import time
 import json
 from time import monotonic
 from typing import Any
@@ -39,7 +38,7 @@ from eolab_app.raster.bounded_window import (
 )
 from eolab_app.raster.read_cancellation import require_active_raster_read
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
-from eolab_app.raster.models import RasterAreaMask, RasterMaskTimings
+from eolab_app.raster.models import RasterAreaMask
 from eolab_app.attribute_filter import matches_filter, validate_filter
 
 # Existing native-read and projection budgets now bound actual streamed work
@@ -494,7 +493,6 @@ class PolygonRasterizer:
         out_shape: tuple[int, int],
         affine: Affine,
         all_touched: bool,
-        timings: RasterMaskTimings | None = None,
     ) -> NDArray[np.bool_]:
         """Create a Boolean mask of selected polygons on a raster tile's grid.
 
@@ -506,7 +504,6 @@ class PolygonRasterizer:
             affine: Mapping from tile pixel coordinates to the raster CRS.
             all_touched: Include every pixel touched by a polygon when True;
                 otherwise use Rasterio's default pixel-center inclusion rule.
-            timings: Optional accumulator; excludes mask allocation and union.
 
         Returns:
             Boolean inclusion mask, counting overlaps once and preserving holes.
@@ -544,7 +541,6 @@ class PolygonRasterizer:
                     or bounds[1] > bottom
                 ):
                     continue
-                started = time.perf_counter()
                 feature_mask = geometry_mask(
                     projected,
                     out_shape=out_shape,
@@ -552,12 +548,9 @@ class PolygonRasterizer:
                     all_touched=all_touched,
                     invert=True,
                 )
-                if timings is not None:
-                    timings.rasterization_seconds += time.perf_counter() - started
                 inside |= feature_mask
                 del feature_mask
             return inside
-        reading_started = time.perf_counter() if timings is not None else 0.0
         bbox = native_bbox_for_grid(
             self.filtered_vector, self.dataset.crs, affine, out_shape
         )
@@ -565,17 +558,7 @@ class PolygonRasterizer:
             self.filtered_vector, bbox, self.cancellation_requested
         ) as features:
             for geometry in features:
-                if timings is not None:
-                    projection_started = time.perf_counter()
-                    timings.feature_reading_seconds += (
-                        projection_started - reading_started
-                    )
                 projected = self.project(geometry)
-                if timings is not None:
-                    rasterization_started = time.perf_counter()
-                    timings.projection_seconds += (
-                        rasterization_started - projection_started
-                    )
                 feature_mask = geometry_mask(
                     projected,
                     out_shape=out_shape,
@@ -583,16 +566,8 @@ class PolygonRasterizer:
                     all_touched=all_touched,
                     invert=True,
                 )
-                if timings is not None:
-                    timings.rasterization_seconds += (
-                        time.perf_counter() - rasterization_started
-                    )
                 inside |= feature_mask
                 del feature_mask
-                if timings is not None:
-                    reading_started = time.perf_counter()
-        if timings is not None:
-            timings.feature_reading_seconds += time.perf_counter() - reading_started
         return inside
 
 
@@ -602,7 +577,6 @@ def pixels_inside_area(
     out_shape: tuple[int, int],
     transform: Affine,
     all_touched: bool,
-    timings: RasterMaskTimings | None = None,
 ) -> NDArray[np.bool_]:
     """Return a boolean inclusion mask for polygons on the supplied raster grid.
 
@@ -613,7 +587,6 @@ def pixels_inside_area(
         transform: Mapping from output pixel coordinates to the raster CRS.
         all_touched: Include every pixel touched by a polygon when True;
             otherwise use Rasterio's default pixel-center inclusion rule.
-        timings: Optional accumulator; existing polygon tuples only rasterize.
 
     Returns:
         Boolean array with out_shape dimensions: True for included pixels
@@ -623,8 +596,7 @@ def pixels_inside_area(
         ValueError: If source geometry or bounded reading is invalid.
     """
     if not isinstance(selected_polygons, tuple):
-        return selected_polygons.rasterize(out_shape, transform, all_touched, timings)
-    rasterization_started = time.perf_counter() if timings is not None else 0.0
+        return selected_polygons.rasterize(out_shape, transform, all_touched)
     inside = geometry_mask(
         selected_polygons,
         out_shape=out_shape,
@@ -632,8 +604,6 @@ def pixels_inside_area(
         all_touched=all_touched,
         invert=True,
     )
-    if timings is not None:
-        timings.rasterization_seconds += time.perf_counter() - rasterization_started
     return inside
 
 

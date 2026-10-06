@@ -105,16 +105,5 @@ def test_benchmark_native_sum_and_required_selection(
         assert sum(
             v for k, v in timing.items() if k != "totalSeconds"
         ) == pytest.approx(timing["totalSeconds"])
-        performance = run["performance"]
-        assert performance["readWindows"] == 4
-        assert performance["stages"]["selectionMaskSeconds"] > 0
-        assert performance["temporaryMaskBytes"] > 0
-        assert performance["stages"]["selectionSetupSeconds"] > 0
-        assert performance["retainedPolygonBytes"] > 0
-        assert performance["stages"]["maskPreparationSeconds"] > 0
-        assert performance["stages"]["maskReadSeconds"] > 0
-        assert (
-            performance["stages"]["maskReadSeconds"]
-            <= performance["stages"]["selectionMaskSeconds"]
-        )
-        assert timing["executionSeconds"] >= performance["kernelSeconds"]
+        assert timing["executionSeconds"] > 0
+        assert run["grid"]["execution"]["readWindows"] == 4

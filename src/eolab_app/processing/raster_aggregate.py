@@ -26,8 +26,6 @@ from eolab_app.processing.aggregate_models import (
     AggregateGrid,
     AggregateExecutionPlan,
     AggregateSpec,
-    AggregatePerformance,
-    AggregateKernelStages,
     GroundAreaPlan,
     NamedCalculation,
     PixelPoint,
@@ -170,19 +168,11 @@ class RasterAreaTools:
             An empty tuple means no additional polygon mask is needed.
         pixel_area_calculator: Per-pixel hectare calculator, or None when
             the plan contains no area-measurement formulas.
-        selection_setup_seconds: Time spent preparing the window and selected polygons.
-        retained_polygon_bytes: Conservative retained geometry size, additional
-            to the saved plan's raster-buffer estimate.
-        pixel_area_setup_seconds: Time spent preparing the hectare calculator
-            and choosing the final window.
     """
 
     raster_window: Window
     selected_polygons: tuple[dict[str, object], ...] | RasterAreaMask
     pixel_area_calculator: PixelAreaCalculator | None
-    selection_setup_seconds: float
-    pixel_area_setup_seconds: float
-    retained_polygon_bytes: int
 
 
 def prepare_raster_area_tools(
@@ -204,7 +194,7 @@ def prepare_raster_area_tools(
         limits: Limits used by the existing geometry readers and area calculator.
 
     Returns:
-        Tools with one final pixel window and the separate setup timings.
+        Tools with one final pixel window.
         No raster pixel values are read during setup. The caller must close any
         returned PolygonRasterizer when the calculation ends.
 
@@ -212,7 +202,6 @@ def prepare_raster_area_tools(
         ProcessingError: If the area cannot be read or projected, does not
             overlap the raster, or exceeds geometry-processing limits.
     """
-    started = time.perf_counter()
     polygon_budget = 0
     if calculation_plan.area.kind == "catalogSelection":
         polygon_budget = min(
@@ -232,7 +221,6 @@ def prepare_raster_area_tools(
         limits,
         max_retained_polygon_bytes=polygon_budget,
     )
-    selection_ready = time.perf_counter()
     try:
         pixel_area_calculator = None
         if calculation_plan.grid.groundArea is not None:
@@ -246,18 +234,10 @@ def prepare_raster_area_tools(
         if isinstance(selected_polygons, PolygonRasterizer):
             selected_polygons.close()
         raise
-    area_ready = time.perf_counter()
     return RasterAreaTools(
         raster_window=raster_window,
         selected_polygons=selected_polygons,
         pixel_area_calculator=pixel_area_calculator,
-        selection_setup_seconds=selection_ready - started,
-        pixel_area_setup_seconds=area_ready - selection_ready,
-        retained_polygon_bytes=(
-            selected_polygons.retained_bytes
-            if isinstance(selected_polygons, PolygonRasterizer)
-            else 0
-        ),
     )
 
 
@@ -506,18 +486,14 @@ def calculate_raster_statistics_for_area(
         limits: Limits on raster reads, memory use, and geometry processing.
 
     Returns:
-        An AggregateArtifact containing the calculated values, performance
-        timings, and the CSV filename, size, and checksum.
+        An AggregateArtifact containing the calculated values and the CSV
+        filename, size, and checksum.
 
     Raises:
         ProcessingError: If the raster or area is unsupported, or the
             calculation exceeds a processing limit.
     """
-    started = time.perf_counter()
-    read_seconds = calculation_seconds = 0.0
-    mask_seconds = weights_seconds = reduction_seconds = 0.0
-    mask_read_seconds = 0.0
-    read_count = tile_count = completed_blocks = 0
+    completed_blocks = 0
     alias = next(iter(calculation_plan.sources))
     roots = [
         compile_expression(item.expression, alias)
@@ -532,36 +508,25 @@ def calculate_raster_statistics_for_area(
     ):
         with rasterio.open(raster_path) as dataset, ExitStack() as resources:
             validate_supported_raster(dataset, raster_path)
-            source_ready = time.perf_counter()
-            point_started = time.perf_counter()
             pixel_window = (
                 pixel_sample_window(dataset, calculation_plan.pixelPoint)
                 if "pixelValue" in functions
                 else None
             )
-            point_setup_seconds = time.perf_counter() - point_started
             pixel_value = None
             if pixel_window is not None and pixel_window.width:
-                read_started = time.perf_counter()
                 sample = read_native_raster_window(dataset, pixel_window)
-                read_seconds += time.perf_counter() - read_started
-                read_count = tile_count = completed_blocks = 1
+                completed_blocks = 1
                 if sample.count():
                     pixel_value = float(sample[0, 0])
                 del sample
-            reduction_started = time.perf_counter()
             calculations = [Calculation(root, pixel_value) for root in roots]
-            reduction_seconds += time.perf_counter() - reduction_started
-            calculation_seconds += reduction_seconds
             write_progress(directory, "preparing_selected_polygons", 0, 0)
             raster_area_tools = (
                 RasterAreaTools(
                     raster_window=pixel_window,
                     selected_polygons=(),
                     pixel_area_calculator=None,
-                    selection_setup_seconds=0.0,
-                    pixel_area_setup_seconds=0.0,
-                    retained_polygon_bytes=0,
                 )
                 if pixel_only
                 else prepare_raster_area_tools(dataset, calculation_plan, limits)
@@ -575,7 +540,6 @@ def calculate_raster_statistics_for_area(
                 0,
                 calculation_plan.grid.nativeBlocks,
             )
-            mask_started = time.perf_counter()
             polygon_mask = resources.enter_context(
                 temporary_polygon_mask(
                     dataset,
@@ -584,10 +548,6 @@ def calculate_raster_statistics_for_area(
                     directory,
                     limits,
                 )
-            )
-            mask_preparation_seconds = time.perf_counter() - mask_started
-            mask_bytes = (
-                0 if polygon_mask is None else Path(polygon_mask.name).stat().st_size
             )
             if isinstance(polygons, PolygonRasterizer):
                 polygons.close()
@@ -626,13 +586,8 @@ def calculate_raster_statistics_for_area(
                 else read_native_raster_window
             )
             for block, native_blocks in iter_windows:
-                read_started = time.perf_counter()
                 native = reader(dataset, block)
-                read_seconds += time.perf_counter() - read_started
-                read_count += 1
-                calculate_started = time.perf_counter()
                 intersection = block.intersection(raster_area_tools.raster_window)
-                mask_started = time.perf_counter()
                 if polygon_mask is None:
                     selection_valid = None
                 else:
@@ -645,8 +600,6 @@ def calculate_raster_statistics_for_area(
                     selection_valid = polygon_mask.read(1, window=mask_window).view(
                         np.bool_
                     )
-                    mask_read_seconds += time.perf_counter() - mask_started
-                mask_seconds += time.perf_counter() - mask_started
                 for y in range(
                     int(intersection.row_off),
                     int(intersection.row_off + intersection.height),
@@ -678,17 +631,14 @@ def calculate_raster_statistics_for_area(
                         values = native[local.toslices()]
                         data = values.data.astype(np.float64)
                         valid = ~np.ma.getmaskarray(values) & np.isfinite(data)
-                        weights_started = time.perf_counter()
                         hectares = (
                             pixel_area_calculator.calculate_hectares(tile)
                             if pixel_area_calculator is not None
                             else None
                         )
-                        weights_seconds += time.perf_counter() - weights_started
                         area_valid = (
                             valid & (hectares > 0) if hectares is not None else None
                         )
-                        mask_started = time.perf_counter()
                         if selection_valid is not None:
                             mask_local = Window(
                                 x - intersection.col_off,
@@ -697,17 +647,12 @@ def calculate_raster_statistics_for_area(
                                 tile.height,
                             )
                             valid &= selection_valid[mask_local.toslices()]
-                        mask_seconds += time.perf_counter() - mask_started
-                        reduction_started = time.perf_counter()
                         for calculation in calculations:
                             calculation.process_tile(data, valid, hectares, area_valid)
-                        reduction_seconds += time.perf_counter() - reduction_started
-                        tile_count += 1
                         # Release the tile before allocating the next one; no old
                         # source view may retain the previous combined read.
                         del values, data, valid, hectares, area_valid
                 del native, selection_valid
-                calculation_seconds += time.perf_counter() - calculate_started
                 completed_blocks += native_blocks
                 if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
                     write_progress(
@@ -717,50 +662,19 @@ def calculate_raster_statistics_for_area(
                         calculation_plan.grid.nativeBlocks,
                     )
                     last_progress = time.monotonic()
-    calculate_started = time.perf_counter()
     rows = [
         {"label": item.label, "expression": item.expression, **calculation.result()}
         for item, calculation in zip(
             calculation_plan.calculations, calculations, strict=True
         )
     ]
-    final_reduction_seconds = time.perf_counter() - calculate_started
-    calculation_seconds += final_reduction_seconds
-    reduction_seconds += final_reduction_seconds
     write_progress(
         directory,
         "writing_results",
         completed_blocks,
         calculation_plan.grid.nativeBlocks,
     )
-    performance = AggregatePerformance(
-        execution=raster_batch_plan,
-        readWindows=read_count,
-        evaluationTiles=tile_count,
-        reducerUpdates=tile_count * len(calculations),
-        readSeconds=read_seconds,
-        calculationSeconds=calculation_seconds,
-        resultWriteSeconds=0.0,
-        kernelSeconds=time.perf_counter() - started,
-        retainedPolygonBytes=raster_area_tools.retained_polygon_bytes,
-        temporaryMaskBytes=mask_bytes,
-        stages=AggregateKernelStages(
-            sourceSetupSeconds=source_ready - started,
-            selectionSetupSeconds=(
-                raster_area_tools.selection_setup_seconds + point_setup_seconds
-            ),
-            groundAreaSetupSeconds=raster_area_tools.pixel_area_setup_seconds,
-            gridCheckSeconds=0.0,
-            selectionMaskSeconds=mask_seconds,
-            maskPreparationSeconds=mask_preparation_seconds,
-            maskReadSeconds=mask_read_seconds,
-            areaWeightsSeconds=weights_seconds,
-            reductionSeconds=reduction_seconds,
-        ),
-    )
-    return write_statistics_result(
-        calculation_plan, rows, directory, performance=performance
-    )
+    return write_statistics_result(calculation_plan, rows, directory)
 
 
 def write_statistics_result(
@@ -768,7 +682,6 @@ def write_statistics_result(
     rows: list[dict[str, object]],
     directory: Path,
     *,
-    performance: AggregatePerformance | None = None,
     cache_hit: bool = False,
 ) -> AggregateArtifact:
     """Write this calculation's CSV and provenance, including reused values.
@@ -777,18 +690,15 @@ def write_statistics_result(
         calculation_plan: Raster, area and formulas recorded for this request.
         rows: Completed result rows with the current labels and formula text.
         directory: Existing private job directory in which to write both files.
-        performance: Measurements through calculation completion, when executed.
-            CSV writing time is added here. Omit for cached results.
         cache_hit: Whether all values came from the shared result cache.
 
     Returns:
-        CSV size, checksum, inline values and this request's cache/timing metadata.
+        CSV size, checksum, inline values and this request's cache status.
 
     Raises:
         OSError: If result files cannot be written.
         ValueError: If result metadata cannot be serialized as finite JSON.
     """
-    writing_started = time.perf_counter()
     result = directory / "result.csv"
     result.write_bytes(statistics_csv(rows))
     with result.open("rb") as stream:
@@ -803,20 +713,11 @@ def write_statistics_result(
         )
         else {}
     )
-    if performance is not None:
-        write_seconds = time.perf_counter() - writing_started
-        performance = performance.model_copy(
-            update={
-                "resultWriteSeconds": write_seconds,
-                "kernelSeconds": performance.kernelSeconds + write_seconds,
-            }
-        )
     artifact = AggregateArtifact(
         size=result.stat().st_size,
         sha256=digest,
         filename=f"{source.item_id}-calculations.csv",
         rows=rows,
-        performance=performance.model_dump(mode="json") if performance else None,
         cache_hit=cache_hit,
     )
     provenance = {

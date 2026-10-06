@@ -17,7 +17,6 @@ export class ProcessingJobs {
         this.destroyed = false;
         this.stopEvents = null;
         this.eventRevision = 0;
-        this.refreshSequence = 0;
     }
     /** Observe shared history. @param {Function} listener Receives store. @return {Function} Unsubscribe. */
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -37,17 +36,10 @@ export class ProcessingJobs {
     /** Refresh tracked and active jobs together, preserving newer local changes.
      * Idle refreshes recover recent history. Active refreshes query only the IDs
      * needed by this observer and retain unrelated history already displayed.
-     * @param {string} [trigger="explicit"] SSE, timer, follow-up, or explicit caller.
      * @return {Promise<void>} The existing in-flight read, or a new refresh.
      */
-    refresh(trigger = "explicit") {
-        const diagnostics = this.api.diagnostics;
-        if (this.refreshing) {
-            diagnostics?.record("refresh-coalesced", {shared: true, trigger, refreshNumber: this.refreshSequence});
-            return this.refreshing;
-        }
-        const refreshNumber = ++this.refreshSequence;
-        const startedAtMs = diagnostics?.record("refresh-start", {shared: true, trigger, refreshNumber});
+    refresh() {
+        if (this.refreshing) return this.refreshing;
         const changedJobs = new Set();
         this.jobsChangedDuringRefresh = changedJobs;
         const eventRevision = this.eventRevision;
@@ -58,37 +50,23 @@ export class ProcessingJobs {
                 const {jobs, unavailableJobIds} = requested.size
                     ? await this.api.readJobStatuses([...requested])
                     : {jobs: await this.api.listJobs(), unavailableJobIds: []};
-                for (const job of jobs) if (job.status === "ready" && this.tracked.has(job.jobId)) {
-                    diagnostics?.record("ready-received", {jobId: job.jobId, trigger, refreshNumber});
-                }
                 if (!this.destroyed) {
-                    const accepted = jobs.filter(job => {
-                        if (!changedJobs.has(job.jobId)) return true;
-                        diagnostics?.record("job-update-skipped", {jobId: job.jobId, trigger, refreshNumber});
-                        return false;
-                    });
+                    const accepted = jobs.filter(job => !changedJobs.has(job.jobId));
                     this.jobs = [...this.jobs.filter(job => changedJobs.has(job.jobId) ||
                         (requested.size && !requested.has(job.jobId))), ...accepted];
                     const unavailable = unavailableJobIds.filter(id => !changedJobs.has(id));
                     this.error = unavailable.length ? "A requested processing job is unavailable. Retry the calculation." : "";
                     for (const id of unavailable) this.tracked.delete(id);
-                    for (const job of accepted) if (job.status === "ready" && this.tracked.has(job.jobId)) {
-                        diagnostics?.record("ready-accepted", {jobId: job.jobId, trigger, refreshNumber});
-                    }
-                } else diagnostics?.record("refresh-discarded", {shared: true, trigger, refreshNumber,
-                    reason: "destroyed"});
+                }
             } catch (error) {
-                diagnostics?.record("refresh-error", {shared: true, trigger, refreshNumber});
                 this.error = `Processing history unavailable: ${error.message}`;
             }
         })().finally(() => {
-            diagnostics?.record("refresh-finish", {shared: true, trigger, refreshNumber,
-                seconds: (diagnostics.now() - startedAtMs) / 1000});
             this.jobsChangedDuringRefresh = null;
             this.refreshing = null; this.notify(); this.schedule();
             // An event arriving during a read may describe a newer commit than
             // that read saw. Coalesce the burst into exactly one subsequent read.
-            if (!this.destroyed && eventRevision !== this.eventRevision) void this.refresh("sse-follow-up");
+            if (!this.destroyed && eventRevision !== this.eventRevision) void this.refresh();
         });
         return this.refreshing;
     }
@@ -99,17 +77,12 @@ export class ProcessingJobs {
         if (!this.destroyed && active && !this.stopEvents) this.stopEvents = this.api.watchJobs?.(() => {
             if (this.destroyed) return;
             this.eventRevision += 1;
-            void this.refresh("sse");
+            void this.refresh();
         }) ?? null;
         if ((!active || this.destroyed) && this.stopEvents) { this.stopEvents(); this.stopEvents = null; }
         if (!this.destroyed) {
             const delay = active ? 2000 : 30000;
-            const scheduledAtMs = this.api.diagnostics?.now();
-            this.timer = this.clock.setTimeout(() => {
-                this.api.diagnostics?.record("fallback-timer", {shared: true,
-                    lateSeconds: Math.max(0, (this.api.diagnostics.now() - scheduledAtMs - delay) / 1000)});
-                void this.refresh("timer");
-            }, delay);
+            this.timer = this.clock.setTimeout(() => void this.refresh(), delay);
         }
     }
     /** Mutate one owned job and refresh. @param {string} id Job ID. @param {string} action Cancel or delete. @return {Promise<Object|undefined>} Updated job. */

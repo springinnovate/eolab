@@ -263,8 +263,7 @@ export class RasterSeriesController {
         this.view.render({
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
-                recoverable: area.needsRecovery, hasErrors: area.hasErrors,
-                elapsedSeconds: area.elapsedSeconds }, statistics, plots: this.plots,
+                recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType,

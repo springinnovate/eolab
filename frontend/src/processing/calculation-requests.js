@@ -10,7 +10,6 @@ export class CalculationRequests {
      * @param {import("./calculation-session.js").CalculationSessionStorage} dependencies.storage Scoped tab recovery records.
      * @param {(area:Object|null)=>void} [dependencies.onActivity] Most recently active calculation area.
      * @param {()=>string} [dependencies.requestId] Idempotency key factory.
-     * @param {()=>number} [dependencies.now] Monotonic clock in milliseconds.
      */
     constructor(dependencies) {
         this.dependencies = dependencies;

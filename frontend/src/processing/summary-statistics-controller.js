@@ -1,5 +1,5 @@
 /** Editable statistic cards over the existing durable calculation workflow. */
-import { calculationIntent, calculationPixelPoint, chunkPixels } from "./calculation-session.js";
+import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { catalogSelectionsEqual } from "../selected-area.js";
 
@@ -34,23 +34,19 @@ export class SummaryStatisticsController {
      * @param {()=>void} dependencies.onEditArea Show sampling controls.
      * @param {(area:Object|null,label:string)=>void} [dependencies.onAreaChange] Publish the committed calculation area.
      * @param {Object} [dependencies.clock=globalThis] Debounce timers.
-     * @param {()=>number} [dependencies.now] Monotonic milliseconds.
      * @param {import("./calculation-requests.js").CalculationRequests} dependencies.calculationRequests Independent recoverable calculation requests.
      * @param {Function} [dependencies.onCancelSelection] Cancel an in-progress area selection.
      */
     constructor(dependencies) {
-        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, onAreaChange = () => {}, clock = globalThis, now = () => performance.now() } = dependencies;
-        this.now = now;
+        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, onAreaChange = () => {}, clock = globalThis } = dependencies;
         Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, onAreaChange, clock });
         this.serial = 0;
-        this.vectorRequestStarted = null;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, pixelPoint: null, areaChoice: "selection",
-            active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
+            active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         this.executor = dependencies.calculationRequests.createClient("summary", snapshot => this.receive(snapshot));
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
             onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
-            onChunkPixels: value => this.setChunkPixels(value),
             onEdit: (id, change) => this.editStatistic(id, change), onAdd: preset => this.addStatistic(preset),
             onRemove: id => this.removeStatistic(id), onUndo: () => this.undoRemove(),
             onRun: id => this.request(id, "manual"), onStop: id => this.stopStatistic(id),
@@ -65,13 +61,13 @@ export class SummaryStatisticsController {
     makeStatistic(value, source = null) {
         return { id: ++this.serial, label: value.label, expression: value.expression, source,
             version: 0, valid: false, checking: false, requested: null, pending: false,
-            message: "Choose a raster", result: null, preparedJob: null, error: false };
+            message: "Choose a raster", result: null, error: false };
     }
     label(card) { return card.label.trim() || `Summary statistic ${card.id}`; }
     /** Identify calculation inputs, including the click only when this formula uses it.
      * @param {Object} card Statistic card. @return {string} Stable input identity.
      */
-    key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area, this.state.targetChunkPixels,
+    key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area,
         calculationPixelPoint([card], this.state.pixelPoint)]); }
     /** Whether committed vector changes may automatically update the visible summary.
      * @return {boolean} True when the vector summary is active and automatic updates are enabled.
@@ -86,7 +82,6 @@ export class SummaryStatisticsController {
     async start() {
         const unfinished = this.executor.snapshot.unfinishedCalculation;
         if (unfinished) {
-            this.state.targetChunkPixels = unfinished.calculation.targetChunkPixels ?? null;
             this.state.pixelPoint = unfinished.calculation.pixelPoint ?? null;
             this.state.area = this.state.selectedArea = unfinished.calculation.area;
             this.state.areaChoice = unfinished.calculation.area.kind === "wholeRaster" ? "whole" : ["catalogSelection", "polygonArea"].includes(unfinished.calculation.area.kind) ? "vector" : "selection";
@@ -170,16 +165,12 @@ export class SummaryStatisticsController {
     }
 
     /** Select a catalog descriptor or owned polygon upload and optionally calculate.
-     * When selection progress was observed here, include that wait in the new cards'
-     * request-to-display timings. Optional outline generation remains independent.
+     * Optional outline generation remains independent.
      * @param {Object} info Catalog selection or polygonArea reference, plus a presentation label.
      * @param {boolean} [calculate=false] User explicitly requested filter and calculation.
      * @return {void}
      */
     setVectorSamplingArea(info, calculate = false) {
-        const selectionStarted = this.vectorRequestStarted;
-        const selectionFinished = this.now();
-        this.vectorRequestStarted = null;
         this.state.vectorSelecting = false;
         this.state.vectorCalculation = calculate;
         this.state.selectionMessage = "";
@@ -191,18 +182,10 @@ export class SummaryStatisticsController {
         if (calculate) {
             this.open();
             this.calculateSelection(true);
-            if (Number.isFinite(selectionStarted)) {
-                for (const card of this.state.statistics) {
-                    if (!card.requested) continue;
-                    card.requestStarted = selectionStarted;
-                    card.vectorSelectionSeconds = (selectionFinished - selectionStarted) / 1000;
-                }
-            }
         }
         this.render();
     }
     /** Receive selection lifecycle through composition, without accessing vector state.
-     * Time the current analysis selection until activation; discard cancelled/failed waits.
      * @param {{phase:string,message:string,analysis:boolean}} selection Public progress snapshot.
      * @return {void}
      */
@@ -210,13 +193,11 @@ export class SummaryStatisticsController {
         if (!selection.analysis) return;
         const selecting = ["reading", "selected"].includes(selection.phase);
         if (selecting && !this.state.vectorSelecting) {
-            this.vectorRequestStarted = this.now();
             this.invalidateBatch();
             this.executor.discardPendingCalculation();
             this.state.areaChoice = "vector";
             this.changeArea(null, false);
         }
-        if (!selecting) this.vectorRequestStarted = null;
         this.state.vectorSelecting = selecting;
         this.state.selectionMessage = selection.phase === "active" ? "" : selection.message;
         this.render();
@@ -241,20 +222,6 @@ export class SummaryStatisticsController {
         if (catalogSelectionsEqual(this.state.area?.catalogSelection, id)) { this.invalidateBatch(); this.changeArea(null, false); }
         if (catalogSelectionsEqual(this.state.selectedArea?.catalogSelection, id)) this.state.selectedArea = null;
         if (catalogSelectionsEqual(this.state.vectorArea?.selection, id)) this.state.vectorArea = null;
-        this.render();
-    }
-    /** Change execution settings without launching a benchmark or invalidating formula syntax.
-     * @param {number|null} value Total target pixels; null keeps legacy execution. @return {void}
-     */
-    setChunkPixels(value) {
-        const target = chunkPixels(value);
-        if (target === this.state.targetChunkPixels) return;
-        this.invalidateBatch();
-        this.executor.discardPendingCalculation();
-        this.state.targetChunkPixels = target;
-        for (const card of this.state.statistics) {
-            card.preparedJob = null; card.requested = null; card.error = false;
-        }
         this.render();
     }
     /** Receive the current map selection and supersede an active vector area when it changes.
@@ -292,10 +259,8 @@ export class SummaryStatisticsController {
             if (keys[index] === this.key(card)) continue;
             if (this.batch?.automatic || this.isActive) this.invalidateBatch(card.id);
             this.executor.discardPendingCalculation();
-            card.preparedJob = null; card.error = false;
+            card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic && this.state.area ? "automatic" : null;
-            card.requestStarted = card.requested ? this.now() : null;
-            card.vectorSelectionSeconds = undefined;
             this.validateLater(card, false);
         }
         this.render();
@@ -320,10 +285,8 @@ export class SummaryStatisticsController {
             ? this.state.vectorArea?.label ?? "Selected polygons"
             : area?.kind === "wholeRaster" ? "Whole raster" : area ? "Current map sampling box" : "");
         for (const card of this.state.statistics) {
-            card.preparedJob = null; card.error = false;
+            card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic && area ? "automatic" : null;
-            card.requestStarted = card.requested ? this.now() : null;
-            card.vectorSelectionSeconds = undefined;
             this.validateLater(card, false);
         }
         this.render();
@@ -357,10 +320,8 @@ export class SummaryStatisticsController {
         Object.assign(card, change);
         if (oldKey !== this.key(card)) {
             this.invalidateBatch(id);
-            card.preparedJob = null; card.error = false;
+            card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic ? "automatic" : null;
-            card.requestStarted = card.requested ? this.now() : null;
-            card.vectorSelectionSeconds = undefined;
             this.validateLater(card, false);
         }
         // Names are presentation only; the immutable original export keeps its run label.
@@ -406,7 +367,7 @@ export class SummaryStatisticsController {
         const version = ++card.version;
         card.valid = false; card.checking = true; card.error = false;
         card.cancelled = false;
-        if (requestAutomatic) { card.requested = "automatic"; card.requestStarted = this.now(); card.vectorSelectionSeconds = undefined; }
+        if (requestAutomatic) card.requested = "automatic";
         if (card.validatedExpression === card.expression.trim()) {
             card.valid = true; card.checking = false;
             if (card.result?.key === this.key(card)) card.requested = null;
@@ -450,8 +411,6 @@ export class SummaryStatisticsController {
         if (!card || !card.source || !this.state.area) return;
         if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
         card.requested = kind; card.error = false; card.cancelled = false;
-        card.requestStarted = this.now();
-        card.vectorSelectionSeconds = undefined;
         if (kind === "manual") {
             this.clock.clearTimeout(card.timer); card.abort?.abort(); card.version++;
             card.checking = false;
@@ -522,14 +481,13 @@ export class SummaryStatisticsController {
         try {
             intent = calculationIntent({ source: first.source, area: this.state.area,
                 pixelPoint: this.state.pixelPoint,
-                targetChunkPixels: this.state.targetChunkPixels,
                 calculations: group.map(card => ({ label: this.label(card), expression: card.expression })) });
         } catch (error) {
             for (const card of group) { card.requested = null; card.error = true; card.message = error.message; }
             this.render(); this.scheduleNextBatch(); return;
         }
         this.batch = { intent, previousJobId: execution.completedJob?.jobId, automatic: first.requested !== "manual", obsolete: false,
-            cards: group.map(card => ({ id: card.id, key: this.key(card), requestStarted: card.requestStarted, vectorSelectionSeconds: card.vectorSelectionSeconds })) };
+            cards: group.map(card => ({ id: card.id, key: this.key(card) })) };
         for (const card of group) { card.requested = null; card.pending = true; card.error = false; card.message = "Preparing calculation…"; }
         this.executor.submit(intent, Object.freeze({automatic: this.batch.automatic}));
         this.render();
@@ -570,10 +528,8 @@ export class SummaryStatisticsController {
                     card.message = execution.message || (execution.currentJob?.status === "running" ? "Calculating…" : "Waiting to calculate…");
                     card.progress = execution.currentJob?.progress ?? null;
                     card.error = execution.phase === "error";
-                    if (execution.currentJob?.grid) card.preparedJob = execution.currentJob;
                     if (isIdle && matching && job.result?.rows[index]) {
-                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area,
-                            requestStarted: entry.requestStarted, vectorSelectionSeconds: entry.vectorSelectionSeconds, stageTrace: execution.completedTimings };
+                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area };
                         card.message = "Up to date";
                     } else if (isIdle && !matching) {
                         card.error = execution.phase === "error" || !batch.obsolete;
@@ -592,8 +548,7 @@ export class SummaryStatisticsController {
         this.onOpen(); this.render();
         this.view.focusSaved?.();
     }
-    /** Record received results and schedule presentation of current calculation feedback.
-     * Browser wait measurements end at receipt, independently of panel visibility or drawing.
+    /** Schedule presentation of current calculation feedback.
      * @return {void}
      */
     render() {
@@ -615,26 +570,6 @@ export class SummaryStatisticsController {
             if (card.cancelled) card.message = card.pending ? "Cancelling calculation…" : "Calculation cancelled";
             if (this.state.vectorSelecting) card.message = "Calculating · selecting filtered features…";
             else if (!this.state.area && this.state.selectionMessage) card.message = this.state.selectionMessage;
-        }
-        // Stop at result receipt; the view draws separately in an animation frame.
-        // Keep this browser-local: recovered jobs have no monotonic start time.
-        for (const card of this.state.statistics) {
-            const result = card.result;
-            if (result && Number.isFinite(result.requestStarted) && result.totalWaitSeconds === undefined) {
-                const displayed = this.now();
-                result.totalWaitSeconds = Math.max(0, displayed - result.requestStarted) / 1000;
-                const trace = result.stageTrace;
-                if (trace && [trace.submissionStartedAtMs, trace.submissionFinishedAtMs].every(Number.isFinite)
-                    && result.requestStarted <= trace.submissionStartedAtMs) {
-                    result.stages = {
-                        beforeSubmissionSeconds: (trace.submissionStartedAtMs - result.requestStarted) / 1000,
-                        submissionSeconds: (trace.submissionFinishedAtMs - trace.submissionStartedAtMs) / 1000,
-                        afterSubmissionSeconds: (displayed - trace.submissionFinishedAtMs) / 1000,
-                        delivery: {...trace, controllerReceivedAtMs: displayed},
-                        vectorSelectionSeconds: result.vectorSelectionSeconds,
-                    };
-                }
-            }
         }
         this.view.render(this.state);
     }

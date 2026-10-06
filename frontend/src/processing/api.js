@@ -2,7 +2,6 @@
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
-import { ProcessingDiagnostics, captureRequestNetworkTiming } from "./diagnostics.js";
 
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */
 export class ProcessingRequestError extends Error {
@@ -85,46 +84,8 @@ function validateExecution(value) {
     }
 }
 
-/** Validate durable timing measurements, including optional kernel stage details.
- * @param {Object|null} value Timings from a retained job.
- * @return {void}
- * @throws {Error} If required counters or present stage durations are invalid.
- */
-function validatePerformance(value) {
-    if (value == null) return;
-    validateExecution(value.execution);
-    validateStages(value.stages, ["sourceSetupSeconds", "selectionSetupSeconds", "groundAreaSetupSeconds", "gridCheckSeconds",
-        "selectionMaskSeconds", "areaWeightsSeconds", "reductionSeconds"]);
-    for (const name of ["maskPreparationSeconds", "maskReadSeconds"]) {
-        if (value.stages?.[name] != null) validateStages(value.stages, [name]);
-    }
-    validateStages(value.stages?.selectionMaskBreakdown,
-        ["featureReadingSeconds", "projectionSeconds", "rasterizationSeconds"]);
-    if (![value.readSeconds, value.calculationSeconds, value.resultWriteSeconds, value.kernelSeconds]
-        .every(n => Number.isFinite(n) && n >= 0 && n <= 86400) ||
-        ![value.readWindows, value.evaluationTiles, value.reducerUpdates].every(n => Number.isSafeInteger(n) && (value.readWindows === 0 ? n === 0 : n > 0)) ||
-        value.readWindows !== value.execution.readWindows) throw new Error("Processing returned invalid performance measurements.");
-}
-
-/** Validate optional stage durations, allowing legacy responses without them.
- * @param {Object|null} value Timing object. @param {string[]} fields Required stage names. @return {void}
- */
-function validateStages(value, fields) {
-    if (value == null) return;
-    if (fields.some(key => !Number.isFinite(value[key]) || value[key] < 0)) {
-        throw new Error("Processing returned invalid stage timings.");
-    }
-}
-
-/** Validate optional native reuse/readiness metadata. @param {Object|null} value Process timing. @return {void} */
-function validateProcessTiming(value) {
-    if (value == null) return;
-    validateStages(value, ["readyWaitSeconds", "operationSeconds", "overheadSeconds"]);
-    if (typeof value.reusedProcess !== "boolean") throw new Error("Processing returned invalid process reuse metadata.");
-}
-
 /** Validate a public owned job before presenting values or download actions.
- * @param {Object} job API response, including optional timing and cache metadata.
+ * @param {Object} job API response, including optional cache metadata.
  * @return {Object} Validated job.
  * @throws {Error} If the lifecycle, results, metadata or download links are invalid.
  */
@@ -133,11 +94,6 @@ function validateJob(job) {
     if (!["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired", "deleted"].includes(job.status) ||
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.grid) validateGrid(job.grid, job.operation);
-    if (job.preparation != null) {
-        validateStages(job.preparation, ["seconds"]);
-        validateProcessTiming(job.preparation.process);
-        if (job.operation === "raster.aggregate.v1" && typeof job.preparation.cacheHit !== "boolean") throw new Error("Processing returned invalid preparation cache metadata.");
-    }
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
@@ -146,10 +102,6 @@ function validateJob(job) {
             if (job.result.cacheHit != null && typeof job.result.cacheHit !== "boolean") {
                 throw new Error("Processing returned invalid cache metadata.");
             }
-            validatePerformance(job.result.performance);
-            validateStages(job.result.executionTiming, ["queueSeconds", "preparationSeconds", "nativeProcessSeconds", "publicationSeconds"]);
-            validateProcessTiming(job.result.executionTiming?.process);
-            if (job.result.queuedToReadySeconds != null) validateStages(job.result, ["queuedToReadySeconds"]);
         }
     }
     return job;
@@ -180,15 +132,11 @@ export class ProcessingApiClient {
         this.session = null;
         this.eventListeners = new Set();
         this.eventStream = null;
-        this.diagnostics = new ProcessingDiagnostics();
-        this.requestSequence = 0;
-        this.requestsInFlight = 0;
         this.pendingCalculations = [];
     }
 
     /** Share one event stream for planning and job observers after cookie setup.
-     * Connection events and optional numeric timing frames are recorded separately;
-     * only fixed changed hints trigger authoritative status reads.
+     * Only fixed changed hints trigger authoritative status reads.
      * @param {Function} changed Request an authoritative job refresh.
      * @return {Function|null} Close the connection, or null when SSE is unavailable. */
     watchJobs(changed) {
@@ -199,27 +147,11 @@ export class ProcessingApiClient {
                 const source = new this.EventSource("/api/processing/events");
                 const receive = event => {
                     if (event.data === "{}") {
-                        this.diagnostics.record("sse-hint", {shared: true});
                         for (const listener of this.eventListeners) listener();
                     }
                 };
-                const opened = () => this.diagnostics.record("sse-open", {shared: true});
-                const failed = () => this.diagnostics.record("sse-error", {shared: true});
-                const timing = event => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        if (Number.isFinite(data.listenerToStreamSeconds) && data.listenerToStreamSeconds >= 0 &&
-                            Number.isFinite(data.previousSendSeconds) && data.previousSendSeconds >= 0) {
-                            this.diagnostics.record("sse-server-timing", {shared: true,
-                                listenerToStreamSeconds: data.listenerToStreamSeconds, previousSendSeconds: data.previousSendSeconds});
-                        }
-                    } catch { /* Optional diagnostics never control refreshes. */ }
-                };
                 source.addEventListener("changed", receive);
-                source.addEventListener("open", opened);
-                source.addEventListener("error", failed);
-                source.addEventListener("timing", timing);
-                this.eventStream = {source, receive, opened, failed, timing};
+                this.eventStream = {source, receive};
             }
             // Give each subscription its own identity even if a callback is reused.
             const listener = () => { if (!closed) changed(); };
@@ -229,13 +161,9 @@ export class ProcessingApiClient {
                 closed = true;
                 this.eventListeners.delete(listener);
                 if (this.eventListeners.size === 0) {
-                    const {source, receive, opened, failed, timing} = this.eventStream;
+                    const {source, receive} = this.eventStream;
                     source.removeEventListener("changed", receive);
-                    source.removeEventListener("open", opened);
-                    source.removeEventListener("error", failed);
-                    source.removeEventListener("timing", timing);
                     source.close();
-                    this.diagnostics.record("sse-close", {shared: true});
                     this.eventStream = null;
                 }
             };
@@ -337,7 +265,7 @@ export class ProcessingApiClient {
     /** Queue complete inputs, coalescing submissions ready in the same microtask turn.
      * Each caller retains its independent promise, retry key and cancellation lifecycle.
      * @param {Object} submission Source, area, formulas, optional pixelPoint and stable requestId.
-     * @return {Promise<Object>} Owned job with preparation details once the worker produces them.
+     * @return {Promise<Object>} Owned job with progress and results as the worker produces them.
      * @throws {ProcessingRequestError|Error} If admission fails or the response is invalid.
      */
     async submitCalculation(submission) {
@@ -421,64 +349,38 @@ export class ProcessingApiClient {
 
     /**
      * Send one bounded JSON request and preserve classified API errors.
-     * Retain bounded browser timings and numeric server durations, without bodies
-     * or credentials. HTTP completion does not imply that a job is ready.
+     * HTTP completion does not imply that a job is ready.
      * @param {string} path Owned endpoint suffix. @param {string} [method="GET"] HTTP method.
      * @param {Object|undefined} body JSON input. @param {AbortSignal|undefined} signal Request cancellation.
      * @return {Promise<Object>} Parsed response.
      * @throws {ProcessingRequestError|Error} HTTP rejection, failed transport, or unreadable JSON.
      */
     async request(path, method = "GET", body, signal) {
-        const requestNumber = ++this.requestSequence;
-        const identity = path.match(/^\/jobs\/([a-f0-9]{32})(?:\/|$)/);
-        const fields = {requestNumber, method, path, jobId: identity?.[1],
-            shared: path === "/jobs" || path === "/jobs/status" || path === "/raster-calculations/batch", inFlight: ++this.requestsInFlight};
-        const startedAtMs = this.diagnostics.record("http-start", fields);
-        const finishNetworkTiming = captureRequestNetworkTiming();
-        let headersAtMs, response, serverTiming = {};
-        try {
-            response = await this.fetch.call(globalThis, `/api/processing${path}`, {
-                method, credentials: "same-origin", cache: "no-store", signal,
-                headers: {
-                    Accept: "application/json",
-                    ...(method === "GET" ? {} : { "X-EOLab-Processing": "1" }),
-                    ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-                },
-                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-            });
-            headersAtMs = this.diagnostics.now();
-            // Only our fixed numeric Server-Timing metrics enter the report.
-            for (const metric of (response.headers?.get("Server-Timing") ?? "").split(",")) {
-                const match = metric.trim().match(/^(processing|admissionChecks|queueAdmission|submissionObservation|jobRead|appToHeaders|beforeRoute|afterRoute|eventLoopLag);dur=([\d.]+)$/);
-                if (match && Number.isFinite(Number(match[2]))) serverTiming[match[1]] = Number(match[2]) / 1000;
-            }
-            const data = await response.json().catch(() => null);
-            if (!response.ok) {
-                const detail = data?.detail;
-                const retryAfterHeader = response.headers?.get("Retry-After");
-                const retryAfterSeconds = retryAfterHeader == null ? NaN : /^\d+(\.\d+)?$/.test(retryAfterHeader)
-                    ? Number(retryAfterHeader) : (Date.parse(retryAfterHeader) - Date.now()) / 1000;
-                throw new ProcessingRequestError(
-                    typeof detail === "string" ? detail : Array.isArray(detail)
-                        ? detail.map(item => item.msg).join("; ")
-                        : detail?.message ?? `Processing request failed (${response.status}).`,
-                    response.status, detail?.code ?? null,
-                    Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 && retryAfterSeconds <= 86400 ? retryAfterSeconds : null,
-                );
-            }
-            if (data === null) throw new Error("Processing returned an unreadable response. Retry to recover your jobs.");
-            return data;
-        } finally {
-            const finishedAtMs = this.diagnostics.now();
-            const headerId = response?.headers?.get("X-EOLab-Request-Id");
-            const requestId = /^[a-f0-9]{32}$/.test(headerId ?? "") ? headerId : null;
-            this.requestsInFlight--;
-            this.diagnostics.record("http-finish", {...fields, status: response?.status ?? null,
-                seconds: (finishedAtMs - startedAtMs) / 1000,
-                headersSeconds: headersAtMs == null ? null : (headersAtMs - startedAtMs) / 1000,
-                bodySeconds: headersAtMs == null ? null : (finishedAtMs - headersAtMs) / 1000,
-                serverTiming, requestId, networkTiming: finishNetworkTiming(requestId, finishedAtMs)});
+        const response = await this.fetch.call(globalThis, `/api/processing${path}`, {
+            method, credentials: "same-origin", cache: "no-store", signal,
+            headers: {
+                Accept: "application/json",
+                ...(method === "GET" ? {} : { "X-EOLab-Processing": "1" }),
+                ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+            const detail = data?.detail;
+            const retryAfterHeader = response.headers?.get("Retry-After");
+            const retryAfterSeconds = retryAfterHeader == null ? NaN : /^\d+(\.\d+)?$/.test(retryAfterHeader)
+                ? Number(retryAfterHeader) : (Date.parse(retryAfterHeader) - Date.now()) / 1000;
+            throw new ProcessingRequestError(
+                typeof detail === "string" ? detail : Array.isArray(detail)
+                    ? detail.map(item => item.msg).join("; ")
+                    : detail?.message ?? `Processing request failed (${response.status}).`,
+                response.status, detail?.code ?? null,
+                Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 && retryAfterSeconds <= 86400 ? retryAfterSeconds : null,
+            );
         }
+        if (data === null) throw new Error("Processing returned an unreadable response. Retry to recover your jobs.");
+        return data;
     }
 }
 

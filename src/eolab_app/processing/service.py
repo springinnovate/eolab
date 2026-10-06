@@ -13,7 +13,6 @@ from eolab_app.processing.shared_calculations import (
     present_calculation_rows,
 )
 from eolab_app.processing.statistics_csv import statistics_csv
-from eolab_app.processing.request_timings import measure_request_stage
 from eolab_app.processing.models import (
     ArtifactDownload,
     PreparedJobPlan,
@@ -108,7 +107,6 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "progress": row["progress"],
-        "preparation": row.get("preparation"),
         "error": row["error"],
         "result": (
             {
@@ -121,11 +119,6 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
                     {
                         "rows": row["artifact"]["rows"],
                         "cacheHit": row["artifact"].get("cache_hit", False),
-                        "performance": row["artifact"].get("performance"),
-                        "executionTiming": row["artifact"].get("execution_timing"),
-                        "queuedToReadySeconds": max(
-                            0, (row["updated_at"] - row["created_at"]).total_seconds()
-                        ),
                     }
                     if calculation
                     else {"validPixels": row["artifact"]["valid_pixels"]}
@@ -288,20 +281,19 @@ class ProcessingService:
                 "bounds": bounds.canonical_tuple() if bounds else None,
             },
         }
-        with measure_request_stage("queueAdmission"):
-            row = await asyncio.to_thread(
-                self.jobs.submit,
-                owner,
-                request.requestId,
-                PreparedJobPlan(
-                    specification=queued.model_dump(mode="json", by_alias=True),
-                    summary=summary,
-                    reserved_bytes=0,
-                    operation=queued.operation,
-                    work_key=identify_shared_calculation(queued),
-                ),
-                request_hash,
-            )
+        row = await asyncio.to_thread(
+            self.jobs.submit,
+            owner,
+            request.requestId,
+            PreparedJobPlan(
+                specification=queued.model_dump(mode="json", by_alias=True),
+                summary=summary,
+                reserved_bytes=0,
+                operation=queued.operation,
+                work_key=identify_shared_calculation(queued),
+            ),
+            request_hash,
+        )
         require_operation(row, queued.operation)
         return public_job(row)
 
@@ -331,35 +323,33 @@ class ProcessingService:
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        with measure_request_stage("admissionChecks"):
-            existing = await asyncio.to_thread(
-                self.jobs.find_request, owner, request.requestId
-            )
-            if existing:
-                require_operation(existing, "raster.aggregate.v1")
-                if existing.get("request_hash") != request_hash:
-                    raise ProcessingError(
-                        "request_conflict",
-                        "That request ID has different calculation inputs.",
-                        409,
-                    )
-            else:
-                submission = await self.build_calculation_submission(
-                    owner, request, {}, request_hash
+        existing = await asyncio.to_thread(
+            self.jobs.find_request, owner, request.requestId
+        )
+        if existing:
+            require_operation(existing, "raster.aggregate.v1")
+            if existing.get("request_hash") != request_hash:
+                raise ProcessingError(
+                    "request_conflict",
+                    "That request ID has different calculation inputs.",
+                    409,
                 )
-                if isinstance(submission.prepared, ProcessingError):
-                    raise submission.prepared
+        else:
+            submission = await self.build_calculation_submission(
+                owner, request, {}, request_hash
+            )
+            if isinstance(submission.prepared, ProcessingError):
+                raise submission.prepared
         if existing:
             row = existing
         else:
-            with measure_request_stage("queueAdmission"):
-                row = await asyncio.to_thread(
-                    self.jobs.submit,
-                    owner,
-                    request.requestId,
-                    submission.prepared,
-                    request_hash,
-                )
+            row = await asyncio.to_thread(
+                self.jobs.submit,
+                owner,
+                request.requestId,
+                submission.prepared,
+                request_hash,
+            )
         return (await self._observe_submitted_calculations(owner, [public_job(row)]))[0]
 
     async def build_calculation_submission(
@@ -463,15 +453,11 @@ class ProcessingService:
             ProcessingError: If the shared admission transaction is unavailable.
         """
         polygon_inputs: dict[PolygonAreaReference, AggregateArea | ProcessingError] = {}
-        with measure_request_stage("admissionChecks"):
-            submissions = [
-                await self.build_calculation_submission(owner, request, polygon_inputs)
-                for request in requests
-            ]
-        with measure_request_stage("queueAdmission"):
-            results = await asyncio.to_thread(
-                self.jobs.submit_batch, owner, submissions
-            )
+        submissions = [
+            await self.build_calculation_submission(owner, request, polygon_inputs)
+            for request in requests
+        ]
+        results = await asyncio.to_thread(self.jobs.submit_batch, owner, submissions)
         return await self._observe_submitted_calculations(
             owner,
             [
@@ -519,18 +505,15 @@ class ProcessingService:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.submission_wait_seconds
         try:
-            with measure_request_stage("submissionObservation"):
-                while True:
-                    status = await self.read_job_statuses(owner, identifiers)
-                    snapshots.update({job["jobId"]: job for job in status["jobs"]})
-                    if all(
-                        snapshots[key]["status"] not in active for key in identifiers
-                    ):
-                        break
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        break
-                    await subscription.wait(remaining)
+            while True:
+                status = await self.read_job_statuses(owner, identifiers)
+                snapshots.update({job["jobId"]: job for job in status["jobs"]})
+                if all(snapshots[key]["status"] not in active for key in identifiers):
+                    break
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                await subscription.wait(remaining)
         except ProcessingError:
             pass
         finally:
@@ -550,8 +533,7 @@ class ProcessingService:
         Returns:
             Public lifecycle and ready download links.
         """
-        with measure_request_stage("jobRead"):
-            row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         return public_job(row)
 
     async def list_owned(self, owner: str) -> list[dict[str, Any]]:
@@ -563,8 +545,7 @@ class ProcessingService:
         Returns:
             At most 50 public job summaries, newest first.
         """
-        with measure_request_stage("jobRead"):
-            rows = await asyncio.to_thread(self.jobs.list_owned, owner)
+        rows = await asyncio.to_thread(self.jobs.list_owned, owner)
         return [public_job(row) for row in rows]
 
     async def read_job_statuses(
@@ -580,10 +561,7 @@ class ProcessingService:
             Public jobs and unavailable IDs, each in request order with duplicates
             removed. Foreign and nonexistent IDs are indistinguishable.
         """
-        with measure_request_stage("jobRead"):
-            rows = await asyncio.to_thread(
-                self.jobs.read_owned_jobs, owner, identifiers
-            )
+        rows = await asyncio.to_thread(self.jobs.read_owned_jobs, owner, identifiers)
         by_id = {row["id"]: row for row in rows}
         requested = list(dict.fromkeys(identifiers))
         return {

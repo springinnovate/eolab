@@ -1,5 +1,4 @@
 /** Processing-owned immutable saved-job presentation and precise scalar formatting. */
-import { performanceDescription } from "./calculation-performance.js";
 import { processingDownloadUrl } from "./api.js";
 import { describeClipArea, describeJobProgress } from "./presentation.js";
 
@@ -52,9 +51,6 @@ export function renderSavedCalculation(root, job, sources) {
             element("p", "Area coverage counts include any positive pixel intersection; numeric functions use pixel centers. Each areaha term is in hectares. Arithmetic can change final units."));
         root.append(method);
     }
-    const performance = element("details");
-    performance.append(element("summary", "Performance"), ...performanceDescription(job).map(text => element("p", text)));
-    root.append(performance);
     const links = element("div"); links.className = "downloads-actions";
     for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {
         const link = element("a", label); link.className = "secondary-button";

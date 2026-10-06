@@ -4,6 +4,7 @@ from dataclasses import replace
 import csv
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 from affine import Affine
 import numpy as np
@@ -128,8 +129,6 @@ def test_pixel_value_matches_exact_map_sample_with_one_cell_read(
     assert float(artifact.rows[0]["value"]) == expected.value == values[22, 17]
     assert reads == [(17, 22, 1, 1)]
     assert spec.grid.width == spec.grid.height == spec.grid.nativeBlocks == 1
-    assert artifact.performance["readWindows"] == 1
-    assert artifact.performance["temporaryMaskBytes"] == 0
     provenance = json.loads((tmp_path / "provenance.json").read_text())
     assert provenance["pixelPoint"] == point.model_dump()
     assert (
@@ -223,21 +222,17 @@ def test_outside_pixel_has_empty_grid_and_no_raster_reads(
     artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
     assert spec.grid.window == (0, 0, 0, 0)
     assert spec.grid.nativeBlocks == spec.grid.decodedBytes == 0
-    assert (
-        artifact.performance["readWindows"]
-        == artifact.performance["evaluationTiles"]
-        == 0
-    )
     assert artifact.rows[0]["state"] == "no_valid_data"
 
 
 def test_mixed_pixel_and_area_formulas_keep_independent_selection_and_limits(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A selected pixel outside the area retains its value and admitted read work.
 
     Args:
         tmp_path: Private source and result files.
+        monkeypatch: Count real native area and selected-pixel reads.
     """
     path = write_source(
         tmp_path / "mixed.tif", np.arange(10_000, dtype="int16").reshape(100, 100)
@@ -250,11 +245,16 @@ def test_mixed_pixel_and_area_formulas_keep_independent_selection_and_limits(
         area,
         pixel_point=point,
     )
+    point_reader = Mock(wraps=kernel.read_native_raster_window)
+    area_reader = Mock(wraps=kernel.read_native_raster_block)
+    monkeypatch.setattr(kernel, "read_native_raster_window", point_reader)
+    monkeypatch.setattr(kernel, "read_native_raster_block", area_reader)
     artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
     assert [float(row["value"]) for row in artifact.rows] == pytest.approx(
         [7575, 454.5, 7120.5]
     )
-    assert spec.grid.nativeBlocks == artifact.performance["readWindows"] == 2
+    assert point_reader.call_count == area_reader.call_count == 1
+    assert spec.grid.nativeBlocks == 2
     assert artifact.rows[0]["aggregates"][0]["validPixels"] == 1
     assert artifact.rows[1]["aggregates"][0]["validPixels"] == 100
     area_only = make_spec(path, ["mean(a)"], area)
@@ -268,11 +268,14 @@ def test_mixed_pixel_and_area_formulas_keep_independent_selection_and_limits(
         )
 
 
-def test_outside_pixel_does_not_discard_independent_area_result(tmp_path: Path) -> None:
+def test_outside_pixel_does_not_discard_independent_area_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Separate result rows preserve a valid mean when the sampled point misses.
 
     Args:
         tmp_path: Private source and result files.
+        monkeypatch: Count real native area and selected-pixel reads.
     """
     path = write_source(
         tmp_path / "mixed.tif", np.arange(100, dtype="int16").reshape(10, 10)
@@ -282,11 +285,16 @@ def test_outside_pixel_does_not_discard_independent_area_result(tmp_path: Path) 
         ["pixelValue(a)", "mean(a)"],
         pixel_point=PixelPoint(longitude=40, latitude=40),
     )
+    point_reader = Mock(wraps=kernel.read_native_raster_window)
+    area_reader = Mock(wraps=kernel.read_native_raster_block)
+    monkeypatch.setattr(kernel, "read_native_raster_window", point_reader)
+    monkeypatch.setattr(kernel, "read_native_raster_block", area_reader)
     artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
     assert artifact.rows[0]["state"] == "no_valid_data"
     assert float(artifact.rows[1]["value"]) == 49.5
     assert artifact.rows[1]["state"] == "ok"
-    assert spec.grid.nativeBlocks == artifact.performance["readWindows"] == 1
+    point_reader.assert_not_called()
+    assert area_reader.call_count == spec.grid.nativeBlocks == 1
 
 
 @pytest.mark.parametrize("whole_raster", [False, True])
@@ -345,8 +353,6 @@ def test_prepared_area_tools_window_and_masks(
             assert np.all(hectares > 0)
         else:
             assert tools.pixel_area_calculator is None
-        assert tools.selection_setup_seconds >= 0
-        assert tools.pixel_area_setup_seconds >= 0
 
 
 def test_native_values_not_overviews_scale_or_histogram_statistics(

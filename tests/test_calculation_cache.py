@@ -184,10 +184,10 @@ def test_changed_inputs_cannot_reuse_results(
     assert cache.calculation_result_cache_keys(calculation_plan) != before
 
 
-def test_cached_csv_has_current_labels_and_no_old_timings(
+def test_cached_csv_has_current_labels_and_provenance(
     calculation_plan: AggregateSpec, tmp_path: Path
 ) -> None:
-    """Reused values produce fresh private files, without old performance data.
+    """Reused values produce fresh private files with the current request metadata.
 
     Args:
         calculation_plan: Real sum and mean input plan.
@@ -216,15 +216,10 @@ def test_cached_csv_has_current_labels_and_no_old_timings(
     directory = tmp_path / "cached"
     directory.mkdir()
     reused = write_statistics_result(changed, rows, directory, cache_hit=True)
-    assert (
-        reused.cache_hit
-        and reused.performance is None
-        and reused.execution_timing is None
-    )
+    assert reused.cache_hit
     assert "New sum,sum ( a )" in (directory / "result.csv").read_text()
     provenance = json.loads((directory / "provenance.json").read_text())
     assert provenance["cache_hit"] is True
-    assert provenance["performance"] is None
     assert cache.restore_cached_calculation_rows(changed, {}) is None
     values[next(iter(values))] = {"state": "invalid"}
     assert cache.restore_cached_calculation_rows(changed, values) is None
@@ -343,7 +338,7 @@ def test_worker_reuses_results_after_authorization(
         """
         calls.append(arguments[0])
         value = calculate_raster_statistics_for_area(*arguments[1])
-        return SimpleNamespace(value=("ok", value), timing=None)
+        return "ok", value
 
     monkeypatch.setattr(worker_module, "run_process", calculate_in_test_process)
     worker = ProcessingWorker(authorizer, store, artifacts, limits)
@@ -357,7 +352,6 @@ def test_worker_reuses_results_after_authorization(
     assert asyncio.run(worker.run_once())
     second = store.finish.call_args.args[2]
     assert second.cache_hit and second.rows == first.rows
-    assert second.performance is None
     assert store.finish.call_args.kwargs["reusable_results"] is None
     assert calls == ["calculate"]
     assert authorizer.authorize.await_count == 2
@@ -450,7 +444,7 @@ def test_cache_hit_skips_planning_and_pins_values(
     )
     areas = SimpleNamespace(resolve_for_sampling=AsyncMock())
     store = Mock()
-    from test_processing_timings import configure_prepared_job_store
+    from test_processing_worker_results import configure_prepared_job_store
     from eolab_app.processing.aggregate_models import UnpreparedCalculation
     from eolab_app.processing.worker import ProcessingWorker
     import eolab_app.processing.worker as worker_module
@@ -474,7 +468,6 @@ def test_cache_hit_skips_planning_and_pins_values(
     )
     monkeypatch.setattr(worker_module, "run_process", forbidden)
     asyncio.run(worker._prepare_calculation(row))
-    assert row["preparation"]["cacheHit"]
     forbidden.assert_not_called()
     retained = AggregateSpec.model_validate(row["spec"])
     assert retained.cachedRows[0].value == "42"

@@ -9,7 +9,6 @@ There are no timing thresholds.
 import argparse
 import asyncio
 from contextlib import AsyncExitStack
-from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
@@ -71,8 +70,9 @@ async def measure(operation, arguments, timeout, lane=None):
         Successful native payload and timing measurements.
     """
     started = time.perf_counter()
-    outcome = await run_process(timed_target, (operation, arguments), timeout, lane)
-    (status, value), child = outcome.value
+    (status, value), child = await run_process(
+        timed_target, (operation, arguments), timeout, lane
+    )
     elapsed = time.perf_counter() - started
     if status != "ok":
         raise RuntimeError(value)
@@ -80,7 +80,6 @@ async def measure(operation, arguments, timeout, lane=None):
         "roundTripSeconds": elapsed,
         "childOperationSeconds": child,
         "outsideOperationSeconds": elapsed - child,
-        "process": asdict(outcome.timing) if outcome.timing else None,
     }
 
 
@@ -190,7 +189,6 @@ async def repeat_measurements(
                     "sourcePixels": 65536,
                     "plan": planning,
                     "execution": execution,
-                    "kernelSeconds": artifact.performance["kernelSeconds"],
                 }
             ),
             flush=True,

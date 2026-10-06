@@ -359,74 +359,6 @@ class AggregateExecutionPlan(BaseModel):
     readWindows: Annotated[int, Field(ge=0, le=65_536)]
 
 
-StageSeconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
-
-
-class AggregateMaskStages(BaseModel):
-    """Nonoverlapping wall times included in selectionMaskSeconds.
-
-    Attributes:
-        featureReadingSeconds: Tile bounds lookup, opening, reading, filtering,
-            validating and closing vector sources, including I/O waits.
-        projectionSeconds: Projecting feature coordinates into the raster CRS.
-        rasterizationSeconds: Rasterio geometry-mask calls. Mask union,
-            allocation and application remain in the parent total's remainder.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    featureReadingSeconds: StageSeconds
-    projectionSeconds: StageSeconds
-    rasterizationSeconds: StageSeconds
-
-
-class AggregateKernelStages(BaseModel):
-    """Nested wall times; mask, weights and reductions are inside calculation.
-
-    Source setup includes expression compilation and opening the raster.
-    Selection setup reads/projects the area envelope and, for catalog summaries,
-    retains those polygons for the calculation. Mask time includes vector
-    source reads, projection and rasterization in historical results. New results
-    report maskPreparationSeconds outside calculation, and maskReadSeconds
-    inside selectionMaskSeconds. Optional selectionMaskBreakdown
-    records those inner stages; it is absent in older results. All times include
-    I/O waits.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    sourceSetupSeconds: StageSeconds
-    selectionSetupSeconds: StageSeconds
-    groundAreaSetupSeconds: StageSeconds
-    gridCheckSeconds: StageSeconds
-    selectionMaskSeconds: StageSeconds
-    selectionMaskBreakdown: AggregateMaskStages | None = None
-    maskPreparationSeconds: StageSeconds | None = None
-    maskReadSeconds: StageSeconds | None = None
-    areaWeightsSeconds: StageSeconds
-    reductionSeconds: StageSeconds
-
-
-class AggregatePerformance(BaseModel):
-    """Final measurements, independent of transient progress.
-
-    retainedPolygonBytes estimates Python geometry memory additional to the
-    plan's raster-buffer allowance; it is not process RSS. temporaryMaskBytes
-    records the temporary GeoTIFF size before cleanup. Older results omit these.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    execution: AggregateExecutionPlan
-    readWindows: Annotated[int, Field(ge=0, le=65_536)]
-    evaluationTiles: Annotated[int, Field(ge=0, le=2**53 - 1)]
-    reducerUpdates: Annotated[int, Field(ge=0, le=2**53 - 1)]
-    readSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
-    calculationSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
-    resultWriteSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
-    kernelSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
-    stages: AggregateKernelStages | None = None
-    retainedPolygonBytes: Annotated[int, Field(ge=0)] = 0
-    temporaryMaskBytes: Annotated[int, Field(ge=0)] = 0
-
-
 class AggregateGrid(BaseModel):
     """Native grid, value domain, and conservative work/memory admission."""
 
@@ -562,69 +494,11 @@ class AggregateSpec(BaseModel):
         return self
 
 
-class NativeProcessTiming(BaseModel):
-    """Call durations and optional process-generation diagnostics.
-
-    Readiness, operation and overhead partition the native call. startupSeconds
-    covers the entire process startup, including earlier prewarming, and overlaps
-    those durations. Process identity and operation count explain reuse;
-    startReason and recycledFor explain replacement before and after this call.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    readyWaitSeconds: StageSeconds
-    operationSeconds: StageSeconds
-    overheadSeconds: StageSeconds
-    reusedProcess: Annotated[bool, Field(strict=True)]
-    processId: Annotated[int, Field(strict=True, gt=0)] | None = None
-    operationNumber: Annotated[int, Field(strict=True, gt=0)] | None = None
-    startupSeconds: StageSeconds | None = None
-    startReason: (
-        Literal["initial", "operation_limit", "memory_limit", "failure", "cancelled"]
-        | None
-    ) = None
-    recycledFor: Literal["operation_limit", "memory_limit"] | None = None
-
-
-class CalculationPreparation(BaseModel):
-    """Worker preparation duration and cache outcome, retained on the job after completion."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    seconds: StageSeconds
-    cacheHit: Annotated[bool, Field(strict=True)]
-    process: NativeProcessTiming | None = None
-
-
-class AggregateExecutionTiming(BaseModel):
-    """Worker stages and database-clock queue interval for one successful attempt.
-
-    The four optional preparation intervals partition preparationSeconds:
-    plan preparation (including storing it), persisted-spec validation and source
-    authorization, private scratch preparation, and the final result-cache lookup.
-    These include waiting within each operation, not just its CPU time. Older
-    results omit the breakdown.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    queueSeconds: StageSeconds
-    preparationSeconds: StageSeconds
-    planPreparationSeconds: StageSeconds | None = None
-    sourceAuthorizationSeconds: StageSeconds | None = None
-    scratchPreparationSeconds: StageSeconds | None = None
-    resultCacheLookupSeconds: StageSeconds | None = None
-    nativeProcessSeconds: StageSeconds
-    publicationSeconds: StageSeconds
-    process: NativeProcessTiming | None = None
-
-
 class AggregateResultResponse(JobResultResponse):
     """Small inline results plus owned CSV and provenance downloads."""
 
     rows: list[AggregateValue]
-    performance: AggregatePerformance | None = None
-    executionTiming: AggregateExecutionTiming | None = None
-    queuedToReadySeconds: StageSeconds | None = None
-    # True only when all values were reused; timings describe this request only.
+    # True only when all values were reused.
     cacheHit: bool = False
 
 
@@ -643,7 +517,6 @@ class AggregateJobResponse(JobResponse):
     calculations: tuple[NamedCalculation, ...] | None
     area: dict[str, object] | None
     grid: AggregateGrid | None
-    preparation: CalculationPreparation | None = None
     progress: AggregateProgress
     result: AggregateResultResponse | None
 
@@ -728,8 +601,6 @@ class AggregateArtifact(Artifact):
     """Server-generated CSV and bounded typed summary for an aggregate job."""
 
     rows: list[dict[str, object]]
-    performance: dict[str, object] | None = field(default=None, kw_only=True)
-    execution_timing: dict[str, object] | None = field(default=None, kw_only=True)
     cache_hit: bool = field(default=False, kw_only=True)
     media_type: str = field(default="text/csv", kw_only=True)
     result_name: str = field(default="result.csv", kw_only=True)

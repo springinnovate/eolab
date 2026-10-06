@@ -62,7 +62,6 @@ def test_polygon_upload_ownership_release_and_cached_reuse(
         assert asyncio.run(worker.run_once())
         result = other.get(f"/api/processing/jobs/{second['jobId']}").json()
         assert result["status"] == "ready", result
-        assert result["preparation"]["cacheHit"] is True
         assert result["result"]["rows"] == finished["result"]["rows"]
         assert other.get(finished["result"]["url"]).status_code == 404
 
