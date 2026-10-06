@@ -186,6 +186,29 @@ test("plot signatures ignore progress, diagnostics and catalog metadata, but ret
     assert.equal(calls.length, 6);
 });
 
+test("adding a secondary plot reveals it once; initial drawing and updates preserve scroll and focus", () => {
+    const h = fixture();
+    const view = new RasterSeriesPlotsView(h.document, {});
+    const state = { plots: [{ id: 1, scale: "linear" }], statistics: [], chartType: "line", showingPrevious: false };
+    view.renderPlots(state);
+    assert.deepEqual(view.cards.get(1).card.scrollRequests, []);
+    state.plots.push({ id: 2, scale: "linear" });
+    view.renderPlots(state);
+    const added = view.cards.get(2);
+    assert.equal(added.empty.textContent, "Choose this plot beside a statistic to show it here.");
+    assert.deepEqual(added.card.scrollRequests, [{ block: "start", inline: "nearest" }]);
+    added.scale.focus();
+    view.renderPlots(state);
+    state.plots[1].scale = "log";
+    view.renderPlots(state);
+    state.showingPrevious = true;
+    view.renderPlots(state);
+    assert.equal(added.card.scrollRequests.length, 1);
+    assert.equal(h.document.activeElement, added.scale);
+    assert.equal(view.cards.get(1).scale.value, "linear");
+    assert.equal(added.scale.value, "log");
+});
+
 test("completed timing reports retain open details and are removed for a new calculation", () => {
     const h = fixture();
     const result = { job: { jobId: "a" }, elapsedSeconds: 1, performanceLines: ["A measured interval"] };
