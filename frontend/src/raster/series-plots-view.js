@@ -82,6 +82,7 @@ export class RasterSeriesPlotsView {
     /** Add or remove plot cards and refresh those whose settings or results changed.
      * All cards use the same current or previous calculation results. Each card
      * is passed to renderPlot() only when its displayed content needs updating.
+     * Newly added secondary plots are revealed once; updates preserve scrolling.
      * @param {Object} state Series view snapshot.
      * @param {{id:number,scale:string}[]} state.plots Plot settings.
      * @param {Object[]} state.statistics Formulas, display settings and ordered result rows.
@@ -97,7 +98,8 @@ export class RasterSeriesPlotsView {
             if (hadFocus) this.document.querySelector("#raster-series-add-plot").focus();
         }
         for (const plot of state.plots) {
-            if (!this.cards.has(plot.id)) this.cards.set(plot.id, this.createPlotCard(plot));
+            const added = !this.cards.has(plot.id);
+            if (added) this.cards.set(plot.id, this.createPlotCard(plot));
             const elements = this.cards.get(plot.id);
             if (elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
             const statistics = state.statistics.filter(statistic => statistic.plotId === plot.id && statistic.visible);
@@ -113,6 +115,7 @@ export class RasterSeriesPlotsView {
             if (elements.signature === signature) continue;
             elements.signature = signature;
             this.renderPlot(elements, plot, statistics, state, series);
+            if (added && plot.id !== 1) elements.card.scrollIntoView({ block: "start", inline: "nearest" });
         }
     }
 
