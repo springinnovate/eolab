@@ -38,6 +38,29 @@ test("raster analysis remains independent from rendering implementations", async
     }
 });
 
+test("numeric raster analysis does not depend on categorical appearance or presentation", async () => {
+    const presentationModules = new Set([
+        "./categorical-presentation.js",
+        "./categorical-style.js",
+        "./appearance-state.js",
+        "./style.js",
+        "./raster-viewer.js",
+    ]);
+    for (const moduleName of ANALYSIS_MODULES) {
+        const source = await readFile(
+            new URL(`../../src/raster/${moduleName}`, import.meta.url), "utf8"
+        );
+        const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
+            .map(match => match[1]);
+        assert.equal(
+            imports.find(modulePath => presentationModules.has(modulePath) ||
+                modulePath.endsWith("-view.js")),
+            undefined,
+            `${moduleName} keeps numeric results independent of appearance and DOM views`
+        );
+    }
+});
+
 test("cursor readout owns only DOM presentation and neutral value formatting", async () => {
     const source = await readFile(
         new URL("../../src/raster/cursor-values-view.js", import.meta.url),

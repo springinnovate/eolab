@@ -171,6 +171,28 @@ test("histogram adapter presents retained point values with layer identity", () 
     assert.equal(list.children.length, 0);
 });
 
+test("point readouts consume literal prepared value text and preserve raw outcomes", () => {
+    const documentContext = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(documentContext);
+    const displayValue = '<img src=x onerror="alert(1)"> (0)';
+    const raw = {
+        position: { longitude: 1, latitude: 2 },
+        samples: [{ key: "land", label: "Land", axis: null, state: "value", value: 0, errorMessage: "" }],
+    };
+    view.renderPointSamples({ ...raw, samples: [{ ...raw.samples[0], displayValue }] });
+    const list = documentContext.querySelector("#raster-point-sample-list");
+    assert.equal(list.children[0].children[1].textContent, displayValue);
+    assert.equal(list.children[0].children[1].children.length, 0);
+    view.renderPointSamples({ ...raw, samples: [{
+        ...raw.samples[0], state: "nodata", value: null, displayValue,
+    }] });
+    assert.equal(list.children[0].children[1].textContent, "No data");
+    view.renderPointSamples(raw);
+    assert.equal(list.children[0].children[1].textContent, "0");
+    assert.equal(raw.samples[0].value, 0);
+    assert.equal(Object.hasOwn(raw.samples[0], "displayValue"), false);
+});
+
 test("replacing dynamic charts and unbinding release all resize observers", () => {
     const doc = new FakeRasterControlDocument();
     const { ResizeObserver, instances } = createFakeResizeObservers();

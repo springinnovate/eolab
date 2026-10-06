@@ -940,6 +940,7 @@ h5 {
   align-items: center;
   gap: 6px;
 }
+.map-layer-legend-list li > span:last-child { overflow-wrap: anywhere; }
 .map-layer-legend-swatch {
   width: 28px;
   height: 22px;
@@ -948,6 +949,8 @@ h5 {
 
 .map-legend-inclusion { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
 .on-map-legend {
+  display: flex;
+  flex-direction: column;
   background: rgba(255, 255, 255, 0.94);
   color: var(--text-1);
   border: 1px solid var(--border-1);
@@ -958,7 +961,9 @@ h5 {
   max-width: min(660px, calc(100vw - 80px));
 }
 .on-map-legend[hidden], .on-map-legend [hidden] { display: none; }
-.on-map-legend header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.on-map-legend header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; }
+.on-map-legend-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.on-map-legend-body:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .on-map-legend button { padding: 3px 5px; border: 0; background: transparent; color: var(--brand); font: inherit; cursor: pointer; }
 .on-map-legend .on-map-legend-heading { font-weight: 700; color: var(--text-1); }
 .on-map-legend button:focus-visible, .on-map-legend summary:focus-visible { outline: 2px solid var(--brand); }
@@ -2260,7 +2265,7 @@ h5 {
 
 .raster-cursor-value-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) fit-content(65%);
   gap: 12px;
   align-items: baseline;
   min-width: 0;
@@ -2324,10 +2329,12 @@ h5 {
 }
 
 .raster-cursor-value-row dd {
+  min-width: 0;
   margin: 0;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .raster-cursor-value-row[data-state="error"] dd {
@@ -2335,6 +2342,7 @@ h5 {
   overflow: hidden;
   color: var(--status-danger);
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #raster-cursor-value-limit {
@@ -4376,7 +4384,7 @@ summary:hover > .raster-disclosure-chevron {
 #raster-point-sample-list { display: grid; gap: 4px; margin: 0; }
 .raster-point-sample-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) fit-content(65%);
   gap: 10px;
   align-items: baseline;
   font-size: 0.72rem;
@@ -4392,7 +4400,12 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--brand);
   font-weight: 700;
 }
-.raster-point-sample-value { margin: 0; font-variant-numeric: tabular-nums; }
+.raster-point-sample-value {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
 .raster-point-sample-row[data-state="error"] .raster-point-sample-value {
   color: var(--status-danger);
 }

@@ -1,9 +1,9 @@
-# Categorical raster rendering foundation
+# Categorical raster appearance
 
 Issue #645 introduces the rendering contract. Issue #646 adds the manual category
-editor and map-layer persistence. Legends and pixel presentation remain in #647;
-CSV import remains in #648. Analysis responses remain numeric and independent of
-the selected appearance.
+editor and map-layer persistence. Issue #647 adds discrete legends and categorical
+pixel presentation. CSV import remains in #648. Analysis responses remain numeric
+and independent of the selected appearance.
 
 ## Manual editing and persistence
 
@@ -52,12 +52,34 @@ size limits; the raster owner validates both style definitions on restoration.
 Both configurations travel through local storage, saved/shared maps, style
 copy/paste, and removal Undo. There is no catalog-wide category definition.
 
-This increment suppresses continuous gradient legends and histogram/percentile
-presentation for categorical layers. Distribution panels explain that categorical
-distributions and area proportions are not yet available. Coordinated 2D styling
-requires continuous layers. Numeric source sampling and analysis APIs remain
-available, including when rendering is unavailable. Discrete legend swatches and
-labeled pixel results are the next increment.
+## Legends and pixel values
+
+Categorical layers show discrete swatches in both the layer-list Legend disclosure
+and the on-map legend. Entries follow the category table's order and include the
+label and exact code, such as `Forest (41)`. An Unmapped entry uses the configured
+fallback appearance. Swatches reflect category opacity multiplied by layer
+opacity; fully transparent categories remain listed. Editing labels, colors,
+opacities, or row order updates the legend from the committed appearance.
+
+The pixel picker, raster values at a click, and copied picker values show
+`Forest (41)` for an exact match and `Unmapped (42)` for valid values absent from
+the table. Category codes use ordinary decimal notation. Samples are never rounded
+to a category. NoData remains `No data`, and a category with zero opacity still
+shows its label and value. Continuous layers retain their existing numeric
+formatting.
+
+Presentation uses the category table belonging to the sampled map layer.
+Committed category edits refresh retained pixel readouts without another source
+read. The composition layer joins immutable appearance metadata to numeric sample
+results; source readers, request controllers, and analysis responses do not acquire
+style or rendering dependencies. Catalog analysis without a styled map-layer
+context continues to present numeric results.
+
+Categorical histogram and percentile presentation remains deferred. Distribution
+panels explain that categorical distributions and area proportions are not yet
+available. Coordinated 2D styling requires continuous layers. Numeric source
+sampling, statistics, and Processing remain available, including when rendering
+is unavailable.
 
 ## Appearance definition
 
@@ -89,11 +111,11 @@ catalog metadata, a dataset's shared GeoServer style, or its source data.
   is still a category, distinct from NoData.
 - Unknown fields and duplicate category values are rejected. Direct JSON rejects
   duplicate object keys. A definition is limited to 65,536 UTF-8 bytes.
-- Input order is retained for future editors and legends. Rendering sorts a copy
+- Input order is retained for the editor and legends. Rendering sorts a copy
   by value and does not reorder the appearance definition.
 
-`frontend/src/raster/categorical-style.js` provides normalization and serialization
-for future controls. Python's raster-owned `styles.py` validates the public input
+`frontend/src/raster/categorical-style.js` provides normalization for the manual
+editor and retained appearance state. Python's raster-owned `styles.py` validates the public input
 boundary independently. Neither module imports analysis or editor implementation
 state.
 

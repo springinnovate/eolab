@@ -15,6 +15,17 @@ import { requireRasterControl } from "./required-control.js";
 import { formatRasterPixelValue } from "./value-format.js";
 
 /**
+ * @typedef {Object} RasterPointValuePresentation
+ * @property {string} key Stable raster identity.
+ * @property {string} label Readable raster name.
+ * @property {"X"|"Y"|null} axis Optional bivariate axis.
+ * @property {"loading"|"value"|"nodata"|"outside"|"error"} state Raw result state.
+ * @property {number|null} value Finite value only in value state.
+ * @property {string} errorMessage Read failure detail.
+ * @property {string} [displayValue] Optional owner-prepared value text.
+ */
+
+/**
  * @typedef {Object} RasterHistogramHandlers
  * @property {() => void} onRetryStatistics Retries raster statistics.
  * @property {(key: string) => void} onSelectHistogram Activates one retained
@@ -168,8 +179,8 @@ export class RasterHistogramControlsView {
     /**
      * Render exact in-bounds raster values retained from one map click.
      *
-     * @param {{position:Readonly<Object>,samples:ReadonlyArray<Object>}}
-     * snapshot Immutable point-result snapshot from the raster owner.
+     * @param {{position:Readonly<{longitude:number,latitude:number}>,samples:ReadonlyArray<Readonly<RasterPointValuePresentation>>}}
+     * snapshot Immutable point results with optional owner-prepared value text.
      * @return {void}
      * @throws {TypeError} If result identity, axis, state, or value fields are
      * outside the closed presentation contract.
@@ -227,7 +238,7 @@ export class RasterHistogramControlsView {
             value.textContent = {
                 loading: "Reading…",
                 value: sample.state === "value"
-                    ? formatRasterPixelValue(sample.value)
+                    ? sample.displayValue ?? formatRasterPixelValue(sample.value)
                     : "",
                 nodata: "No data",
                 error: sample.errorMessage === ""
