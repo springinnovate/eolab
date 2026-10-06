@@ -2707,7 +2707,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Hydrate an editor from a retained layer when its target or saved state changes.
+     * Hydrate an editor and clear stale action feedback when its target or saved state changes.
      * @param {Object} session Retained layer and both committed configurations.
      * @return {void}
      */
@@ -2716,6 +2716,7 @@ export function initializeRasterViewer(
         controlsView.setStyle(session.rasterStyle, session.paletteName);
         controlsView.setCategoricalStyle?.(session.categoricalStyle ?? null);
         controlsView.setAppearanceMode?.(editingAppearanceMode);
+        controlsView.setAppearanceStatus("");
     }
 
     /**

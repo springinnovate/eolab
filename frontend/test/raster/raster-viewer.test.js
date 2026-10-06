@@ -1144,7 +1144,11 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
     h.mapLayers.setOpacity(sourceRecord.entry.key, 0.4);
     const savedAppearance = sourceRecord.adapter.exportSavedState(sourceRecord);
     assert.equal(h.mapLayers.copyStyle(sourceRecord.entry.key), true);
+    h.viewer.openStyle(targetRecord.entry.key);
+    h.controlsView.handlers.onAppearanceModeChange("continuous");
+    assert.match(h.controlsView.appearanceStatus, /Restored continuous styling/);
     assert.equal(await h.mapLayers.pasteStyle(targetRecord.entry.key), true);
+    assert.equal(h.controlsView.appearanceStatus, "");
     assert.deepEqual(targetRecord.adapter.exportSavedState(targetRecord), savedAppearance);
     assert.equal(targetRecord.entry.opacity, 0.4);
 
