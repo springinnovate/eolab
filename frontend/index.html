@@ -1607,7 +1607,7 @@
                             <div id="raster-category-csv-import" class="raster-category-csv-import" aria-busy="false">
                               <label for="raster-category-csv-file">Import categories from CSV</label>
                               <input id="raster-category-csv-file" type="file" accept=".csv,text/csv" aria-describedby="raster-category-csv-guidance raster-category-csv-status" />
-                              <p id="raster-category-csv-guidance" class="raster-category-guidance">Headers: value, label, color; optional opacity from 0 to 1 (default 1). Use #RRGGBB colors. Up to 256 categories and 128 KiB. Preview before replacing the current table; unmapped settings are preserved.</p>
+                              <p id="raster-category-csv-guidance" class="raster-category-guidance">Required headers: value, label, color. Optional header: opacity. Opacity values range from 0 to 1; omitted or blank values default to 1. Use #RRGGBB colors. Up to 256 categories and 128 KiB. Preview before replacing the current table; unmapped settings are preserved.</p>
                               <p id="raster-category-csv-status" class="raster-category-guidance" role="status" aria-live="polite" aria-atomic="true"></p>
                               <div id="raster-category-csv-preview" class="raster-category-csv-preview" role="region" aria-label="CSV import preview" aria-describedby="raster-category-csv-status" tabindex="-1" hidden>
                                 <p id="raster-category-csv-summary" class="raster-category-guidance"></p>
