@@ -3,6 +3,7 @@
 from eolab_app.bounded_vector import PolygonRasterizer, pixels_inside_area
 import math
 from pathlib import Path
+from typing import Literal
 
 import numpy
 import rasterio
@@ -346,6 +347,31 @@ def read_raster_statistics(
             )
         require_active_raster_read(cancellation_requested)
 
+    return summarize_raster_sample(sample, source_window, sampling_area, sampling_method)
+
+
+def summarize_raster_sample(
+    sample: numpy.ma.MaskedArray,
+    source_window: Window,
+    sampling_area: RasterSamplingArea,
+    sampling_method: Literal["sampleGrid", "exactSourceWindow"],
+) -> RasterStatistics:
+    """Summarize an owned numeric sample without additional source reads.
+
+    Args:
+        sample: Finite/nodata and selected-area masked band-one values.
+        source_window: Integral source envelope represented by the sample.
+        sampling_area: Validated scope and selection provenance.
+        sampling_method: Exact native window or bounded center-grid method.
+
+    Returns:
+        Numeric counts, percentiles, suggested range and sampling provenance.
+
+    Raises:
+        NoValidRasterSamplesError: If no finite unmasked values remain.
+    """
+    source_width, source_height = int(source_window.width), int(source_window.height)
+    sample_height, sample_width = sample.shape
     sample_values = numpy.asarray(sample.compressed(), dtype=numpy.float64)
     sample_values = sample_values[numpy.isfinite(sample_values)]
     if sample_values.size == 0:

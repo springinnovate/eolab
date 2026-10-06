@@ -368,6 +368,25 @@ export class RasterControlsView {
     }
 
     /**
+     * Render prepared categorical ground areas for the active analysis.
+     * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
+     * @return {void}
+     */
+    renderCategoricalHistogram(presentation) {
+        this.#histogramView.renderCategoricalHistogram(presentation);
+    }
+
+    /**
+     * Render prepared categorical ground areas in the style editor.
+     * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
+     * @param {string} scopeLabel Readable sampling scope.
+     * @return {void}
+     */
+    renderCategoricalStyleHistogram(presentation, scopeLabel) {
+        this.#styleHistogramView.renderCategorical(presentation, scopeLabel);
+    }
+
+    /**
      * Render the keyed style target's distribution and candidate thresholds.
      *
      * @param {Object} statistics Validated raster statistics snapshot.

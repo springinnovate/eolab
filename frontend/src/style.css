@@ -5051,3 +5051,21 @@ summary:hover > .raster-disclosure-chevron {
     max-width: min(18rem, calc(100% - 8px)); overflow-wrap: anywhere;
 }
 .map-feature-hover-card[hidden] { display: none; }
+
+/* Category fills retain their own opacity over a hatched represented area. */
+.categorical-area-chart { display: grid; gap: 8px; min-width: 0; }
+.categorical-area-caption { margin: 0; color: var(--text-2); font-size: 0.7rem; line-height: 1.5; }
+.categorical-area-rows { display: grid; gap: 6px; max-height: 440px; overflow-y: auto; }
+.categorical-area-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(36px, 1fr) 48px 76px; gap: 7px; align-items: center; font-size: 0.72rem; }
+.categorical-area-name { min-width: 0; overflow-wrap: anywhere; }
+.categorical-area-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.categorical-area-track { height: 14px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.categorical-area-bar { position: relative; display: block; height: 100%; background: repeating-linear-gradient(135deg, #fff 0 3px, #cbd5e1 3px 5px); }
+.categorical-area-fill { position: absolute; inset: 0; }
+.categorical-area-toggle { justify-self: start; }
+.categorical-area-toggle[hidden] { display: none; }
+.raster-histogram-chart[hidden] { display: none; }
+@media (max-width: 600px) {
+  .categorical-area-row { grid-template-columns: minmax(36px, 1fr) 48px 76px; }
+  .categorical-area-name { grid-column: 1 / -1; }
+}

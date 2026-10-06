@@ -351,7 +351,12 @@ function createFakeControlsView() {
             this.styleHistogram = null;
             this.styleHistogramState = null;
         },
+        /** @param {Object} presentation Category rows. @return {void} */
+        renderCategoricalHistogram(presentation) { this.categoricalHistogram = presentation; },
+        /** @param {Object} presentation Category rows. @param {string} scopeLabel Scope. @return {void} */
+        renderCategoricalStyleHistogram(presentation, scopeLabel) { this.categoricalStyleHistogram = { presentation, scopeLabel }; },
         clearHistogram() {
+            this.categoricalHistogram = null;
             this.displayedStatistics = null;
         },
         /** @param {boolean} visible Whether range controls may show. @return {void} */
@@ -530,6 +535,24 @@ function createLayerStatistics(item, selectedBounds = null) {
 }
 
 /**
+ * Add category ground areas to a statistics fixture.
+ * @param {Object} item Catalog Item.
+ * @param {Object|null} bounds Selected rectangle.
+ * @param {number[]|null} codes Numeric classification.
+ * @return {Object} Statistics matching the requested classification.
+ */
+function createCategoryStatistics(item, bounds, codes) {
+    const result = createLayerStatistics(item, bounds);
+    if (codes) {
+        const canonical = [...codes].sort((a, b) => a - b);
+        result.categoricalDistribution = { categoryValues: canonical, areasHectares: canonical.map(() => 10),
+            validAreaHectares: canonical.length * 10 + 5, unmappedAreaHectares: 5, nodataAreaHectares: 3,
+            areaEstimated: true, areaMethod: "sample-cell-equal-area-v1", selectionSubdivisions: 4 };
+    }
+    return result;
+}
+
+/**
  * Return rectangular bounds from one normalized test sampling area.
  *
  * @param {Object} samplingArea Whole, rectangular, or catalog-vector area.
@@ -560,7 +583,7 @@ function flushPromises() {
  * @return {Object} Viewer, map, views, layers, and cleanup helper.
  */
 function visibleLayerFixture(
-    loadStatistics = async (item) => createLayerStatistics(item),
+    loadStatistics = async (item, area, _signal, _fetch, codes) => createCategoryStatistics(item, selectedBoundsFromArea(area), codes),
     dependencies = {},
     configuration = {},
     layerConfiguration = {},
@@ -1029,7 +1052,8 @@ test("categorical editor commits exact tables to both rendering boundaries and p
 
     assert.equal(h.controlsView.categoricalError, null);
     assert.match(h.controlsView.appearanceStatus, /Applied categorical styling/);
-    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    await flushPromises();
+    assert.match(h.controlsView.statisticsStatus, /categorical/i);
     assert.equal(record.state.appearanceMode, "categorical");
     assert.deepEqual(record.adapter.renderDescriptor(record), {
         layerName: record.publication.layerName,
@@ -1051,6 +1075,7 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     assert.equal(categoricalSnapshot.effectiveOpacity, 0.4);
 
     h.controlsView.handlers.onAppearanceModeChange("continuous");
+    await flushPromises();
     assert.equal(Object.hasOwn(record.state.layer.wmsParams, "raster_style"), false);
     assert.match(record.state.layer.wmsParams.env, /min:-5;med:0;max:30/);
     assert.equal(Object.hasOwn(record.adapter.renderDescriptor(record), "styleDefinition"), false);
@@ -1068,7 +1093,8 @@ test("categorical editor commits exact tables to both rendering boundaries and p
     assert.deepEqual(record.adapter.renderDescriptor(record).styleDefinition, style);
     assert.deepEqual(record.adapter.exportSavedState(record).continuous, continuous);
     assert.match(h.controlsView.appearanceStatus, /Applied categorical styling/);
-    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    await flushPromises();
+    assert.match(h.controlsView.statisticsStatus, /categorical/i);
     h.destroy();
 });
 
@@ -1243,7 +1269,9 @@ test("late active and inactive whole-raster statistics cannot replace categorica
     const first = createRasterItem("categorical-late-first");
     const second = createRasterItem("categorical-late-second");
     const results = new Map([[first.id, createDeferred()], [second.id, createDeferred()]]);
-    const h = visibleLayerFixture((item) => results.get(item.id).promise);
+    const h = visibleLayerFixture((item, area, _signal, _fetch, codes) => codes
+        ? Promise.resolve(createCategoryStatistics(item, selectedBoundsFromArea(area), codes))
+        : results.get(item.id).promise);
     await h.viewer.show(first);
     await h.viewer.show(second);
     const records = [...h.mapLayers.retainedRecords];
@@ -1266,7 +1294,7 @@ test("late active and inactive whole-raster statistics cannot replace categorica
     assert.equal(h.controlsView.percentileControlsVisible, false);
     assert.ok(h.controlsView.layerHistograms.every((summary) =>
         summary.state === "ready" && summary.counts === null &&
-        summary.statistics === null && /Categorical/.test(summary.unavailableMessage)
+        summary.statistics === null && summary.categorical?.rows.length === 4
     ));
     h.destroy();
 });
@@ -1328,6 +1356,8 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
     assert.equal(undoRecord.entry.opacity, 0.4);
     assert.deepEqual(undoRecord.adapter.renderDescriptor(undoRecord).styleDefinition, savedAppearance.categorical);
     assert.equal(h.mapLayers.removedLayer, null);
+    await flushPromises();
+    assert.ok(h.controlsView.layerHistograms.every(summary => summary.state === "ready" && summary.categorical));
     h.destroy();
 });
 
@@ -1447,13 +1477,13 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     const pixelReads = [];
     let pairedReads = 0;
     let pendingCategoricalStatistics = null;
-    const h = visibleLayerFixture(async (item, area) => {
-        statisticsReads.push({ item, area });
+    const h = visibleLayerFixture(async (item, area, _signal, _fetch, codes) => {
+        statisticsReads.push({ item, area, codes });
         if (area.kind !== "wholeRaster" && item.id === "geotiff-categorical-sampling" &&
             pendingCategoricalStatistics !== null) {
             return pendingCategoricalStatistics.promise;
         }
-        return createLayerStatistics(item, selectedBoundsFromArea(area));
+        return createCategoryStatistics(item, selectedBoundsFromArea(area), codes);
     }, {
         samplePixel: async (item) => {
             pixelReads.push(item.id);
@@ -1486,29 +1516,32 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     assert.equal(summary.state, "ready");
     assert.equal(summary.counts, null);
     assert.equal(summary.statistics, null);
-    assert.match(summary.unavailableMessage, /Categorical/);
+    assert.equal(summary.categorical.rows.length, 4);
+    assert.equal(summary.categorical.nodataHectares, 3);
 
     pendingCategoricalStatistics = createDeferred();
     assert.equal(h.viewer.exploreAt({ lng: 2, lat: 2 }), true);
     await flushPromises();
     assert.equal(categorical.state.selectedRasterStatisticsState, "loading");
     assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "loading");
-    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    assert.match(h.controlsView.statisticsStatus, /categorical/i);
     assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
     assert.equal(h.controlsView.displayedStatistics, null);
     pendingCategoricalStatistics.reject(new Error("Selected sample unavailable"));
     await flushPromises();
     assert.equal(categorical.state.selectedRasterStatisticsState, "error");
     assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "error");
-    assert.match(h.controlsView.statisticsStatus, /Categorical/);
+    assert.match(h.controlsView.statisticsStatus, /categorical/i);
     assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
     assert.equal(h.controlsView.displayedStatistics, null);
+    assert.match(h.controlsView.statisticsStatus, /unavailable: Selected sample unavailable/);
     pendingCategoricalStatistics = null;
     assert.equal(h.viewer.exploreAt({ lng: 3, lat: 3 }), true);
     await flushPromises();
     assert.equal(categorical.state.selectedRasterStatisticsState, "ready");
 
     h.controlsView.handlers.onAppearanceModeChange("continuous");
+    await flushPromises();
     assert.equal(h.controlsView.bivariateAvailability.canEnter, true);
     const continuousSummary = h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key);
     assert.ok(continuousSummary.statistics);
@@ -4457,5 +4490,43 @@ test("hide all cancels pending histograms and drops late results; show all resto
         await flushPromises();
     }
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ["ready", "ready"]);
+    h.destroy();
+});
+
+
+test("category code changes cancel stale statistics while label, color and opacity reuse area samples", async () => {
+    const reads = [];
+    const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+        const pending = createDeferred();
+        reads.push({ item, area, signal, codes, pending });
+        return codes ? pending.promise : Promise.resolve(createLayerStatistics(item));
+    });
+    const item = createRasterItem("category-areas");
+    await h.viewer.show(item); await flushPromises();
+    const record = h.mapLayers.retainedRecords[0];
+    editCategoricalAppearance(h, record.entry.key);
+    const first = reads.at(-1);
+    assert.deepEqual([...first.codes].sort((a, b) => a - b), [-1, 0, 41]);
+    const edited = categoricalAppearance();
+    edited.categories[0] = { ...edited.categories[0], label: "Updated forest", color: "#123456", opacity: 0.2 };
+    editCategoricalAppearance(h, record.entry.key, edited);
+    assert.equal(reads.at(-1), first, "appearance-only edit does not restart pending numeric work");
+    edited.categories[0].value = 42;
+    editCategoricalAppearance(h, record.entry.key, edited);
+    const second = reads.at(-1);
+    assert.equal(first.signal.aborted, true);
+    first.pending.resolve(createCategoryStatistics(item, null, first.codes));
+    second.pending.resolve(createCategoryStatistics(item, null, second.codes));
+    await flushPromises();
+    const chart = h.controlsView.layerHistograms[0].categorical;
+    assert.equal(chart.rows.find(row => row.code === 42).opacity, 0.2);
+    assert.equal(chart.rows.find(row => row.code === 42).color, "#123456");
+    assert.equal(chart.rows.some(row => row.code === 41), false);
+    const count = reads.length;
+    edited.categories[0].label = "Final forest";
+    editCategoricalAppearance(h, record.entry.key, edited);
+    await flushPromises();
+    assert.equal(reads.length, count);
+    assert.equal(h.controlsView.layerHistograms[0].categorical.rows.find(row => row.code === 42).label, "Final forest");
     h.destroy();
 });

@@ -183,6 +183,7 @@ def test_paired_analysis_has_no_rendering_or_publication_dependency() -> None:
     """
     paired_modules = (
         Path("src/eolab_app/raster/paired_statistics.py"),
+        Path("src/eolab_app/raster/categorical_statistics.py"),
         Path("src/eolab_app/raster/source_authorization.py"),
         Path("src/eolab_app/raster/statistics_service.py"),
         Path("src/eolab_app/routes/raster_analysis.py"),

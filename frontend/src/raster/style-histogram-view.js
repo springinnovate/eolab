@@ -8,6 +8,7 @@ import {
     clearRasterHistogramChart,
     renderRasterHistogramChart,
 } from "./histogram-view.js";
+import { createCategoricalRasterHistogram } from "./categorical-histogram-view.js";
 import { requireRasterControl } from "./required-control.js";
 
 /** Ordered style stops paired with the percentile controls. */
@@ -52,6 +53,8 @@ export class RasterStyleHistogramView {
             documentContext,
             "#open-raster-histogram-analysis"
         );
+        this.categoryHost = documentContext.createElement("div");
+        this.root.append(this.categoryHost);
         this.handlers = null;
         this.boundOpenHistogram = this.#handleOpenHistogram.bind(this);
     }
@@ -98,6 +101,8 @@ export class RasterStyleHistogramView {
         valueLabel = "Raster value",
         percentiles = null
     ) {
+        this.categoryHost.replaceChildren();
+        this.chart.hidden = false;
         const markers = STYLE_STOPS.map(
             ([percentileName, valueName, colorName]) => ({
                 label: percentiles === null
@@ -122,6 +127,22 @@ export class RasterStyleHistogramView {
     }
 
     /**
+     * Render category rows for the keyed style target.
+     * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
+     * @param {string} scopeLabel Readable sampling scope.
+     * @return {void}
+     */
+    renderCategorical(presentation, scopeLabel) {
+        clearRasterHistogramChart(this.chart);
+        this.chart.hidden = true;
+        this.root.hidden = false;
+        this.root.setAttribute("aria-busy", "false");
+        this.scope.textContent = scopeLabel;
+        this.status.textContent = "";
+        this.categoryHost.replaceChildren(createCategoricalRasterHistogram(presentation, this.documentContext));
+    }
+
+    /**
      * Show a loading or unavailable state without retaining a stale chart.
      *
      * @param {string} scopeLabel Readable sampling scope.
@@ -134,11 +155,14 @@ export class RasterStyleHistogramView {
         this.root.setAttribute("aria-busy", String(isBusy));
         this.scope.textContent = scopeLabel;
         this.status.textContent = message;
+        this.categoryHost.replaceChildren();
+        this.chart.hidden = true;
         clearRasterHistogramChart(this.chart);
     }
 
     /** Hide the preview and release its responsive chart observer. @return {void} */
     clear() {
+        this.categoryHost.replaceChildren();
         clearRasterHistogramChart(this.chart);
         this.root.hidden = true;
         this.root.setAttribute("aria-busy", "false");

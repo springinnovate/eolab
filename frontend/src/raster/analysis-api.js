@@ -4,6 +4,7 @@ import {
     normalizeRasterSamplingArea,
     validateRasterStatisticsForSelection,
 } from "./statistics.js";
+import { normalizeCategoryValues, rasterStatisticsMatchCategories } from "./categorical-statistics.js";
 import {
     normalizeRasterPairedSamplingArea,
     validateRasterPairedStatisticsForSelection,
@@ -121,16 +122,19 @@ export async function sampleCatalogRasterPixel(
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
- * @return {Promise<Object>} Validated fixed-bin raster statistics.
+ * @param {number[]|null} [categoryValues=null] Optional exact category codes.
+ * @return {Promise<Object>} Validated statistics and optional ground areas.
  * @throws {Error} If the area or response violates the analysis contract.
  */
 export async function loadCatalogRasterStatistics(
     item,
     samplingArea,
     signal,
-    fetchImplementation = globalThis.fetch
+    fetchImplementation = globalThis.fetch,
+    categoryValues = null
 ) {
     const normalizedArea = normalizeRasterSamplingArea(samplingArea);
+    const codes = categoryValues === null ? null : normalizeCategoryValues(categoryValues);
     const requestDocument = {
         collectionId: item.collection,
         itemId: item.id
@@ -140,6 +144,7 @@ export async function loadCatalogRasterStatistics(
     } else if (normalizedArea.kind === "catalogSelection") {
         requestDocument.catalogSelection = normalizedArea.catalogSelection;
     }
+    if (codes !== null) requestDocument.categoryValues = codes;
     const response = await fetchImplementation.call(
         globalThis,
         "/api/raster-analysis/statistics",
@@ -159,10 +164,11 @@ export async function loadCatalogRasterStatistics(
             "Raster statistics request"
         );
     }
-    return validateRasterStatisticsForSelection(
-        await response.json(),
-        normalizedArea
-    );
+    const statistics = validateRasterStatisticsForSelection(await response.json(), normalizedArea);
+    if (!rasterStatisticsMatchCategories(statistics, codes)) {
+        throw new Error("Raster statistics returned a different category classification.");
+    }
+    return statistics;
 }
 
 /**

@@ -18,7 +18,7 @@ labels, colors, and opacities. The settings belong to that map layer and travel
 with saved maps. The layer-list and on-map legends show the categories in table
 order, followed by the configured Unmapped appearance. See the
 [categorical appearance contract](categorical-raster-contract.md) for editing and
-persistence details. CSV import is a later increment.
+persistence details and CSV import.
 
 For a styled categorical layer, the pixel picker and raster values at a click
 show labels with their exact codes, such as **Forest (41)**. Copying picker values
@@ -28,12 +28,29 @@ samples are not rounded into a category. Transparent categories still report the
 labels and values. Committed label edits update retained results without reading
 the pixel again.
 
-Categorical distributions and proportional category areas are not available yet.
-Distribution panels show that limitation instead of a continuous chart for the
-category codes. Percentile stretches and 2D comparisons require continuous
-layers. Numeric analysis and raster calculations continue to use unchanged source
-values. Catalog analysis without a styled map-layer context keeps its ordinary
-numeric presentation.
+Categorical distributions show **label and code → horizontal bar → percentage →
+hectares**, sorted by estimated area. Bars use the category color and opacity over
+a hatched background; transparent categories still count as data. The first 12
+rows include an aggregated remainder, with a button to expand all categories.
+Unmapped valid values, including fractional values, enter the percentage
+denominator. NoData and non-finite samples are excluded and reported separately.
+
+Each bounded native sample represents a source-grid cell. Ground areas use an
+ellipsoidal equal-area transformation of that cell, with a fixed 4 × 4 subdivision
+to estimate partial selection coverage. This accounts for latitude, projection,
+rotation, polygon holes and overlapping polygons. Areas and percentages are
+explicitly estimates: thin or rare features may be missed. Categorical reads
+bypass embedded overviews so averaged codes cannot become categories. Native
+work limits still apply; unsupported CRS transformations or longitude wrap
+domains fail explicitly.
+
+Label, color, opacity and row-order edits reuse the current numeric result;
+category-code or mode changes cancel obsolete requests and refresh statistics.
+Saved maps retain the layer-specific category table through the existing
+appearance contract. Percentile stretches and 2D comparisons require continuous
+layers. Processing continues to use unchanged source values and its native
+calculation contracts. Catalog analysis without a styled map-layer context keeps
+its ordinary numeric presentation.
 
 ## Plot values across raster layers
 

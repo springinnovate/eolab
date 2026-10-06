@@ -14,9 +14,16 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import rasterio
+from functools import partial
+
+from eolab_app.raster.categorical_statistics import (
+    CATEGORICAL_STATISTICS_ALGORITHM,
+    categorical_statistics_policy_parameters,
+    read_raster_categorical_statistics,
+)
 
 from eolab_app.raster.errors import (
     RasterConflictError,
@@ -58,6 +65,33 @@ from eolab_app.sampling_area import (
 )
 
 _StatisticsResult = RasterStatistics | RasterPairedStatistics
+
+
+class _CategoricalStatisticsReader(Protocol):
+    """Typed owning boundary for a bounded numeric classification read."""
+
+    def __call__(
+        self,
+        source_path: Path,
+        sampling_area: RasterSamplingArea,
+        cancellation_requested: RasterReadCancellationCheck,
+        *,
+        category_values: tuple[int, ...],
+    ) -> RasterStatistics:
+        """Read category coverage with the service's shared cancellation contract.
+
+        Args:
+            source_path: Authorized immutable source raster.
+            sampling_area: Resolved whole, bounds or Catalog selection.
+            cancellation_requested: Last-waiter cancellation predicate.
+            category_values: Canonically sorted numeric classification codes.
+
+        Returns:
+            Numeric statistics and bounded category-area estimates.
+        """
+        ...
+
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -108,6 +142,7 @@ class RasterStatisticsService:
             RasterPairedStatistics,
         ] = read_raster_paired_statistics,
         *,
+        categorical_statistics_reader: _CategoricalStatisticsReader = read_raster_categorical_statistics,
         queue_capacity: int = 32,
         queue_wait_seconds: float = 30,
         max_waiters: int = 256,
@@ -123,6 +158,8 @@ class RasterStatisticsService:
                 optional only for compositions that reject catalog selection requests.
             statistics_reader: Synchronous bounded Rasterio reader boundary.
             paired_statistics_reader: Synchronous ordered-pair reader boundary.
+            categorical_statistics_reader: Numeric category/area reader sharing
+                the same admission, authorization and cancellation lifecycle.
             queue_capacity: Additional distinct reads allowed to wait for a reader.
             queue_wait_seconds: Maximum wait for read capacity, excluding reading.
             max_waiters: Maximum callers awaiting queued or active results,
@@ -150,6 +187,7 @@ class RasterStatisticsService:
         self._tasks: set[asyncio.Task[_StatisticsResult]] = set()
         self._cache_entries = cache_entries
         self._catalog_selection_reader = catalog_selection_reader
+        self._categorical_statistics_reader = categorical_statistics_reader
         self._statistics_reader = statistics_reader
         self._paired_statistics_reader = paired_statistics_reader
         self._cache: OrderedDict[
@@ -182,13 +220,30 @@ class RasterStatisticsService:
             sampling_area = await self._resolve_sampling_area(request)
         except SelectionUnavailableError as error:
             raise RasterConflictError(error.detail) from error
+        category_values = (
+            tuple(sorted(request.category_values))
+            if request.category_values is not None
+            else None
+        )
         cache_key: RasterStatisticsCacheKey = (
             request.collection_id,
             request.item_id,
             authorized_raster.source_signature,
-            RASTER_STATISTICS_ALGORITHM,
+            (
+                CATEGORICAL_STATISTICS_ALGORITHM
+                if category_values is not None
+                else RASTER_STATISTICS_ALGORITHM
+            ),
             sampling_area.cache_identity(),
-            raster_statistics_policy_parameters(),
+            (
+                (
+                    *categorical_statistics_policy_parameters(),
+                    len(category_values),
+                    *category_values,
+                )
+                if category_values is not None
+                else raster_statistics_policy_parameters()
+            ),
         )
         async with self._state_lock:
             cached = self._cache.get(cache_key)
@@ -203,6 +258,7 @@ class RasterStatisticsService:
                         cache_key,
                         sampling_area,
                         cancellation,
+                        category_values,
                     ),
                 )
 
@@ -539,6 +595,7 @@ class RasterStatisticsService:
         cache_key: RasterStatisticsCacheKey,
         sampling_area: RasterSamplingArea,
         cancellation_requested: threading.Event,
+        category_values: tuple[int, ...] | None = None,
     ) -> RasterStatistics:
         """Compute one current source/area identity within bounded capacity.
 
@@ -547,6 +604,8 @@ class RasterStatisticsService:
             cache_key: Source, area, algorithm, and parameter cache identity.
             sampling_area: Resolved whole, rectangle, or catalog-selection area.
             cancellation_requested: Thread-safe last-waiter signal.
+            category_values: Sorted numeric classification codes, or None for
+                the unchanged continuous distribution.
 
         Returns:
             Newly computed bounded raster statistics.
@@ -566,7 +625,14 @@ class RasterStatisticsService:
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
                 statistics = await asyncio.to_thread(
-                    self._statistics_reader,
+                    (
+                        partial(
+                            self._categorical_statistics_reader,
+                            category_values=category_values,
+                        )
+                        if category_values is not None
+                        else self._statistics_reader
+                    ),
                     authorized_raster.source_path,
                     sampling_area,
                     cancellation_requested.is_set,
