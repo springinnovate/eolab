@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCategoricalRasterStyleParameter,
   buildRasterStyleEnvironment,
 } from "../../src/raster/wms.js";
 import {
@@ -68,4 +69,24 @@ test("constant raster suggestions build valid WMS environments", () => {
       { lower: 10, middle: 50, upper: 90 },
     ),
   ));
+});
+
+test("categorical WMS parameter carries canonical JSON without ENV or URL encoding", () => {
+  const serialized = buildCategoricalRasterStyleParameter({
+    mode: "categorical",
+    categories: [
+      { value: 41, label: " Forest & trees ", color: "#22ABCC" },
+      { value: -1, label: "Water", color: "#112233", opacity: 0.5 },
+    ],
+  });
+  assert.equal(serialized,
+    '{"mode":"categorical","categories":[' +
+    '{"value":41,"label":"Forest & trees","color":"#22abcc","opacity":1},' +
+    '{"value":-1,"label":"Water","color":"#112233","opacity":0.5}],' +
+    '"unmapped":{"color":"#808080","opacity":1}}');
+  assert.throws(() => buildCategoricalRasterStyleParameter(DEFAULT_RASTER_STYLE),
+    /unknown fields/);
+  assert.throws(() => buildCategoricalRasterStyleParameter({
+    mode: "categorical", categories: [],
+  }), /1 to 256 rows/);
 });

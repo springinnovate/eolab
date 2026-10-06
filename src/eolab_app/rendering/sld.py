@@ -96,3 +96,49 @@ def build_get_map_document(
     ElementTree.SubElement(size, "Height").text = str(height)
     ElementTree.SubElement(output, "Transparent").text = "true"
     return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def build_get_map_form(
+    sld_document: bytes,
+    bbox: tuple[float, float, float, float],
+    width: int,
+    height: int,
+    spatial_reference: str,
+    interpolations: tuple[str | None, ...],
+) -> dict[str, str]:
+    """Serialize trusted inline styles with per-layer interpolation overrides.
+
+    Form-encoded WMS keeps large styles out of URLs and uses GeoServer's KVP
+    interpolation contract, which is not part of the GetMap XML schema.
+
+    Args:
+        sld_document: Complete authorized SLD in bottom-first drawing order.
+        bbox: Validated map extent in the requested spatial reference.
+        width: Validated output pixel width.
+        height: Validated output pixel height.
+        spatial_reference: Validated EPSG identifier.
+        interpolations: Trusted overrides in the same order as the SLD layers.
+
+    Returns:
+        WMS 1.1.1 form fields for a transparent PNG response.
+    """
+    root = ElementTree.fromstring(sld_document)
+    names = [
+        layer.findtext(f"{{{SLD_NAMESPACE}}}Name", "")
+        for layer in root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")
+    ]
+    return {
+        "service": "WMS",
+        "version": "1.1.1",
+        "request": "GetMap",
+        "layers": ",".join(names),
+        "styles": ",".join("" for _ in names),
+        "sld_body": sld_document.decode("utf-8"),
+        "interpolations": ",".join(value or "" for value in interpolations),
+        "bbox": ",".join(format(value, ".17g") for value in bbox),
+        "width": str(width),
+        "height": str(height),
+        "srs": spatial_reference,
+        "format": "image/png",
+        "transparent": "true",
+    }

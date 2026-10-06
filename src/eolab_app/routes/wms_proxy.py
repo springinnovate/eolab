@@ -58,7 +58,7 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
     "getcapabilities": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
     | {"acceptformats", "acceptversions", "sections", "updatesequence"},
     "getmap": PUBLIC_WMS_MAP_QUERY_PARAMETERS
-    | {"featureid", "tiled", "tilesorigin"},
+    | {"featureid", "tiled", "tilesorigin", "raster_style"},
     "getfeatureinfo": PUBLIC_WMS_MAP_QUERY_PARAMETERS
     | {
         "buffer",
@@ -325,14 +325,31 @@ def create_wms_proxy_router(
                         sorted(forwarded_headers.items()),
                     ]
                 )
+                async def load_map() -> httpx2.Response:
+                    """Send trusted inline styles in a body instead of an oversized URL.
+
+                    Returns:
+                        Completed upstream response under the shared render queue.
+
+                    Raises:
+                        httpx2.RequestError: If GeoServer cannot be reached.
+                    """
+                    if any(name.lower() == "sld_body" for name, _ in query_entries):
+                        return await geoserver_client.post(
+                            f"{internal_geoserver_url}/eolab/wms",
+                            data=dict(query_entries),
+                            headers=forwarded_headers,
+                        )
+                    return await geoserver_client.get(
+                        f"{internal_geoserver_url}/eolab/wms",
+                        params=query_entries,
+                        headers=forwarded_headers,
+                    )
+
                 return await forward_geoserver_get_map(
                     request,
                     render_queue.run(
-                        lambda: geoserver_client.get(
-                            f"{internal_geoserver_url}/eolab/wms",
-                            params=query_entries,
-                            headers=forwarded_headers,
-                        ),
+                        load_map,
                         request_key=render_request_key,
                     ),
                     get_map_request_tracker,

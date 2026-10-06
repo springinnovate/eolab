@@ -6,7 +6,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from eolab_app.raster.categorical_sld import build_categorical_raster_sld
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from eolab_app.raster.styles import (
+    parse_categorical_raster_style,
+    parse_categorical_raster_style_json,
+)
 from eolab_app.rendering.errors import PublishedLayerRequestError
 
 
@@ -111,10 +116,13 @@ class PublishedRasterAuthorization:
             query: Normalized, globally bounded query parameters.
 
         Raises:
-            PublishedLayerRequestError: If a dynamic-style environment is
-                malformed.
+            PublishedLayerRequestError: If the requested representation conflicts
+                with the operation or the continuous environment is malformed.
         """
-        del operation
+        if "raster_style" in query and (operation != "getmap" or "env" in query):
+            raise PublishedLayerRequestError(
+                "raster_style requires GetMap without a continuous env"
+            )
         if "featureid" in query:
             raise PublishedLayerRequestError(
                 "featureid is supported only for vector layers"
@@ -133,8 +141,39 @@ class PublishedRasterAuthorization:
 
         Returns:
             Server-owned upstream query entries.
+
+        Raises:
+            PublishedLayerRequestError: If the categorical definition is invalid.
         """
-        return query
+        normalized = {name.lower(): value for name, value in query}
+        definition = normalized.get("raster_style")
+        if definition is None:
+            return query
+        style = parse_categorical_raster_style_json(definition)
+        document = build_categorical_raster_sld(normalized["layers"], style, 1)
+        forwarded = [
+            (name, value)
+            for name, value in query
+            if name.lower() not in {"raster_style", "styles", "tiled", "tilesorigin"}
+        ]
+        return forwarded + [
+            ("styles", ""),
+            ("sld_body", document.decode("utf-8")),
+            ("interpolations", "nearest neighbor"),
+        ]
+
+    def composite_interpolation(
+        self, style_definition: Mapping[str, object] | None
+    ) -> str | None:
+        """Describe resampling for an already authorized composite appearance.
+
+        Args:
+            style_definition: Categorical definition, or None for a ramp.
+
+        Returns:
+            Nearest-neighbor override for categories, otherwise service default.
+        """
+        return "nearest neighbor" if style_definition is not None else None
 
     def build_composite_sld(
         self,
@@ -149,8 +188,8 @@ class PublishedRasterAuthorization:
         Args:
             layer_name: Current workspace-qualified raster layer identity.
             style_name: Requested dynamic raster style identity.
-            style_environment: Required validated raster ramp environment.
-            style_definition: Unsupported vector-style representation.
+            style_environment: Ramp environment, mutually exclusive with a table.
+            style_definition: Bounded categorical appearance, or None for a ramp.
             opacity: Neutral retained-layer opacity from zero through one.
 
         Returns:
@@ -160,14 +199,15 @@ class PublishedRasterAuthorization:
             PublishedLayerRequestError: If the appearance is not a complete
                 authorized dynamic raster style.
         """
-        if (
-            style_name != self.style_name
-            or style_environment is None
-            or style_definition is not None
+        if style_name != self.style_name or (style_environment is None) == (
+            style_definition is None
         ):
             raise PublishedLayerRequestError(
                 "Composite raster rendering requires its dynamic raster style"
             )
+        if style_definition is not None:
+            style = parse_categorical_raster_style(style_definition)
+            return build_categorical_raster_sld(layer_name, style, opacity)
         assignments = parse_raster_style_environment(style_environment)
         from eolab_app.raster.composite_sld import build_raster_composite_sld
 

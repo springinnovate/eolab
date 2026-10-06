@@ -54,6 +54,10 @@ class PublishedVectorAuthorization:
             PublishedLayerRequestError: If a dynamic environment is supplied.
         """
         del operation
+        if "raster_style" in query:
+            raise PublishedLayerRequestError(
+                "raster_style is not supported for vector layers"
+            )
         if "env" in query:
             raise PublishedLayerRequestError(
                 "env is not supported for vector layers"
@@ -87,6 +91,19 @@ class PublishedVectorAuthorization:
         if operation != "getlegendgraphic":
             forwarded.append(("cql_filter", predicate))
         return forwarded
+
+    def composite_interpolation(
+        self, style_definition: Mapping[str, object] | None
+    ) -> str | None:
+        """Keep the service interpolation default for vector appearances.
+
+        Args:
+            style_definition: Already authorized vector appearance.
+
+        Returns:
+            None, because vector styling has no raster resampling override.
+        """
+        return None
 
     def build_composite_sld(
         self,

@@ -24,7 +24,7 @@ from eolab_app.rendering.models import (
     CompositeMapPlanRequest,
     PublishedCompositeMapPlan,
 )
-from eolab_app.rendering.sld import build_get_map_document
+from eolab_app.rendering.sld import build_get_map_document, build_get_map_form
 from eolab_app.rendering.ports import MapRenderQueue
 from eolab_app.routes.geoserver_map import (
     forward_geoserver_get_map,
@@ -464,6 +464,19 @@ def create_composite_map_router(
             Returns:
                 Completed internal GeoServer response.
             """
+            if any(value is not None for value in plan.interpolations):
+                return await geoserver_client.post(
+                    internal_wms_url,
+                    data=build_get_map_form(
+                        plan.sld_document,
+                        bbox,
+                        width,
+                        height,
+                        spatial_reference,
+                        plan.interpolations,
+                    ),
+                    headers=geoserver_forward_headers(request),
+                )
             get_map_document = build_get_map_document(
                 plan.sld_document,
                 bbox,

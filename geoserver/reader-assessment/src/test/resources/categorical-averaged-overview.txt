@@ -1,0 +1,14 @@
+Synthetic GeoTIFF fixture for CategoricalRasterFunctionTest.
+
+The 256 x 256 unsigned-byte source is a checkerboard: ((row + column) % 2) * 2.
+It has WGS84 bounds (-1, -1, 1, 1), one band, no NoData, DEFLATE compression,
+32 x 32 tiles, and internal average overviews at factors 2, 4, 8, and 16.
+Every overview sample is 1, which is absent from the source. The test first
+proves ordinary overview selection reads 1, then proves categorical request
+overrides return bounded source samples (0 or 2) without using those overviews.
+
+Generated with the existing project Rasterio dependency: numpy.indices,
+rasterio.open(..., driver="GTiff", width=256, height=256, count=1,
+dtype="uint8", crs="EPSG:4326", transform=from_bounds(-1,-1,1,1,256,256),
+compress="deflate", tiled=True, blockxsize=32, blockysize=32), followed by
+dataset.build_overviews([2,4,8,16], Resampling.average).
