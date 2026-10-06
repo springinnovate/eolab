@@ -200,6 +200,14 @@ export class RasterControlsView {
     }
 
     /**
+     * Cancel the appearance editor's transient CSV preview and outstanding read.
+     * @return {void}
+     */
+    cancelCategoricalImport() {
+        this.#appearanceView.cancelCategoricalImport();
+    }
+
+    /**
      * Validate and read the category editor's current draft.
      * @return {Object} Canonical immutable categorical style.
      * @throws {Error} If any category field or table limit is invalid.

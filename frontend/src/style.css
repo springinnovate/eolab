@@ -1097,7 +1097,8 @@ h5 {
 }
 
 .raster-appearance-mode select,
-.raster-category-fields input {
+.raster-category-fields input,
+.raster-category-fields textarea {
   min-width: 0;
   width: 100%;
   border: 1px solid var(--border-1);
@@ -1106,6 +1107,25 @@ h5 {
   padding: 7px 8px;
   color: var(--text-1);
 }
+
+.raster-category-fields textarea {
+  min-height: 3em;
+  max-height: 12em;
+  resize: vertical;
+  font: inherit;
+}
+
+.raster-category-fields textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.raster-category-fields textarea:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
+.raster-category-fields textarea:hover:not(:disabled) { border-color: var(--text-3); }
 
 .raster-continuous-controls,
 .raster-categorical-editor,
@@ -1180,6 +1200,76 @@ h5 {
 .raster-category-actions { margin-top: 10px; }
 .raster-category-actions .secondary-button { padding: 5px 8px; }
 .raster-category-add span { color: var(--text-3); font-size: 0.7rem; }
+
+.raster-category-csv-import,
+.raster-category-csv-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.raster-category-csv-import {
+  padding: 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+}
+
+.raster-category-csv-import > label {
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.raster-category-csv-import input[type="file"] {
+  min-width: 0;
+  width: 100%;
+  color: var(--text-1);
+  font-size: 0.72rem;
+}
+
+.raster-category-csv-preview[hidden],
+.raster-category-csv-table[hidden] { display: none; }
+
+.raster-category-csv-table {
+  max-width: 100%;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+}
+
+.raster-category-csv-table table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  color: var(--text-1);
+  font-size: 0.7rem;
+}
+
+.raster-category-csv-table caption,
+.raster-category-csv-table th,
+.raster-category-csv-table td {
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.raster-category-csv-table th { background: var(--surface-2); }
+.raster-category-csv-table th:nth-child(1) { width: 14%; }
+.raster-category-csv-table th:nth-child(2) { width: 12%; }
+.raster-category-csv-table th:nth-child(3) { width: 38%; }
+.raster-category-csv-table th:nth-child(4) { width: 19%; }
+.raster-category-csv-table th:nth-child(5) { width: 17%; }
+.raster-category-csv-table td { border-top: 1px solid var(--border-2); }
+.raster-category-csv-table td:nth-child(3) { white-space: pre-wrap; }
+.raster-category-csv-import p { overflow-wrap: anywhere; }
+
+.raster-category-csv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
 @media (max-width: 480px) {
   .raster-category-fields { grid-template-columns: minmax(0, 1fr); }

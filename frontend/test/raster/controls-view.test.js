@@ -497,6 +497,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "unbind",
         "readStyle",
         "setStyle",
+        "cancelCategoricalImport",
         "getPaletteName",
         "setPaletteName",
         "renderStyleError",
@@ -527,4 +528,21 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
     for (const methodName of expectedMethods) {
         assert.equal(typeof view[methodName], "function", methodName);
     }
+});
+
+test("RasterControlsView forwards import cancellation without committing category drafts", async () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+    view.bind({ onCategoricalStyleChange: () => assert.fail("Cancellation cannot commit") });
+    let resolveRead;
+    const fileRead = new Promise(resolve => { resolveRead = resolve; });
+    const input = documentContext.querySelector("#raster-category-csv-file");
+    input.files = [{ name: "pending.csv", size: 100, arrayBuffer: () => fileRead }];
+    input.dispatchEvent(new Event("change"));
+    view.cancelCategoricalImport();
+    resolveRead(new TextEncoder().encode("value,label,color\n1,Forest,#112233").buffer);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(documentContext.querySelector("#raster-category-csv-preview").hidden, true);
+    assert.equal(documentContext.querySelector("#raster-category-csv-status").textContent, "");
+    assert.throws(() => view.readCategoricalStyle(), /Category 1 value/);
 });

@@ -1,10 +1,14 @@
-/** Manual category-table presentation owned by raster appearance controls. */
+/** Manual category-table and CSV preview presentation for raster appearance. */
 import {
     DEFAULT_UNMAPPED_RASTER_APPEARANCE,
     MAX_CATEGORICAL_RASTER_CATEGORIES,
     normalizeCategoricalRasterStyle,
 } from "./categorical-style.js";
 import { requireRasterControl } from "./required-control.js";
+import {
+    MAX_CATEGORICAL_RASTER_CSV_BYTES,
+    parseCategoricalRasterCsv,
+} from "./categorical-csv.js";
 
 /**
  * @typedef {import("./categorical-style.js").CategoricalRasterStyle} CategoricalRasterStyle
@@ -15,7 +19,7 @@ import { requireRasterControl } from "./required-control.js";
  * @typedef {Object} CategoryRowControls
  * @property {HTMLFieldSetElement} root Row fieldset.
  * @property {HTMLLegendElement} legend Row position label.
- * @property {Object<string, HTMLInputElement>} inputs Value, label, color, and opacity inputs.
+ * @property {Object<string, HTMLInputElement|HTMLTextAreaElement>} inputs Value, label, color, and opacity fields.
  * @property {HTMLInputElement} swatch Native color selector.
  * @property {Object<string, HTMLButtonElement>} actions Reorder and remove buttons.
  * @property {Array<() => void>} dispose Direct-listener cleanup callbacks.
@@ -42,12 +46,35 @@ export class CategoricalRasterEditorView {
         this.unmappedColor = requireRasterControl(documentContext, "#raster-unmapped-color");
         this.unmappedSwatch = requireRasterControl(documentContext, "#raster-unmapped-swatch");
         this.unmappedOpacity = requireRasterControl(documentContext, "#raster-unmapped-opacity");
+        this.csvRoot = requireRasterControl(documentContext, "#raster-category-csv-import");
+        this.csvFile = requireRasterControl(documentContext, "#raster-category-csv-file");
+        this.csvStatus = requireRasterControl(documentContext, "#raster-category-csv-status");
+        this.csvPreview = requireRasterControl(documentContext, "#raster-category-csv-preview");
+        this.csvSummary = requireRasterControl(documentContext, "#raster-category-csv-summary");
+        this.csvTable = requireRasterControl(documentContext, "#raster-category-csv-table");
+        this.csvRows = requireRasterControl(documentContext, "#raster-category-csv-rows");
+        this.csvApply = requireRasterControl(documentContext, "#apply-raster-category-csv");
+        this.csvCancel = requireRasterControl(documentContext, "#cancel-raster-category-csv");
+        this.csvGeneration = 0;
+        this.csvStyle = null;
         this.rows = [];
         this.handlers = null;
         this.enabled = true;
         this.boundAdd = () => this.#addRow();
-        this.boundInput = () => this.handlers?.onCategoricalStyleInput?.();
-        this.boundChange = () => this.handlers?.onCategoricalStyleChange?.();
+        this.boundInput = () => {
+            this.cancelCategoricalImport();
+            this.handlers?.onCategoricalStyleInput?.();
+        };
+        this.boundChange = () => {
+            this.cancelCategoricalImport();
+            this.handlers?.onCategoricalStyleChange?.();
+        };
+        this.boundCsvFileChange = () => { void this.#previewCsvFile(); };
+        this.boundCsvApply = () => this.#applyCsvPreview();
+        this.boundCsvCancel = () => {
+            this.cancelCategoricalImport();
+            this.csvFile.focus();
+        };
         this.boundUnmappedColor = () => {
             this.#syncSwatch(this.unmappedColor, this.unmappedSwatch);
             this.boundInput();
@@ -68,6 +95,9 @@ export class CategoricalRasterEditorView {
         this.unbind();
         this.handlers = handlers;
         this.addButton.addEventListener("click", this.boundAdd);
+        this.csvFile.addEventListener("change", this.boundCsvFileChange);
+        this.csvApply.addEventListener("click", this.boundCsvApply);
+        this.csvCancel.addEventListener("click", this.boundCsvCancel);
         this.unmappedColor.addEventListener("input", this.boundUnmappedColor);
         this.unmappedSwatch.addEventListener("input", this.boundUnmappedSwatch);
         this.unmappedOpacity.addEventListener("input", this.boundInput);
@@ -77,9 +107,16 @@ export class CategoricalRasterEditorView {
         for (const row of this.rows) this.#bindRow(row);
     }
 
-    /** Remove all direct listeners while preserving editable drafts. @return {void} */
+    /**
+     * Remove direct listeners and cancel transient imports, preserving manual drafts.
+     * @return {void}
+     */
     unbind() {
+        this.cancelCategoricalImport();
         this.addButton.removeEventListener("click", this.boundAdd);
+        this.csvFile.removeEventListener("change", this.boundCsvFileChange);
+        this.csvApply.removeEventListener("click", this.boundCsvApply);
+        this.csvCancel.removeEventListener("click", this.boundCsvCancel);
         this.unmappedColor.removeEventListener("input", this.boundUnmappedColor);
         this.unmappedSwatch.removeEventListener("input", this.boundUnmappedSwatch);
         this.unmappedOpacity.removeEventListener("input", this.boundInput);
@@ -92,12 +129,14 @@ export class CategoricalRasterEditorView {
 
     /**
      * Hydrate a committed appearance when changing targets or restoring a style.
+     * Cancel any preview or pending CSV read belonging to the previous draft.
      * Ordinary typing must not call this method: incomplete drafts stay in DOM.
      * @param {Readonly<CategoricalRasterStyle>|null} style Valid retained style,
      * or null to show an empty starter row without inventing a raster category.
      * @return {void}
      */
     setStyle(style) {
+        this.cancelCategoricalImport();
         for (const row of this.rows) this.#unbindRow(row);
         this.rows = (style?.categories ?? [null]).map(category => this.#createRow(category));
         this.rowsRoot.replaceChildren(...this.rows.map(row => row.root));
@@ -124,10 +163,7 @@ export class CategoricalRasterEditorView {
                 color: inputs.color.value,
                 opacity: this.#number(inputs.opacity) / 100,
             })),
-            unmapped: {
-                color: this.unmappedColor.value,
-                opacity: this.#number(this.unmappedOpacity) / 100,
-            },
+            unmapped: this.#readUnmappedAppearance(),
         });
     }
 
@@ -153,13 +189,139 @@ export class CategoricalRasterEditorView {
 
     /**
      * Set editor availability without discarding draft values.
+     * Disabling also discards CSV previews and invalidates pending file reads.
      * @param {boolean} enabled Whether the appearance owner allows editing.
      * @return {void}
      */
     setEnabled(enabled) {
         this.enabled = enabled;
+        if (!enabled) this.cancelCategoricalImport();
+        this.csvFile.disabled = !enabled;
         for (const input of this.#allInputs()) input.disabled = !enabled;
         this.#updateRows();
+    }
+
+    /**
+     * Discard an import preview and invalidate any outstanding file read.
+     * Manual category drafts and committed appearance are never changed.
+     * File reads may finish, but their obsolete generation cannot publish a preview.
+     * @return {void}
+     */
+    cancelCategoricalImport() {
+        this.csvGeneration += 1;
+        this.csvStyle = null;
+        this.csvFile.value = "";
+        this.csvStatus.textContent = "";
+        this.csvSummary.textContent = "";
+        this.csvRows.replaceChildren();
+        this.csvPreview.hidden = true;
+        this.csvTable.hidden = true;
+        this.csvApply.disabled = true;
+        this.csvCancel.disabled = true;
+        this.csvRoot.setAttribute("aria-busy", "false");
+    }
+
+    /**
+     * Read a bounded local file and preview its fully validated category rows.
+     * Selection, reading, decoding, and parse errors never emit style edits.
+     * @return {Promise<void>} Completes after preview or local error presentation.
+     */
+    async #previewCsvFile() {
+        const file = this.csvFile.files?.[0];
+        this.cancelCategoricalImport();
+        if (!file || !this.enabled || !this.handlers) return;
+        const generation = this.csvGeneration;
+        this.csvPreview.hidden = false;
+        this.csvCancel.disabled = false;
+        try {
+            if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > MAX_CATEGORICAL_RASTER_CSV_BYTES) {
+                throw new Error(`CSV file must be no larger than ${MAX_CATEGORICAL_RASTER_CSV_BYTES} bytes (128 KiB).`);
+            }
+            this.csvRoot.setAttribute("aria-busy", "true");
+            this.csvStatus.textContent = `Reading ${file.name}…`;
+            const buffer = await file.arrayBuffer();
+            if (generation !== this.csvGeneration) return;
+            let text;
+            try {
+                text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+            } catch {
+                throw new Error("CSV file must contain valid UTF-8 text.");
+            }
+            this.csvStyle = parseCategoricalRasterCsv(text);
+            this.#renderCsvPreview(this.csvStyle, file.name);
+            this.csvStatus.textContent = "Preview ready. Replace categories to apply the complete table; unmapped settings are preserved.";
+            this.csvApply.disabled = false;
+        } catch (error) {
+            if (generation !== this.csvGeneration) return;
+            this.csvStyle = null;
+            this.csvRows.replaceChildren();
+            this.csvTable.hidden = true;
+            this.csvApply.disabled = true;
+            this.csvStatus.textContent = error instanceof Error
+                ? error.message : "The CSV file could not be read.";
+        } finally {
+            if (generation === this.csvGeneration) {
+                this.csvRoot.setAttribute("aria-busy", "false");
+                this.csvPreview.focus();
+            }
+        }
+    }
+
+    /**
+     * Show every imported category in its supplied order using literal text.
+     * @param {Readonly<CategoricalRasterStyle>} style Canonical imported table.
+     * @param {string} filename User-selected file name.
+     * @return {void}
+     */
+    #renderCsvPreview(style, filename) {
+        this.csvSummary.textContent = `${filename}: ${style.categories.length} categories will replace the current table.`;
+        const rows = style.categories.map((category, index) => {
+            const row = this.documentContext.createElement("tr");
+            for (const value of [index + 1, category.value, category.label, category.color, category.opacity]) {
+                const cell = this.documentContext.createElement("td");
+                cell.textContent = String(value);
+                row.append(cell);
+            }
+            return row;
+        });
+        this.csvRows.replaceChildren(...rows);
+        this.csvTable.hidden = false;
+    }
+
+    /**
+     * Validate current unmapped fields before atomically replacing all categories.
+     * Failures preserve both the previous category draft and the committed style.
+     * @return {void}
+     */
+    #applyCsvPreview() {
+        if (!this.enabled || this.csvApply.disabled || this.csvStyle === null || !this.handlers) return;
+        let style;
+        try {
+            style = normalizeCategoricalRasterStyle({
+                mode: "categorical",
+                categories: this.csvStyle.categories,
+                unmapped: this.#readUnmappedAppearance(),
+            });
+        } catch (error) {
+            this.renderError(error);
+            this.csvStatus.textContent = `Cannot replace categories: ${error.message}`;
+            this.csvApply.disabled = true;
+            return;
+        }
+        this.setStyle(style);
+        this.boundChange();
+        this.rows[0].inputs.value.focus();
+    }
+
+    /**
+     * Read independent unmapped drafts for complete style-boundary validation.
+     * @return {{color:string,opacity:number}} Candidate fallback appearance.
+     */
+    #readUnmappedAppearance() {
+        return {
+            color: this.unmappedColor.value,
+            opacity: this.#number(this.unmappedOpacity) / 100,
+        };
     }
 
     /**
@@ -172,18 +334,19 @@ export class CategoricalRasterEditorView {
     }
 
     /**
-     * Create an explicitly labelled field and input for a category row.
+     * Create an explicitly labelled field, retaining line breaks in category labels.
      * @param {string} title Visible field label.
-     * @param {string} type HTML input type.
+     * @param {"number"|"text"|"textarea"} type Native input type or multiline text field.
      * @param {string} value Initial field value.
-     * @return {{label: HTMLLabelElement, input: HTMLInputElement}} New field.
+     * @return {{label: HTMLLabelElement, input: HTMLInputElement|HTMLTextAreaElement}} New field.
      */
     #field(title, type, value) {
         const label = this.documentContext.createElement("label");
         const text = this.documentContext.createElement("span");
         text.textContent = title;
-        const input = this.documentContext.createElement("input");
-        input.type = type;
+        const input = this.documentContext.createElement(type === "textarea" ? "textarea" : "input");
+        if (type === "textarea") input.rows = 2;
+        else input.type = type;
         input.value = value;
         input.setAttribute("aria-describedby", "raster-category-error");
         label.append(text, input);
@@ -203,7 +366,7 @@ export class CategoricalRasterEditorView {
         fields.className = "raster-category-fields";
         const value = this.#field("Value", "number", category ? String(category.value) : "");
         value.input.step = "1";
-        const label = this.#field("Label", "text", category?.label ?? "");
+        const label = this.#field("Label", "textarea", category?.label ?? "");
         const color = this.#field("Color (hex)", "text", category?.color ?? "#808080");
         color.input.spellcheck = false;
         color.input.maxLength = 7;
@@ -362,7 +525,7 @@ export class CategoricalRasterEditorView {
         }
     }
 
-    /** Return all mutable category and unmapped fields. @return {HTMLInputElement[]} Fields. */
+    /** Return all mutable category and unmapped fields. @return {Array<HTMLInputElement|HTMLTextAreaElement>} Fields. */
     #allInputs() {
         return [this.unmappedColor, this.unmappedSwatch, this.unmappedOpacity,
             ...this.rows.flatMap(row => [...Object.values(row.inputs), row.swatch])];

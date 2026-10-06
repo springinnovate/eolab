@@ -2,7 +2,7 @@
 
 Issue #645 introduces the rendering contract. Issue #646 adds the manual category
 editor and map-layer persistence. Issue #647 adds discrete legends and categorical
-pixel presentation. CSV import remains in #648. Analysis responses remain numeric
+pixel presentation. Issue #648 adds category-table CSV import. Analysis responses remain numeric
 and independent of the selected appearance.
 
 ## Manual editing and persistence
@@ -18,6 +18,48 @@ the map and persistence keep the last valid appearance. Switching to Continuous
 restores its retained palette, thresholds, and opacity stops. Switching back
 retains the category table. Closing and reopening an editor restores committed
 settings, discarding incomplete drafts.
+
+## Importing a category table
+
+In the Categorical style editor, choose a CSV file and review its preview before
+selecting **Replace categories**. Applying replaces the entire category table in
+file order; it keeps the layer's Unmapped appearance and continuous-mode settings.
+Imported rows use the same editor, validation, rendering, legends, pixel readouts,
+and saved-map persistence as manually entered rows. No raster data is uploaded or
+changed. Cancel, an unreadable file, or a validation error leaves the existing
+table and saved appearance intact.
+
+The required columns are `value,label,color`; `opacity` is optional. Columns may
+be reordered. Header names ignore surrounding whitespace and case; unknown or
+duplicate columns are rejected. Omitted or blank opacity means `1`. CSV opacity
+uses the range **0 to 1**, while the manual editor displays **0 to 100 percent**.
+Colors use six-digit `#RRGGBB` notation. Values are exact safe whole decimal
+numbers, including zero and negatives; an all-zero fractional suffix such as
+`41.0` is accepted. Fractional codes, hexadecimal codes, and exponent notation
+for codes are rejected instead of being rounded or interpreted ambiguously.
+
+For example, [categorical-raster-example.csv](categorical-raster-example.csv):
+
+```csv
+value,label,color,opacity
+0,Water,#2166ac,1
+41,"Forest, woodland",#228b22,0.8
+-1,"Unclassified ""other""",#808080,
+```
+
+Files must be UTF-8, optionally with a BOM, and may use LF or CRLF line endings.
+Quoted fields support commas, doubled quotation marks, and embedded newlines.
+Embedded CRLF line endings become LF in both the preview and editable labels.
+Empty physical lines are ignored. Malformed quoting, incorrect field counts,
+duplicate codes, and invalid fields report the relevant CSV row. The first error
+must be corrected before applying; an invalid import cannot be partially applied.
+
+Files are limited to 128 KiB before reading. Parsing also bounds input bytes and
+stops after 256 category rows; the resulting style still must satisfy the existing
+65,536-byte normalized-style limit and 128-code-point label limit. Leaving the
+editor, changing its target or mode, disabling editing, or editing the manual
+table cancels the pending import. A late file-read result cannot replace a newer
+preview or another layer's categories.
 
 The raster owner exports a versioned appearance envelope:
 
@@ -115,7 +157,9 @@ catalog metadata, a dataset's shared GeoServer style, or its source data.
   by value and does not reorder the appearance definition.
 
 `frontend/src/raster/categorical-style.js` provides normalization for the manual
-editor and retained appearance state. Python's raster-owned `styles.py` validates the public input
+editor, CSV input boundary, and retained appearance state. The domain-local
+`categorical-csv.js` parser owns CSV syntax and numeric text conversion; it returns
+the same immutable appearance contract. Python's raster-owned `styles.py` validates the public input
 boundary independently. Neither module imports analysis or editor implementation
 state.
 

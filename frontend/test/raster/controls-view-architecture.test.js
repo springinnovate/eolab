@@ -145,14 +145,24 @@ test("histogram axis controls and transforms have only local presentation depend
     }
 });
 
-test("category editor depends only on its appearance contract and DOM lookup", async () => {
+test("category editor depends only on its local input contract and DOM lookup", async () => {
     const source = await readFile(
         new URL("../../src/raster/categorical-editor-view.js", import.meta.url), "utf8"
     );
     const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
         .map(match => match[1]).sort();
-    assert.deepEqual(imports, ["./categorical-style.js", "./required-control.js"]);
+    assert.deepEqual(imports, ["./categorical-csv.js", "./categorical-style.js", "./required-control.js"]);
     assert.match(source, /"#raster-categorical-editor"/);
     assert.doesNotMatch(source, /"#raster-(histogram|percentile|style-controls)/);
     assert.doesNotMatch(source, /fetch\(|localStorage|Leaflet/);
+});
+
+test("category CSV boundary depends only on canonical raster appearance validation", async () => {
+    const source = await readFile(
+        new URL("../../src/raster/categorical-csv.js", import.meta.url), "utf8"
+    );
+    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
+        .map(match => match[1]);
+    assert.deepEqual(imports, ["./categorical-style.js"]);
+    assert.doesNotMatch(source, /fetch\(|localStorage|document\.|FileReader|GeoServer/);
 });

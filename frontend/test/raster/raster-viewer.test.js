@@ -11,6 +11,7 @@ import {
 } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
@@ -1322,6 +1323,90 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
     assert.deepEqual(undoRecord.adapter.renderDescriptor(undoRecord).styleDefinition, savedAppearance.categorical);
     assert.equal(h.mapLayers.removedLayer, null);
     h.destroy();
+});
+
+test("CSV preview commits through the category editor and persists through the existing appearance contract", async () => {
+    const h = visibleLayerFixture();
+    const appearance = new RasterAppearanceControlsView(new FakeRasterControlDocument());
+    const editor = appearance.categoricalEditor;
+    appearance.bind(h.controlsView.handlers);
+    for (const method of ["setCategoricalStyle", "readCategoricalStyle", "setAppearanceMode",
+        "renderCategoricalError", "cancelCategoricalImport"]) {
+        h.controlsView[method] = appearance[method].bind(appearance);
+    }
+    h.controlsView.setAppearanceEnabled = appearance.setEnabled.bind(appearance);
+    const csv = 'value,label,color,opacity\r\n0,"Water, clear",#2166AC,0\r\n41,Forest,#228b22,\r\n-1,Other,#808080,0.5\r\n';
+    const bytes = new TextEncoder().encode(csv);
+    /**
+     * Select a file through the actual editor input boundary.
+     * @param {Promise<ArrayBuffer>} content Asynchronous bounded file content.
+     * @return {void}
+     */
+    const select = (content = Promise.resolve(bytes.buffer)) => {
+        editor.csvFile.files = [{ name: "categories.csv", size: bytes.byteLength,
+            arrayBuffer: () => content }];
+        editor.csvFile.dispatchEvent(new Event("change"));
+    };
+    try {
+        await h.viewer.show(createRasterItem("csv-import"));
+        const record = h.mapLayers.retainedRecords[0];
+        h.viewer.openStyle(record.entry.key);
+        const before = record.adapter.exportSavedState(record);
+        h.controlsView.handlers.onAppearanceModeChange("categorical");
+        editor.unmappedColor.value = "#123456";
+        editor.unmappedOpacity.value = "25";
+        select();
+        await flushPromises();
+        assert.equal(editor.csvPreview.hidden, false);
+        assert.equal(editor.csvApply.disabled, false);
+        assert.deepEqual(record.adapter.exportSavedState(record), before,
+            "preview leaves rendered and persisted appearance unchanged");
+        editor.csvApply.dispatchEvent(new Event("click"));
+        const applied = record.adapter.exportSavedState(record);
+        assert.equal(applied.mode, "categorical");
+        assert.deepEqual(applied.continuous, before.continuous);
+        assert.deepEqual(applied.categorical.unmapped, { color: "#123456", opacity: 0.25 });
+        assert.deepEqual(applied.categorical.categories, [
+            { value: 0, label: "Water, clear", color: "#2166ac", opacity: 0 },
+            { value: 41, label: "Forest", color: "#228b22", opacity: 1 },
+            { value: -1, label: "Other", color: "#808080", opacity: 0.5 },
+        ]);
+        assert.deepEqual(JSON.parse(record.state.layer.wmsParams.raster_style), applied.categorical);
+        assert.equal(h.mapLayers.snapshots()[0].legend.entries[0].label, "Water, clear (0)");
+        editor.rows[1].inputs.label.value = "Imported forest";
+        editor.rows[1].inputs.label.dispatchEvent(new Event("change"));
+        assert.equal(record.adapter.exportSavedState(record).categorical.categories[1].label, "Imported forest");
+        const saved = createSavedMapView({
+            viewer: { version: "test", origin: "https://example.test" },
+            createdAt: "2026-10-06T00:00:00Z",
+            viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
+            layers: [{ catalogItem: { collection: record.entry.item.collection, id: record.entry.item.id },
+                sourceRevision: null, visible: true, opacity: 1,
+                style: record.adapter.exportSavedState(record) }],
+        });
+        const restored = parseSavedMapView(serializeSavedMapView(saved));
+        const staged = await h.viewer.stage(createRasterItem("csv-restored"), { visible: false, opacity: 1 });
+        staged.record.adapter.applySavedState(staged.record, restored.layers[0].style);
+        assert.deepEqual(staged.record.adapter.exportSavedState(staged.record), restored.layers[0].style);
+        h.viewer.closeStyle();
+        h.viewer.openStyle(record.entry.key);
+        assert.equal(editor.readStyle().categories[1].label, "Imported forest");
+
+        for (const leave of [() => h.viewer.closeStyle(), () => h.viewer.openStyle("missing"),
+            () => h.viewer.clear()]) {
+            h.viewer.openStyle(record.entry.key);
+            const pending = createDeferred();
+            select(pending.promise);
+            leave();
+            pending.resolve(bytes.buffer);
+            await flushPromises();
+            assert.equal(editor.csvPreview.hidden, true, "a released target cannot receive a late import");
+            assert.equal(editor.csvApply.disabled, true);
+        }
+    } finally {
+        appearance.unbind();
+        h.destroy();
+    }
 });
 
 test("hidden raster category edits remain independent of active analysis and visibility", async () => {
