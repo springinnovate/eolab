@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 import psycopg
+from psycopg.types.json import Jsonb
 import pytest
 
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
@@ -362,9 +363,8 @@ def submit_calculation(
         headers=HEADERS,
     )
     assert response.status_code == 202, response.text
-    timings = response.headers["server-timing"]
-    assert "admissionChecks;dur=" in timings
-    assert "processing;dur=" in timings
+    assert "server-timing" not in response.headers
+    assert "x-eolab-request-id" not in response.headers
     return response.json()
 
 
@@ -390,11 +390,10 @@ def test_calculation_http_lifecycle_mixed_history_and_owned_csv(
     url = f"/api/processing/jobs/{job['jobId']}"
     ready = client.get(url).json()
     assert ready["status"] == "ready", ready
-    assert ready["result"]["executionTiming"]["queueSeconds"] >= 0
-    assert ready["result"]["queuedToReadySeconds"] >= 0
+    assert "preparation" not in ready
     assert (
-        ready["result"]["executionTiming"]["nativeProcessSeconds"]
-        >= ready["result"]["performance"]["kernelSeconds"]
+        not {"performance", "executionTiming", "queuedToReadySeconds"}
+        & ready["result"].keys()
     )
     assert ready["result"]["rows"][0]["value"] == "4999"
     assert float(ready["result"]["rows"][1]["value"]) == sum(range(5001, 10000))
@@ -497,8 +496,8 @@ def test_summary_resolves_source_again_after_waiting_for_disk(
         assert completed["result"]["rows"][0]["value"] == "4999"
 
 
-def test_batched_plan_metrics_and_execution(boundary: Any, store: Any) -> None:
-    """Prepared batch metrics survive storage, execution and result publication.
+def test_batched_plan_execution_and_provenance(boundary: Any, store: Any) -> None:
+    """Prepared read dimensions survive storage, execution and result publication.
 
     Args:
         boundary: Real API, native worker, source and artifact composition.
@@ -510,13 +509,13 @@ def test_batched_plan_metrics_and_execution(boundary: Any, store: Any) -> None:
     assert asyncio.run(worker.run_once())
     ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert ready["status"] == "ready", ready
-    metrics = ready["result"]["performance"]
     execution = ready["grid"]["execution"]
     assert execution["targetChunkPixels"] == 65536
     assert execution["readWindows"] < ready["grid"]["nativeBlocks"]
-    assert metrics["execution"] == execution
-    assert metrics["readWindows"] == execution["readWindows"]
-    assert client.get(ready["result"]["provenanceUrl"]).json()["performance"] == metrics
+    provenance = client.get(ready["result"]["provenanceUrl"]).json()
+    assert provenance["grid"]["execution"] == execution
+    assert "performance" not in provenance
+    assert "execution_timing" not in provenance
     assert ready["result"]["rows"][0]["value"] == "4999"
     assert ready["progress"]["phase"] == "ready"
 
@@ -620,7 +619,7 @@ def test_catalog_selection_calculates(
 def test_worker_restart_invalidates_legacy_queued_jobs(
     boundary: Any, store: Any
 ) -> None:
-    """Migrate old schemas and interrupt their queued jobs before execution.
+    """Retire old schema fields while preserving completed results and queue recovery.
 
     Args:
         boundary: Actual HTTP and worker composition.
@@ -635,6 +634,35 @@ def test_worker_restart_invalidates_legacy_queued_jobs(
     original_csv = client.get(result_url).content
     job = submit_calculation(client, calculation_inputs(client))
     with psycopg.connect(store.conninfo) as conn:
+        conn.execute("ALTER TABLE processing.jobs ADD COLUMN preparation jsonb")
+        conn.execute(
+            "UPDATE processing.jobs SET preparation=%s", (Jsonb({"seconds": 0.1}),)
+        )
+        previous_view = (
+            conn.execute(
+                "SELECT pg_get_viewdef('processing.subscribed_jobs'::regclass)"
+            )
+            .fetchone()[0]
+            .rstrip(";\n ")
+        )
+        conn.execute(
+            "CREATE OR REPLACE VIEW processing.subscribed_jobs AS "
+            f"SELECT existing.*, j.preparation FROM ({previous_view}) existing "
+            "JOIN processing.jobs j ON j.id=existing.job_id"
+        )
+        conn.execute(
+            "UPDATE processing.jobs SET artifact=artifact || %s "
+            "WHERE id=(SELECT job_id FROM processing.job_subscribers WHERE id=%s)",
+            (
+                Jsonb(
+                    {
+                        "performance": {"kernelSeconds": 0.1},
+                        "execution_timing": {"queueSeconds": 0.2},
+                    }
+                ),
+                completed["jobId"],
+            ),
+        )
         conn.execute(
             "CREATE TABLE processing.plans (id text PRIMARY KEY, request jsonb)"
         )
@@ -660,14 +688,16 @@ def test_worker_restart_invalidates_legacy_queued_jobs(
     assert failed["error"]["code"] == "worker_restarted"
     assert failed["sources"] is None
     assert client.get(result_url).content == original_csv
+    migrated = client.get(f"/api/processing/jobs/{completed['jobId']}").json()
+    assert migrated == completed_job
     with psycopg.connect(store.conninfo) as conn:
         assert conn.execute(
             "SELECT version FROM processing.schema_version ORDER BY version"
-        ).fetchall() == [(n,) for n in range(1, 15)]
+        ).fetchall() == [(n,) for n in range(1, 16)]
         assert (
             conn.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_schema='processing' "
-                "AND table_name='jobs' AND column_name IN ('minimum_claim_version','job_format_version','plan_id')"
+                "AND table_name='jobs' AND column_name IN ('minimum_claim_version','job_format_version','plan_id','preparation')"
             ).fetchone()
             is None
         )

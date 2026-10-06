@@ -15,7 +15,6 @@ import { describeJobProgress } from "./presentation.js";
  * @property {Object|null} currentJob Job including prepared grid and estimates when available.
  * @property {Object|null} completedJob Last successful job.
  * @property {Object|null} completedCalculation Inputs for the last successful job.
- * @property {Object|null} completedTimings Submission and result-observation measurements.
  * @property {ReadonlyArray<Object>} jobs Summary history.
  * @property {string} historyError History retrieval error.
  */
@@ -38,13 +37,12 @@ export class CalculationExecutor {
      * @param {(snapshot:CalculationExecutionSnapshot)=>void} options.onChange Progress consumer.
      * @param {(area:Object|null)=>void} [options.onActivity] Working-area callback.
      * @param {()=>string} [options.requestId] Submission key factory.
-     * @param {()=>number} [options.now] Monotonic clock in milliseconds.
      */
     constructor({api, jobs, storage, onChange, onActivity = () => {},
-        requestId = () => crypto.randomUUID(), now = () => performance.now()}) {
-        Object.assign(this, {api, jobs, storage, onChange, onActivity, requestId, now});
+        requestId = () => crypto.randomUUID()}) {
+        Object.assign(this, {api, jobs, storage, onChange, onActivity, requestId});
         this.#status = {phase: "idle", message: "", currentJob: null, completedJob: null,
-            completedCalculation: null, completedTimings: null, jobs: [], historyError: ""};
+            completedCalculation: null, jobs: [], historyError: ""};
         this.#saved = storage.read();
         this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.#receiveJobs());
@@ -117,7 +115,6 @@ export class CalculationExecutor {
         const saved = this.#saved;
         for (let attempt = 0; ; attempt++) {
             try {
-                if (this.trace) this.trace.submissionAttempts = attempt + 1;
                 return await this.api.submitCalculation({...saved.intent, requestId: saved.pending.requestId});
             } catch (error) {
                 if (error instanceof ProcessingRequestError && error.isCapacityRejection) {
@@ -126,11 +123,9 @@ export class CalculationExecutor {
                     this.#status.phase = "waiting";
                     this.#status.message = error.code === "previous_attempt_stopping" ? error.message : "Waiting for server capacity; retrying automatically…";
                     this.#notify();
-                    const started = this.now();
                     try { await waitBeforeCapacityRetry(error, attempt, wait.signal); continue; }
                     catch (cancelled) { if (cancelled.name !== "AbortError") throw cancelled; }
                     finally {
-                        if (this.trace) this.trace.capacityWaitSeconds = (this.trace.capacityWaitSeconds ?? 0) + (this.now()-started)/1000;
                         this.#capacityWait = null;
                     }
                 } else if (!(error instanceof ProcessingRequestError) || error.status < 400 || error.status >= 500 || error.status === 408) {
@@ -158,7 +153,6 @@ export class CalculationExecutor {
                 this.storage.write(record);
                 this.#saved = record;
                 this.#pending = null;
-                this.trace = {submissionStartedAtMs: this.now()};
             }
             if (this.#saved?.pending) {
                 this.#status.phase = "submitting";
@@ -166,14 +160,11 @@ export class CalculationExecutor {
                 this.#notify();
                 const job = await this.#submitWhenCapacityAvailable();
                 if (!job) return;
-                if (this.trace) { this.trace.submissionFinishedAtMs = this.now(); this.trace.jobId = job.jobId; }
                 this.#saved.jobId = job.jobId;
                 this.#saved.pending = null;
                 this.storage.write(this.#saved);
-                if (job.status === "ready") this.api.diagnostics?.record("ready-received", {jobId: job.jobId, trigger: "submission"});
                 if (ACTIVE_JOB_STATES.has(job.status)) this.jobs.tracked.add(job.jobId);
                 this.jobs.accept(job);
-                if (job.status === "ready") this.api.diagnostics?.record("ready-accepted", {jobId: job.jobId, trigger: "submission"});
             }
             if (!this.#saved?.jobId) return;
             let job = this.jobs.jobs.find(item => item.jobId === this.#saved.jobId);
@@ -190,25 +181,18 @@ export class CalculationExecutor {
                 return;
             }
             if (job.status === "ready" && !this.#saved.cancelRequested) {
-                if (this.trace) {
-                    this.trace.executorReadyAtMs = this.now();
-                    this.trace.deliveryDiagnostics = this.api.diagnostics?.snapshot(this.trace.submissionStartedAtMs, null, job.jobId);
-                }
                 this.#status.completedJob = job;
                 this.#status.completedCalculation = this.#saved.intent;
-                this.#status.completedTimings = this.trace ?? null;
                 this.#status.message = "Calculation complete.";
             } else this.#status.message = this.#saved.cancelRequested || job.status === "cancelled"
                 ? "Calculation cancelled." : job.error?.detail ?? "Calculation interrupted. Calculate to try again.";
             this.jobs.tracked.delete(job.jobId);
             this.storage.clear();
             this.#saved = null;
-            this.trace = null;
             this.#status.currentJob = null;
             this.#status.phase = "idle";
         } catch (error) {
             this.#retryRequired = true;
-            this.trace = null;
             this.#pending = null;
             this.#status.phase = "error";
             this.#status.message = `${error.message}${this.#saved ? " Recover / retry to confirm or cancel the same job safely." : " Click Calculate to retry."}`;

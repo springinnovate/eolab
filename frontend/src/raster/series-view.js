@@ -24,7 +24,6 @@ export class RasterSeriesView {
         this.formulaRows = documentContext.querySelector("#raster-series-formulas");
         this.frame = null;
         this.pendingState = null;
-        this.timingReports = new Map();
     }
 
     /**
@@ -163,7 +162,7 @@ export class RasterSeriesView {
     }
 
 
-    /** Update changed formula controls while preserving focused edits and timing disclosures.
+    /** Update changed formula controls while preserving focused edits.
      * @param {Object} state Area-series presentation. @return {void}
      */
     renderAreaControls(state) {
@@ -233,40 +232,6 @@ export class RasterSeriesView {
         if (cancel.hidden !== !state.busy) cancel.hidden = !state.busy;
         const recover = this.document.querySelector("#raster-series-recover");
         if (recover.hidden !== !area.recoverable) recover.hidden = !area.recoverable;
-        const performance = this.document.querySelector("#raster-series-performance");
-        for (const [key, report] of this.timingReports) {
-            if (area.results.get(key) === report.result) continue;
-            report.details.remove();
-            this.timingReports.delete(key);
-        }
-        for (const [key, result] of area.results) {
-            if (!result.job) continue;
-            if (!this.timingReports.has(key)) {
-                const details = this.document.createElement("details");
-                const summary = this.document.createElement("summary");
-                details.append(summary);
-                for (const line of result.performanceLines) {
-                    const p = this.document.createElement("p"); p.textContent = line; details.append(p);
-                }
-                performance.append(details);
-                this.timingReports.set(key, { result, details, summary });
-            }
-            const summary = this.timingReports.get(key).summary;
-            const text = (area.sources.find(source => source.key === key)?.label ?? key) + " — " + result.elapsedSeconds.toFixed(3) + " s";
-            if (summary.textContent !== text) summary.textContent = text;
-        }
-        if (area.elapsedSeconds == null) {
-            this.totalTiming?.remove();
-            this.totalTiming = null;
-        } else {
-            if (!this.totalTiming) {
-                this.totalTiming = this.document.createElement("p");
-                performance.prepend(this.totalTiming);
-            }
-            const text = "Whole series: " + area.elapsedSeconds.toFixed(3) +
-                " s from requesting the series to the last result or error, including debounce, validation and any recovery pauses.";
-            if (this.totalTiming.textContent !== text) this.totalTiming.textContent = text;
-        }
     }
 
     /**

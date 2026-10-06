@@ -83,7 +83,7 @@ Completed raster-calculator values are cached in PostgreSQL for up to 24 hours,
 shared by viewers connected to the same EOLab database. The UI identifies these
 as **Reused cached result**. A reused value gets its own job and CSV download
 with the current statistic title and formula; it does not inherit another
-session's download permissions or execution timings.
+session's download permissions.
 
 The match includes the immutable catalog raster, source metadata, exact area
 or vector filter, parsed formula, requested batch size and calculation-policy

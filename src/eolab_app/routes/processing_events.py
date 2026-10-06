@@ -1,8 +1,6 @@
 """SSE wire format and response lifetime for Processing-owned change hints."""
 
 import asyncio
-import json
-import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -36,7 +34,6 @@ class JobEventResponse(StreamingResponse):
         self.subscription = subscription
         self.heartbeat_seconds = heartbeat_seconds
         self.lifetime_seconds = lifetime_seconds
-        self.previous_send_seconds = 0.0
         super().__init__(
             self._events(),
             media_type="text/event-stream",
@@ -56,8 +53,7 @@ class JobEventResponse(StreamingResponse):
         """Request an initial snapshot, then send hints or idle heartbeats.
 
         Yields:
-            Fixed change hints and optional numeric timing frames. Timings measure
-            listener receipt to stream handoff, never database commit or browser receipt.
+            Fixed change hints and idle heartbeat comments.
         """
         # Subscribe-before-snapshot also closes the completion-before-connect race.
         yield "retry: 2000\nevent: changed\ndata: {}\n\n"
@@ -65,19 +61,7 @@ class JobEventResponse(StreamingResponse):
             while True:
                 changed = await self.subscription.wait(self.heartbeat_seconds)
                 if changed:
-                    received_at = self.subscription.received_at
-                    if received_at is not None:
-                        timing = json.dumps(
-                            {
-                                "listenerToStreamSeconds": max(
-                                    0.0, time.perf_counter() - received_at
-                                ),
-                                "previousSendSeconds": self.previous_send_seconds,
-                            }
-                        )
-                        yield f"event: timing\ndata: {timing}\n\nevent: changed\ndata: {{}}\n\n"
-                    else:
-                        yield "event: changed\ndata: {}\n\n"
+                    yield "event: changed\ndata: {}\n\n"
                 else:
                     yield ": keepalive\n\n"
         except ProcessingError:
@@ -91,18 +75,8 @@ class JobEventResponse(StreamingResponse):
         """
         try:
 
-            async def measured_send(message: dict[str, Any]) -> None:
-                """Measure ASGI handoff, not browser receipt, of the previous frame.
-
-                Args:
-                    message: Streaming response start, body, or terminator.
-                """
-                started = time.perf_counter()
-                await send(message)
-                self.previous_send_seconds = time.perf_counter() - started
-
             async with asyncio.timeout(self.lifetime_seconds):
-                await self.stream_response(measured_send)
+                await self.stream_response(send)
         except TimeoutError:
             async with asyncio.timeout(1):
                 await send(

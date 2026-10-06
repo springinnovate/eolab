@@ -1,7 +1,6 @@
 /** Calculate the same area statistics for each raster selected in Raster series. */
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
-import { performanceDescription } from "./calculation-performance.js";
 import { describeJobProgress } from "./presentation.js";
 
 /**
@@ -18,10 +17,9 @@ export class RasterSeriesCalculations {
      * @param {Object} options Providers.
      * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
-     * @param {()=>number} [options.now] Monotonic browser clock in milliseconds.
      */
-    constructor({ requests, clock = globalThis, now = () => performance.now() }) {
-        Object.assign(this, { requests, clock, now });
+    constructor({ requests, clock = globalThis }) {
+        Object.assign(this, { requests, clock });
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -131,8 +129,6 @@ export class RasterSeriesCalculations {
         this.cancelRemainingRasters();
         this.results = new Map();
         this.complete = false;
-        this.startedAt = null;
-        this.elapsedSeconds = null;
         if (this.active) this.scheduleRemainingCalculations(debounce);
         else this.onChange();
     }
@@ -163,7 +159,6 @@ export class RasterSeriesCalculations {
      */
     scheduleRemainingCalculations(debounce = false) {
         this.clock.clearTimeout(this.timer);
-        this.startedAt ??= this.now();
         this.message = debounce ? "Waiting for edits to finish…" : "Submitting calculations…";
         this.busy = true;
         this.timer = this.clock.setTimeout(() => void this.calculateRemainingRasters(false), debounce ? 700 : 0);
@@ -190,7 +185,6 @@ export class RasterSeriesCalculations {
             this.onChange(); return;
         }
         const version = this.version;
-        this.startedAt ??= this.now();
         if (retryFailures) {
             for (const [key, result] of this.results) if (result.error) this.results.delete(key);
         }
@@ -207,7 +201,7 @@ export class RasterSeriesCalculations {
                 while (this.pending.has(index)) index++;
                 const client = this.getOrCreateRasterExecutor(index);
                 const request = { key: source.key, calculationInputs: calculationIntent({ ...firstCalculationInputs, source: this.getRasterReference(source) }),
-                    startedAt: this.now(), submitted: true, previousJobId: client.snapshot.completedJob?.jobId,
+                    submitted: true, previousJobId: client.snapshot.completedJob?.jobId,
                     phase: "submitting", message: "Submitting calculation…" };
                 this.pending.set(index, request);
                 additions.push([client, request]);
@@ -235,8 +229,6 @@ export class RasterSeriesCalculations {
 
     /** Apply progress only to this executor's current immutable raster request.
      * Failures leave gaps while peers continue.
-     * Completed results include browser timing stages when the executor recorded
-     * the full request. The timer stops here, before the view renders the result.
      * @param {number} index Executor position.
      * @param {import("./calculation-executor.js").CalculationExecutionSnapshot} state Execution progress.
      * @return {void}
@@ -251,19 +243,7 @@ export class RasterSeriesCalculations {
         const matchesCalculationInputs = calculationInputs => JSON.stringify(calculationInputs) === JSON.stringify(request.calculationInputs);
         if (state.completedJob && matchesCalculationInputs(state.completedCalculation) && request.submitted &&
             state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
-            const receivedAt = this.now();
-            const elapsedSeconds = (receivedAt - request.startedAt) / 1000;
-            const trace = state.completedTimings;
-            let stages;
-            if (trace && [trace.submissionStartedAtMs, trace.submissionFinishedAtMs].every(Number.isFinite)) {
-                stages = {beforeSubmissionSeconds: (trace.submissionStartedAtMs-request.startedAt)/1000,
-                    submissionSeconds: (trace.submissionFinishedAtMs-trace.submissionStartedAtMs)/1000,
-                    afterSubmissionSeconds: (receivedAt-trace.submissionFinishedAtMs)/1000,
-                    delivery: {...trace, controllerReceivedAtMs: receivedAt}};
-            }
-            this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs, elapsedSeconds,
-                performanceLines: performanceDescription(state.completedJob, elapsedSeconds, stages,
-                    "Measured in this tab from submitting this raster calculation until its completed result reaches the series controller, including validation, preparation, queueing, submission and result delivery (notifications or polling). Excludes earlier area selection, formula debounce, and subsequent UI rendering.") });
+            this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs });
             this.pending.delete(index);
         } else if (state.recoverable) {
             request.phase = "recovery"; request.message = state.message;
@@ -277,10 +257,8 @@ export class RasterSeriesCalculations {
         this.updateSeriesProgress();
     }
 
-    /** Update per-raster progress, whole-series status and the final elapsed time.
+    /** Update per-raster progress and whole-series status.
      * Read pending requests and finished results to set busy and completion flags and the overall message, then notify the plot listener.
-     * When every raster has a result or error, record time since the series was
-     * requested, including debounce, submission validation and recovery pauses.
      * This method uses existing state; it does not request server updates.
      * @return {void}
      */
@@ -289,7 +267,6 @@ export class RasterSeriesCalculations {
         this.busy = this.dispatching || [...this.pending.values()].some(request => request.phase !== "recovery");
         this.complete = !!this.sources.length && this.results.size === this.sources.length;
         if (this.complete) {
-            this.elapsedSeconds = (this.now() - this.startedAt) / 1000;
             this.message = this.commonError || (this.hasErrors ? "Some rasters failed. Calculate to retry failed rasters." : "Raster series complete.");
         } else if (this.needsRecovery) {
             this.message = "Recover interrupted requests to confirm or cancel the same jobs safely. Other rasters can continue.";

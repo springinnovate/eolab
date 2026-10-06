@@ -5,10 +5,8 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 import asyncio
-from dataclasses import asdict, replace
 from contextlib import suppress
 import logging
-import time
 from typing import Any
 
 from eolab_app.execution.bounded_process import (
@@ -27,7 +25,6 @@ from eolab_app.processing.aggregate_models import (
     AggregateSpec,
     UnpreparedCalculation,
     RasterAggregateLimits,
-    AggregateExecutionTiming,
 )
 from eolab_app.processing.raster_aggregate import (
     aggregate_process_target,
@@ -98,7 +95,6 @@ class ProcessingWorker:
                 cancellation or insufficient storage.
             TimeoutError: If preparation exceeds its separate time limit.
         """
-        started = time.perf_counter()
         queued = UnpreparedCalculation.model_validate(row["spec"])
         request = queued.request
         async with asyncio.timeout(self.limits.plan_timeout_seconds):
@@ -133,7 +129,6 @@ class ProcessingWorker:
             spec = restore_cached_calculation_plan(
                 request, signature, cached, queued.polygonArea
             )
-            outcome = None
             if spec is None:
                 if queued.polygonArea:
                     area = queued.polygonArea
@@ -146,10 +141,9 @@ class ProcessingWorker:
                         bounds=(bounds.west, bounds.south, bounds.east, bounds.north),
                     )
                 else:
-                    measured = await run_process(
+                    success, summary = await run_process(
                         summary_process, (resolved,), READ_SECONDS, self.native
                     )
-                    success, summary = measured.value
                     if not success:
                         raise ProcessingError("selection_unavailable", summary, 409)
                     area = AggregateArea(
@@ -158,7 +152,7 @@ class ProcessingWorker:
                         catalogSelection=request.catalogSelection,
                         resolved=resolved,
                     )
-                outcome = await run_process(
+                status, grid = await run_process(
                     aggregate_process_target,
                     (
                         "plan",
@@ -175,7 +169,6 @@ class ProcessingWorker:
                     self.limits.plan_timeout_seconds,
                     self.native,
                 )
-                status, grid = outcome.value
                 if status != "ok":
                     raise ProcessingError(*grid)
                 if resolved is not None:
@@ -193,16 +186,7 @@ class ProcessingWorker:
                 row["id"],
                 row["attempt_id"],
                 prepare_aggregate_job(spec, self.aggregate_limits),
-                {
-                    "seconds": time.perf_counter() - started,
-                    "cacheHit": spec.cachedRows is not None,
-                    "process": (
-                        asdict(outcome.timing) if outcome and outcome.timing else None
-                    ),
-                },
             )
-            # Preserve the original execution start used for queue timing.
-            updated["updated_at"] = row["updated_at"]
             row.update(updated)
             return authorized
 
@@ -216,7 +200,6 @@ class ProcessingWorker:
             ProcessingError: If the source, area, storage or attempt is unavailable.
             TimeoutError: If source inspection exceeds its time limit.
         """
-        started = time.perf_counter()
         request = UnpreparedClip.model_validate(row["spec"]).request
         async with asyncio.timeout(self.limits.plan_timeout_seconds):
             if not await asyncio.to_thread(
@@ -246,10 +229,9 @@ class ProcessingWorker:
                 resolved = await self.areas.resolve_for_sampling(
                     request.catalogSelection
                 )
-                measured = await run_process(
+                success, summary = await run_process(
                     summary_process, (resolved,), READ_SECONDS, self.native
                 )
-                success, summary = measured.value
                 if not success:
                     raise ProcessingError("selection_unavailable", summary, 409)
                 area = ClipArea(
@@ -258,13 +240,12 @@ class ProcessingWorker:
                     catalogSelection=request.catalogSelection,
                     resolved=resolved,
                 )
-            outcome = await run_process(
+            status, grid = await run_process(
                 clip_process_target,
                 ("plan", (authorized.source_path, area, self.limits)),
                 self.limits.plan_timeout_seconds,
                 self.native,
             )
-            status, grid = outcome.value
             if status != "ok":
                 raise ProcessingError(*grid)
             if request.catalogSelection:
@@ -280,9 +261,7 @@ class ProcessingWorker:
                 row["id"],
                 row["attempt_id"],
                 prepare_clip_job(spec),
-                {"seconds": time.perf_counter() - started},
             )
-            updated["updated_at"] = row["updated_at"]
             row.update(updated)
 
     async def _execute(self, row: dict[str, Any]) -> Artifact | None:
@@ -293,20 +272,17 @@ class ProcessingWorker:
 
         Returns:
             Result-file metadata, or None after preparation returns the job to
-            the existing queue until its disk reservation fits. Successful calculations
-            include disjoint preparation intervals measured by this worker.
+            the existing queue until its disk reservation fits.
 
         Raises:
             ProcessingError: If the source, resources, or native operation fail.
         """
-        started = time.perf_counter()
         operation = row["spec"]["operation"]
         authorized = None
         if operation == "raster.aggregate.v1" and "request" in row["spec"]:
             authorized = await self._prepare_calculation(row)
         elif operation == "raster.clip.v1" and "request" in row["spec"]:
             await self._prepare_clip(row)
-        preparation_completed = time.perf_counter()
         if row["status"] == "queued":
             return None
         if operation == "raster.clip.v1":
@@ -356,14 +332,12 @@ class ProcessingWorker:
             )
         if authorized is None:
             authorized = await self.authorizer.authorize(source)
-        sources_authorized = time.perf_counter()
         directory = await asyncio.to_thread(
             self.artifacts.prepare,
             row["attempt_id"],
             row["reserved_bytes"],
             self.limits,
         )
-        scratch_prepared = time.perf_counter()
         if operation == "raster.aggregate.v1":
             if spec.cachedRows is not None:
                 cached_rows = [row.model_dump(mode="json") for row in spec.cachedRows]
@@ -383,15 +357,12 @@ class ProcessingWorker:
                     await self.areas.resolve_for_sampling(resolved_area.selection)
                 self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
                 return value
-        prepared = time.perf_counter()
-        outcome = await run_process(
+        status, value = await run_process(
             target,
             (action, (authorized.source_path, spec, directory, limits)),
             self.limits.runtime_seconds,
             self.native,
         )
-        status, value = outcome.value
-        calculated = time.perf_counter()
         if status != "ok":
             raise ProcessingError(*value)
         if resolved_area is not None:
@@ -401,24 +372,6 @@ class ProcessingWorker:
         # This bounded local-directory rename must finish before cancellation
         # can mark the attempt terminal and permit cleanup of its files.
         self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
-        if operation == "raster.aggregate.v1":
-            value = replace(
-                value,
-                execution_timing=AggregateExecutionTiming(
-                    queueSeconds=max(
-                        0, (row["updated_at"] - row["created_at"]).total_seconds()
-                    ),
-                    preparationSeconds=prepared - started,
-                    planPreparationSeconds=preparation_completed - started,
-                    sourceAuthorizationSeconds=sources_authorized
-                    - preparation_completed,
-                    scratchPreparationSeconds=scratch_prepared - sources_authorized,
-                    resultCacheLookupSeconds=prepared - scratch_prepared,
-                    nativeProcessSeconds=calculated - prepared,
-                    publicationSeconds=time.perf_counter() - calculated,
-                    process=asdict(outcome.timing) if outcome.timing else None,
-                ).model_dump(),
-            )
         return value
 
     async def run_once(self) -> bool:

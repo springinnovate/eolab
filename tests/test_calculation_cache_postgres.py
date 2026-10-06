@@ -63,8 +63,6 @@ def test_other_session_reuses_values_but_not_downloads(
         reused = other.get(f"/api/processing/jobs/{second['jobId']}").json()
         assert reused["status"] == "ready", reused
         assert reused["result"]["cacheHit"] is True
-        assert reused["result"]["performance"] is None
-        assert reused["result"]["executionTiming"] is None
         assert (
             reused["result"]["rows"][0]["value"]
             == original["result"]["rows"][0]["value"]
@@ -222,8 +220,7 @@ def test_cached_area_skips_geometry_work_even_after_entry_expires(
     submitted = submit_calculation(client, calculation_inputs(client, **area))
     claimed = store.claim_next_job()
     asyncio.run(worker._prepare_calculation(claimed))
-    assert claimed["preparation"]["cacheHit"] is True
-    assert claimed["preparation"]["process"] is None
+    assert claimed["spec"]["cachedRows"] == original["result"]["rows"]
     with psycopg.connect(store.conninfo) as connection:
         connection.execute("DELETE FROM processing.calculation_results")
     # The prepared result is retained even after every cache entry was evicted.

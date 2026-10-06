@@ -76,8 +76,8 @@ UPDATE processing.jobs SET started_at=updated_at
     WHERE started_at IS NULL AND attempt_id IS NOT NULL;
 INSERT INTO processing.schema_version VALUES (7) ON CONFLICT DO NOTHING;
 
--- Direct calculation jobs carry input identity without an external plan record.
-ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS preparation jsonb;
+-- Retire profiling metadata after dropping its dependent view above.
+ALTER TABLE processing.jobs DROP COLUMN IF EXISTS preparation;
 INSERT INTO processing.schema_version VALUES (8) ON CONFLICT DO NOTHING;
 
 -- Worker startup discards unfinished jobs; no persisted compatibility versions.
@@ -134,7 +134,7 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        CASE WHEN s.status='cancelling' AND j.status<>'cancelling' THEN 'cancelled'
             ELSE coalesce(s.status,j.status) END AS status,
        j.operation,CASE WHEN j.spec IS NULL THEN NULL ELSE j.summary END AS spec,
-       j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,j.preparation,
+       j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
        CASE WHEN s.status IS NULL THEN j.error END AS error
 FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id;
@@ -189,3 +189,4 @@ CREATE INDEX IF NOT EXISTS jobs_cleaned_history ON processing.jobs(updated_at)
     WHERE reserved_bytes=0 AND spec IS NULL
       AND status NOT IN ('queued','running','cancelling','ready');
 INSERT INTO processing.schema_version VALUES (14) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (15) ON CONFLICT DO NOTHING;

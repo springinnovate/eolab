@@ -57,9 +57,6 @@ test("completed submission results use one batch request and only pending jobs o
         for (const [i, state] of statuses.entries()) if (state === "ready") {
             assert.equal(clients[i].snapshot.completedJob.result.rows[0].value, "12.5");
             assert.equal(clients[i].snapshot.currentJob, null);
-            const events = clients[i].snapshot.completedTimings.deliveryDiagnostics.events;
-            assert.equal(events.filter(event => event.kind === "http-finish").length, 1);
-            assert.equal(events.find(event => event.kind === "ready-received").trigger, "submission");
         }
         requests.destroy(); jobs.destroy();
     }

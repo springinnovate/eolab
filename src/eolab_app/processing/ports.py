@@ -14,9 +14,6 @@ from eolab_app.processing.models import (
 class JobSubscription(Protocol):
     """A bounded owner-specific change hint, never a result or authorization."""
 
-    received_at: float | None
-    """Server monotonic time of the oldest coalesced hint consumed by wait()."""
-
     async def wait(self, timeout: float) -> bool:
         """Consume a coalesced hint or time out for a transport heartbeat.
 
@@ -135,7 +132,6 @@ class JobStore(Protocol):
         identifier: str,
         attempt: str,
         prepared: PreparedJobPlan,
-        details: dict[str, Any],
     ) -> dict[str, Any]:
         """Publish prepared inputs and reserve execution storage for a live attempt.
 
@@ -143,7 +139,6 @@ class JobStore(Protocol):
             identifier: Running job ID.
             attempt: Current worker attempt, checked against cancellation and expiry.
             prepared: Validated execution inputs, summary and required disk bytes.
-            details: Public preparation metadata retained on the job.
 
         Returns:
             Prepared running job, or queued job awaiting shared disk capacity.

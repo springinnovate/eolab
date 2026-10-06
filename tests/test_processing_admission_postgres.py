@@ -69,17 +69,14 @@ def finish(store: PostgresJobStore, job: dict[str, Any]) -> None:
 
 def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     store: PostgresJobStore,
-    caplog: pytest.LogCaptureFixture,
     request: pytest.FixtureRequest,
 ) -> None:
     """Admit a 32-job stack plus twelve four-job bursts while execution is held.
 
     Args:
         store: Real PostgreSQL with deployment defaults.
-        caplog: Captured backlog logs, excluding session IDs and input payloads.
         request: Owns cleanup of the replacement worker adapter.
     """
-    caplog.set_level("INFO", logger="eolab_app.processing.job_store")
     blocker = admit(store, "blocker", make_plan(store, "blocker"))
     active = store.claim_next_job()
     assert active["id"] == blocker["id"]
@@ -94,8 +91,6 @@ def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     admission_seconds = time.perf_counter() - started
     assert len(jobs) == 80 and all(job["status"] == "queued" for job in jobs)
     assert store.claim_next_job() is None
-    assert "waiting=80/128" in caplog.text
-    assert "records=81/4096" in caplog.text
 
     finish(store, active)
     # A replacement worker uses the same durable turn history after deployment.
@@ -122,8 +117,6 @@ def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     for offset in range(0, 52, 13):
         assert set(order[offset : offset + 13]) == set(owners)
     assert order[52:] == ["stack"] * 28
-    assert "queue_seconds=" in caplog.text
-    assert all(owner not in caplog.text for owner in owners[1:])
     print(
         f"80 queued jobs, 13 waiting sessions: admission={admission_seconds:.3f}s; "
         f"claim/completion drain={time.perf_counter() - drain_started:.3f}s"
@@ -262,16 +255,14 @@ def test_duplicate_concurrent_submission_and_owner_cancel_are_isolated(
 
 @pytest.mark.parametrize("batch", [False, True])
 def test_failed_subscriber_insert_rolls_back_the_entire_submission(
-    store: PostgresJobStore, caplog: pytest.LogCaptureFixture, batch: bool
+    store: PostgresJobStore, batch: bool
 ) -> None:
-    """A later pipeline failure leaves neither orphan work nor an admission log.
+    """A later pipeline failure rolls back all work and subscriber records.
 
     Args:
         store: Disposable PostgreSQL with the real subscriber size constraint.
-        caplog: Captured admission log records.
         batch: Include a valid neighbor in the transaction that must roll back.
     """
-    caplog.set_level("INFO", logger="eolab_app.processing.job_store")
     plan = PreparedJobPlan({}, {}, 0, work_key="atomic")
     oversized = replace(plan, presentation={"label": "x" * 32769})
     with pytest.raises(ProcessingError) as failed:
@@ -293,47 +284,29 @@ def test_failed_subscriber_insert_rolls_back_the_entire_submission(
         assert connection.execute(
             "SELECT count(*) FROM processing.job_subscribers"
         ).fetchone() == (0,)
-    assert "Processing admission:" not in caplog.text
     accepted = store.submit("owner", "retry", plan, "hash")
     assert accepted["status"] == "queued"
     assert store.find_request("owner", "retry")["id"] == accepted["id"]
 
 
-def test_admission_logging_runs_after_commit_and_lock_release(
-    store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
+def test_admission_returns_after_commit_and_lock_release(
+    store: PostgresJobStore,
 ) -> None:
-    """Logging observes committed work without retaining the admission mutex.
+    """Returned admission is committed and no longer holds the shared mutex.
 
     Args:
         store: Disposable PostgreSQL store.
-        monkeypatch: Replace only the admission log sink with an independent reader.
     """
-    observed = []
-
-    def observe_log(message: str, *args: Any) -> None:
-        """Check committed visibility and lock availability at the log boundary.
-
-        Args:
-            message: Admission log format.
-            args: Non-sensitive counts supplied by the completed transaction.
-        """
-        with psycopg.connect(store.conninfo) as connection:
-            assert connection.execute(
-                "SELECT pg_try_advisory_xact_lock(%s)",
-                (job_store_module.PROCESSING_ADVISORY_LOCK_ID,),
-            ).fetchone() == (True,)
-            assert connection.execute(
-                "SELECT count(*) FROM processing.job_subscribers WHERE owner='owner' AND request_key='logged'"
-            ).fetchone() == (1,)
-        observed.append(message % args)
-
-    monkeypatch.setattr(job_store_module.LOGGER, "info", observe_log)
-    store.submit("owner", "logged", PreparedJobPlan({}, {}, 0), "hash")
-    assert len(observed) == 1
-    assert "waiting=1/128" in observed[0]
-    assert "reserved_bytes" not in observed[0]
-    assert "waiting_sessions" not in observed[0]
-
+    accepted = store.submit("owner", "committed", PreparedJobPlan({}, {}, 0), "hash")
+    with psycopg.connect(store.conninfo) as connection:
+        assert connection.execute(
+            "SELECT pg_try_advisory_xact_lock(%s)",
+            (job_store_module.PROCESSING_ADVISORY_LOCK_ID,),
+        ).fetchone() == (True,)
+        assert connection.execute(
+            "SELECT id FROM processing.job_subscribers "
+            "WHERE owner='owner' AND request_key='committed'"
+        ).fetchone() == (accepted["id"],)
 
 def test_retry_precedes_stopping_work_and_capacity_decisions(
     store: PostgresJobStore,
@@ -589,9 +562,7 @@ def test_submission_defers_disk_admission_until_preparation(
     store.limits = replace(store.limits, max_stored_bytes=2048)
     claimed = store.claim_next_job()
     prepared = PreparedJobPlan({"input": "prepared"}, {}, 2048)
-    waiting = store.save_prepared_job(
-        claimed["id"], claimed["attempt_id"], prepared, {}
-    )
+    waiting = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
     assert waiting["status"] == "queued" and waiting["reserved_bytes"] == 0
     assert store.claim_next_job() is None
     store.cancel(retained["id"], "first", delete=True)
@@ -691,39 +662,6 @@ def test_shared_cancelled_and_deleted_handles_retain_history_capacity(
     assert history_full.value.code == "job_record_capacity"
     assert store.submit("returning", "old", plan, "hash")["status"] == "cancelled"
     assert store.submit("departed", "old", plan, "hash")["status"] == "deleted"
-
-
-def test_claim_backlog_counts_distinct_live_work_and_waiting_owners(
-    store: PostgresJobStore, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Shared and departed handles do not inflate the remaining queue report.
-
-    Args:
-        store: Disposable PostgreSQL retaining independent subscribers.
-        caplog: Captured operational backlog after a successful claim.
-    """
-    first = store.submit("first", "one", PreparedJobPlan({}, {}, 0), "hash")
-    plan = PreparedJobPlan({}, {}, 0, work_key="shared-backlog")
-    live = [
-        store.submit("one", "first", plan, "hash"),
-        store.submit("one", "second", plan, "hash"),
-        store.submit("two", "shared", plan, "hash"),
-        store.submit("two", "distinct", PreparedJobPlan({}, {}, 0), "hash"),
-    ]
-    cancelled = store.submit("cancelled-owner", "old", plan, "hash")
-    deleted = store.submit("deleted-owner", "old", plan, "hash")
-    store.cancel(cancelled["id"], "cancelled-owner")
-    store.cancel(deleted["id"], "deleted-owner")
-    store.cancel(deleted["id"], "deleted-owner", delete=True)
-    stopped = store.submit("stopped-owner", "old", PreparedJobPlan({}, {}, 0), "hash")
-    store.cancel(stopped["id"], "stopped-owner")
-    caplog.set_level("INFO", logger="eolab_app.processing.job_store")
-    caplog.clear()
-
-    claimed = store.claim_next_job()
-    assert claimed["id"] == first["job_id"]
-    assert "Processing execution started: waiting=2 waiting_sessions=2 " in caplog.text
-    assert all(store.get(job["id"], job["owner"])["status"] == "queued" for job in live)
 
 
 def test_owner_waiting_budget_ignores_nonqueued_persisted_history(
@@ -829,16 +767,13 @@ def test_retained_terminal_disk_blocks_preparation_until_cleanup(
     assert current["id"] == pending["job_id"]
     fitting = PreparedJobPlan({"prepared": True}, {}, 20)
     for _ in range(2):
-        saved = store.save_prepared_job(
-            current["id"], current["attempt_id"], fitting, {}
-        )
+        saved = store.save_prepared_job(current["id"], current["attempt_id"], fitting)
         assert saved["status"] == "running" and saved["reserved_bytes"] == 20
 
     waiting = store.save_prepared_job(
         current["id"],
         current["attempt_id"],
         PreparedJobPlan({"prepared": True}, {}, 21),
-        {},
     )
     assert waiting["status"] == "queued" and waiting["reserved_bytes"] == 0
     assert waiting["attempt_id"] is None

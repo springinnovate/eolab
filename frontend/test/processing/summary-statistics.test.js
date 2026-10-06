@@ -121,17 +121,15 @@ test("closed summary retains completed manual results without drawing and shows 
     h.controller.request(card.id, "manual"); await flush(); h.drawFrame();
     const history = h.view.elements.history.children;
     h.controller.close();
-    h.elapse(1000); await h.finish("ready", ["42"]);
+    await h.finish("ready", ["42"]);
     assert.equal(h.frames.size, 0);
     assert.equal(card.result.row.value, "42");
-    assert.equal(card.result.totalWaitSeconds, 1);
     assert.equal(row.value.textContent, "");
     assert.equal(h.view.elements.history.children, history);
-    h.elapse(10000); await h.open();
+    await h.open();
     assert.equal(h.frames.size, 1);
     h.drawFrame();
     assert.equal(row.value.textContent, "42");
-    assert.equal(card.result.totalWaitSeconds, 1);
     assert.match(visibleText(h.view.elements.history), /Ready/);
     h.controller.destroy();
 });
@@ -249,7 +247,7 @@ test("clearing raster coverage cancels automatic work without relabeling the pre
  * @return {Object} Observable workflow harness.
  */
 function fixture(overrides = {}, data = new Map(), browserContext = {}, context = {sources:[source,resistance],area:box(77)}, manualFrames = false) {
-    let serial = 0, jobSerial = 0, elapsed = 0;
+    let serial = 0, jobSerial = 0;
     const timers = new Map(), requests = [], server = new Map();
     const clock = { setTimeout(fn, delay) { timers.set(++serial, { fn, delay }); return serial; }, clearTimeout(id) { timers.delete(id); } };
     const api = {
@@ -288,8 +286,8 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
         view.render = state => { schedule(state); drawFrame(); };
     }
     let controller;
-    const calculationRequests = new CalculationRequests({ api, jobs, storage, now:()=>elapsed, requestId:()=>`request-${String(jobSerial).padStart(16,"0")}` });
-    controller = new SummaryStatisticsController({api,jobs,calculationRequests,view,clock,now:()=>elapsed,getContext:()=>context,
+    const calculationRequests = new CalculationRequests({ api, jobs, storage, requestId:()=>`request-${String(jobSerial).padStart(16,"0")}` });
+    controller = new SummaryStatisticsController({api,jobs,calculationRequests,view,clock,getContext:()=>context,
         onOpen:()=>controller.setActive(true),onClose(){},onEditArea(){},requestId:()=>`request-${String(jobSerial).padStart(16,"0")}`});
     const tick = async (delay = 700) => { const due=[...timers.entries()].filter(([,t])=>t.delay===delay);for(const[id,t]of due){timers.delete(id);t.fn();}await flush(); };
     const finish = async (status="ready", values=["12.5"]) => {
@@ -300,7 +298,7 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
     };
     const open = async()=>{controller.open();await tick();};
     const submits=()=>requests.filter(r=>r[0]==="submit").length;
-    return {controller,api,jobs,storage,view,document,requests,server,tick,finish,open,submits,data,frames,drawFrame,elapse:ms=>{elapsed+=ms;}};
+    return {controller,api,jobs,storage,view,document,requests,server,tick,finish,open,submits,data,frames,drawFrame};
 }
 
 /** Read text throughout a fake DOM tree. @param {Object} node Test node. @return {string} Descendant text. */
@@ -408,8 +406,6 @@ test("selection progress greys previous values and exposes cancellation before p
     assert.match(row.status.textContent, /Selection cancelled/); assert.equal(row.stop.hidden, true);
     assert.equal(h.submits(), 1);
 });
-
-
 
 test("a late accepted vector job is cancelled before a replacement runs and cannot publish its value", async () => {
     const h = fixture(); await h.open(); const wait = deferred(), submit = h.api.submitCalculation;
@@ -682,53 +678,12 @@ test("the summary Area selector offers inline vector controls and never calculat
     assert.equal(h.submits(),1);
 });
 
-test("total wait ends at result receipt, excludes drawing, then freezes", async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.calculateSelection();h.elapse(700);await h.tick();
-    h.elapse(3300);
-    const render=h.view.render.bind(h.view);let displayed=false;
-    h.view.render=state=>{render(state);if(card.result&&!displayed){displayed=true;h.elapse(25);}};
-    await h.finish();
-    assert.equal(card.result.totalWaitSeconds,4);
-    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
-    assert.match(text(h.view.cards.get(card.id).detailsBody),/Total measured wait: 4.000 s/);
-    assert.match(text(h.view.cards.get(card.id).detailsBody),/excludes earlier confirmation time and subsequent panel drawing/);
-    h.elapse(10000);h.controller.render();await h.jobs.refresh();
-    assert.equal(card.result.totalWaitSeconds,4);
-    h.controller.request(card.id,"manual");await flush();h.elapse(1500);await h.finish();
-    assert.equal(card.result.totalWaitSeconds,1.5);
-});
-
 test("one explicit vector calculation includes planning and needs no second confirmation", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     h.controller.setVectorSamplingArea({selection:CATALOG_SELECTION,label:"Peru"});await h.tick();
     h.controller.request(card.id,"manual");await flush();
-    assert.equal(h.submits(),1);h.elapse(2500);await h.finish();
-    assert.equal(card.result.totalWaitSeconds,2.5);
+    assert.equal(h.submits(),1);await h.finish();
     assert.equal(h.requests.filter(r=>r[0]==="submit").length,1);
-    assert.equal(card.result.stages.planningSeconds,undefined);
-});
-
-test("browser stages add to total and distinguish planning from submission and delivery", async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    const submit=h.api.submitCalculation;
-    h.api.submitCalculation=async request=>{h.elapse(300);return submit(request);};
-    h.controller.calculateSelection();h.elapse(700);await h.tick();h.elapse(4000);await h.finish();
-    const s=card.result.stages;
-    assert.equal(s.beforeSubmissionSeconds,.7);assert.equal(s.planningSeconds,undefined);
-    assert.equal(s.submissionSeconds,.3);assert.equal(s.afterSubmissionSeconds,4);
-    assert.ok(Math.abs(s.beforeSubmissionSeconds+s.submissionSeconds+s.afterSubmissionSeconds-card.result.totalWaitSeconds)<1e-9);
-    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
-    assert.match(text(h.view.cards.get(card.id).detailsBody),/Before submission: 0.700 s/);
-    assert.match(text(h.view.cards.get(card.id).detailsBody),/Submission response → result observed: 4.000 s/);
-});
-
-test("replacement total wait includes obsolete job cancellation without inheriting its start", async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.request(card.id,"manual");await flush();h.elapse(10000);
-    h.controller.setSelection(box(80));h.elapse(700);await h.tick();
-    h.elapse(2300);await h.finish("cancelled");await flush();h.elapse(1000);await h.finish();
-    assert.equal(card.result.totalWaitSeconds,4);
 });
 
 test("choosing vector from an empty selection immediately shows its controls without another validation", async()=>{
@@ -756,10 +711,8 @@ test("vector calculation submits on the first click and invalidates results when
     h.controller.request(card.id,"manual");await flush();
     assert.equal(h.submits(),1);
     h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
-    assert.equal(h.view.cards.get(card.id).size.hidden,false);
     assert.deepEqual(h.controller.executor.snapshot.unfinishedCalculation.calculation.area,{kind:"catalogSelection",catalogSelection:id});
     await h.finish();assert.equal(card.current,true);
-    assert.equal(h.view.cards.get(card.id).size.hidden,true);
     h.controller.setSelection(null,false);
     h.controller.invalidateSamplingArea(id);assert.equal(card.current,false);assert.equal(h.controller.state.area,null);
     assert.equal(h.controller.state.areaChoice,"vector");
@@ -968,7 +921,6 @@ test("uncertain submissions retain the same request identity during recovery",as
     assert.equal(h.controller.state.recoverable,true);const request=h.requests.find(r=>r[0]==="uncertain")[1].requestId;
     h.view.handlers.onRetry();await flush();assert.equal(h.requests.find(r=>r[0]==="submit")[1].requestId,request);
     await h.finish();assert.equal(card.current,true);
-    assert.equal(card.result.stages,undefined);
 });
 test("exports retain exact integers, null explanations, source, and immutable formula context",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];h.controller.request(card.id,"manual");await flush();await h.finish();
@@ -992,8 +944,6 @@ test("clearing a queued automatic request prevents a later validation from runni
     h.controller.setActive(true);await h.tick();assert.equal(h.submits(),0);assert.equal(card.valid,true);
 });
 
-
-
 test("inspected history refreshes a running job without rewriting the editable cards",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     h.controller.request(card.id,"manual");await flush();const jobId=h.controller.executor.snapshot.currentJob.jobId;
@@ -1008,7 +958,6 @@ test("reload recovers a manual job into its card without admitting another calcu
     await restored.controller.start();assert.equal(restored.submits(),0);assert.equal(restored.controller.executor.snapshot.currentJob.jobId,id);
     const old=h.server.get(id);h.server.set(id,{...old,status:"ready",result:{url:"/api/processing/jobs/"+id+"/result",provenanceUrl:"/api/processing/jobs/"+id+"/provenance",rows:[{...old.calculations[0],value:"9",valueType:"float",state:"ok",aggregates:[]}]}});
     await restored.jobs.refresh();await flush();assert.equal(restored.controller.state.statistics[0].result.row.value,"9");assert.equal(restored.submits(),0);
-    assert.equal(restored.controller.state.statistics[0].result.totalWaitSeconds,undefined);
 });
 
 test("manual pixel recovery retains its submitted point when the reloaded map has no click",async()=>{
@@ -1040,8 +989,6 @@ test("reload cancels recovered automatic work and never resumes sampling on its 
     assert.equal(h.server.get(id).status,"cancelled");assert.equal(restored.submits(),0);assert.equal(restored.controller.state.statistics[0].result,null);
 });
 
-
-
 test("the summary cancels a recovered automatic submission whose response was lost", async () => {
     const h = fixture(); await h.open();
     const submit = h.api.submitCalculation;
@@ -1069,96 +1016,29 @@ test("the summary cancels a recovered automatic submission whose response was lo
     assert.equal(restored.controller.state.statistics[0].result, null);
 });
 
-test("batch tuning invalidates the result without running, persists on repeats, and can return to legacy", async()=>{
+test("recovery preserves a saved batch setting after its tuning control is removed",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.request(card.id,"manual");await flush();await h.finish();
-    const input=h.view.extra["chunk-pixels"];
-    input.value="65536";input.dispatchEvent(new Event("change"));await flush();
-    assert.equal(card.current,false);assert.equal(card.preparedJob,null);assert.equal(h.submits(),1);
-    assert.equal(card.valid,true);assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
     h.controller.request(card.id,"manual");await flush();
-    assert.equal(h.controller.executor.snapshot.unfinishedCalculation.calculation.targetChunkPixels,65536);
-    await h.finish();
-    h.controller.setSelection(box(78));await h.tick();
-    assert.equal(h.controller.executor.snapshot.unfinishedCalculation.calculation.targetChunkPixels,65536);
-    await h.finish();
-    input.value="";input.dispatchEvent(new Event("change"));await flush();
-    h.controller.request(card.id,"manual");await flush();
-    assert.equal(h.controller.executor.snapshot.unfinishedCalculation.calculation.targetChunkPixels,undefined);
-    assert.equal(h.requests.filter(r=>r[0]==="submit").at(-1)[1].targetChunkPixels,undefined);
-});
-
-test("recovery preserves accepted batch settings without another submission",async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.setChunkPixels(262144);h.controller.request(card.id,"manual");await flush();
+    const saved = h.storage.read();
+    saved.intent = {...saved.intent, targetChunkPixels: 262144};
+    h.storage.write(saved);
     const id=h.controller.executor.snapshot.currentJob.jobId;h.controller.destroy();
     const restored=fixture({listJobs:async()=>[...h.server.values()],getJob:async id=>h.server.get(id)},h.data);
     await restored.controller.start();
     assert.equal(restored.submits(),0);assert.equal(restored.controller.executor.snapshot.currentJob.jobId,id);
-    assert.equal(restored.controller.state.targetChunkPixels,262144);
     await restored.open();
-    assert.equal(restored.view.extra["chunk-pixels"].value,"262144");
     assert.equal(restored.controller.executor.snapshot.unfinishedCalculation.calculation.targetChunkPixels,262144);
+    assert.doesNotMatch(SUMMARY_MARKUP, /summary-chunk-pixels|summary-performance/);
+    const old = h.server.get(id);
+    h.server.set(id, {...old, status: "ready", result: {rows: old.calculations.map(value => ({...value,
+        value: "12.5", valueType: "float", state: "ok", aggregates: []})),
+        url: `/api/processing/jobs/${id}/result`, provenanceUrl: `/api/processing/jobs/${id}/provenance`}});
+    await restored.jobs.refresh(); await flush();
+    assert.equal(restored.controller.state.statistics[0].current, true);
+    restored.controller.request(restored.controller.state.statistics[0].id, "manual"); await flush();
+    assert.equal(restored.requests.find(([kind]) => kind === "submit")[1].targetChunkPixels, undefined);
+    restored.controller.destroy();
 });
-
-test("changing batch size cancels obsolete work and waits before the next explicit calculation",async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.setChunkPixels(65536);h.controller.request(card.id,"manual");await flush();
-    const oldIntent=h.controller.executor.snapshot.unfinishedCalculation.calculation;
-    h.controller.setChunkPixels(262144);await flush();
-    assert.equal(oldIntent.targetChunkPixels,65536);assert.ok(h.requests.some(r=>r[0]==="cancel"));
-    h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
-    await h.finish("cancelled");await flush();
-    assert.equal(h.submits(),2);assert.equal(h.controller.executor.snapshot.unfinishedCalculation.calculation.targetChunkPixels,262144);
-});
-
-test("performance details retain measured timings and source-work units in cards and history",async()=>{
-    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.request(card.id,"manual");await flush();await h.finish();
-    const execution={targetChunkPixels:65536,readWidth:512,readHeight:128,evaluationWidth:512,evaluationHeight:128,readWindows:1};
-    const performance={execution,readWindows:1,evaluationTiles:1,reducerUpdates:1,readSeconds:.125,calculationSeconds:.25,resultWriteSeconds:.01,kernelSeconds:.6,stages:{sourceSetupSeconds:.05,selectionSetupSeconds:.1,groundAreaSetupSeconds:0,gridCheckSeconds:.01,selectionMaskSeconds:.2,areaWeightsSeconds:0,reductionSeconds:.03}};
-    const job=card.result.job;
-    card.result.job={...job,grid:{...job.grid,execution,estimatedMemoryBytes:150*1024**2},result:{...job.result,performance}};
-    const root=h.document.createElement("div");h.view.renderValueDetails(root,card.result);
-    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
-    assert.match(text(root),/4 native blocks in 1 reads/);
-    assert.match(text(root),/Kernel elapsed: 0.600 s/);
-    assert.match(text(root),/polygon selection masks: 0.200 s/);
-    assert.match(text(root),/Queueing, worker startup/);
-    h.controller.state.saved = card.result.job;
-    h.controller.render();
-    assert.match(text(h.view.elements.result),/Read\/decode and source mask: 0.125 s/);
-    assert.match(text(h.view.elements.result),/formula evaluation and reductions: 0.030 s/);
-});
-
-test("vector selection wait contributes once to total and resets for later manual requests", async () => {
-    const h = fixture(); await h.open();
-    const card = h.controller.state.statistics[0];
-    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Reading" });
-    h.elapse(3000);
-    h.controller.setVectorSelectionState({ analysis: true, phase: "selected", message: "Selected" });
-    h.controller.setVectorSamplingArea({ selection: CATALOG_SELECTION, label: "Peru/Brazil" }, true);
-    await h.tick(); h.elapse(2000); await h.finish();
-    assert.equal(card.result.stages.vectorSelectionSeconds, 3);
-    assert.ok(card.result.totalWaitSeconds >= 5);
-    assert.ok(card.result.stages.beforeSubmissionSeconds >= 3);
-    h.controller.request(card.id, "manual"); await flush(); h.elapse(1000); await h.finish();
-    assert.equal(card.result.totalWaitSeconds, 1);
-    assert.equal(card.result.stages.vectorSelectionSeconds, undefined);
-});
-
-test("cancelled selection wait is not charged to a replacement selection", async () => {
-    const h = fixture(); await h.open();
-    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Reading" });
-    h.elapse(9000);
-    h.controller.setVectorSelectionState({ analysis: true, phase: "idle", message: "Cancelled" });
-    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Replacement" });
-    h.elapse(1000);
-    h.controller.setVectorSamplingArea({ selection: CATALOG_SELECTION, label: "Replacement" }, true);
-    await h.tick(); await h.finish();
-    assert.equal(h.controller.state.statistics[0].result.stages.vectorSelectionSeconds, 1);
-});
-
 
 test("summary progress is visible while planning and preparing, then measures raster reads", async () => {
     const h = fixture();
@@ -1192,19 +1072,16 @@ test("summary progress is visible while planning and preparing, then measures ra
     assert.equal(row.progress.hidden, true);
 });
 
-test("cached values are identified next to the number without claiming old kernel timings", async () => {
+test("cached values are identified next to the number", async () => {
     const h = fixture(); await h.open();
     const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); await h.finish();
     card.result.job.result.cacheHit = true;
-    card.result.job.result.performance = null;
     h.view.cards.get(card.id).resultSignature = null;
     h.controller.render();
     const row = h.view.cards.get(card.id);
     assert.equal(row.status.textContent, "Reused cached result");
     assert.equal(row.run.hidden, true);
-    assert.match(visibleText(row.detailsBody), /no raster pixels were read or calculated/);
-    assert.doesNotMatch(visibleText(row.detailsBody), /Kernel elapsed|Kernel measurements are unavailable/);
     h.controller.editStatistic(card.id, { expression: "sum(a)" });
     assert.notEqual(row.status.textContent, "Reused cached result");
     assert.equal(row.root.classList.contains("is-previous"), true);
@@ -1228,7 +1105,6 @@ test("the API preserves boolean cache metadata and rejects misleading values", a
     await assert.rejects(() => api.getJob(id), /invalid cache metadata/);
 });
 
-
 test("whole-raster summaries prepare and calculate without a separate confirmation", async () => {
     const h = fixture();
     await h.open();
@@ -1239,7 +1115,6 @@ test("whole-raster summaries prepare and calculate without a separate confirmati
     await h.finish();
     assert.equal(card.current, true);
 });
-
 
 test("polygon areas use normal summary execution and cancel when their source disappears", async () => {
     const h = fixture(); await h.open();

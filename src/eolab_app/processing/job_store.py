@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from importlib.resources import files
 import json
-import logging
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -34,7 +33,6 @@ from eolab_app.processing.models import (
 # Keep it stable across releases so all Processing transactions use the same lock.
 # Other components using this database must allocate a different advisory key.
 PROCESSING_ADVISORY_LOCK_ID = 7_610_329
-LOGGER = logging.getLogger(__name__)
 UNFINISHED = ("queued", "running", "cancelling")
 
 
@@ -489,17 +487,6 @@ class PostgresJobStore:
                     (owner, [item for item in outcomes if isinstance(item, str)]),
                 )
             rows = {row["id"]: row for row in cursor.fetchall()}
-        LOGGER.info(
-            "Processing admission: waiting=%s/%s session_waiting=%s/%s records=%s/%s accepted=%s new_work=%s",
-            waiting,
-            self.limits.max_waiting_jobs,
-            owned,
-            self.limits.max_owner_waiting_jobs,
-            records,
-            self.limits.max_job_records,
-            len(new_subscribers),
-            len(new_jobs),
-        )
         return [rows[item] if isinstance(item, str) else item for item in outcomes]
 
     def save_prepared_job(
@@ -507,7 +494,6 @@ class PostgresJobStore:
         identifier: str,
         attempt: str,
         prepared: PreparedJobPlan,
-        details: dict[str, Any],
     ) -> dict[str, Any]:
         """Save preparation and reserve disk, or queue the prepared job until it fits.
 
@@ -515,10 +501,9 @@ class PostgresJobStore:
             identifier: Running job ID.
             attempt: Worker attempt that must still own the job.
             prepared: Validated execution inputs, public summary and disk estimate.
-            details: Bounded public preparation measurements retained until cleanup.
 
         Returns:
-            Updated job with prepared details. Temporary disk contention returns
+            Updated job with prepared inputs. Temporary disk contention returns
             it to queued without an attempt; preparation created no attempt files.
 
         Raises:
@@ -551,7 +536,7 @@ class PostgresJobStore:
                 used["bytes"] + prepared.reserved_bytes > self.limits.max_stored_bytes
             )
             cursor.execute(
-                "UPDATE processing.jobs SET spec=%s,summary=%s,reserved_bytes=%s,preparation=%s,"
+                "UPDATE processing.jobs SET spec=%s,summary=%s,reserved_bytes=%s,"
                 "required_disk_bytes=%s,status=%s,"
                 "attempt_id=CASE WHEN %s THEN NULL ELSE attempt_id END,"
                 "lease_until=CASE WHEN %s THEN NULL ELSE lease_until END,"
@@ -562,7 +547,6 @@ class PostgresJobStore:
                     Jsonb(prepared.specification),
                     Jsonb(prepared.summary),
                     0 if waiting else prepared.reserved_bytes,
-                    Jsonb(details),
                     prepared.reserved_bytes,
                     "queued" if waiting else "running",
                     waiting,
@@ -774,18 +758,6 @@ class PostgresJobStore:
                 ),
             )
             claimed = cursor.fetchone()
-            cursor.execute(
-                "SELECT count(DISTINCT j.id) AS waiting,count(DISTINCT s.owner) AS owners "
-                "FROM processing.jobs j JOIN processing.job_subscribers s ON s.job_id=j.id "
-                "WHERE j.status='queued' AND s.status IS NULL"
-            )
-            backlog = cursor.fetchone()
-            LOGGER.info(
-                "Processing execution started: waiting=%s waiting_sessions=%s queue_seconds=%.3f",
-                backlog["waiting"],
-                backlog["owners"],
-                (claimed["started_at"] - claimed["created_at"]).total_seconds(),
-            )
             claimed["owner"] = row["owner"]
             return claimed
 

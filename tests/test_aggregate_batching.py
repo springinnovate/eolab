@@ -1,9 +1,7 @@
-"""Batch coverage, native semantics, immutable plans, memory and timing contracts."""
+"""Batch coverage, native semantics, immutable plans, memory contracts."""
 
-from dataclasses import replace
-import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from affine import Affine
 import numpy as np
@@ -18,7 +16,6 @@ from shapely.geometry import Polygon, mapping
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     AggregatePlanRequest,
-    AggregatePerformance,
     AggregateSpec,
 )
 from eolab_app.processing.aggregate_windows import (
@@ -106,7 +103,7 @@ def test_invalid_tuning_rejected_by_request(value):
 
 
 @pytest.mark.parametrize("target", [65536, 262144, 1048576])
-def test_batched_native_results_and_durable_metrics(tmp_path, monkeypatch, target):
+def test_batched_native_results_and_read_counts(tmp_path, monkeypatch, target):
     """Larger reads reduce actual calls while respecting native masks and overviews.
 
     Args:
@@ -162,53 +159,8 @@ def test_batched_native_results_and_durable_metrics(tmp_path, monkeypatch, targe
             assert float(left["value"]) == pytest.approx(
                 float(right["value"]), rel=1e-12
             )
-    metrics = result.performance
-    assert (
-        metrics["readWindows"]
-        == len(reads)
-        == spec.grid.execution.readWindows
-        < spec.grid.nativeBlocks
-    )
-    assert metrics["reducerUpdates"] < baseline.performance["reducerUpdates"]
-    assert metrics["stages"]["selectionMaskBreakdown"] is None
-    assert metrics["stages"]["maskReadSeconds"] == 0
-    breakdown = dict(
-        featureReadingSeconds=0, projectionSeconds=0, rasterizationSeconds=0
-    )
-    old_stages = {
-        k: v for k, v in metrics["stages"].items() if k != "selectionMaskBreakdown"
-    }
-    assert (
-        AggregatePerformance.model_validate(
-            {**metrics, "stages": old_stages}
-        ).stages.selectionMaskBreakdown
-        is None
-    )
-    for key in breakdown:
-        with pytest.raises(ValidationError):
-            AggregatePerformance.model_validate(
-                {
-                    **metrics,
-                    "stages": {
-                        **metrics["stages"],
-                        "selectionMaskBreakdown": {**breakdown, key: -1},
-                    },
-                }
-            )
-    legacy = {key: value for key, value in metrics.items() if key != "stages"}
-    assert AggregatePerformance.model_validate(legacy).stages is None
-    with pytest.raises(ValidationError):
-        AggregatePerformance.model_validate(
-            {**metrics, "stages": {**metrics["stages"], "selectionMaskSeconds": -1}}
-        )
-    assert metrics["kernelSeconds"] >= sum(
-        metrics[name]
-        for name in ["readSeconds", "calculationSeconds", "resultWriteSeconds"]
-    )
+    assert len(reads) == spec.grid.execution.readWindows < spec.grid.nativeBlocks
     assert progress[-1] == (spec.grid.nativeBlocks, spec.grid.nativeBlocks)
-    assert (
-        json.loads((tmp_path / "provenance.json").read_text())["performance"] == metrics
-    )
 
 
 @pytest.mark.parametrize(
@@ -315,7 +267,6 @@ def test_memory_planning_and_execution_without_grid_recheck(
             path, plan, tmp_path, LIMITS
         )
         assert float(result.rows[0]["value"]) == 2048**2
-        assert result.performance["stages"]["gridCheckSeconds"] == 0.0
 
 
 def test_large_polygon_boundary_counts_do_not_depend_on_tile_width(
@@ -367,114 +318,3 @@ def test_large_polygon_boundary_counts_do_not_depend_on_tile_width(
             assert float(expected["value"]) == pytest.approx(
                 float(actual["value"]), rel=1e-10
             )
-
-
-@pytest.mark.parametrize("target", [None, 65536])
-def test_kernel_stage_timers_attribute_work_without_changing_results(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: int | None
-) -> None:
-    """Injected stage durations prove attribution on legacy and combined reads.
-
-    Args:
-        tmp_path: Private native fixture and output.
-        monkeypatch: Replace the clock and observe existing operation boundaries.
-        target: Legacy blocks or combined reads.
-    """
-    values = np.ones((32, 32), dtype="float32")
-    path = write_source(tmp_path / "source.tif", values)
-    with rasterio.open(path) as ds:
-        bounds = ds.bounds
-    polygon = mapping(
-        Polygon(
-            [
-                (bounds.left, bounds.bottom),
-                (bounds.right, bounds.bottom),
-                (bounds.right, bounds.top),
-                (bounds.left, bounds.top),
-            ]
-        )
-    )
-    area = AggregateArea(kind="aoi", bounds=tuple(bounds), geometries=(polygon,))
-    spec = make_spec(path, ["sum(a)", "areaha(a>0)"], area, target_chunk_pixels=target)
-    expected = kernel.calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
-    assert expected.performance["stages"]["maskPreparationSeconds"] > 0
-    assert expected.performance["stages"]["maskReadSeconds"] > 0
-    clock = [0.0]
-    calls = {"read": 0, "mask": 0, "weights": 0, "reduce": 0}
-
-    def measured(
-        function: Callable[..., Any], stage: str, seconds: float
-    ) -> Callable[..., Any]:
-        """Wrap a real boundary with a deterministic extra wall duration.
-
-        Args:
-            function: Original operation, preserving values and exceptions.
-            stage: Counter key.
-            seconds: Time charged to this invocation.
-
-        Returns:
-            Instrumented callable with unchanged result.
-        """
-
-        def invoke(*args: Any, **kwargs: Any) -> Any:
-            """Call the original operation and charge its controlled duration.
-
-            Args:
-                *args: Positional operation arguments.
-                **kwargs: Named operation arguments.
-
-            Returns:
-                Unchanged result from the original operation.
-            """
-            result = function(*args, **kwargs)
-            calls[stage] += 1
-            clock[0] += seconds
-            return result
-
-        return invoke
-
-    from eolab_app.processing import raster_mask as mask_module
-
-    monkeypatch.setattr(kernel.time, "perf_counter", lambda: clock[0])
-    monkeypatch.setattr(
-        kernel,
-        "read_native_raster_block",
-        measured(kernel.read_native_raster_block, "read", 2),
-    )
-    monkeypatch.setattr(
-        kernel,
-        "read_native_raster_window",
-        measured(kernel.read_native_raster_window, "read", 2),
-    )
-    monkeypatch.setattr(
-        mask_module, "rasterize", measured(mask_module.rasterize, "mask", 3)
-    )
-    monkeypatch.setattr(
-        kernel.PixelAreaCalculator,
-        "calculate_hectares",
-        measured(kernel.PixelAreaCalculator.calculate_hectares, "weights", 5),
-    )
-    monkeypatch.setattr(
-        kernel.Calculation,
-        "process_tile",
-        measured(kernel.Calculation.process_tile, "reduce", 7),
-    )
-    result = kernel.calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
-    assert result.rows == expected.rows
-    metrics = result.performance
-    stages = metrics["stages"]
-    assert metrics["readSeconds"] == calls["read"] * 2
-    assert stages["maskPreparationSeconds"] == calls["mask"] * 3 == 3
-    assert stages["selectionMaskSeconds"] == 0
-    assert stages["areaWeightsSeconds"] == calls["weights"] * 5 > 0
-    assert stages["reductionSeconds"] == calls["reduce"] * 7 > 0
-    assert metrics["calculationSeconds"] == sum(
-        stages[key]
-        for key in ["selectionMaskSeconds", "areaWeightsSeconds", "reductionSeconds"]
-    )
-    assert (
-        metrics["kernelSeconds"]
-        == metrics["readSeconds"]
-        + metrics["calculationSeconds"]
-        + stages["maskPreparationSeconds"]
-    )

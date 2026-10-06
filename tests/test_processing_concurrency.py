@@ -109,9 +109,7 @@ def test_prepared_job_waits_for_disk_without_repeating_preparation(
     )
     two = store.claim_next_job()
     prepared = PreparedJobPlan({"prepared": True}, {"grid": "retained"}, 50)
-    waiting = store.save_prepared_job(
-        two["id"], two["attempt_id"], prepared, {"seconds": 0.1}
-    )
+    waiting = store.save_prepared_job(two["id"], two["attempt_id"], prepared)
     assert waiting["status"] == "queued"
     assert waiting["attempt_id"] is None
     assert waiting["execution_memory_bytes"] == waiting["reserved_bytes"] == 0
@@ -124,14 +122,13 @@ def test_prepared_job_waits_for_disk_without_repeating_preparation(
     assert resumed["id"] == second["job_id"]
     assert resumed["spec"] == {"prepared": True}
     assert resumed["reserved_bytes"] == 50
-    assert resumed["preparation"] == {"seconds": 0.1}
+    assert resumed["summary"] == {"grid": "retained"}
     assert not store.finish(two["id"], two["attempt_id"], Artifact(1, "old", "old"))
     with pytest.raises(ProcessingError, match="configured limit"):
         store.save_prepared_job(
             resumed["id"],
             resumed["attempt_id"],
             replace(prepared, reserved_bytes=101),
-            {},
         )
 
 

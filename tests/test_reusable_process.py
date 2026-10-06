@@ -69,19 +69,10 @@ def test_reuses_process_beyond_one_hundred_operations() -> None:
         lane.warm()
         try:
             first = await lane.run(echo, (b"x" * 2_000_000,), 10)
-            assert len(first.value[1]) == 2_000_000
-            assert not first.timing.reusedProcess
-            assert first.timing.processId == first.value[0]
-            assert first.timing.operationNumber == 1
-            assert first.timing.startReason == "initial"
-            assert first.timing.startupSeconds > 0
+            assert len(first[1]) == 2_000_000
             for number in range(2, 111):
                 result = await lane.run(echo, (number,), 10)
-                assert result.value == (first.value[0], number)
-                assert result.timing.reusedProcess
-                assert result.timing.operationNumber == number
-                assert result.timing.recycledFor is None
-                assert result.timing.startupSeconds == first.timing.startupSeconds
+                assert result == (first[0], number)
         finally:
             await lane.close()
         with pytest.raises(RuntimeError):
@@ -103,9 +94,8 @@ def test_result_acknowledges_full_return_not_early_put(tmp_path: Path):
         marker = tmp_path / "operation"
         try:
             result = await lane.run(slow, (marker, 0.1), 10)
-            assert result.value == "early"
+            assert result == "early"
             assert marker.with_suffix(".finished").exists()
-            assert result.timing.operationSeconds >= 0.1
         finally:
             await lane.close()
 
@@ -149,10 +139,9 @@ def test_failure_stops_old_work_before_replacement(tmp_path: Path, mode: str):
                     await task
                 assert not marker.with_suffix(".finished").exists()
             if mode != "close":
-                assert first.value[0] not in {child.pid for child in active_children()}
+                assert first[0] not in {child.pid for child in active_children()}
                 second = await lane.run(echo, ("replacement",), 10)
-                assert first.value[0] != second.value[0]
-                assert not second.timing.reusedProcess
+                assert first[0] != second[0]
             await asyncio.sleep(0.05)
             assert not list(tmp_path.glob("*.finished"))
         finally:
@@ -207,8 +196,7 @@ def test_parent_memory_does_not_recycle_small_child() -> None:
         try:
             first = await lane.run(echo, ("first",), 10)
             second = await lane.run(echo, ("second",), 10)
-            assert first.value[0] == second.value[0]
-            assert second.timing.reusedProcess
+            assert first[0] == second[0]
             assert parent_memory[0] == ord("x")
         finally:
             await lane.close()
@@ -226,10 +214,7 @@ def test_peak_memory_recycles_process() -> None:
         try:
             first = await lane.run(echo, ("first",), 10)
             second = await lane.run(echo, ("second",), 10)
-            assert first.value[0] != second.value[0]
-            assert not second.timing.reusedProcess
-            assert first.timing.recycledFor == "memory_limit"
-            assert second.timing.startReason == "memory_limit"
+            assert first[0] != second[0]
         finally:
             await lane.close()
         await asyncio.sleep(0)
@@ -263,7 +248,7 @@ def test_native_memory_reservation_has_an_os_limit() -> None:
         )
         try:
             result = await native.run(report_address_space_limit, (), 15)
-            assert result.value == (ceiling, ceiling)
+            assert result == (ceiling, ceiling)
         finally:
             await native.close()
 

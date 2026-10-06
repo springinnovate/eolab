@@ -176,7 +176,7 @@ resource controls.
 
 - [Raster pixels and histograms](docs/raster-analysis.md): sampling and missing data.
 - [Comparing two rasters](docs/bivariate-raster.md): paired grids and histogram colors.
-- [Raster calculations](docs/raster-calculations.md): formulas, results and timing.
+- [Raster calculations](docs/raster-calculations.md): formulas, results and limits.
 - [Ground-area calculations](docs/ground-area-calculations.md): hectares and boundary fractions.
 - [Vector filters](docs/vector-filters.md) and [sampling selections](docs/vector-sampling.md).
 - [Raster clips](docs/raster-clips.md): exported values, masks and downloads.

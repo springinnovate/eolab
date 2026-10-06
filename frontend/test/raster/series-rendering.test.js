@@ -37,7 +37,7 @@ function controlsFixture() {
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
-            elapsedSeconds: null, complete: false, recoverable: false } };
+            complete: false, recoverable: false } };
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
@@ -160,7 +160,7 @@ test("closing cancels drawing; reopening draws current inputs rather than an old
     assert.deepEqual(drawn, ["new"]);
 });
 
-test("plot signatures ignore progress, diagnostics and catalog metadata, but retain display changes", () => {
+test("plot signatures ignore progress and catalog metadata, but retain display changes", () => {
     const h = fixture(), calls = [];
     const view = new RasterSeriesPlotsView(h.document, {});
     view.cards.set(1, { scale: {}, signature: null });
@@ -207,26 +207,4 @@ test("adding a secondary plot reveals it once; initial drawing and updates prese
     assert.equal(h.document.activeElement, added.scale);
     assert.equal(view.cards.get(1).scale.value, "linear");
     assert.equal(added.scale.value, "log");
-});
-
-test("completed timing reports retain open details and are removed for a new calculation", () => {
-    const h = fixture();
-    const result = { job: { jobId: "a" }, elapsedSeconds: 1, performanceLines: ["A measured interval"] };
-    const state = { busy: false, statistics: [], plots: [], area: { formulas: [], sources: [{ key: "a", label: "A" }],
-        results: new Map([["a", result]]), areaChoice: "whole", elapsedSeconds: null } };
-    h.view.renderAreaControls(state);
-    const report = h.document.querySelector("#raster-series-performance").children[0];
-    report.open = true;
-    state.area.results.set("b", { ...result, job: { jobId: "b" } });
-    h.view.renderAreaControls(state);
-    const reports = h.document.querySelector("#raster-series-performance").children;
-    assert.equal(reports.length, 2);
-    assert.equal(reports[0], report);
-    assert.equal(report.open, true);
-    state.area.sources[0].label = "Renamed";
-    h.view.renderAreaControls(state);
-    assert.equal(report.children[0].textContent, "Renamed — 1.000 s");
-    state.area.results = new Map();
-    h.view.renderAreaControls(state);
-    assert.equal(h.document.querySelector("#raster-series-performance").children.length, 0);
 });

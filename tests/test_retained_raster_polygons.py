@@ -15,7 +15,6 @@ import eolab_app.bounded_vector as vector
 import eolab_app.processing.raster_aggregate as kernel
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.models import ProcessingError
-from eolab_app.raster.models import RasterMaskTimings
 from eolab_app.raster.read_cancellation import RasterReadCancelled
 from catalog_selection_support import write_selection
 from test_raster_aggregates import make_spec
@@ -122,12 +121,6 @@ def test_calculation_reuses_polygons_and_releases_them(
         )
         assert result.rows == reference.rows
         assert result.sha256 == reference.sha256
-        assert result.performance["retainedPolygonBytes"] > 0
-        assert result.performance["stages"]["selectionSetupSeconds"] > 0
-        assert result.performance["temporaryMaskBytes"] > 0
-        assert result.performance["stages"]["maskPreparationSeconds"] > 0
-        assert result.performance["stages"]["maskReadSeconds"] > 0
-        assert result.performance["stages"]["selectionMaskBreakdown"] is None
     assert not (tmp_path / "polygon-mask.tif").exists()
     assert calls == len(geometries)
     assert len(prepared) == 1
@@ -241,16 +234,14 @@ def test_retained_masks_do_not_reopen_sources_and_remain_cancellable(
 
         monkeypatch.setattr(vector, "polygon_features", forbidden)
         monkeypatch.setattr(vector, "native_bbox_for_grid", forbidden)
-        timings = RasterMaskTimings()
         for _ in range(3):
-            mask = reader.rasterize((8, 8), dataset.transform, False, timings)
+            mask = reader.rasterize((8, 8), dataset.transform, False)
             assert mask.sum() == 9
         cancelled = True
         with pytest.raises(RasterReadCancelled):
             reader.rasterize((8, 8), dataset.transform, False)
         reader.close()
         assert reader.retained_bytes == 0
-        assert timings.feature_reading_seconds == timings.projection_seconds == 0
 
 
 def test_polygon_memory_shares_the_calculation_budget(tmp_path: Path) -> None:

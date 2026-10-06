@@ -106,7 +106,6 @@ def test_summary_prepares_and_calculates_without_a_plan_request(
     job = response.json()
     assert job["status"] == "queued"
     assert job["grid"] is None
-    assert job["preparation"] is None
     assert (
         client.post(ENDPOINT, json=body, headers=HEADERS).json()["jobId"]
         == job["jobId"]
@@ -121,8 +120,7 @@ def test_summary_prepares_and_calculates_without_a_plan_request(
     completed = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert completed["status"] == "ready", completed
     assert completed["grid"]["nativeBlocks"] > 0
-    assert completed["preparation"]["seconds"] >= 0
-    assert completed["preparation"]["cacheHit"] is False
+    assert completed["result"]["cacheHit"] is False
     assert len(completed["result"]["rows"]) == 2
     assert (
         client.post(ENDPOINT, json=body, headers=HEADERS).json()["jobId"]
@@ -136,8 +134,6 @@ def test_summary_prepares_and_calculates_without_a_plan_request(
     assert asyncio.run(worker.run_once())
     cached = client.get(f"/api/processing/jobs/{cached['jobId']}").json()
     assert cached["status"] == "ready", cached
-    assert cached["preparation"]["cacheHit"]
-    assert cached["preparation"]["process"] is None
     assert cached["result"]["cacheHit"]
     assert cached["result"]["rows"] == completed["result"]["rows"]
 
@@ -197,9 +193,6 @@ def test_pixel_formula_uses_same_batch_worker_cache_and_owned_provenance(
             == completed["grid"]["height"]
             == (0 if outside else 1)
         )
-        assert completed["result"]["performance"]["readWindows"] == (
-            0 if outside else 1
-        )
     provenance_url = completed["result"]["provenanceUrl"]
     assert client.get(provenance_url).json()["pixelPoint"] == point
     with TestClient(app, base_url="https://testserver") as stranger:
@@ -226,7 +219,7 @@ def test_pixel_formula_uses_same_batch_worker_cache_and_owned_provenance(
     assert asyncio.run(worker.run_once())
     cached = client.get(f"/api/processing/jobs/{cached['jobId']}").json()
     assert cached["status"] == "ready", cached
-    assert cached["preparation"]["cacheHit"] and cached["result"]["cacheHit"]
+    assert cached["result"]["cacheHit"]
     assert cached["result"]["rows"] == rows
     assert client.get(cached["result"]["provenanceUrl"]).json()["pixelPoint"] == point
 
@@ -258,7 +251,7 @@ def test_queued_job_cancels_without_starting_preparation(
     assert cancelled["status"] == "cancelled"
     assert not asyncio.run(worker.run_once())
     owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
-    assert store.get(job["jobId"], owner)["preparation"] is None
+    assert store.get(job["jobId"], owner)["spec"]["grid"] is None
 
 
 @pytest.mark.parametrize("kind", ["whole", "catalog", "polygons"])
@@ -361,10 +354,10 @@ def test_preparation_and_execution_are_observed_and_cancelled_through_one_job(
             assert snapshot["status"] == "running"
             if phase == "calculate":
                 assert snapshot["progress"]["phase"] == "calculating"
-                assert snapshot["preparation"] and snapshot["grid"]
+                assert snapshot["grid"]
             else:
                 assert snapshot["progress"]["phase"] == "preparing"
-                assert snapshot["preparation"] is None and snapshot["grid"] is None
+                assert snapshot["grid"] is None
             assert snapshot["result"] is None
             client.post(f"/api/processing/jobs/{job['jobId']}/cancel", headers=HEADERS)
             await asyncio.wait_for(task, 5)

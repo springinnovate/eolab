@@ -120,7 +120,7 @@ def run_benchmark(raster: Path, vector: Path, layer: str) -> dict[str, Any]:
         layer: Native layer name; exactly two features must match PER/BRA.
 
     Returns:
-        Result, source/grid identities and nested wall-clock stage measurements.
+        Result, source/grid identities and harness wall-clock measurements.
 
     Raises:
         ValueError: If the selection does not contain exactly two features.
@@ -179,7 +179,6 @@ def run_benchmark(raster: Path, vector: Path, layer: str) -> dict[str, Any]:
         result = {
             "rows": artifact.rows,
             "csvSha256": artifact.sha256,
-            "performance": artifact.performance,
         }
     finished = time.perf_counter()
     return {
@@ -269,10 +268,6 @@ def main() -> None:
                 "notes": [
                     "Each run repeats selection, planning and native execution; caches are not cleared.",
                     "Outer timing stages sum to totalSeconds; importSeconds is separate.",
-                    "performance is nested inside executionSeconds; its stages are not additive to parents.",
-                    "selectionSetupSeconds includes vector reading and projection before rasterization.",
-                    "maskPreparationSeconds measures one-time mask rasterization; maskReadSeconds is nested inside selectionMaskSeconds.",
-                    "selectionMaskSeconds includes mask window reads and applying the mask to raster tiles.",
                     "No HTTP, catalog lookup, queue, process pool, SSE or browser timing is included.",
                     "Inputs are read-only; temporary kernel artifacts are removed after each run.",
                     "Compare only matching input identities, grid, limits, runtime and returned values.",

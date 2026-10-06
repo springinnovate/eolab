@@ -24,10 +24,10 @@ from eolab_app.processing.service import public_job
 from eolab_app.processing.worker import ProcessingWorker, serve
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
-from test_processing_timings import configure_prepared_job_store
+from test_processing_worker_results import configure_prepared_job_store
 
 
-def test_warm_service_and_worker_reopen_sources_and_preserve_timing(tmp_path: Path):
+def test_warm_service_and_worker_reopen_sources_and_preserve_results(tmp_path: Path):
     """A retained interpreter must not retain another request's raster or values.
 
     Args:
@@ -105,26 +105,6 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_timing(tmp_path: Pa
                     response.result.rows[0].aggregates[0]["validPixels"] == 1023 + index
                 )
                 assert float(response.result.rows[1].value) > 0
-                timing = response.result.executionTiming
-                assert timing.process.reusedProcess is True
-                assert response.preparation.process.reusedProcess is bool(index)
-                assert (
-                    timing.process.operationSeconds
-                    >= response.result.performance.kernelSeconds
-                )
-                assert (
-                    abs(
-                        timing.nativeProcessSeconds
-                        - sum(
-                            (
-                                timing.process.readyWaitSeconds,
-                                timing.process.operationSeconds,
-                                timing.process.overheadSeconds,
-                            )
-                        )
-                    )
-                    < 0.1
-                )
                 assert str(tmp_path) not in response.model_dump_json()
             # Each attempt resolves independently, then reuses its own source
             # while the warm interpreter still opens the new request's raster.
@@ -156,18 +136,17 @@ def test_warm_clip_plan_and_execution_preserve_pixels(tmp_path: Path):
             planned = await lane.run(
                 clip_process_target, ("plan", (path, area, limits)), 15
             )
-            assert planned.value[0] == "ok"
+            assert planned[0] == "ok"
             spec = ClipSpec(
                 source=SOURCE,
                 sourceSignature=signature,
                 area=area,
-                grid=planned.value[1],
+                grid=planned[1],
             )
             result = await lane.run(
                 clip_process_target, ("clip", (path, spec, output, limits)), 30
             )
-            assert result.value[0] == "ok"
-            assert result.timing.reusedProcess
+            assert result[0] == "ok"
             with rasterio.open(output / "result.tif") as dataset:
                 assert dataset.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
                 assert np.array_equal(dataset.read(1), values)

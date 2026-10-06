@@ -74,22 +74,6 @@ class SelectedRasterArea:
     projected_geometries: "tuple[dict[str, object], ...] | RasterAreaMask"
 
 
-@dataclass
-class RasterMaskTimings:
-    """Accumulated wall times for generating polygon inclusion masks.
-
-    Attributes:
-        feature_reading_seconds: Bounding-box lookup, source opening, feature
-            iteration/filtering/validation, exhaustion and source closing.
-        projection_seconds: Projecting selected features into the raster CRS.
-        rasterization_seconds: Rasterio geometry-mask calls.
-    """
-
-    feature_reading_seconds: float = 0.0
-    projection_seconds: float = 0.0
-    rasterization_seconds: float = 0.0
-
-
 class RasterAreaMask(Protocol):
     """A bounded polygon-membership reader independent of its invoking feature."""
 
@@ -98,7 +82,6 @@ class RasterAreaMask(Protocol):
         out_shape: tuple[int, int],
         affine: Affine,
         all_touched: bool,
-        timings: RasterMaskTimings | None = None,
     ) -> NDArray[bool_]:
         """Rasterize selected polygons into a Boolean mask on the supplied grid.
 
@@ -107,7 +90,6 @@ class RasterAreaMask(Protocol):
             affine: Mapping from output pixel coordinates to the raster CRS.
             all_touched: Include every pixel touched by a polygon when True;
                 otherwise use Rasterio's default pixel-center inclusion rule.
-            timings: Optional accumulator for work performed by this call.
 
         Returns:
             Boolean array with the supplied shape: True for included pixels

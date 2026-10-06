@@ -1,4 +1,4 @@
-"""Timing boundaries with real native children/files and isolated lifecycle ports."""
+"""Real native execution, result files and public serialization across lifecycle ports."""
 
 import asyncio
 from dataclasses import asdict
@@ -10,15 +10,11 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import numpy as np
-import pytest
-from pydantic import ValidationError
 
 from eolab_app.processing.aggregate_models import (
-    AggregateExecutionTiming,
     AggregateJobResponse,
     AggregatePlanRequest,
     UnpreparedCalculation,
-    CalculationPreparation,
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
@@ -28,8 +24,8 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
 
-def test_real_plan_worker_and_public_result_timing(tmp_path: Path) -> None:
-    """Timing crosses native execution and public serialization without private paths.
+def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
+    """Native execution returns durable results without publishing private paths.
 
     Args:
         tmp_path: Isolated source and artifact directories.
@@ -74,23 +70,6 @@ def test_real_plan_worker_and_public_result_timing(tmp_path: Path) -> None:
     assert asyncio.run(worker.run_once())
     authorizer.authorize.assert_awaited_once_with(request.sources["a"])
     artifact = store.finish.call_args.args[2]
-    assert artifact.execution_timing["queueSeconds"] == 2
-    timings = artifact.execution_timing
-    assert sum(
-        timings[name]
-        for name in (
-            "planPreparationSeconds",
-            "sourceAuthorizationSeconds",
-            "scratchPreparationSeconds",
-            "resultCacheLookupSeconds",
-        )
-    ) == pytest.approx(timings["preparationSeconds"])
-    assert timings["planPreparationSeconds"] >= row["preparation"]["seconds"]
-
-    assert (
-        artifact.execution_timing["nativeProcessSeconds"]
-        >= artifact.performance["kernelSeconds"]
-    )
     assert artifacts.result_path(row["attempt_id"], result_name="result.csv").exists()
     # Match the adapter's JSON storage, then the HTTP response model.
     ready = {
@@ -100,36 +79,10 @@ def test_real_plan_worker_and_public_result_timing(tmp_path: Path) -> None:
         "updated_at": datetime.now(timezone.utc),
     }
     response = AggregateJobResponse.model_validate(public_job(ready))
-    assert response.result.executionTiming.queueSeconds == 2
-    assert response.result.queuedToReadySeconds >= 2
     assert float(response.result.rows[0].value) == 1
     assert str(path) not in response.model_dump_json()
-    # Older workers/artifacts have no execution stage metadata.
-    del ready["artifact"]["execution_timing"]
-    assert (
-        AggregateJobResponse.model_validate(public_job(ready)).result.executionTiming
-        is None
-    )
     ready["status"] = "cancelled"
     assert public_job(ready)["result"] is None
-
-
-@pytest.mark.parametrize("bad", [-1, float("nan"), float("inf")])
-def test_stage_contract_rejects_invalid_durations(bad: float) -> None:
-    """Do not publish negative or nonfinite measurements.
-
-    Args:
-        bad: Invalid duration under test.
-    """
-    with pytest.raises(ValidationError):
-        CalculationPreparation(seconds=bad, cacheHit=False)
-    with pytest.raises(ValidationError):
-        AggregateExecutionTiming(
-            queueSeconds=bad,
-            preparationSeconds=0,
-            nativeProcessSeconds=0,
-            publicationSeconds=0,
-        )
 
 
 def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
@@ -137,19 +90,16 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
 
     Args:
         store: Isolated lifecycle port; SQL fencing is tested with PostgreSQL.
-        row: Mutable job that will receive prepared inputs and timing metadata.
+        row: Mutable job that will receive prepared inputs and disk reservation.
     """
 
-    def save(
-        identifier: str, attempt: str, prepared: Any, details: dict[str, Any]
-    ) -> dict[str, Any]:
+    def save(identifier: str, attempt: str, prepared: Any) -> dict[str, Any]:
         """Return the fields a successful storage reservation publishes.
 
         Args:
             identifier: Claimed job ID.
             attempt: Current attempt ID.
             prepared: Validated specification, summary and disk reservation.
-            details: Public preparation timings.
 
         Returns:
             Updated job row for execution.
@@ -159,7 +109,6 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
             "spec": prepared.specification,
             "summary": prepared.summary,
             "reserved_bytes": prepared.reserved_bytes,
-            "preparation": details,
         }
 
     store.save_prepared_job.side_effect = save
