@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 MAX_COMPOSITE_MAP_LAYERS = 64
+MAX_COMPOSITE_PLAN_BYTES = 512 * 1024
 
 
 class CompositeMapLayerRequest(BaseModel):
@@ -47,7 +48,7 @@ class CompositeMapLayerRequest(BaseModel):
             Validated layer request.
 
         Raises:
-            ValueError: If raster and vector appearance are both present or
+            ValueError: If environment and structured appearance are both present or
                 both absent.
         """
         if (self.style_environment is None) == (self.style_definition is None):
@@ -66,6 +67,23 @@ class CompositeMapPlanRequest(BaseModel):
         min_length=1,
         max_length=MAX_COMPOSITE_MAP_LAYERS,
     )
+
+    @model_validator(mode="after")
+    def require_bounded_size(self) -> "CompositeMapPlanRequest":
+        """Bound retained appearance data independently of layer count.
+
+        Returns:
+            The request when its compact UTF-8 representation fits 512 KiB.
+
+        Raises:
+            ValueError: If combined feature-owned definitions exceed the bound.
+        """
+        if (
+            len(self.model_dump_json(by_alias=True).encode("utf-8"))
+            > MAX_COMPOSITE_PLAN_BYTES
+        ):
+            raise ValueError("Composite map plan must be 512 KiB or smaller")
+        return self
 
     @model_validator(mode="after")
     def require_unique_layers(self) -> "CompositeMapPlanRequest":

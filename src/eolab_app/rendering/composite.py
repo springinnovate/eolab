@@ -33,10 +33,18 @@ class CompositeMapPlanUnavailableError(Exception):
 
 @dataclass(frozen=True)
 class AuthorizedCompositeMapPlan:
-    """One immutable plan and its complete server-owned SLD document."""
+    """One immutable plan and its complete server-owned rendering parameters.
+
+    Attributes:
+        request: Validated top-first layer appearances and identities.
+        sld_document: Authorized styles in bottom-first rendering order.
+        interpolations: Per-layer overrides in the same bottom-first order;
+            None preserves the service's default interpolation for that layer.
+    """
 
     request: CompositeMapPlanRequest
     sld_document: bytes
+    interpolations: tuple[str | None, ...] = ()
 
 
 class CompositeMapPlanStore:
@@ -127,7 +135,7 @@ class CompositeMapRenderingService:
             PublishedLayerChangedError: If a mounted source changed.
             PublishedLayerRequestError: If any requested style is not current.
         """
-        sld_document = await asyncio.to_thread(
+        sld_document, interpolations = await asyncio.to_thread(
             self._build_authorized_sld,
             request,
         )
@@ -139,7 +147,7 @@ class CompositeMapRenderingService:
         plan_id = sha256(canonical_request).hexdigest()
         self._store.put(
             plan_id,
-            AuthorizedCompositeMapPlan(request, sld_document),
+            AuthorizedCompositeMapPlan(request, sld_document, interpolations),
         )
         return PublishedCompositeMapPlan(
             planId=plan_id,
@@ -167,20 +175,25 @@ class CompositeMapRenderingService:
         await asyncio.to_thread(self._require_current_plan, plan.request)
         return plan
 
-    def _build_authorized_sld(self, request: CompositeMapPlanRequest) -> bytes:
+    def _build_authorized_sld(
+        self, request: CompositeMapPlanRequest
+    ) -> tuple[bytes, tuple[str | None, ...]]:
         """Build one bottom-first SLD after current authorization checks.
 
         Args:
             request: Validated top-first composite plan.
 
         Returns:
-            Complete multi-layer SLD document.
+            Complete multi-layer SLD and bottom-first interpolation overrides.
         """
         documents = [
             self._build_layer_sld(layer)
             for layer in reversed(request.layers)
         ]
-        return combine_sld_layers(documents)
+        return (
+            combine_sld_layers([document for document, _ in documents]),
+            tuple(interpolation for _, interpolation in documents),
+        )
 
     def _require_current_plan(self, request: CompositeMapPlanRequest) -> None:
         """Recheck every source and style without rebuilding the SLD.
@@ -200,14 +213,16 @@ class CompositeMapRenderingService:
                     f"Composite style must be {authorization.style_name}"
                 )
 
-    def _build_layer_sld(self, layer: CompositeMapLayerRequest) -> bytes:
+    def _build_layer_sld(
+        self, layer: CompositeMapLayerRequest
+    ) -> tuple[bytes, str | None]:
         """Delegate one requested appearance to its feature authorization.
 
         Args:
             layer: Validated generic composite layer request.
 
         Returns:
-            One complete single-layer SLD document.
+            One complete single-layer SLD and its trusted interpolation override.
 
         Raises:
             PublishedLayerRequestError: If its current style does not match.
@@ -217,13 +232,14 @@ class CompositeMapRenderingService:
             raise PublishedLayerRequestError(
                 f"Composite style must be {authorization.style_name}"
             )
-        return authorization.build_composite_sld(
+        document = authorization.build_composite_sld(
             layer.layer_name,
             layer.style_name,
             layer.style_environment,
             layer.style_definition,
             layer.opacity,
         )
+        return document, authorization.composite_interpolation(layer.style_definition)
 
     def _require_authorization(
         self,

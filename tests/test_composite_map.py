@@ -34,6 +34,19 @@ class _TestAuthorization:
 
     style_name = "test-style"
 
+    def composite_interpolation(
+        self, style_definition: Mapping[str, object] | None
+    ) -> str | None:
+        """Return no override for this generic style fixture.
+
+        Args:
+            style_definition: Unused validated fixture appearance.
+
+        Returns:
+            None to preserve service defaults.
+        """
+        return None
+
     def prepare_query(
         self, operation: str, query: list[tuple[str, str]],
     ) -> list[tuple[str, str]]:

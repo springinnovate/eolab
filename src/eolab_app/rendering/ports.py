@@ -72,6 +72,19 @@ class PublishedLayerAuthorization(Protocol):
         """
         ...
 
+    def composite_interpolation(
+        self, style_definition: Mapping[str, object] | None
+    ) -> str | None:
+        """Return a trusted resampling override for an authorized appearance.
+
+        Args:
+            style_definition: Definition already checked by build_composite_sld.
+
+        Returns:
+            A GeoServer interpolation name, or None to preserve service default.
+        """
+        ...
+
     def build_composite_sld(
         self,
         layer_name: str,
@@ -86,7 +99,7 @@ class PublishedLayerAuthorization(Protocol):
             layer_name: Current workspace-qualified GeoServer layer identity.
             style_name: Feature-owned style identity requested by the browser.
             style_environment: Optional raster dynamic-style environment.
-            style_definition: Optional complete vector style definition.
+            style_definition: Optional complete feature-owned style definition.
             opacity: Neutral retained-layer opacity from zero through one.
 
         Returns:
