@@ -117,11 +117,26 @@ results; source readers, request controllers, and analysis responses do not acqu
 style or rendering dependencies. Catalog analysis without a styled map-layer
 context continues to present numeric results.
 
-Categorical histogram and percentile presentation remains deferred. Distribution
-panels explain that categorical distributions and area proportions are not yet
-available. Coordinated 2D styling requires continuous layers. Numeric source
-sampling, statistics, and Processing remain available, including when rendering
-is unavailable.
+Categorical distribution panels show area-weighted horizontal bars with the
+current layer labels, exact codes, colors and opacities. A hatched background
+shows transparent fills; percentages and hectares remain opaque and readable.
+See [raster analysis](raster-analysis.md#categorical-raster-values) for estimate
+semantics, selection coverage and bounded native sampling. Coordinated 2D styling
+and percentile stretches require continuous layers. Numeric source analysis and
+Processing remain available when rendering is unavailable.
+
+The existing statistics request optionally accepts `categoryValues`: 1–256
+distinct JavaScript-safe integer codes. The service sorts codes for cache identity
+and returns optional `categoricalDistribution` with matching sorted
+`categoryValues`, `areasHectares`, `unmappedAreaHectares`, `validAreaHectares`,
+`nodataAreaHectares`, `areaEstimated: true`,
+`areaMethod: "sample-cell-equal-area-v1"`, and `selectionSubdivisions: 4`.
+Category and Unmapped totals sum to valid area; NoData is separate.
+Continuous requests and responses retain their existing schema without the
+optional categorical field. Labels, colors and opacities never enter analysis
+requests or numeric responses. Composition joins those results to the current
+committed layer appearance; readers and API clients remain independent of
+rendering and browser styling.
 
 ## Appearance definition
 

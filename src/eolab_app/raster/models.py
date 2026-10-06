@@ -3,7 +3,8 @@
 from eolab_app.catalog_selection import CatalogSelection
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
+import math
 
 from affine import Affine
 from numpy import bool_
@@ -27,6 +28,9 @@ RasterStatisticsCacheKey = tuple[
     str,
     tuple[object, ...],
     tuple[int, ...],
+]
+CategoryCode = Annotated[
+    int, Field(strict=True, ge=-9_007_199_254_740_991, le=9_007_199_254_740_991)
 ]
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
@@ -163,6 +167,8 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
             the whole raster unless ``catalog_selection`` is present.
         catalog_selection: Optional immutable Catalog descriptor;
             absence selects bounds or the whole raster.
+        category_values: Optional distinct numeric classification codes. Labels,
+            colors and opacity remain outside the analysis contract.
     """
 
     selected_bounds: Wgs84Bounds | None = Field(
@@ -171,6 +177,10 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
     )
     catalog_selection: CatalogSelection | None = Field(
         default=None, alias="catalogSelection"
+    )
+
+    category_values: tuple[CategoryCode, ...] | None = Field(
+        default=None, alias="categoryValues", min_length=1, max_length=256
     )
 
     @model_validator(mode="after")
@@ -189,6 +199,10 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
             raise ValueError(
                 "selectedBounds and catalogSelection are mutually exclusive"
             )
+        if self.category_values is not None and len(set(self.category_values)) != len(
+            self.category_values
+        ):
+            raise ValueError("categoryValues must contain distinct codes")
         return self
 
 
@@ -467,6 +481,59 @@ class RasterPairedStatistics(BaseModel):
         return self
 
 
+class RasterCategoricalDistribution(BaseModel):
+    """Numeric classification areas, independent of labels and rendering.
+
+    Attributes:
+        category_values: Canonically sorted exact integer classification codes.
+        areas_hectares: Estimated valid selected hectares for each matching code.
+        unmapped_area_hectares: Valid selected hectares matching no supplied code.
+        valid_area_hectares: Sum of classified and unmapped valid coverage.
+        nodata_area_hectares: Selected hectares represented by missing samples.
+        area_estimated: Areas and percentages are estimates, including small grids.
+        area_method: Fixed WGS84 equal-area sample-cell quadrature method.
+        selection_subdivisions: Subcells per sample-cell edge for mask/area weights.
+    """
+
+    category_values: tuple[CategoryCode, ...] = Field(
+        alias="categoryValues", min_length=1, max_length=256
+    )
+    areas_hectares: list[Annotated[FiniteFloat, Field(ge=0)]] = Field(
+        alias="areasHectares", min_length=1, max_length=256
+    )
+    unmapped_area_hectares: FiniteFloat = Field(alias="unmappedAreaHectares", ge=0)
+    valid_area_hectares: FiniteFloat = Field(alias="validAreaHectares", gt=0)
+    nodata_area_hectares: FiniteFloat = Field(alias="nodataAreaHectares", ge=0)
+    area_estimated: Literal[True] = Field(default=True, alias="areaEstimated")
+    area_method: Literal["sample-cell-equal-area-v1"] = Field(
+        default="sample-cell-equal-area-v1", alias="areaMethod"
+    )
+    selection_subdivisions: Literal[4] = Field(default=4, alias="selectionSubdivisions")
+
+    @model_validator(mode="after")
+    def require_area_balance(self) -> "RasterCategoricalDistribution":
+        """Validate classification cardinality, code order and area conservation.
+
+        Returns:
+            The validated bounded classification result.
+
+        Raises:
+            ValueError: If codes, cardinality or valid-area totals are inconsistent.
+        """
+        if tuple(sorted(set(self.category_values))) != self.category_values:
+            raise ValueError("Categorical codes must be distinct and sorted")
+        if len(self.areas_hectares) != len(self.category_values):
+            raise ValueError("Categorical areas must match the supplied codes")
+        if not math.isclose(
+            math.fsum(self.areas_hectares) + self.unmapped_area_hectares,
+            self.valid_area_hectares,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("Categorical areas must sum to valid coverage")
+        return self
+
+
 class RasterStatistics(BaseModel):
     """Bounded raster distribution with explicit area and sampling provenance.
 
@@ -489,6 +556,7 @@ class RasterStatistics(BaseModel):
         percentiles: Fixed percentiles of valid sampled values.
         histogram: Fixed 64-bin distribution of valid sampled values.
         suggested_range: Strict range suggested for downstream color controls.
+        categorical_distribution: Optional bounded numeric category-area estimate.
     """
 
     band: Literal[1] = 1
@@ -513,6 +581,11 @@ class RasterStatistics(BaseModel):
     percentiles: RasterPercentiles
     histogram: RasterHistogram
     suggested_range: RasterValueRange = Field(alias="suggestedRange")
+    categorical_distribution: RasterCategoricalDistribution | None = Field(
+        default=None,
+        alias="categoricalDistribution",
+        exclude_if=_exclude_none_from_response,
+    )
 
     @model_validator(mode="after")
     def require_scope_provenance(self) -> "RasterStatistics":

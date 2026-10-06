@@ -8,6 +8,7 @@ const FOCUSED_VIEW_IMPORTS = {
     ],
     "sampling-area-controls-view.js": ["./required-control.js"],
     "histogram-controls-view.js": [
+        "./categorical-histogram-view.js",
         "./histogram-axis-controls.js",
         "./histogram-view.js",
         "./required-control.js",
@@ -15,6 +16,7 @@ const FOCUSED_VIEW_IMPORTS = {
     ],
     "percentile-controls-view.js": ["./required-control.js"],
     "style-histogram-view.js": [
+        "./categorical-histogram-view.js",
         "./histogram-view.js",
         "./required-control.js",
     ],

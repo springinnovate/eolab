@@ -124,3 +124,49 @@ export function presentRasterPixelSnapshot(snapshot, resolveStyle) {
         samples: Object.freeze(samples),
     });
 }
+
+/**
+ * @typedef {Object} CategoricalAreaRow
+ * @property {string} label Category label or Unmapped.
+ * @property {number|null} code Exact category code, or null for Unmapped.
+ * @property {string} color Committed hexadecimal fill.
+ * @property {number} opacity Committed fill opacity from zero to one.
+ * @property {number} hectares Estimated selected ground area.
+ * @property {number} percentage Share of valid selected ground area.
+ */
+
+/**
+ * @typedef {Object} CategoricalAreaPresentation
+ * @property {CategoricalAreaRow[]} rows Descending-area rows, table order for ties.
+ * @property {number} validHectares Estimated valid selected ground area.
+ * @property {number} nodataHectares Estimated excluded NoData ground area.
+ * @property {number} sampledPixelCount Bounded native sample count.
+ */
+
+/**
+ * Join trusted numeric areas to the map layer's current category appearance.
+ * Zero-area categories remain visible; Unmapped appears when it has coverage.
+ * NoData never enters the percentage denominator.
+ * @param {Object} statistics Category statistics matching the committed codes.
+ * @param {Readonly<CategoricalRasterStyle>} style Committed map-specific style.
+ * @return {CategoricalAreaPresentation} Presentation inputs for views.
+ */
+export function presentCategoricalRasterDistribution(statistics, style) {
+    const distribution = statistics.categoricalDistribution;
+    const byCode = new Map(distribution.categoryValues.map((code, index) =>
+        [code, distribution.areasHectares[index]]));
+    const rows = style.categories.map((category) => ({
+        label: category.label, code: category.value, color: category.color,
+        opacity: category.opacity, hectares: byCode.get(category.value),
+        percentage: 100 * byCode.get(category.value) / distribution.validAreaHectares,
+    }));
+    if (distribution.unmappedAreaHectares > 0) rows.push({
+        label: "Unmapped", code: null, ...style.unmapped,
+        hectares: distribution.unmappedAreaHectares,
+        percentage: 100 * distribution.unmappedAreaHectares / distribution.validAreaHectares,
+    });
+    rows.sort((a, b) => b.hectares - a.hectares);
+    return { rows, validHectares: distribution.validAreaHectares,
+        nodataHectares: distribution.nodataAreaHectares,
+        sampledPixelCount: statistics.sampledPixelCount };
+}

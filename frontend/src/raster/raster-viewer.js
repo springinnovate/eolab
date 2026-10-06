@@ -48,6 +48,7 @@ import {
     rasterStatisticsMatchesSelection,
     WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
+import { rasterStatisticsMatchCategories } from "./categorical-statistics.js";
 import { RasterStatisticsController } from "./statistics-controller.js";
 import { requestRasterStatistics } from "./statistics-request.js";
 import { getHistogramValueLabel } from "./histogram-axes.js";
@@ -70,12 +71,13 @@ import { normalizeRasterAppearanceState } from "./appearance-state.js";
 import {
     buildCategoricalRasterLegend,
     presentRasterPixelSnapshot,
+    presentCategoricalRasterDistribution,
 } from "./categorical-presentation.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 const MAXIMUM_VISIBLE_RASTER_HISTOGRAMS = 16;
-const CATEGORICAL_HISTOGRAM_MESSAGE = "Categorical distributions and area proportions are not available yet.";
+const CATEGORICAL_HISTOGRAM_MESSAGE = "Categorical areas need a matching native raster sample.";
 export const RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS = 350;
 /**
  * Check one copied style against the portable raster appearance contract.
@@ -288,7 +290,10 @@ export function initializeRasterViewer(
      * @return {Promise<Object>} Statistics or the final read/abort failure.
      */
     function loadStatisticsWithRetry(item, area, signal) {
-        return requestRasterStatistics(() => loadStatistics(item, area, signal), signal, clock);
+        const session = mapLayers.getRecord(getCatalogItemKey(item))?.state;
+        const codes = sessionCategoryValues(session);
+        if (session) session.statisticsCategoryIdentity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
+        return requestRasterStatistics(() => loadStatistics(item, area, signal, undefined, codes), signal, clock);
     }
     ensureRasterSampleWindowPane(leafletMap);
     const ownsMapLayerController = mapLayerController === null;
@@ -940,7 +945,12 @@ export function initializeRasterViewer(
             automatic: followsVisibleLayers,
             valueLabel: getHistogramValueLabel(session.item),
             statistics: !categorical && presentation.state === "ready" ? presentation.statistics : null,
-            ...(categorical ? { unavailableMessage: CATEGORICAL_HISTOGRAM_MESSAGE } : {}),
+            categorical: categorical && presentation.state === "ready" &&
+                rasterStatisticsMatchCategories(presentation.statistics, sessionCategoryValues(session))
+                ? presentCategoricalRasterDistribution(presentation.statistics, session.categoricalStyle) : null,
+            ...(categorical && presentation.state === "ready" &&
+                !rasterStatisticsMatchCategories(presentation.statistics, sessionCategoryValues(session))
+                ? { unavailableMessage: CATEGORICAL_HISTOGRAM_MESSAGE } : {}),
             style: session.rasterStyle,
             errorMessage: presentation.state === "error" ? error?.message ?? "" : "",
             canRetry: presentation.state === "error" && canRetryRasterStatistics(error),
@@ -2133,6 +2143,7 @@ export function initializeRasterViewer(
                 leaveBivariateMode("2D comparison is not available for categorical layers.");
             }
             if (editingLayerKey === session.key) presentSessionAppearance(session);
+            refreshSessionStatisticsForAppearance(session);
             renderBivariateAvailability();
         },
         /**
@@ -2352,7 +2363,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreActiveLayerStatistics() {
+        const codes = sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state);
         if (hasSelectedRasterSamplingArea()) {
+            if (selectedRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(selectedRasterStatistics, codes)) {
+                selectedRasterStatisticsState = "idle";
+            }
             if (selectedRasterStatisticsState === "ready") {
                 renderRasterStatistics(selectedRasterStatistics);
             } else if (selectedRasterStatisticsState === "error") {
@@ -2366,6 +2381,8 @@ export function initializeRasterViewer(
                     currentRasterSamplingArea()
                 );
             }
+        } else if (wholeRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(wholeRasterStatistics, codes)) {
+            void rasterStatisticsController.activate(activeRasterItem, WHOLE_RASTER_SAMPLING_AREA);
         } else if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
         } else if (wholeRasterStatisticsState === "error") {
@@ -2663,7 +2680,18 @@ export function initializeRasterViewer(
         }
         const scopeLabel = styleHistogramScopeLabel(session);
         if (editingAppearanceMode === "categorical") {
-            controlsView.renderStyleHistogramState?.(scopeLabel, CATEGORICAL_HISTOGRAM_MESSAGE);
+            const presentation = getLayerHistogramPresentation(session);
+            if (session.appearanceMode === "categorical" && presentation.state === "ready" &&
+                rasterStatisticsMatchCategories(presentation.statistics, sessionCategoryValues(session))) {
+                controlsView.renderCategoricalStyleHistogram?.(
+                    presentCategoricalRasterDistribution(presentation.statistics, session.categoricalStyle), scopeLabel);
+            } else {
+                const lifecycle = styleHistogramLifecycle(session);
+                controlsView.renderStyleHistogramState?.(scopeLabel, lifecycle.state === "loading"
+                    ? "Calculating categorical ground areas…" : lifecycle.state === "error"
+                        ? `Histogram unavailable: ${lifecycle.error?.message ?? "Unknown error"}`
+                        : CATEGORICAL_HISTOGRAM_MESSAGE, lifecycle.state === "loading");
+            }
             return;
         }
         if (session.rasterStatistics === null) {
@@ -2749,15 +2777,59 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Replace a continuous histogram with explicit categorical availability guidance.
+     * Present category areas using the current layer appearance and matching result.
      * @return {void}
      */
-    function presentCategoricalHistogramUnavailable() {
+    function presentCategoricalHistogram() {
         controlsView.clearHistogram();
         controlsView.setPercentileControlsVisible(false);
         controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsBusy(false);
-        controlsView.setStatisticsStatus(CATEGORICAL_HISTOGRAM_MESSAGE);
+        const session = mapLayers.getRecord(activeLayerKey)?.state;
+        if (rasterStatisticsIsApplicable &&
+            rasterStatisticsMatchCategories(rasterStatistics, sessionCategoryValues(session))) {
+            controlsView.renderCategoricalHistogram?.(
+                presentCategoricalRasterDistribution(rasterStatistics, session.categoricalStyle));
+            controlsView.setStatisticsStatus("Estimated categorical ground area; percentages include Unmapped and exclude NoData.");
+        } else {
+            controlsView.setStatisticsStatus(CATEGORICAL_HISTOGRAM_MESSAGE);
+        }
+    }
+
+    /**
+     * Read committed numeric classification without exposing appearance to analysis.
+     * @param {Object|undefined} session Retained layer session, or detached analysis.
+     * @return {number[]|null} Category codes, or continuous analysis.
+     */
+    function sessionCategoryValues(session) {
+        return session?.appearanceMode === "categorical"
+            ? session.categoricalStyle.categories.map((row) => row.value) : null;
+    }
+
+    /**
+     * Refresh only numeric classification changes, canceling stale controller work.
+     * Label, color, opacity and table ordering changes reuse matching results or
+     * the matching pending request. Scope changes remain owned by area controls.
+     * @param {Object} session Retained style target.
+     * @return {void}
+     */
+    function refreshSessionStatisticsForAppearance(session) {
+        if (!mapLayers.getRecord(session.key)) return;
+        if (session.key === activeLayerKey) saveActiveLayerSession();
+        const codes = sessionCategoryValues(session);
+        const presentation = getLayerHistogramPresentation(session);
+        const identity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
+        if (["loading", "error"].includes(presentation.state) && session.statisticsCategoryIdentity === identity) return;
+        if (presentation.state === "ready" && rasterStatisticsMatchCategories(presentation.statistics, codes)) {
+            if (session.key === activeLayerKey) renderRasterStatistics(presentation.statistics);
+            return;
+        }
+        if (session.key === activeLayerKey) {
+            void rasterStatisticsController.activate(activeRasterItem, currentRasterSamplingArea());
+        } else {
+            void requireLayerHistogramController(session).activate(session.item,
+                getSelectedArea(session.key, "1d") ?? WHOLE_RASTER_SAMPLING_AREA);
+        }
     }
 
     /**
@@ -2871,7 +2943,7 @@ export function initializeRasterViewer(
             activePaletteName = paletteName;
             rasterStyleWasEdited = wasEdited;
             if (session.appearanceMode === "categorical") {
-                presentCategoricalHistogramUnavailable();
+                presentCategoricalHistogram();
             } else if (rasterStatistics !== null) {
                 renderRasterStatistics(rasterStatistics, false, rasterStatisticsIsApplicable);
             } else {
@@ -3078,6 +3150,7 @@ export function initializeRasterViewer(
         clearRasterStatisticsPresentation();
         controlsView.setStatisticsBusy(true);
         controlsView.setStatisticsStatus(
+            activeAppearanceIsCategorical() ? "Calculating categorical ground areas…" :
             scope === "selectedArea"
                 ? "Calculating a bounded histogram for the selected area..."
                 : "Calculating a bounded whole-raster histogram..."
@@ -3141,7 +3214,7 @@ export function initializeRasterViewer(
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(false);
         if (activeAppearanceIsCategorical()) {
-            presentCategoricalHistogramUnavailable();
+            presentCategoricalHistogram();
             saveActiveLayerSession();
             return;
         }
@@ -3277,11 +3350,12 @@ export function initializeRasterViewer(
         selectedRasterStatisticsError = null;
         rasterStatisticsIsApplicable = false;
         controlsView.setStatisticsBusy(true);
+        if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
         controlsView.setStatisticsRetryVisible(false);
         controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsStatus(
             activeAppearanceIsCategorical()
-                ? CATEGORICAL_HISTOGRAM_MESSAGE
+                ? "Calculating categorical ground areas for the selected area…"
             : rasterStatistics === null
                 ? selectedRasterStatisticsLoadingMessage()
                 : selectedRasterStatisticsLoadingMessage() + " " +
@@ -3338,13 +3412,14 @@ export function initializeRasterViewer(
             canRetryRasterStatistics(error)
         );
         controlsView.setApplyPercentilesEnabled(false);
+        if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
         const areaName = selectedCatalogSelection === null
             ? "Selected-area"
             : `Vector selection ${selectedCatalogSelection.filename}, layer ` +
               selectedCatalogSelection.selectedDataset;
         controlsView.setStatisticsStatus(
             activeAppearanceIsCategorical()
-                ? CATEGORICAL_HISTOGRAM_MESSAGE
+                ? `Categorical ground areas unavailable: ${error.message}`
             : rasterStatistics === null
                 ? `${areaName} histogram unavailable: ${error.message} ` +
                   "Manual appearance controls remain available."
@@ -3385,7 +3460,10 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clearSelection();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        if (wholeRasterStatisticsState === "ready") {
+        if (wholeRasterStatisticsState === "ready" &&
+            !rasterStatisticsMatchCategories(wholeRasterStatistics, sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state))) {
+            void rasterStatisticsController.activate(activeRasterItem, WHOLE_RASTER_SAMPLING_AREA);
+        } else if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
         } else if (wholeRasterStatisticsState === "error") {
             renderRasterStatisticsError(
@@ -3848,6 +3926,7 @@ export function initializeRasterViewer(
             applySessionStyle(session, session.rasterStyle, session.paletteName,
                 session.rasterStyleWasEdited);
             controlsView.setStyle(session.rasterStyle, session.paletteName);
+            refreshSessionStatisticsForAppearance(session);
             renderBivariateAvailability();
             renderLayerStack();
             controlsView.setAppearanceStatus("Restored continuous styling with its retained palette and range.");
@@ -3876,7 +3955,8 @@ export function initializeRasterViewer(
             controlsView.setAppearanceStatus("The map keeps its last valid appearance until every category is valid.");
             return;
         }
-        if (session.key === activeLayerKey) presentCategoricalHistogramUnavailable();
+        refreshSessionStatisticsForAppearance(session);
+        if (session.key === activeLayerKey && rasterStatisticsIsApplicable) presentCategoricalHistogram();
         syncBivariateCandidate(session);
         refreshRasterPixelPresentation();
         renderBivariateAvailability();

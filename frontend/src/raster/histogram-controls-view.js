@@ -10,6 +10,7 @@ import {
     clearRasterHistogramChart,
     renderRasterHistogramChart,
 } from "./histogram-view.js";
+import { createCategoricalRasterHistogram } from "./categorical-histogram-view.js";
 import { HistogramAxisControls } from "./histogram-axis-controls.js";
 import { requireRasterControl } from "./required-control.js";
 import { formatRasterPixelValue } from "./value-format.js";
@@ -46,6 +47,7 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {string} [unavailableMessage] Presentation-only explanation replacing
  * the continuous chart, axes, and bin preview without changing statistics state.
  * @property {string} [valueLabel] X-axis name with explicit source units.
+ * @property {import("./categorical-presentation.js").CategoricalAreaPresentation|null} [categorical] Prepared category rows.
  */
 
 /** Own direct DOM interaction and presentation for raster histograms. */
@@ -103,10 +105,13 @@ export class RasterHistogramControlsView {
         this.summaryButtons = [];
         this.summaryCharts = [];
         this.axisStates = new Map();
+        this.categoryExpansions = new Map();
         this.summaryAxisControls = [];
         this.detailAxisControls = null;
         this.detailAxesHost = documentContext.createElement("div");
         this.histogram.append(this.detailAxesHost);
+        this.categoryHost = documentContext.createElement("div");
+        this.histogram.append(this.categoryHost);
         this.activeHistogramKey = null;
         this.handlers = null;
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
@@ -138,6 +143,7 @@ export class RasterHistogramControlsView {
         this.#clearSummaryCharts();
         this.clearHistogram();
         this.axisStates.clear();
+        this.categoryExpansions.clear();
         this.handlers = null;
     }
 
@@ -407,10 +413,23 @@ export class RasterHistogramControlsView {
      * @return {void}
      */
     renderHistogram(statistics, style, valueLabel = "Raster value") {
+        this.categoryHost.replaceChildren();
+        this.histogramChart.hidden = false;
         this.detailAxisControls?.dispose();
         const key = JSON.stringify([statistics.collectionId, statistics.itemId]);
         this.detailAxisControls = this.#axisControls(key, this.histogramChart, statistics, style, valueLabel);
         this.detailAxesHost.replaceChildren(this.detailAxisControls.root);
+    }
+
+    /**
+     * Render the active layer's prepared category distribution.
+     * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
+     * @return {void}
+     */
+    renderCategoricalHistogram(presentation) {
+        this.clearHistogram();
+        this.histogramChart.hidden = true;
+        this.categoryHost.append(createCategoricalRasterHistogram(presentation, this.documentContext));
     }
 
     /** Hide and empty the fixed-bin histogram chart. @return {void} */
@@ -418,6 +437,8 @@ export class RasterHistogramControlsView {
         this.detailAxisControls?.dispose();
         this.detailAxisControls = null;
         this.detailAxesHost.replaceChildren();
+        this.categoryHost.replaceChildren();
+        this.histogramChart.hidden = true;
         clearRasterHistogramChart(this.histogramChart);
     }
 
@@ -503,7 +524,14 @@ export class RasterHistogramControlsView {
         }[summary.state];
         status.hidden = !presentationUnavailable && summary.state === "ready";
         content.append(name, status);
-        if (!presentationUnavailable && summary.automatic && summary.state === "ready" && summary.statistics) {
+        if (summary.categorical && summary.state === "ready") {
+            const chart = createCategoricalRasterHistogram(summary.categorical, this.documentContext, {
+                expanded: this.categoryExpansions.get(summary.key) ?? false,
+                onExpandedChange: (expanded) => this.categoryExpansions.set(summary.key, expanded),
+            });
+            // Keep chart buttons outside the optional summary selection button.
+            (summary.automatic ? content : container).append(chart);
+        } else if (!presentationUnavailable && summary.automatic && summary.state === "ready" && summary.statistics) {
             const chart = this.documentContext.createElementNS(
                 "http://www.w3.org/2000/svg", "svg"
             );

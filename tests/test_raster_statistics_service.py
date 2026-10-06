@@ -567,3 +567,89 @@ def test_statistics_service_shares_one_completed_cache_budget(
     asyncio.run(exercise_combined_limit())
     assert ordinary_read_count == 2
     assert paired_read_count == 2
+
+
+def test_categorical_statistics_share_admission_and_cache_by_codes_and_source(
+    tmp_path: Path,
+) -> None:
+    """Canonical codes coalesce, while source and classification changes invalidate."""
+    authorizer = _SourceAuthorizer(tmp_path / "source.tif")
+    calls: list[tuple[int, ...]] = []
+
+    def categorical_reader(
+        source_path: Path,
+        area: RasterSamplingArea,
+        cancellation: RasterReadCancellationCheck,
+        *,
+        category_values: tuple[int, ...],
+    ) -> RasterStatistics:
+        """Return controlled category results through the real service boundary.
+
+        Args:
+            source_path: Authorized fixture source.
+            area: Validated sampling area.
+            cancellation: Owning service cancellation predicate.
+            category_values: Canonically sorted numeric codes.
+
+        Returns:
+            Valid statistics with numeric category areas.
+        """
+        from eolab_app.raster.models import RasterCategoricalDistribution
+
+        calls.append(category_values)
+        return _statistics(1).model_copy(
+            update={
+                "categorical_distribution": RasterCategoricalDistribution(
+                    categoryValues=category_values,
+                    areasHectares=[1.0] * len(category_values),
+                    unmappedAreaHectares=0,
+                    validAreaHectares=len(category_values),
+                    nodataAreaHectares=0,
+                )
+            }
+        )
+
+    async def exercise() -> None:
+        """Exercise cache reuse and source reauthorization.
+
+        Returns:
+            None after verifying independent classification identities.
+        """
+        service = RasterStatisticsService(
+            authorizer,
+            1,
+            8,
+            categorical_statistics_reader=categorical_reader,
+            statistics_reader=lambda *_: _statistics(1),
+        )
+
+        def request(codes: list[int] | None) -> CatalogRasterStatisticsRequest:
+            """Build a validated public request.
+
+            Args:
+                codes: Optional category classification.
+
+            Returns:
+                Path-free statistics request.
+            """
+            return CatalogRasterStatisticsRequest(
+                collectionId="eolab-mounted-geotiffs",
+                itemId="geotiff-0123456789abcdef01234567",
+                categoryValues=codes,
+            )
+
+        first, reordered = await asyncio.gather(
+            service.get(request([41, 0])), service.get(request([0, 41]))
+        )
+        assert first == reordered
+        assert calls == [(0, 41)]
+        assert (await service.get(request(None))).categorical_distribution is None
+        await service.get(request([0, 42]))
+        assert calls == [(0, 41), (0, 42)]
+        authorizer.authorization = AuthorizedRaster(
+            authorizer.authorization.source_path, (6, 7, 8, 9, 10)
+        )
+        await service.get(request([0, 41]))
+        assert calls == [(0, 41), (0, 42), (0, 41)]
+
+    asyncio.run(exercise())

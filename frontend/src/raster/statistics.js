@@ -6,6 +6,7 @@
  * estimates values from histogram percentiles. It performs no I/O or rendering.
  */
 import { validateRasterSelectedBounds } from "./geometry.js";
+import { validateCategoricalDistribution } from "./categorical-statistics.js";
 
 /** Default histogram percentiles used to derive raster color thresholds. */
 export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
@@ -182,6 +183,9 @@ export function validateRasterStatistics(statistics) {
         )
     ) {
         throw rasterStatisticsContractError("suggested range");
+    }
+    if (statistics.categoricalDistribution != null) {
+        validateCategoricalDistribution(statistics.categoricalDistribution);
     }
     return statistics;
 }
