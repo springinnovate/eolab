@@ -140,3 +140,36 @@ test("opacity controls convert percent, validate blanks, and share the edit life
     input.dispatchEvent(new Event("input"));
     assert.equal(events.length, 2);
 });
+
+test("appearance mode switches editors without erasing retained continuous or categorical inputs", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterAppearanceControlsView(doc);
+    const events = [];
+    view.bind({ onAppearanceModeChange: mode => events.push(mode) });
+    view.setStyle(DEFAULT_RASTER_STYLE, "viridis");
+    view.setCategoricalStyle({
+        mode: "categorical",
+        categories: [{ value: 0, label: "Water", color: "#0022ff", opacity: 0 }],
+        unmapped: { color: "#808080", opacity: 1 },
+    });
+    const mode = doc.querySelector("#raster-appearance-mode");
+    mode.value = "categorical";
+    mode.dispatchEvent(new Event("change"));
+    assert.deepEqual(events, ["categorical"]);
+    assert.equal(doc.querySelector("#raster-continuous-controls").hidden, true);
+    assert.equal(doc.querySelector("#raster-categorical-editor").hidden, false);
+    assert.equal(doc.querySelector("#reset-raster-style").hidden, true);
+    assert.deepEqual(view.readStyle(), DEFAULT_RASTER_STYLE);
+    assert.equal(view.readCategoricalStyle().categories[0].value, 0);
+    view.setAppearanceMode("continuous");
+    assert.equal(mode.value, "continuous");
+    assert.equal(doc.querySelector("#raster-continuous-controls").hidden, false);
+    assert.equal(doc.querySelector("#raster-categorical-editor").hidden, true);
+    assert.equal(view.readCategoricalStyle().categories[0].opacity, 0);
+    view.setEnabled(false);
+    assert.equal(mode.disabled, true);
+    assert.equal(doc.querySelector("#raster-unmapped-opacity").disabled, true);
+    view.unbind();
+    mode.dispatchEvent(new Event("change"));
+    assert.deepEqual(events, ["categorical"]);
+});

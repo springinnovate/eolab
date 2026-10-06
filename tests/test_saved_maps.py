@@ -307,3 +307,74 @@ def test_map_legend_preferences_round_trip() -> None:
             invalid["view"]["layers"][index]["legendIncluded"] = value
             with pytest.raises(ValidationError):
                 CreateSavedMap.model_validate(invalid)
+
+
+def test_versioned_raster_appearance_round_trip() -> None:
+    """Preserve both raster configurations and legacy wire documents unchanged."""
+    candidate = map_request()
+    candidate["view"] = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
+        ).read_text()
+    )
+    for mode in ("categorical", "continuous"):
+        candidate["view"]["layers"][0]["style"]["mode"] = mode
+        parsed = CreateSavedMap.model_validate(candidate)
+        assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    candidate["view"]["layers"][0]["style"]["categorical"] = None
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("appearanceVersion",), 2),
+        (("appearanceVersion",), True),
+        (("appearanceVersion",), None),
+        (("mode",), "unknown"),
+        (("definition",), {}),
+        (("continuous",), None),
+        (("continuous", "styleWasEdited"), "false"),
+        (("continuous", "paletteName"), "x" * 101),
+        (("continuous", "definition"), {"text": "x" * 65536}),
+        (("categorical",), None),
+        (("categorical",), {"text": "🌲" * 17000}),
+    ],
+)
+def test_versioned_raster_appearance_boundaries(
+    path: tuple[str, ...], value: Any
+) -> None:
+    """Keep the portable envelope strict without importing raster semantics.
+
+    Args:
+        path: Appearance field to replace or append.
+        value: Invalid scalar, mixed-envelope field, or oversized definition.
+    """
+    candidate = map_request()
+    candidate["view"] = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
+        ).read_text()
+    )
+    target = candidate["view"]["layers"][0]["style"]
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(candidate)
+
+
+def test_versioned_raster_appearance_requires_all_envelope_fields() -> None:
+    """Do not silently default missing configuration fields in imported maps."""
+    candidate = map_request()
+    candidate["view"] = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "saved-map-v3-categorical.json"
+        ).read_text()
+    )
+    for field in ("appearanceVersion", "mode", "continuous", "categorical"):
+        invalid = deepcopy(candidate)
+        del invalid["view"]["layers"][0]["style"][field]
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)

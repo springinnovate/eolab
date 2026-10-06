@@ -8,6 +8,7 @@ import {
     RASTER_SAMPLE_WINDOW_PANE,
     rasterSampleBoundsToLeaflet,
     setRasterLayerAdditiveBlend,
+    setRasterWmsStyle,
 } from "../../src/raster/leaflet.js";
 import { SELECTED_BOUNDS } from "../../test-support/raster/fixtures.js";
 
@@ -143,4 +144,23 @@ test("raster WMS blending uses the ESOS-C plus-lighter mode", () => {
     () => setRasterLayerAdditiveBlend({}, true),
     /container is unavailable/,
   );
+});
+
+test("switching WMS styles removes the previous mutually exclusive parameter before redraw", () => {
+  const snapshots = [];
+  const layer = {
+    wmsParams: { layers: "eolab:test", env: "old-ramp", transparent: true },
+    setParams(parameters) {
+      Object.assign(this.wmsParams, parameters);
+      snapshots.push({ ...this.wmsParams });
+    },
+  };
+  setRasterWmsStyle(layer, { raster_style: '{"mode":"categorical"}' });
+  assert.equal(Object.hasOwn(snapshots[0], "env"), false);
+  assert.equal(snapshots[0].raster_style, '{"mode":"categorical"}');
+  assert.equal(snapshots[0].layers, "eolab:test");
+  setRasterWmsStyle(layer, { env: "restored-ramp" });
+  assert.equal(Object.hasOwn(snapshots[1], "raster_style"), false);
+  assert.equal(snapshots[1].env, "restored-ramp");
+  assert.equal(snapshots[1].transparent, true);
 });

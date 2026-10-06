@@ -7,6 +7,7 @@ export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 
 const MAX_IDENTITY_LENGTH = 512;
 const MAX_VERSION_LENGTH = 100;
+const MAX_APPEARANCE_DEFINITION_BYTES = 65536;
 const SOURCE_REVISION_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 /** Error raised when an imported saved-map document violates its contract. */
@@ -284,14 +285,7 @@ function validateLayer(candidate) {
             "Saved layer style kind must be raster or vector."
         );
     }
-    requireExactKeys(
-        candidate.style,
-        candidate.style.kind === "raster"
-            ? ["kind", "definition", "paletteName"]
-            : ["kind", "definition"],
-        "Saved layer style"
-    );
-    requirePlainObject(candidate.style.definition, "Saved style definition");
+    validateStyleEnvelope(candidate.style);
     if (Object.hasOwn(candidate, "filter")) {
         requirePlainObject(candidate.filter, "Saved filter");
         if (JSON.stringify(candidate.filter).length > 8192) {
@@ -308,6 +302,66 @@ function validateLayer(candidate) {
         style: structuredClone(candidate.style),
         ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
     });
+}
+
+/**
+ * Validate portable style structure while leaving style meaning to its owner.
+ *
+ * Versioned raster envelopes retain both independent configurations. Legacy
+ * raster envelopes remain unchanged so the raster owner can migrate them on
+ * restoration. Definitions stay opaque and cannot add transport fields.
+ *
+ * @param {Object} style Untrusted raster or vector style envelope.
+ * @return {void}
+ * @throws {SavedMapViewValidationError} If envelope fields or bounds are invalid.
+ */
+function validateStyleEnvelope(style) {
+    if (style.kind !== "raster" || !Object.hasOwn(style, "appearanceVersion")) {
+        requireExactKeys(style, style.kind === "raster"
+            ? ["kind", "definition", "paletteName"] : ["kind", "definition"],
+        "Saved layer style");
+        requirePlainObject(style.definition, "Saved style definition");
+        return;
+    }
+    requireExactKeys(style,
+        ["kind", "appearanceVersion", "mode", "continuous", "categorical"],
+        "Saved raster appearance");
+    if (style.appearanceVersion !== 1) {
+        throw new SavedMapViewValidationError("Raster appearance version is not supported.");
+    }
+    if (!["continuous", "categorical"].includes(style.mode)) {
+        throw new SavedMapViewValidationError("Raster appearance mode is invalid.");
+    }
+    requirePlainObject(style.continuous, "Continuous appearance");
+    requireExactKeys(style.continuous,
+        ["definition", "paletteName", "styleWasEdited"], "Continuous appearance");
+    requireBoundedString(style.continuous.paletteName, 100, "Raster palette name");
+    if (typeof style.continuous.styleWasEdited !== "boolean") {
+        throw new SavedMapViewValidationError("Continuous style edit state must be boolean.");
+    }
+    validateAppearanceDefinition(style.continuous.definition);
+    if (style.categorical !== null) {
+        validateAppearanceDefinition(style.categorical);
+    } else if (style.mode === "categorical") {
+        throw new SavedMapViewValidationError("Categorical mode requires a category table.");
+    }
+}
+
+/**
+ * Require a bounded opaque definition at the portable appearance boundary.
+ *
+ * @param {unknown} definition Owner-specific JSON record.
+ * @return {void}
+ * @throws {SavedMapViewValidationError} If shape or serialized size is invalid.
+ */
+function validateAppearanceDefinition(definition) {
+    requirePlainObject(definition, "Saved appearance definition");
+    if (new TextEncoder().encode(JSON.stringify(definition)).byteLength >
+        MAX_APPEARANCE_DEFINITION_BYTES) {
+        throw new SavedMapViewValidationError(
+            "Saved appearance definition exceeds 65536 UTF-8 bytes."
+        );
+    }
 }
 
 /**

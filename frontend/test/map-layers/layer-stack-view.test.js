@@ -1214,5 +1214,19 @@ test("both legend presentations share all colors, selection, ordering and disclo
   assert.ok(!classifiedRow.classList.contains("on-map-legend-layer--fixed"));
   assert.equal(elementsByClass(classifiedRow, "map-layer-legend-field")[0].textContent, "Protection class");
   assert.equal(elementsByClass(classifiedRow, "map-layer-legend-swatch").length, 2);
+  const placeholder = { ...LAYERS[0], visible: true,
+    legend: { kind: "fixed", label: "Categorical legend is not available yet." } };
+  view.render([placeholder], null);
+  legend.update([placeholder]);
+  const placeholderRow = legend.contents.children[0];
+  assert.equal(placeholderRow.tagName, "SECTION");
+  assert.equal(placeholderRow.children[0].textContent, placeholder.label);
+  assert.equal(legend.choices.children.length, 1);
+  for (const presentation of [placeholderRow, doc.querySelector("#raster-layer-list").children[0]]) {
+    assert.equal(elementsByClass(presentation, "map-layer-legend-field")[0].textContent,
+      "Categorical legend is not available yet.");
+    assert.equal(elementsByClass(presentation, "map-layer-legend-swatch").length, 0);
+    assert.equal(elementsByClass(presentation, "map-layer-legend-gradient").length, 0);
+  }
   legend.remove(); assert.equal(removed, true);
 });

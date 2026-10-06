@@ -144,3 +144,38 @@ test("map legend preferences round-trip for catalog and shared layers without ch
     }
   }
 });
+
+test("versioned raster appearance round-trips both configurations without interpreting them", () => {
+  const candidate = JSON.parse(readFileSync(new URL(
+    "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+  ), "utf8"));
+  for (const mode of ["categorical", "continuous"]) {
+    candidate.layers[0].style.mode = mode;
+    assert.deepEqual(parseSavedMapView(serializeSavedMapView(candidate)), candidate);
+  }
+  candidate.layers[0].style.categorical = null;
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(candidate)), candidate);
+});
+
+test("saved raster appearance rejects mixed envelopes, invalid edit state and unbounded definitions", () => {
+  const fixture = JSON.parse(readFileSync(new URL(
+    "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
+  ), "utf8"));
+  for (const mutate of [
+    style => { style.appearanceVersion = 2; },
+    style => { style.appearanceVersion = true; },
+    style => { style.mode = "unknown"; },
+    style => { style.definition = {}; },
+    style => { style.continuous = null; },
+    style => { style.continuous.styleWasEdited = "false"; },
+    style => { style.continuous.paletteName = "x".repeat(101); },
+    style => { style.categorical = null; },
+    style => { delete style.categorical; },
+    style => { style.categorical = { text: "🌲".repeat(17000) }; },
+    style => { style.continuous.definition = { text: "x".repeat(65536) }; }
+  ]) {
+    const candidate = structuredClone(fixture);
+    mutate(candidate.layers[0].style);
+    assert.throws(() => parseSavedMapView(JSON.stringify(candidate)));
+  }
+});

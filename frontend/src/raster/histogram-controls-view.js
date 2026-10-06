@@ -32,6 +32,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {string} scope Readable geographic sampling scope.
  * @property {number[]|null} counts Histogram bin counts when ready.
  * @property {string} [errorMessage] Reason the current sample is unavailable.
+ * @property {string} [unavailableMessage] Presentation-only explanation replacing
+ * the continuous chart, axes, and bin preview without changing statistics state.
  * @property {string} [valueLabel] X-axis name with explicit source units.
  */
 
@@ -437,6 +439,8 @@ export class RasterHistogramControlsView {
             typeof summary.scope !== "string" ||
             summary.scope === "" ||
             !allowedStates.has(summary.state) ||
+            (summary.unavailableMessage !== undefined &&
+                typeof summary.unavailableMessage !== "string") ||
             !(
                 summary.counts === null ||
                 (
@@ -477,7 +481,8 @@ export class RasterHistogramControlsView {
         const status = this.documentContext.createElement("span");
         status.className = "raster-histogram-summary-status";
         status.setAttribute("role", "status");
-        status.textContent = {
+        const presentationUnavailable = summary.unavailableMessage !== undefined;
+        status.textContent = summary.unavailableMessage ?? {
             idle: "Waiting for histogram",
             loading: "Updating histogram…",
             ready: "",
@@ -485,9 +490,9 @@ export class RasterHistogramControlsView {
                 ? `Histogram unavailable: ${summary.errorMessage}`
                 : "Histogram unavailable",
         }[summary.state];
-        status.hidden = summary.state === "ready";
+        status.hidden = !presentationUnavailable && summary.state === "ready";
         content.append(name, status);
-        if (summary.automatic && summary.state === "ready" && summary.statistics) {
+        if (!presentationUnavailable && summary.automatic && summary.state === "ready" && summary.statistics) {
             const chart = this.documentContext.createElementNS(
                 "http://www.w3.org/2000/svg", "svg"
             );
@@ -496,7 +501,7 @@ export class RasterHistogramControlsView {
             this.summaryAxisControls.push(controls);
             this.summaryCharts.push(chart);
             content.append(chart, controls.root);
-        } else if (summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
+        } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             content.append(this.#createSummaryPreview(summary));
         }
         content.append(scope);

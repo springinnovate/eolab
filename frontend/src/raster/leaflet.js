@@ -88,6 +88,19 @@ export function createRasterWmsLayer(
 }
 
 /**
+ * Replace mutually exclusive raster style parameters before redrawing a layer.
+ * Leaflet merges WMS parameters, so switching modes must remove the old key.
+ * @param {Object} rasterLayer Leaflet WMS layer with mutable wmsParams.
+ * @param {{env?:string,raster_style?:string}} parameters Validated style parameters.
+ * @return {void}
+ */
+export function setRasterWmsStyle(rasterLayer, parameters) {
+    delete rasterLayer.wmsParams.env;
+    delete rasterLayer.wmsParams.raster_style;
+    rasterLayer.setParams({ styles: "dynamic-raster", ...parameters });
+}
+
+/**
  * Apply or clear the ESOS-C additive compositing mode on one WMS tile layer.
  *
  * @param {Object} rasterLayer Leaflet-compatible WMS tile layer.

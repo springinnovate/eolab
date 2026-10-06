@@ -7,6 +7,7 @@
  */
 import { requireRasterControl } from "./required-control.js";
 import { buildRasterLegend } from "./style.js";
+import { CategoricalRasterEditorView } from "./categorical-editor-view.js";
 
 /**
  * @typedef {Object} RasterAppearanceHandlers
@@ -14,6 +15,10 @@ import { buildRasterLegend } from "./style.js";
  * @property {() => void} onStyleChange Commits a completed style edit.
  * @property {() => void} onPaletteChange Applies a selected color palette.
  * @property {() => void} onResetStyle Restores the initial raster style.
+ * @property {(mode: "continuous"|"categorical") => void} onAppearanceModeChange
+ * Selects a retained appearance mode or starts a categorical draft.
+ * @property {() => void} onCategoricalStyleInput Validates a category draft.
+ * @property {() => void} onCategoricalStyleChange Commits a completed category edit.
  */
 
 /**
@@ -40,6 +45,9 @@ export class RasterAppearanceControlsView {
             "#raster-appearance-layer"
         );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
+        this.appearanceMode = requireRasterControl(documentContext, "#raster-appearance-mode");
+        this.continuousControls = requireRasterControl(documentContext, "#raster-continuous-controls");
+        this.categoricalEditor = new CategoricalRasterEditorView(documentContext);
         this.styleInputs = {
             minimum: requireRasterControl(documentContext, "#raster-minimum"),
             midpoint: requireRasterControl(documentContext, "#raster-midpoint"),
@@ -92,6 +100,10 @@ export class RasterAppearanceControlsView {
         this.boundStyleChange = this.#handleStyleChange.bind(this);
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
+        this.boundAppearanceModeChange = () => {
+            this.setAppearanceMode(this.appearanceMode.value);
+            this.handlers?.onAppearanceModeChange?.(this.appearanceMode.value);
+        };
     }
 
     /**
@@ -127,6 +139,8 @@ export class RasterAppearanceControlsView {
         }
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.resetStyleButton.addEventListener("click", this.boundResetStyle);
+        this.appearanceMode.addEventListener("change", this.boundAppearanceModeChange);
+        this.categoricalEditor.bind(handlers);
     }
 
     /**
@@ -141,6 +155,8 @@ export class RasterAppearanceControlsView {
         }
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.resetStyleButton.removeEventListener("click", this.boundResetStyle);
+        this.appearanceMode.removeEventListener("change", this.boundAppearanceModeChange);
+        this.categoricalEditor.unbind();
         this.handlers = null;
     }
 
@@ -216,6 +232,49 @@ export class RasterAppearanceControlsView {
     }
 
     /**
+     * Select the editor presentation without deciding which style is rendered.
+     * A categorical draft may be shown while the last valid style remains active.
+     * @param {"continuous"|"categorical"} mode Selected appearance editor.
+     * @return {void}
+     */
+    setAppearanceMode(mode) {
+        this.appearanceMode.value = mode;
+        const categorical = mode === "categorical";
+        this.continuousControls.hidden = categorical;
+        this.categoricalEditor.root.hidden = !categorical;
+        this.resetStyleButton.hidden = categorical;
+    }
+
+    /**
+     * Restore one layer's retained categorical appearance or empty starter draft.
+     * @param {Readonly<import("./categorical-style.js").CategoricalRasterStyle>|null}
+     * style Committed appearance, or null when no categories have been defined.
+     * @return {void}
+     */
+    setCategoricalStyle(style) {
+        this.categoricalEditor.setStyle(style);
+    }
+
+    /**
+     * Read a complete, validated category draft without changing rendered state.
+     * @return {Readonly<import("./categorical-style.js").CategoricalRasterStyle>}
+     * Normalized immutable categorical appearance.
+     * @throws {Error} If the category table or unmapped appearance is invalid.
+     */
+    readCategoricalStyle() {
+        return this.categoricalEditor.readStyle();
+    }
+
+    /**
+     * Present category-table validation feedback beside the editor.
+     * @param {Error|null} [error=null] Validation error, or null to clear it.
+     * @return {void}
+     */
+    renderCategoricalError(error = null) {
+        this.categoricalEditor.renderError(error);
+    }
+
+    /**
      * Return the currently selected palette name.
      *
      * @return {string} Selected palette name or `custom`.
@@ -287,6 +346,8 @@ export class RasterAppearanceControlsView {
             input.disabled = !isEnabled;
         }
         this.palette.disabled = !isEnabled;
+        this.appearanceMode.disabled = !isEnabled;
+        this.categoricalEditor.setEnabled(isEnabled);
         this.resetStyleButton.disabled = !isEnabled;
     }
 
