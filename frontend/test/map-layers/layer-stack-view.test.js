@@ -1292,6 +1292,12 @@ test("large neutral legends retain every entry in a bounded keyboard-accessible 
 
   size = { x: 1400, y: 900 };
   legend.update([layer, { ...layer, key: "second" }, { ...layer, key: "third" }]);
+  assert.equal(legend.contents.children.length, 1, "identical 256-category tables appear once");
+  assert.equal(elementsByClass(legend.contents, "map-layer-legend-list")[0].children.length, 257);
+  legend.update([layer,
+    { ...layer, key: "second", legend: { ...layer.legend, label: "Second classification" } },
+    { ...layer, key: "third", legend: { ...layer.legend, label: "Third classification" } },
+  ]);
   for (const section of legend.contents.children) section.offsetHeight = 600;
   listeners.get("resize")();
   assert.equal(legend.contents.style.columnCount, "3", "separate layers keep the existing multi-column layout");
@@ -1311,4 +1317,168 @@ test("large neutral legends retain every entry in a bounded keyboard-accessible 
   assert.equal(elementsByClass(legend.contents, "map-layer-legend-list").length, 0);
   legend.remove();
   assert.equal(listeners.has("resize"), false);
+});
+
+/**
+ * Attach the real on-map view to the existing neutral DOM and Leaflet fakes.
+ * @param {(key:string,included:boolean)=>void} [onInclusion] Per-layer inclusion callback.
+ * @return {Promise<{doc:FakeLayerStackDocument,legend:import('../../src/map-layers/on-map-legend.js').OnMapLegend}>} View and owning document.
+ */
+async function categoricalMapLegendFixture(onInclusion = () => {}) {
+  const { OnMapLegend } = await import("../../src/map-layers/on-map-legend.js");
+  const doc = new FakeLayerStackDocument();
+  const toggleButton = doc.createElement("button");
+  toggleButton.closest = () => doc.createElement("details");
+  const map = { getContainer: () => ({ ownerDocument: doc }), getSize: () => ({ x: 1200, y: 800 }), on() {}, off() {} };
+  const leaflet = { DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} },
+    control: () => ({ addTo() {}, remove() {} }) };
+  return { doc, legend: new OnMapLegend(leaflet, map, { toggleButton, onInclusion, onChange() {} }) };
+}
+
+/**
+ * Build a neutral ordered category table with transparent and fallback entries.
+ * @param {string} key Layer identity.
+ * @return {import('../../src/map-layers/on-map-legend.js').LegendLayer} Visible layer presentation.
+ */
+function categoricalLegendLayer(key) {
+  const symbol = { shape: "polygon", fill: "#228b22", fillOpacity: 0.5,
+    stroke: "#000000", strokeOpacity: 0, strokeWidth: 0 };
+  return { key, label: key, visible: true, opacity: 0.4,
+    legend: { kind: "categories", label: "Categories", entries: [
+      { label: "Forest (41)", symbol },
+      { label: "Water (-1)", symbol: { ...symbol, fill: "#2166ac", fillOpacity: 0 } },
+      { label: "Unmapped", symbol: { ...symbol, fill: "#808080", fillOpacity: 1 } },
+    ] } };
+}
+
+test("identical nonadjacent category legends share one table and literal member names in map order", async () => {
+  const { doc, legend } = await categoricalMapLegendFixture();
+  const first = categoricalLegendLayer("first");
+  first.label = "<b>First forest</b>";
+  const copy = structuredClone(first);
+  copy.key = "copy";
+  copy.label = "Second forest";
+  copy.opacity = 1;
+  copy.effectiveOpacity = 0.4;
+  copy.legend.entries = copy.legend.entries.map(({ label, symbol }) => ({
+    symbol: Object.fromEntries(Object.entries(symbol).reverse()), label,
+  }));
+  copy.legend.description = "Owner metadata does not change the displayed category table";
+  const distinct = categoricalLegendLayer("distinct");
+  distinct.legend.entries[0].label = "Woodland (41)";
+  const layers = [first, distinct, copy];
+  const original = structuredClone(layers);
+  legend.update(layers);
+  assert.equal(legend.contents.children.length, 2);
+  const shared = legend.contents.children[0];
+  assert.equal(shared.children[0].textContent, "Shared categories");
+  const members = elementsByClass(shared, "on-map-legend-members")[0];
+  assert.equal(members.children[0].textContent, "2 layers");
+  assert.deepEqual(members.children[1].children.map(name => name.textContent), [first.label, copy.label]);
+  assert.equal(elementsByClass(shared, "map-layer-legend-list").length, 1);
+  const list = elementsByClass(shared, "map-layer-legend-list")[0];
+  assert.deepEqual(list.children.map(row => row.children[1].textContent), ["Forest (41)", "Water (-1)", "Unmapped"]);
+  assert.equal(elementsByClass(list, "map-layer-legend-swatch")[0].children[0].children[0].getAttribute("fill-opacity"), "0.2");
+  assert.equal(elementsByClass(list, "map-layer-legend-swatch")[1].children[0].children[0].getAttribute("fill-opacity"), "0");
+  assert.equal(legend.contents.children[1].children[0].textContent, "distinct");
+  assert.deepEqual(legend.choices.children.map(choice => choice.children[0].dataset.legendKey), ["first", "distinct", "copy"]);
+  const view = new MapLayerStackView(doc);
+  view.render(layers.map(layer => ({ ...LAYERS[0], ...layer })), null);
+  assert.equal(elementsByClass(doc.querySelector("#raster-layer-list"), "map-layer-legend-list").length, 3,
+    "layer-list legends remain individual");
+  assert.deepEqual(layers, original);
+});
+
+test("category legend matching preserves each displayed style difference and other legend kinds", async t => {
+  const { legend } = await categoricalMapLegendFixture();
+  const first = categoricalLegendLayer("first");
+  const variants = [
+    ["caption", layer => { layer.legend.label = "Biome"; }],
+    ["label", layer => { layer.legend.entries[0].label = "Woodland (41)"; }],
+    ["code", layer => { layer.legend.entries[0].label = "Forest (42)"; }],
+    ["row order", layer => { layer.legend.entries.reverse(); }],
+    ["color", layer => { layer.legend.entries[0].symbol.fill = "#00aa00"; }],
+    ["category opacity", layer => { layer.legend.entries[0].symbol.fillOpacity = 0.6; }],
+    ["Unmapped color", layer => { layer.legend.entries[2].symbol.fill = "#ff0000"; }],
+    ["Unmapped opacity", layer => { layer.legend.entries[2].symbol.fillOpacity = 0; }],
+    ["layer opacity", layer => { layer.opacity = 0.5; }],
+    ["effective opacity", layer => { layer.effectiveOpacity = 0.5; }],
+    ["shape", layer => { layer.legend.entries[0].symbol.shape = "line"; }],
+    ["stroke color", layer => { layer.legend.entries[0].symbol.stroke = "#ffffff"; }],
+    ["stroke opacity", layer => { layer.legend.entries[0].symbol.strokeOpacity = 1; }],
+    ["stroke width", layer => { layer.legend.entries[0].symbol.strokeWidth = 2; }],
+  ];
+  for (const [name, change] of variants) {
+    await t.test(name, () => {
+      const changed = structuredClone(first);
+      changed.key = "changed";
+      change(changed);
+      legend.update([first, changed]);
+      assert.equal(legend.contents.children.length, 2);
+      assert.equal(elementsByClass(legend.contents, "on-map-legend-members").length, 0);
+      legend.update([first, { ...first, key: "changed" }]);
+      assert.equal(legend.contents.children.length, 1, "restoring a matching style merges the sections");
+    });
+  }
+  await t.test("point size", () => {
+    const point = structuredClone(first);
+    point.legend.entries[0].symbol.shape = "point";
+    point.legend.entries[0].symbol.pointSize = 6;
+    const changed = structuredClone(point);
+    changed.key = "changed";
+    changed.legend.entries[0].symbol.pointSize = 10;
+    legend.update([point, changed]);
+    assert.equal(legend.contents.children.length, 2, "distinct point diameters are separate symbols");
+  });
+  for (const kind of ["fixed", "gradient", "graduated"]) {
+    const other = { ...first, legend: kind === "gradient"
+      ? { kind, label: "Value", gradient: "linear-gradient(red,blue)", labels: [0, 5, 10] }
+      : { ...first.legend, kind } };
+    legend.update([other, { ...other, key: "second" }]);
+    assert.equal(legend.contents.children.length, 2, kind + " legends retain separate sections");
+  }
+});
+
+test("shared category members retain independent inclusion, visibility, disclosure and focus", async () => {
+  const inclusions = [];
+  const { doc, legend } = await categoricalMapLegendFixture((key, included) => {
+    inclusions.push([key, included]);
+    layers = layers.map(layer => layer.key === key ? { ...layer, legendIncluded: included } : layer);
+    legend.update(layers);
+  });
+  let layers = [categoricalLegendLayer("first"), categoricalLegendLayer("second"), categoricalLegendLayer("third")];
+  legend.update(layers);
+  const members = elementsByClass(legend.contents, "on-map-legend-members")[0];
+  members.open = true;
+  members.children[0].focus();
+  const body = legend.body;
+  body.scrollTop = 70;
+  layers = [layers[2], { ...layers[1], label: "Renamed second" }, layers[0]];
+  legend.update(layers);
+  const reordered = elementsByClass(legend.contents, "on-map-legend-members")[0];
+  assert.equal(reordered.open, true);
+  assert.deepEqual(reordered.children[1].children.map(name => name.textContent), ["third", "Renamed second", "first"]);
+  assert.equal(doc.activeElement, reordered.children[0]);
+  assert.equal(body.scrollTop, 70);
+  assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
+  const checkbox = legend.choices.children[0].children[0];
+  checkbox.focus(); checkbox.checked = false; checkbox.dispatchEvent(new Event("change"));
+  assert.deepEqual(inclusions, [["third", false]]);
+  assert.equal(doc.activeElement, legend.choices.children[0].children[0]);
+  assert.equal(legend.choices.children.length, 3);
+  assert.equal(elementsByClass(legend.contents, "on-map-legend-members")[0].children[0].textContent, "2 layers");
+  layers = layers.map(layer => layer.key === "second" ? { ...layer, visible: false } : layer);
+  legend.update(layers);
+  assert.equal(legend.contents.children.length, 1);
+  assert.equal(legend.contents.children[0].children[0].textContent, "first");
+  assert.equal(elementsByClass(legend.contents, "on-map-legend-members").length, 0);
+  assert.equal(legend.choices.children[1].children[1].textContent, "Renamed second (hidden on map)");
+  layers = layers.map(layer => ({ ...layer, visible: true, legendIncluded: true }));
+  legend.update(layers);
+  elementsByClass(legend.contents, "on-map-legend-members")[0].children[0].focus();
+  legend.update([layers[0]]);
+  assert.equal(doc.activeElement, body, "a removed shared heading returns focus to the retained scroll region");
+  legend.update(layers.map(layer => ({ ...layer, visible: false })));
+  assert.equal(elementsByClass(legend.contents, "map-layer-legend-list").length, 0);
+  assert.equal(legend.choices.children.length, 3);
 });

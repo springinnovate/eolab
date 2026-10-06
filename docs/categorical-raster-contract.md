@@ -103,6 +103,16 @@ fallback appearance. Swatches reflect category opacity multiplied by layer
 opacity; fully transparent categories remain listed. Editing labels, colors,
 opacities, or row order updates the legend from the committed appearance.
 
+The on-map legend shares one **Shared categories** section among visible,
+legend-included layers with identical category captions, ordered labels/codes,
+complete symbols (including Unmapped), and effective layer opacity. Open its
+**N layers** disclosure to see every member's full name in map order. The section
+appears at its first member's position; each layer keeps its own **Choose layers**
+checkbox. Changing a style or opacity can split or merge sections. Category rows
+use smaller text and swatches while retaining every entry in the scrollable
+legend. Layer-list legends remain individual. Grouping is derived when displaying
+the map and does not change category definitions or saved-map data.
+
 The pixel picker, raster values at a click, and copied picker values show
 `Forest (41)` for an exact match and `Unmapped (42)` for valid values absent from
 the table. Category codes use ordinary decimal notation. Samples are never rounded
