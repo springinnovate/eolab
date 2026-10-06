@@ -1055,15 +1055,20 @@ export function initializeRasterViewer(
 
     /**
      * Decide whether a click should open the histogram using published extents.
+     * Ordinary visible-layer mode considers every visible raster extent; 2D
+     * mode and detached Catalog analysis retain their click participants.
      * This presentation decision does not restrict backend pixel requests.
      *
-     * @param {Object[]} participants Current bounded click participants.
+     * @param {Array<{key:string}>} participants Current click participants.
      * @param {{longitude:number,latitude:number}} position Canonical point.
      * @return {boolean} Whether any published extent covers the point, or a
      * participant has no retained renderer.
      */
     function shouldOpenRasterHistogram(participants, position) {
-        return participants.some(({ key }) => {
+        const coverageParticipants = followsVisibleLayers && !bivariateMode.active
+            ? allVisibleRasterRecords().map(({ entry }) => entry)
+            : participants;
+        return coverageParticipants.some(({ key }) => {
             const record = mapLayers.getRecord(key);
             return record === null || publishedBoundsContainPosition(
                 record.state.publishedRaster.bbox,
@@ -3480,7 +3485,8 @@ export function initializeRasterViewer(
      * Explore one composition-owned map position with the current window size.
      *
      * Request pixel values independently of the published-extent check that
-     * controls histogram selection. The pixel API determines actual coverage.
+     * controls histogram selection. Ordinary mode checks all visible extents;
+     * 2D mode checks its current pair. The pixel API determines actual coverage.
      * Catalog-vector analysis returns to ordinary raster scope before selecting
      * a box. Reject noncanonical coordinates before requesting either analysis.
      *
