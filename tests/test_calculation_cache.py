@@ -41,6 +41,75 @@ def calculation_plan(tmp_path: Path) -> AggregateSpec:
     return make_spec(path, ["sum(a)", "mean(a)"])
 
 
+def test_stdev_cache_identity_and_restoration(tmp_path: Path) -> None:
+    """The parsed population function reuses only matching source/area/formula work.
+
+    Args:
+        tmp_path: Private raster and result files.
+    """
+    path = write_source(
+        tmp_path / "source.tif", np.arange(100, dtype="int16").reshape(10, 10)
+    )
+    plan = make_spec(path, ["stdev(a)"])
+    request = AggregatePlanRequest(
+        sources=plan.sources, calculations=plan.calculations, wholeRaster=True
+    )
+    keys = cache.calculation_result_cache_keys(request, plan.sourceSignature)
+    assert keys == cache.calculation_result_cache_keys(plan)
+    artifact = calculate_raster_statistics_for_area(path, plan, tmp_path, LIMITS)
+    saved = cache.prepare_calculation_values_for_cache(plan, artifact.rows)
+    renamed = request.model_copy(
+        update={
+            "calculations": (
+                NamedCalculation(label="Deviation", expression=" stdev ( a ) "),
+            )
+        }
+    )
+    assert cache.calculation_result_cache_keys(renamed, plan.sourceSignature) == keys
+    assert identify_shared_calculation(
+        UnpreparedCalculation(request=request)
+    ) == identify_shared_calculation(UnpreparedCalculation(request=renamed))
+    restored = cache.restore_cached_calculation_plan(
+        renamed, plan.sourceSignature, saved
+    )
+    assert restored is not None
+    assert restored.cachedRows[0].value == artifact.rows[0]["value"]
+    assert restored.cachedRows[0].label == "Deviation"
+    assert restored.cachedRows[0].aggregates[0]["function"] == "stdev"
+    for changes in [
+        {"calculations": (NamedCalculation(label="Mean", expression="mean(a)"),)},
+        {
+            "calculations": (
+                NamedCalculation(label="Filtered", expression="stdev(a,where=a>10)"),
+            )
+        },
+        {"targetChunkPixels": 256},
+        {
+            "wholeRaster": None,
+            "selectedBounds": {
+                "west": 0.01,
+                "south": 9.91,
+                "east": 0.09,
+                "north": 9.99,
+            },
+        },
+    ]:
+        changed = AggregatePlanRequest.model_validate(
+            {**request.model_dump(mode="json", by_alias=True), **changes}
+        )
+        assert (
+            cache.calculation_result_cache_keys(changed, plan.sourceSignature) != keys
+        )
+        assert identify_shared_calculation(
+            UnpreparedCalculation(request=changed)
+        ) != identify_shared_calculation(UnpreparedCalculation(request=request))
+        assert (
+            cache.restore_cached_calculation_plan(changed, plan.sourceSignature, saved)
+            is None
+        )
+    assert cache.calculation_result_cache_keys(request, (1, 2, 3, 4)) != keys
+
+
 def test_cache_ignores_titles_whitespace_and_formula_order(
     calculation_plan: AggregateSpec,
 ) -> None:

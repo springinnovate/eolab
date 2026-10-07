@@ -19,6 +19,23 @@ const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4, decod
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 
+test("standard deviation preset is editable and submits the population formula through summary controls", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    h.view.elements.template.value = "stdev";
+    h.view.elements.template.dispatchEvent(new Event("change")); await h.tick();
+    const card = h.controller.state.statistics.at(-1);
+    assert.equal(card.label, "Standard deviation");
+    assert.equal(h.view.cards.get(card.id).expression.value, "stdev(a)");
+    h.controller.editStatistic(card.id, {expression: "stdev(a, where=a > 10)"});
+    h.controller.request(card.id, "manual"); await flush();
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").at(-1)[1].calculations,
+        [{label: "Standard deviation", expression: "stdev(a, where=a > 10)"}]);
+    await h.finish("ready", ["3.25"]);
+    assert.equal(card.result.row.value, "3.25");
+    assert.equal(card.current, true);
+    h.controller.destroy();
+});
+
 test("the first active map click calculates and an unchanged completed box reuses its result", async () => {
     const h = fixture(); await h.open();
     assert.equal(h.submits(), 0);

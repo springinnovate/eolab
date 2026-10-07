@@ -12,6 +12,7 @@ import { catalogSelectionsEqual } from "../selected-area.js";
 export const STATISTIC_PRESETS = Object.freeze({
     pixel: { label: "Pixel value", expression: "pixelValue(a)" },
     mean: { label: "Mean", expression: "mean(a)" }, sum: { label: "Sum", expression: "sum(a)" },
+    stdev: { label: "Standard deviation", expression: "stdev(a)" },
     count: { label: "Count above 10", expression: "count(a > 10)" },
     "area-threshold": { label: "Area above 10", expression: "areaha(a > 10)" },
     "area-class": { label: "Area in class 4", expression: "areaha(a == 4)" },

@@ -646,12 +646,13 @@
               <p class="raster-series-help">Area formulas use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
               <div id="raster-series-formulas"></div>
               <div class="raster-series-controls">
-                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
+                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
               </div>
               <details class="raster-series-help"><summary>Formula reference</summary>
                 <ul>
                   <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area.</li>
                   <li><code>mean(a)</code> — Average of valid pixel values.</li>
+                  <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. One pixel gives zero; no matching pixels gives no value.</li>
                   <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
                   <li><code>sum(a)</code> — Sum of valid pixel values.</li>
                   <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
@@ -723,7 +724,7 @@
             </section>
             <div id="calculations-rows"></div>
             <div id="summary-undo" class="downloads-actions" hidden><span>Statistic removed.</span><button id="summary-undo-button" class="summary-text-button" type="button">Undo</button></div>
-            <div class="summary-add-row"><label class="visually-hidden" for="calculations-template">Add statistic</label><select id="calculations-template"><option value="">+ Add statistic</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom</option></select></div>
+            <div class="summary-add-row"><label class="visually-hidden" for="calculations-template">Add statistic</label><select id="calculations-template"><option value="">+ Add statistic</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="count">Count above a threshold</option><option value="sum">Sum</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom</option></select></div>
               <details id="calculations-help"><summary>Formula reference</summary>
                 <p>Use <code>a</code> for the raster selected in that statistic. Presets are editable.</p>
                 <h4>Functions</h4>
@@ -733,10 +734,11 @@
                   <li><code>areaha(a == 4)</code> — Ground area in hectares where the value is 4. For values above a threshold, use <code>areaha(a &gt; 10)</code>. Includes the fraction of each matching pixel inside your box or selected polygons.</li>
                   <li><code>count(a)</code> — Number of valid pixels. Use <code>count(a &gt; 10)</code> to count matching pixels.</li>
                   <li><code>mean(a)</code> — Average pixel value. For a selected group, use <code>mean(a, where=a &gt; 10)</code>.</li>
+                  <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. Use <code>stdev(a, where=a &gt; 10)</code> to filter. One pixel gives zero; no matching pixels gives no value.</li>
                   <li><code>min(a)</code> — Smallest pixel value.</li>
                   <li><code>max(a)</code> — Largest pixel value.</li>
                 </ul>
-                <p><code>sum</code>, <code>count</code>, <code>mean</code>, <code>min</code>, and <code>max</code> accept an optional <code>where=condition</code>. <code>areaha</code> takes one condition.</p>
+                <p><code>sum</code>, <code>count</code>, <code>mean</code>, <code>stdev</code>, <code>min</code>, and <code>max</code> accept an optional <code>where=condition</code>. <code>areaha</code> takes one condition.</p>
                 <h4>Operators and combinations</h4>
                 <ul class="calculation-functions">
                   <li>Arithmetic: <code>+ - * /</code>. Example range: <code>max(a) - min(a)</code>.</li>
