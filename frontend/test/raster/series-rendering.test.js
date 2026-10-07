@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { RasterSeriesView } from "../../src/raster/series-view.js";
 import { RasterSeriesPlotsView } from "../../src/raster/series-plots-view.js";
@@ -41,6 +42,25 @@ function controlsFixture() {
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
+
+test("raster stack places plots before configuration and keeps scope and execution actions outside disclosures", async () => {
+    const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
+    const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
+    const positions = ["raster-series-context", "raster-series-status", "raster-series-plots",
+        "raster-series-statistics", "raster-series-data-settings", "Formula reference", "Values &amp; download"]
+        .map(name => panel.indexOf(name));
+    // Match owning elements rather than aria-controls references in the section navigation.
+    positions[2] = panel.indexOf('id="raster-series-plots"');
+    positions[3] = panel.indexOf('id="raster-series-statistics"');
+    positions[4] = panel.indexOf('id="raster-series-data-settings"');
+    assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
+    const disclosures = [...panel.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map(match => match[0]);
+    for (const id of ["context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
+        const attribute = `id="raster-series-${id}"`;
+        assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
+        assert.ok(disclosures.every(disclosure => !disclosure.includes(attribute)), `${id} stays outside secondary settings`);
+    }
+});
 
 test("series publishes selected raster and owned area context while inactive without drawing", () => {
     const h = controlsFixture(), contexts = [];
@@ -127,7 +147,93 @@ test("series renders each statistic through the same plots and values table", ()
     assert.equal(h.plots[0],h.state);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
         ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5","Value"]]);
-    assert.equal(h.view.context.textContent,"Whole extent of each raster");
+    assert.equal(h.view.context.textContent,"Whole extent of each raster · 1 raster");
+});
+
+test("compact rows retain focused drafts and editor disclosures when other statistics change", () => {
+    const h = controlsFixture(); h.draw();
+    const row = h.view.formulaRows.children[0], editor = row.querySelector("details");
+    assert.equal(editor.open, false, "preset editors start collapsed");
+    editor.open = true;
+    const expression = row.querySelectorAll("input").find(input => input.dataset.field === "expression");
+    expression.value = "mean(a) + "; expression.focus();
+    const custom = { ...h.state.statistics[0], id: 2, label: "Custom", expression: "", styleIndex: 1 };
+    h.state.statistics.push(custom); h.state.area.formulas = h.state.statistics;
+    h.draw();
+    assert.equal(h.view.formulaRows.children[0], row);
+    assert.equal(h.document.activeElement, expression);
+    assert.equal(expression.value, "mean(a) + ");
+    assert.equal(editor.open, true);
+    assert.equal(h.view.formulaRows.children[1].querySelector("details").open, true, "blank custom formulas expose their editor");
+    assert.equal(row.querySelector("button").disabled, false);
+    h.state.statistics.pop(); h.draw();
+    assert.equal(h.view.formulaRows.children[0], row);
+    assert.equal(expression.value, "mean(a) + ");
+    assert.equal(editor.open, true);
+    assert.equal(row.querySelector("button").disabled, true, "the remaining statistic cannot be removed");
+    assert.equal(h.view.formulaNodes.size, 1, "removed rows are released");
+});
+
+test("removing a focused statistic returns focus to Add statistic", () => {
+    const h = controlsFixture();
+    h.state.area.formulas = h.state.statistics;
+    h.state.statistics.push({ ...h.state.statistics[0], id: 2, styleIndex: 1 });
+    h.draw();
+    h.view.formulaRows.children[1].querySelector("button").focus();
+    h.state.statistics.pop(); h.draw();
+    assert.equal(h.document.activeElement, h.document.querySelector("#raster-series-add-formula"));
+});
+
+test("scope and collapsed data settings describe the active source count and display order", () => {
+    const h = controlsFixture();
+    h.document.querySelector("#raster-series-order").value = "name";
+    h.document.querySelector("#raster-series-direction").value = "reverse";
+    h.state.chartType = "scatter";
+    h.state.sources.push({ key: "b", label: "Raster B", selected: false });
+    h.draw();
+    assert.equal(h.view.sourceSummary.textContent, "Data and order · 1 selected · Layer name · Reverse · Scatter");
+    assert.equal(h.document.querySelector("#raster-series-edit-statistics").textContent, "Statistics (1)");
+    h.state.sources[1].selected = true;
+    h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
+    h.draw();
+    assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
+    assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Scatter");
+});
+
+test("section shortcuts focus owned destinations and open data settings without calculation actions", () => {
+    const h = controlsFixture();
+    const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
+        "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
+        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover"].map(key => [key, () => assert.fail(key)]));
+    h.view.bind(actions);
+    for (const [button, target] of [["show-plots", "plots"], ["edit-statistics", "statistics-title"], ["edit-data", "source-summary"]]) {
+        h.document.querySelector("#raster-series-" + button).dispatchEvent(new Event("click"));
+        const destination = h.document.querySelector("#raster-series-" + target);
+        assert.equal(h.document.activeElement, destination);
+        assert.deepEqual(destination.scrollRequests, [{ block: "start", inline: "nearest" }]);
+    }
+    assert.equal(h.document.querySelector("#raster-series-data-settings").open, true);
+});
+
+test("compact statistic controls send stable identities through the existing owner callbacks", () => {
+    const h = controlsFixture(), events = [];
+    h.view.actions = {
+        onStatisticDisplay: (...args) => events.push(["display", ...args]),
+        onEditFormula: (...args) => events.push(["edit", ...args]),
+        onRemoveFormula: id => events.push(["remove", id]),
+    };
+    h.draw();
+    const row = h.view.formulaRows.children[0];
+    const inputs = row.querySelectorAll("input");
+    const visible = inputs.find(input => input.dataset.field === "visible");
+    visible.checked = false; visible.dispatchEvent(new Event("change"));
+    const name = inputs.find(input => input.dataset.field === "label");
+    name.value = "Average"; name.dispatchEvent(new Event("input"));
+    const expression = inputs.find(input => input.dataset.field === "expression");
+    expression.value = "mean(a) + 1"; expression.dispatchEvent(new Event("input"));
+    const plot = row.querySelector("select"); plot.value = "2"; plot.dispatchEvent(new Event("change"));
+    assert.deepEqual(events, [["display", 1, { visible: false }], ["edit", 1, { label: "Average" }],
+        ["edit", 1, { expression: "mean(a) + 1" }], ["display", 1, { plotId: 2 }]]);
 });
 
 test("results return immediately and a burst draws only its latest snapshot", () => {

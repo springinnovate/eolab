@@ -649,52 +649,62 @@
         <div id="map-inspection-panels" class="map-inspection-panels">
           <section id="raster-series" role="tabpanel" aria-labelledby="map-inspection-tab-raster-series" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster series</h2>
+              <h2>Raster stack</h2>
               <button id="close-raster-series" class="secondary-button" type="button" aria-label="Close raster series">&times;</button>
             </header>
             <div id="raster-series-area-controls">
+              <p id="raster-series-context">No sampling area selected</p>
               <div class="raster-series-controls">
                 <label>Area <select id="raster-series-area"><option value="selection">Current sampling area</option><option value="whole">Whole raster</option></select></label>
                 <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
               </div>
-              <p class="raster-series-help">Area formulas use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
-              <div id="raster-series-formulas"></div>
-              <div class="raster-series-controls">
-                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
-              </div>
-              <details class="raster-series-help"><summary>Formula reference</summary>
-                <ul>
-                  <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area.</li>
-                  <li><code>mean(a)</code> — Average of valid pixel values.</li>
-                  <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. One pixel gives zero; no matching pixels gives no value.</li>
-                  <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
-                  <li><code>sum(a)</code> — Sum of valid pixel values.</li>
-                  <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
-                  <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
-                </ul>
-                <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter area statistics: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one calculation per raster. Assign statistics with different units or ranges to separate plots as needed.</p>
-              </details>
+            </div>
+            <div class="raster-series-run-controls">
+              <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
                 <button id="raster-series-calculate" type="button">Calculate</button>
                 <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel remaining</button>
                 <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
               </div>
             </div>
-            <p id="raster-series-context">No sampling area selected</p>
-            <details>
-              <summary id="raster-series-source-summary">Rasters</summary>
-              <div id="raster-series-sources"></div>
-            </details>
-            <div class="raster-series-controls">
-              <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
-              <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
-              <label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option></select></label>
-            </div>
-            <p id="raster-series-status" role="status" aria-live="polite"></p>
             <p id="raster-series-chart-note" hidden></p>
-            <button id="raster-series-add-plot" class="secondary-button" type="button">+ Add plot</button>
+            <nav class="raster-series-section-links" aria-label="Raster stack sections">
+              <button id="raster-series-show-plots" class="summary-text-button" type="button" aria-controls="raster-series-plots">Plots</button>
+              <button id="raster-series-edit-statistics" class="summary-text-button" type="button" aria-controls="raster-series-statistics">Statistics</button>
+              <button id="raster-series-edit-data" class="summary-text-button" type="button" aria-controls="raster-series-data-settings">Data and order</button>
+              <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
+            </nav>
             <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
-            <details>
+            <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
+              <div class="raster-series-statistics-header">
+                <h3 id="raster-series-statistics-title" tabindex="-1">Statistics</h3>
+                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
+              </div>
+              <div id="raster-series-formulas"></div>
+            </section>
+            <details id="raster-series-data-settings" class="raster-series-settings">
+              <summary id="raster-series-source-summary">Data and order</summary>
+              <div id="raster-series-sources"></div>
+              <div class="raster-series-controls">
+                <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
+                <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
+                <label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option></select></label>
+              </div>
+            </details>
+            <details class="raster-series-help raster-series-settings"><summary>Formula reference</summary>
+              <p>Area formulas use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
+              <ul>
+                <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area.</li>
+                <li><code>mean(a)</code> — Average of valid pixel values.</li>
+                <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. One pixel gives zero; no matching pixels gives no value.</li>
+                <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
+                <li><code>sum(a)</code> — Sum of valid pixel values.</li>
+                <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
+                <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
+              </ul>
+              <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter area statistics: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one calculation per raster. Assign statistics with different units or ranges to separate plots as needed.</p>
+            </details>
+            <details class="raster-series-settings">
               <summary>Values &amp; download</summary>
               <div class="raster-series-table-scroll">
                 <table><thead><tr><th scope="col">Raster</th><th scope="col">Statistic</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>

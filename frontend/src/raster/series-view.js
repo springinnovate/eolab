@@ -4,6 +4,46 @@ import { createStatisticSwatch, RasterSeriesPlotsView } from "./series-plots-vie
 
 const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No matches", no_valid_data: "No valid data", invalid_arithmetic: "Invalid arithmetic", overflow: "Overflow" };
 
+/**
+ * @typedef {Object} SeriesValueRow
+ * @property {string} label Full raster name.
+ * @property {string} statisticLabel Statistic name for the values table.
+ * @property {string} state Value, pending or failure state from the owner.
+ * @property {number|null} value Numeric plotting value.
+ * @property {string|null} rawValue Exact scalar representation.
+ * @property {string} [unit] Returned unit.
+ * @property {string} [errorMessage] Per-raster status or error explanation.
+ * @property {boolean} [cached] Whether the value came from a completed cached calculation.
+ */
+
+/**
+ * @typedef {Object} SeriesStatistic
+ * @property {number} id Stable formula identity.
+ * @property {string} label Editable statistic name.
+ * @property {string} expression Formula over the current raster.
+ * @property {boolean} visible Whether to plot the statistic.
+ * @property {number} plotId Assigned plot identity.
+ * @property {number} styleIndex Stable line/marker identity.
+ * @property {SeriesValueRow[]} rows Current ordered values.
+ * @property {SeriesValueRow[]|null} previousRows Retained values for replacement calculations.
+ */
+
+/**
+ * @typedef {Object} SeriesPresentation
+ * @property {boolean} active Whether the panel is open.
+ * @property {{key:string,label:string,selected:boolean}[]} sources Available catalog rasters.
+ * @property {SeriesValueRow[]} rows Current ordered values for the table.
+ * @property {SeriesValueRow[]|null} previousRows Retained values for pending replacements.
+ * @property {string} message Progress, guidance or result summary.
+ * @property {boolean} busy Whether calculations are running.
+ * @property {"line"|"scatter"} chartType Plot geometry.
+ * @property {boolean} canDownload Whether current values can be exported.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,hasErrors:boolean,recoverable:boolean}} area Scope and execution availability supplied by the owner; the view does not inspect the sampling descriptor.
+ * @property {SeriesStatistic[]} statistics Statistic presentation.
+ * @property {{id:number,scale:string}[]} plots Independent plot settings.
+ * @property {boolean} showingPrevious Whether plots use retained results.
+ */
+
 /** Display Raster series without accessing map, renderer or request state. */
 export class RasterSeriesView {
     /**
@@ -25,6 +65,8 @@ export class RasterSeriesView {
         this.download = documentContext.querySelector("#raster-series-download");
         this.sourceSignature = null;
         this.formulaRows = documentContext.querySelector("#raster-series-formulas");
+        /** @type {Map<number, HTMLDivElement>} Retained editor nodes owned by this view. */
+        this.formulaNodes = new Map();
         this.frame = null;
         this.pendingState = null;
     }
@@ -40,7 +82,7 @@ export class RasterSeriesView {
      * @param {(choice:string)=>void} actions.onArea Sampling area or whole raster.
      * @param {()=>void} actions.onEditArea Open existing area controls.
      * @param {(preset:string)=>void} actions.onAddFormula Add statistic.
-     * @param {(id:number,change:Object)=>void} actions.onEditFormula Update formula/name.
+     * @param {(id:number,change:{label?:string,expression?:string})=>void} actions.onEditFormula Update formula/name.
      * @param {(id:number)=>void} actions.onRemoveFormula Remove statistic.
      * @param {(id:number,change:{visible?:boolean,plotId?:number})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
      * @param {()=>void} actions.onAddPlot Add a linear plot.
@@ -65,6 +107,15 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
+        for (const [id, target] of [["show-plots", "plots"], ["edit-statistics", "statistics-title"],
+            ["edit-data", "source-summary"]]) {
+            this.document.querySelector("#raster-series-" + id).addEventListener("click", () => {
+                if (id === "edit-data") this.document.querySelector("#raster-series-data-settings").open = true;
+                const section = this.document.querySelector("#raster-series-" + target);
+                section.focus({ preventScroll: true });
+                section.scrollIntoView({ block: "start", inline: "nearest" });
+            });
+        }
         for (const [id, action] of [["edit-area", actions.onEditArea], ["calculate", actions.onCalculate],
             ["cancel", actions.onCancel], ["recover", actions.onRecover]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", action);
@@ -76,19 +127,7 @@ export class RasterSeriesView {
      * Multiple updates before that frame replace its pending snapshot. Results
      * remain in the controller; intermediate drawings may be skipped. Closing
      * the panel cancels pending drawing, and reopening supplies current state.
-     * @param {Object} state Plot presentation.
-     * @param {boolean} state.active Whether the series panel is open.
-     * @param {Object[]} state.sources Available rasters with their selected flag.
-     * @param {Object[]} state.rows Ordered current statistic results.
-     * @param {Object[]|null} state.previousRows Previous input's rows while no new value has arrived.
-     * @param {string} state.message Progress, guidance or result summary.
-     * @param {boolean} state.busy Whether the current workflow is still running.
-     * @param {"line"|"scatter"} state.chartType Plot geometry.
-     * @param {boolean} state.canDownload Whether a completed table can be exported.
-     * @param {Object} state.area Area calculation presentation.
-     * @param {Object[]} state.statistics All statistics with ordered rows and display settings.
-     * @param {{id:number,scale:string}[]} state.plots Independent plot settings.
-     * @param {boolean} state.showingPrevious Whether all charts use previous results.
+     * @param {SeriesPresentation} state Plot presentation.
      * @return {void}
      */
     render(state) {
@@ -113,18 +152,26 @@ export class RasterSeriesView {
 
     /** Update changed controls and figures from one coalesced snapshot.
      * Unchanged presentation leaves existing DOM nodes and attributes intact.
-     * @param {Object} state Latest presentation supplied to render().
+     * @param {SeriesPresentation} state Latest presentation supplied to render().
      * @return {void}
      */
     draw(state) {
         this.renderAreaControls(state);
-        const context = state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected";
+        const scope = state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected";
+        const selectedCount = state.sources.filter(source => source.selected).length;
+        const context = `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
         if (this.context.textContent !== context) this.context.textContent = context;
         if (this.status.textContent !== state.message) this.status.textContent = state.message;
         const busy = String(state.busy);
         if (this.root.getAttribute("aria-busy") !== busy) this.root.setAttribute("aria-busy", busy);
-        const sourceCount = `Rasters · ${state.sources.filter(source => source.selected).length} selected`;
-        if (this.sourceSummary.textContent !== sourceCount) this.sourceSummary.textContent = sourceCount;
+        const order = this.document.querySelector("#raster-series-order").value === "name" ? "Layer name" : "Map layer order";
+        const direction = this.document.querySelector("#raster-series-direction").value === "reverse" ? "Reverse" : "Forward";
+        const chartType = state.chartType === "scatter" ? "Scatter" : "Line";
+        const dataSummary = `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
+        if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
+        const statisticsLink = this.document.querySelector("#raster-series-edit-statistics");
+        const statisticCount = `Statistics (${state.statistics.length})`;
+        if (statisticsLink.textContent !== statisticCount) statisticsLink.textContent = statisticCount;
         const signature = JSON.stringify(state.sources.map(({ key, label, selected }) => [key, label, selected]));
         if (signature !== this.sourceSignature) {
             this.sourceSignature = signature;
@@ -168,42 +215,38 @@ export class RasterSeriesView {
     }
 
 
-    /** Update changed formula controls while preserving focused edits.
-     * @param {Object} state Area-series presentation. @return {void}
+    /** Update scope, execution actions and compact statistics without losing editor state.
+     * @param {SeriesPresentation} state Area-series presentation.
+     * @return {void}
      */
     renderAreaControls(state) {
         const area = state.area;
         const signature = area.formulas.map(formula => formula.id).join(",");
         if (this.formulaSignature !== signature) {
             this.formulaSignature = signature;
+            const focused = this.document.activeElement;
+            const ownedFocus = this.formulaRows.contains(focused);
+            const ids = new Set(area.formulas.map(formula => formula.id));
+            for (const id of this.formulaNodes.keys()) if (!ids.has(id)) this.formulaNodes.delete(id);
             this.formulaRows.replaceChildren(...state.statistics.map(formula => {
-                const row = this.document.createElement("div"); row.className = "raster-series-formula";
-                row.dataset.formulaId = String(formula.id);
-                const legend = this.document.createElement("label"); legend.className = "raster-series-formula-legend";
-                const visible = this.document.createElement("input"); visible.type = "checkbox"; visible.dataset.field = "visible";
-                visible.addEventListener("change", () => this.actions.onStatisticDisplay(formula.id, { visible: visible.checked }));
-                legend.append(visible, createStatisticSwatch(this.document, formula.styleIndex)); row.append(legend);
-                for (const event of ["pointerenter", "focusin"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(formula.id));
-                for (const event of ["pointerleave", "focusout"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(null));
-                for (const [field, label, limit] of [["label", "Statistic name", 80], ["expression", "Formula", 4096]]) {
-                    const input = this.document.createElement("input");
-                    input.dataset.field = field; input.setAttribute("aria-label", label); input.placeholder = label; input.maxLength = limit;
-                    input.addEventListener("input", () => this.actions.onEditFormula(formula.id, { [field]: input.value }));
-                    row.append(input);
-                }
-                const plot = this.document.createElement("select"); plot.dataset.field = "plotId";
-                plot.addEventListener("change", () => this.actions.onStatisticDisplay(formula.id, { plotId: Number(plot.value) }));
-                row.append(plot);
-                const remove = this.document.createElement("button"); remove.type = "button"; remove.textContent = "×";
-                remove.setAttribute("aria-label", "Remove statistic"); remove.className = "secondary-button";
-                remove.disabled = area.formulas.length === 1;
-                remove.addEventListener("click", () => this.actions.onRemoveFormula(formula.id));
-                row.append(remove); return row;
+                if (!this.formulaNodes.has(formula.id)) this.formulaNodes.set(formula.id, this.createFormulaRow(formula));
+                return this.formulaNodes.get(formula.id);
             }));
+            if (this.formulaRows.contains(focused)) focused.focus({ preventScroll: true });
+            else if (ownedFocus) this.document.querySelector("#raster-series-add-formula").focus();
         }
         for (const row of this.formulaRows.children) {
             const formula = state.statistics.find(item => item.id === Number(row.dataset.formulaId));
             const name = formula.label || formula.expression || "Custom statistic";
+            const caption = row.querySelector("span");
+            if (caption.textContent !== name) caption.textContent = name;
+            const editor = row.querySelector("summary");
+            const editLabel = `Edit ${name}`;
+            if (editor.getAttribute("aria-label") !== editLabel) editor.setAttribute("aria-label", editLabel);
+            const remove = row.querySelector("button");
+            if (remove.disabled !== (area.formulas.length === 1)) remove.disabled = area.formulas.length === 1;
+            const removeLabel = `Remove ${name}`;
+            if (remove.getAttribute("aria-label") !== removeLabel) remove.setAttribute("aria-label", removeLabel);
             for (const input of row.querySelectorAll("input")) {
                 if (input.dataset.field === "visible") {
                     if (input.checked !== formula.visible) input.checked = formula.visible;
@@ -238,6 +281,40 @@ export class RasterSeriesView {
         if (cancel.hidden !== !state.busy) cancel.hidden = !state.busy;
         const recover = this.document.querySelector("#raster-series-recover");
         if (recover.hidden !== !area.recoverable) recover.hidden = !area.recoverable;
+    }
+
+    /** Create a retained statistic row with visibility, assignment and a native editor disclosure.
+     * Blank custom expressions start expanded; subsequent snapshots leave disclosure state alone.
+     * @param {{id:number,label:string,expression:string,styleIndex:number}} formula Statistic identity and presentation.
+     * @return {HTMLDivElement} Row whose input events use the existing owner callbacks.
+     */
+    createFormulaRow(formula) {
+        const row = this.document.createElement("div"); row.className = "raster-series-formula";
+        row.dataset.formulaId = String(formula.id);
+        const legend = this.document.createElement("label"); legend.className = "raster-series-formula-legend";
+        const visible = this.document.createElement("input"); visible.type = "checkbox"; visible.dataset.field = "visible";
+        visible.addEventListener("change", () => this.actions.onStatisticDisplay(formula.id, { visible: visible.checked }));
+        const name = this.document.createElement("span");
+        legend.append(visible, createStatisticSwatch(this.document, formula.styleIndex), name);
+        for (const event of ["pointerenter", "focusin"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(formula.id));
+        for (const event of ["pointerleave", "focusout"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(null));
+        const plot = this.document.createElement("select"); plot.dataset.field = "plotId";
+        plot.addEventListener("change", () => this.actions.onStatisticDisplay(formula.id, { plotId: Number(plot.value) }));
+        const editor = this.document.createElement("details"); editor.className = "raster-series-formula-editor";
+        editor.open = !formula.expression;
+        const summary = this.document.createElement("summary"); summary.textContent = "Edit"; editor.append(summary);
+        for (const [field, label, limit] of [["label", "Statistic name", 80], ["expression", "Formula", 4096]]) {
+            const fieldLabel = this.document.createElement("label"); fieldLabel.textContent = label;
+            const input = this.document.createElement("input");
+            input.dataset.field = field; input.setAttribute("aria-label", label); input.placeholder = label; input.maxLength = limit;
+            input.addEventListener("input", () => this.actions.onEditFormula(formula.id, { [field]: input.value }));
+            fieldLabel.append(input); editor.append(fieldLabel);
+        }
+        const remove = this.document.createElement("button"); remove.type = "button"; remove.textContent = "×";
+        remove.className = "summary-text-button";
+        remove.addEventListener("click", () => this.actions.onRemoveFormula(formula.id));
+        row.append(legend, plot, editor, remove);
+        return row;
     }
 
     /**

@@ -64,8 +64,12 @@ you later edit its card.
 
 ## Plotting statistics across rasters
 
-Open **Raster series** from **Tools** or a raster histogram. Use the raster
-checklist to choose the rasters to calculate. There is one formula workflow,
+Open **Plot raster stack** from **Tools** or a raster histogram. The **Raster stack**
+panel shows its sampling scope, selected raster count, progress and calculation
+actions above the plots. **Statistics** follows the plots; **Data and order** holds
+the raster checklist, ordering, direction and chart type, with the active settings
+shown while collapsed. Use the **Plots**, **Statistics** and **Data and order**
+shortcuts to move between sections in a short panel. There is one formula workflow,
 with no fixed raster-count limit.
 The same formulas run independently on each raster's native grid, over the
 current sampling area or each raster's whole extent. This does not align rasters
@@ -80,10 +84,14 @@ Add up to five formulas. Within each formula, `a` means the current raster in
 the stack. Those formulas share one job per raster. Area reductions share a
 read/mask pass; `pixelValue(a)` reads the exact clicked cell.
 Each statistic starts visible in **Plot 1**. Its checkbox shows or hides it;
-the colored line and marker identify it on the graph. **Add plot** creates another
+the colored line and marker identify it on the graph. Choose **Edit** beside a
+statistic to change its name or formula; a new custom formula opens its editor.
+**Add plot** creates another
 plot beside the first. Choose a plot beside each statistic to group related values
 or separate different units and ranges. Removing a plot moves its statistics back
-to Plot 1. Scroll horizontally to reach more plots in a narrow panel.
+to Plot 1. Plots wrap onto additional rows in a narrow panel, using the panel's
+existing scroll area. **Formula reference** and **Values & download** remain below
+the configuration sections.
 
 Each plot has its own **Linear / Log** Y-axis control. Log plots omit zero and
 negative values and report how many were omitted. Units come from calculation
