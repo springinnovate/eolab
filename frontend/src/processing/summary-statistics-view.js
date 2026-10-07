@@ -140,12 +140,15 @@ export class SummaryStatisticsView {
             focus?.();
         });
     }
-    /** Update visible cards and history from the latest retained state.
+    /** Update cards and history, distinguishing input-waiting intent from queued work.
+     * Calculation indicators require a raster and area; vector progress belongs
+     * to the vector workflow. Missing inputs retain their guidance and no Cancel action.
      * @param {Object} state Summary controller state. @return {void}
      * @throws {TypeError} If a result contains an invalid owned download address.
      */
     draw(state) {
         this.sources = state.sources;
+        const selecting = !!state.vectorSelecting && (state.areaChoice === "vector" || ["catalogSelection", "polygonArea"].includes(state.area?.kind));
         const sourceSignature = JSON.stringify(state.sources);
         const ids = state.statistics.map(card => card.id).join(",");
         for (const card of state.statistics) if (!this.cards.has(card.id)) this.cards.set(card.id, this.createCard(card));
@@ -157,6 +160,7 @@ export class SummaryStatisticsView {
         }
         for (const card of state.statistics) {
             const row = this.cards.get(card.id);
+            const queued = !!(card.requested && card.source && state.area);
             if (row.label.value !== card.label) row.label.value = card.label;
             if (row.expression.value !== card.expression) row.expression.value = card.expression;
             // A hidden, identically styled mirror sizes wrapped and multiline formulas without layout reads.
@@ -171,24 +175,24 @@ export class SummaryStatisticsView {
             row.source.value = String(state.sources.findIndex(source => source.collectionId === card.source?.collectionId && source.itemId === card.source?.itemId));
             row.source.disabled = !state.sources.length;
             row.expression.setAttribute("aria-invalid", String(card.error && !card.valid));
-            row.root.setAttribute("aria-busy", String(!!(card.pending || state.vectorSelecting)));
+            row.root.setAttribute("aria-busy", String(!!(card.pending || selecting)));
             row.root.classList.toggle("is-previous", !!card.result && !card.current);
             const message = card.current
                 ? [card.result?.job.result?.cacheHit ? "Reused cached result" : "",
                     RESULT_STATES[card.result?.row.state] ?? ""].filter(Boolean).join(" · ")
                 : card.message;
-            row.status.textContent = state.vectorCalculation && (card.pending || card.requested) && !message.startsWith("Calculating")
+            row.status.textContent = state.vectorCalculation && (card.pending || queued) && !message.startsWith("Calculating")
                 ? `Calculating · ${message}` : message;
             row.status.hidden = !row.status.textContent;
             row.status.classList.toggle("is-error", card.error);
             row.status.classList.toggle("is-awaiting-map", !!card.awaitingMap);
-            row.status.classList.toggle("is-working", card.pending || !!card.requested || card.checking);
-            row.run.hidden = !state.area || card.current || card.pending || !!card.requested || !!state.vectorSelecting;
+            row.status.classList.toggle("is-working", !!(card.pending || queued || selecting || (card.checking && card.source && state.area)));
+            row.run.hidden = !state.area || card.current || card.pending || queued || selecting;
             row.run.disabled = !card.expression.trim() || !card.source || !state.area || state.recoverable;
-            row.stop.hidden = !card.pending && !card.requested && !state.vectorSelecting;
+            row.stop.hidden = !card.pending && !queued && !selecting;
             row.statusRow.hidden = row.status.hidden && row.run.hidden && row.stop.hidden;
             const progress = card.progress;
-            row.progress.hidden = !(card.pending || card.requested || state.vectorSelecting);
+            row.progress.hidden = !(card.pending || queued || selecting);
             if (progress?.phase === "calculating" && progress.totalBlocks > 0) {
                 row.progress.max = progress.totalBlocks;
                 row.progress.value = progress.completedBlocks ?? 0;
