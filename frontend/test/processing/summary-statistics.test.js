@@ -352,6 +352,112 @@ function composedVectorSelection(h, bbox) {
     return { view, destroy: () => controller.destroy() };
 }
 
+/** Connect summary sampling's real idle/progress callback to the summary owner.
+ * @param {Object} h Summary workflow harness.
+ * @return {VectorSamplingController} Selection controller publishing production snapshots.
+ */
+function composedSummarySampling(h) {
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const callback = main.slice(main.indexOf("summarySampling = new VectorSamplingController({"))
+        .match(/onSelectionState: selection => [^\r\n]+/);
+    assert.ok(callback, "Production summary selection callback exists");
+    const { onSelectionState } = new Function("calculations", `return ({${callback[0]}});`)(h.controller);
+    return new VectorSamplingController({
+        view: { bind() {}, render() {}, unbind() {} }, getTargets: () => [],
+        createArea: async () => { throw new Error("No polygon layer selected"); },
+        onActivate() {}, onInvalidate() {}, onEditFilter() {}, onSelectionState,
+    });
+}
+
+test("composed idle summary sampling keeps fresh map guidance and waiting edits do not claim work", async () => {
+    const h = fixture({}, new Map(), {}, { sources: [source], area: null });
+    const sampling = composedSummarySampling(h);
+    await h.open();
+    assert.match(h.view.cards.get(1).status.textContent, /^Click the map to calculate/);
+    sampling.refresh();
+    h.controller.addStatistic("sum");
+    const card = h.controller.state.statistics.at(-1), row = h.view.cards.get(card.id);
+    assert.equal(card.requested, "automatic", "Automatic intent may wait for an area");
+    for (const stage of ["checking", "validated", "edited"]) {
+        if (stage === "validated") await h.tick();
+        if (stage === "edited") {
+            h.controller.editStatistic(card.id, { expression: "max(a)" }); await h.tick();
+        }
+        assert.equal(row.status.classList.contains("is-working"), false, stage);
+        assert.equal(row.root.getAttribute("aria-busy"), "false", stage);
+        assert.equal(row.stop.hidden, true, stage); assert.equal(row.progress.hidden, true, stage);
+        assert.equal(row.run.hidden, true, stage);
+    }
+    assert.match(row.status.textContent, /^Click the map to calculate/);
+    assert.equal(h.submits(), 0);
+    h.controller.setAutomatic(false);
+    assert.match(row.status.textContent, /^Click the map to select an area, then choose Calculate/);
+    h.controller.chooseArea("vector");
+    assert.match(row.status.textContent, /^Choose a polygon layer/);
+    assert.equal(row.status.classList.contains("is-awaiting-map"), false);
+    h.controller.chooseArea("selection");
+    assert.match(row.status.textContent, /^Click the map to select an area/);
+    sampling.destroy(); h.controller.destroy();
+});
+
+test("vector lifecycle guidance preserves raster, formula and cancellation feedback", async () => {
+    const h = fixture({}, new Map(), {}, { sources: [], area: null }); await h.open();
+    const card = h.controller.state.statistics[0], row = h.view.cards.get(card.id);
+    h.controller.chooseArea("vector");
+    h.controller.setVectorSelectionState({ analysis: true, phase: "idle", message: "Choose a polygon layer" });
+    assert.equal(row.status.textContent, "Choose a raster");
+    assert.equal(row.stop.hidden, true); assert.equal(row.progress.hidden, true);
+    h.controller.open(source, null); await h.tick(); h.controller.chooseArea("vector");
+    h.controller.editStatistic(card.id, { expression: "bad(a)" }); await h.tick();
+    for (const phase of ["reading", "error", "idle"]) {
+        h.controller.setVectorSelectionState({ analysis: true, phase, message: "No matching polygons" });
+        assert.match(row.status.textContent, /Unknown function bad/);
+        assert.equal(row.status.classList.contains("is-error"), true);
+    }
+    h.controller.editStatistic(card.id, { expression: "mean(a)" }); await h.tick();
+    h.controller.setVectorSelectionState({ analysis: true, phase: "error", message: "No matching polygons" });
+    assert.equal(row.status.textContent, "No matching polygons");
+    h.controller.onCancelSelection = () => h.controller.setVectorSelectionState({ analysis: true, phase: "idle", message: "Selection cancelled" });
+    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Reading filtered polygons" });
+    assert.equal(row.status.classList.contains("is-working"), true);
+    assert.equal(row.root.getAttribute("aria-busy"), "true");
+    assert.equal(row.progress.hidden, false); assert.equal(row.stop.hidden, false);
+    row.stop.dispatchEvent(new Event("click"));
+    assert.equal(row.status.textContent, "Selection cancelled"); assert.equal(row.stop.hidden, true);
+    assert.equal(h.submits(), 0); h.controller.destroy();
+});
+
+test("leaving vector mode restores map guidance while selection work is still settling", async () => {
+    const h = fixture({}, new Map(), {}, { sources: [source], area: null }); await h.open();
+    const row = h.view.cards.get(1);
+    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Reading polygons" });
+    h.controller.chooseArea("selection");
+    assert.match(row.status.textContent, /^Click the map to calculate/);
+    assert.equal(row.status.classList.contains("is-working"), false);
+    assert.equal(row.stop.hidden, true); assert.equal(row.progress.hidden, true);
+    assert.equal(row.root.getAttribute("aria-busy"), "false");
+    h.controller.setVectorSelectionState({ analysis: true, phase: "error", message: "Selection failed" });
+    assert.match(row.status.textContent, /^Click the map to calculate/);
+    h.controller.destroy();
+});
+
+test("whole-raster and pixel presets retain their inputs after idle vector feedback", async () => {
+    const h = fixture({}, new Map(), {}, { sources: [source], area: null }); await h.open();
+    const sampling = composedSummarySampling(h); h.controller.setAutomatic(false);
+    h.controller.addStatistic("pixel"); await h.tick();
+    const card = h.controller.state.statistics.at(-1), row = h.view.cards.get(card.id);
+    assert.match(row.status.textContent, /^Click the map to select an area/);
+    h.controller.setPixelPoint({ longitude: 77, latitude: 22 }, false);
+    h.controller.chooseArea("whole"); await h.tick(); sampling.refresh();
+    assert.equal(row.status.textContent, "Ready to calculate"); assert.equal(row.run.hidden, false);
+    row.run.dispatchEvent(new Event("click")); await flush();
+    const submission = h.requests.find(([kind]) => kind === "submit")[1];
+    assert.deepEqual(submission.area, { kind: "wholeRaster" });
+    assert.deepEqual(submission.pixelPoint, { longitude: 77, latitude: 22 });
+    assert.deepEqual(submission.calculations, [{ label: "Pixel value", expression: "pixelValue(a)" }]);
+    sampling.destroy(); h.controller.destroy();
+});
+
 for (const [name, bbox, confirmations] of [
     ["small selection", [-81, -19, -68, 0], 0],
     ["reviewed selection", [-90, -30, -30, 30], 1],

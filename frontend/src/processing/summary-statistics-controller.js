@@ -549,15 +549,18 @@ export class SummaryStatisticsController {
         this.onOpen(); this.render();
         this.view.focusSaved?.();
     }
-    /** Schedule presentation of current calculation feedback.
+    /** Schedule feedback for the chosen area workflow, preserving card-level failures.
+     * Idle vector snapshots do not replace map-click guidance. Formula and source
+     * feedback remain local to each card while selection controls show their lifecycle.
      * @return {void}
      */
     render() {
         if (this.destroyed) return;
+        const vectorWorkflow = this.state.areaChoice === "vector" || ["catalogSelection", "polygonArea"].includes(this.state.area?.kind);
         for (const card of this.state.statistics) {
             card.current = !!card.result && card.result.key === this.key(card) && !card.pending && !card.requested && !card.checking && !card.error && !card.cancelled;
             card.awaitingMap = !this.state.area && this.state.areaChoice === "selection" && !!card.source && card.valid &&
-                !card.pending && !card.checking && !card.error && !card.cancelled && !this.state.vectorSelecting && !this.state.selectionMessage;
+                !card.pending && !card.checking && !card.error && !card.cancelled;
             if (!card.pending && !card.checking && !card.error) {
                 card.message = !card.source ? "Choose a raster" : card.awaitingMap ? (this.state.automatic
                     ? "Click the map to calculate. Statistics use the sampling box around your click."
@@ -569,6 +572,7 @@ export class SummaryStatisticsController {
         }
         for (const card of this.state.statistics) {
             if (card.cancelled) card.message = card.pending ? "Cancelling calculation…" : "Calculation cancelled";
+            if (!vectorWorkflow || !card.source || !card.valid || card.pending || card.checking || card.error) continue;
             if (this.state.vectorSelecting) card.message = "Calculating · selecting filtered features…";
             else if (!this.state.area && this.state.selectionMessage) card.message = this.state.selectionMessage;
         }
