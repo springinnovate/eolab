@@ -783,6 +783,7 @@ async function initializeCatalog(
     const mapLayerStackView = new MapLayerStackView(document, { allowRemoval: !isSharedViewer });
     const mapLegend = new OnMapLegend(L, leafletMap, {
         toggleButton: document.querySelector("#toggle-map-legend"),
+        onRestoreRequested: () => mapInspection.showToolActions(),
         onInclusion: (key, included) => mapLayerController.setLegendIncluded(key, included),
         onChange: () => savedMapViewController?.scheduleRemember(),
     });
@@ -1119,7 +1120,7 @@ async function initializeCatalog(
     void calculations.start();
     rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
-    for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram", "open-raster-series-summary"]) {
+    for (const id of ["open-raster-series", "open-raster-series-histogram", "open-raster-series-summary"]) {
         document.querySelector(`#${id}`).addEventListener("click", () => mapInspection.showRasterSeries());
     }
     const vectorTimeSeries = new VectorTimeSeriesController({

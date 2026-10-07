@@ -219,8 +219,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Analysis · Map results/);
     assert.match(inspection.source, /class="map-inspection-analysis" aria-label="Analysis"/);
     assert.match(inspection.source, /id="open-calculations-dock"[\s\S]*?aria-controls="calculations-panel"/);
-    assert.match(inspection.source, /id="map-inspection-more-summary"[^>]*>More/);
-    assert.match(inspection.source, /id="open-raster-clips-dock"[\s\S]*?>Raster clips/);
+    assert.match(inspection.source, /id="map-inspection-more-summary"[\s\S]*?popovertarget="workspace-tool-actions"/);
     assert.match(
         inspection.source,
         /id="style-inspected-vector-layer"[\s\S]*?aria-controls="layer-style-editor"/
@@ -574,6 +573,23 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
         MARKUP,
         /id="map-histogram-panel"[^>]*role="tabpanel"/s
     );
+});
+
+test("workspace overflow shares one native action list and keeps statistics settings with their owner", () => {
+    const actions = requireElementRange("workspace-tool-actions");
+    const summary = requireElementRange("calculations-panel");
+    assert.match(actions.source, /popover="auto"/);
+    assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
+    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+        assert.match(actions.source, new RegExp(`id="${id}"`));
+        assert.equal(countMarkupId(id), 1);
+    }
+    for (const id of ["map-tools-more-summary", "map-inspection-more-summary"]) {
+        assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools<\/button>/);
+    }
+    assert.match(summary.source, /id="summary-auto"/);
+    assert.doesNotMatch(actions.source, /id="summary-auto"/);
+    assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-series-dock|open-raster-clips-dock)"/);
 });
 
 test("semantic regions preserve one DOM instance of every owned control", () => {

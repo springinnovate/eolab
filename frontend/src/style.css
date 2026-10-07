@@ -3795,38 +3795,58 @@ article.raster-histogram-summary {
 }
 .map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
 
-.map-analysis-more {
-  position: relative;
-  min-width: 0;
-}
-
-.map-analysis-more > summary {
-  cursor: pointer;
-  list-style: none;
-  white-space: nowrap;
-}
-
-.map-analysis-more > summary::-webkit-details-marker { display: none; }
-
-.map-analysis-more-menu {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 6px);
-  right: 0;
+#workspace-tool-actions {
+  position: fixed;
+  inset: 0 auto auto 0;
+  margin: 0;
   display: grid;
-  min-width: 210px;
+  width: min(240px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--surface-1);
+  color: var(--text-1);
   padding: 6px;
   box-shadow: var(--elevation-panel);
 }
 
-.map-analysis-more-menu .secondary-button {
+#workspace-tool-actions:not(:popover-open) { display: none; }
+.workspace-tool-actions-group { display: grid; }
+.workspace-tool-actions-group + .workspace-tool-actions-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-1);
+}
+.workspace-tool-actions-label {
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+
+/* Overflow uses plain contextual rows; primary and secondary controls retain their roles. */
+.workspace-tool-action {
   width: 100%;
-  box-shadow: none;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--brand);
+  font-size: 0.85rem;
+  cursor: pointer;
   text-align: left;
   white-space: normal;
+}
+.workspace-tool-action:is(:hover, :focus-visible):not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--brand-hover);
+}
+.workspace-tool-action:active:not(:disabled) { background: var(--surface-selected); }
+@media (pointer: coarse) {
+  .workspace-tool-action,
+  #map-tools-more-summary,
+  #map-inspection-more-summary { min-height: 44px; }
 }
 
 #map-inspection {
@@ -4080,6 +4100,8 @@ article.raster-histogram-summary {
 #map-inspection:not(:popover-open),
 #open-calculations[hidden],
 #open-calculations-dock[hidden],
+#map-tools-more-summary[hidden],
+#map-inspection-more-summary[hidden],
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
@@ -4957,12 +4979,6 @@ summary:hover > .raster-disclosure-chevron {
   .map-inspection-tabs, .map-click-summary {
     min-height: 0;
     max-height: calc((45dvh - 80px) / 3);
-    overflow-y: auto;
-  }
-  #map-inspection-more .map-analysis-more-menu {
-    top: auto;
-    bottom: calc(100% + 6px);
-    max-height: calc(55dvh - 32px);
     overflow-y: auto;
   }
   #app[data-inspection-open="true"] .panel-opener {

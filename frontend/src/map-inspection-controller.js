@@ -7,7 +7,7 @@
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
-     * Bind retained task context, navigation and independent close controls.
+     * Bind retained task context, navigation, native Tools popover and close controls.
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
@@ -29,6 +29,23 @@ export class MapInspectionController {
         this.calculationOpener = documentContext.querySelector("#open-calculations");
         this.dockCalculationOpener = documentContext.querySelector("#open-calculations-dock");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
+        this.toolActions = documentContext.querySelector("#workspace-tool-actions");
+        this.mapToolsButton = documentContext.querySelector("#map-tools-more-summary");
+        this.dockToolsButton = documentContext.querySelector("#map-inspection-more-summary");
+        this.toolActionsOpen = false;
+        /** @type {(event:ToggleEvent)=>void} Track native open/closed state synchronously. */
+        this.onToolActionsBeforeToggle = event => { this.toolActionsOpen = event.newState === "open"; };
+        /** @type {()=>void} Place the opened popover or reposition it after a resize. */
+        this.onToolActionsLayout = () => this.#positionToolActions();
+        /** @type {(event:MouseEvent)=>void} Dismiss before an action reaches its independent owner. */
+        this.onToolActionsCommand = event => {
+            const button = /** @type {Element} */ (event.target).closest("button");
+            if (button && !button.disabled) this.#closeToolActions();
+        };
+        this.toolActions.addEventListener("beforetoggle", this.onToolActionsBeforeToggle);
+        this.toolActions.addEventListener("toggle", this.onToolActionsLayout);
+        this.toolActions.addEventListener("click", this.onToolActionsCommand, true);
+        this.document.defaultView?.addEventListener?.("resize", this.onToolActionsLayout);
         this.clickSummary = documentContext.querySelector("#map-click-summary");
         this.clickContext = documentContext.querySelector("#map-click-context");
         this.clickDisclosure = documentContext.querySelector("#map-click-disclosure");
@@ -168,9 +185,46 @@ export class MapInspectionController {
         this.#renderDock();
         const ResizeObserverClass = documentContext.defaultView?.ResizeObserver;
         this.dockObserver = ResizeObserverClass
-            ? new ResizeObserverClass(() => this.#reportLayoutChange())
+            ? new ResizeObserverClass(() => {
+                this.#reportLayoutChange();
+                this.#positionToolActions();
+            })
             : null;
         this.dockObserver?.observe(this.root);
+        this.dockObserver?.observe(this.toolActions);
+    }
+
+    /**
+     * Reveal Tools from its visible native invoker for an explicit restore intent.
+     * Composition lets the requesting owner focus its own command afterwards.
+     * @return {void}
+     */
+    showToolActions() {
+        if (!this.toolActionsOpen) {
+            (this.isOpen ? this.dockToolsButton : this.mapToolsButton).click();
+        }
+    }
+
+    /** Close the transient popover without changing any tool's state. @return {void} */
+    #closeToolActions() {
+        if (this.toolActionsOpen) this.toolActions.hidePopover();
+    }
+
+    /**
+     * Keep the shared action list near its visible invoker and inside the viewport.
+     * Prefer below the button, flip above when necessary and constrain both axes.
+     * Native popover focus order and dismissal remain owned by the browser.
+     * @return {void}
+     */
+    #positionToolActions() {
+        if (!this.toolActionsOpen) return;
+        const { innerWidth, innerHeight } = this.document.defaultView;
+        const anchor = (this.isOpen ? this.dockToolsButton : this.mapToolsButton).getBoundingClientRect();
+        const menu = this.toolActions.getBoundingClientRect();
+        const below = anchor.bottom + 6;
+        const top = below + menu.height <= innerHeight - 8 ? below : anchor.top - menu.height - 6;
+        this.toolActions.style.top = `${Math.max(8, Math.min(top, innerHeight - menu.height - 8))}px`;
+        this.toolActions.style.left = `${Math.max(8, Math.min(anchor.right - menu.width, innerWidth - menu.width - 8))}px`;
     }
 
     /**
@@ -712,7 +766,8 @@ export class MapInspectionController {
     }
 
     /**
-     * Synchronize the bounded dock and its one native top-layer surface.
+     * Synchronize the dock, close transient Tools on a home change and preserve
+     * focus when its invoker moves between the map and the dock.
      *
      * @return {void}
      */
@@ -729,6 +784,9 @@ export class MapInspectionController {
             this.minimized = false;
         }
         const openChanged = shouldOpen !== this.isOpen;
+        if (openChanged) this.#closeToolActions();
+        const toolsFocused = openChanged &&
+            [this.mapToolsButton, this.dockToolsButton].includes(this.document.activeElement);
         this.isOpen = shouldOpen;
         this.#renderDock();
         this.analysisToolsButton.hidden = shouldOpen;
@@ -736,6 +794,7 @@ export class MapInspectionController {
             if (shouldOpen) this.root.showPopover();
             else this.root.hidePopover();
             this.#reportLayoutChange();
+            if (toolsFocused) (shouldOpen ? this.dockToolsButton : this.mapToolsButton).focus();
         }
     }
 
@@ -772,6 +831,8 @@ export class MapInspectionController {
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = !this.dockContext.textContent;
         this.calculationOpener.hidden = this.isOpen;
+        this.mapToolsButton.hidden = this.isOpen;
+        this.dockToolsButton.hidden = !this.isOpen;
         this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
         this.minimizeButton.setAttribute(
             "aria-expanded", String(!this.minimized)
@@ -837,6 +898,11 @@ export class MapInspectionController {
 
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
+        this.#closeToolActions();
+        this.toolActions.removeEventListener("beforetoggle", this.onToolActionsBeforeToggle);
+        this.toolActions.removeEventListener("toggle", this.onToolActionsLayout);
+        this.toolActions.removeEventListener("click", this.onToolActionsCommand, true);
+        this.document.defaultView?.removeEventListener?.("resize", this.onToolActionsLayout);
         this.dockObserver?.disconnect();
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;

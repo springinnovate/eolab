@@ -210,9 +210,9 @@ test("clip form and job cards show grid, real progress, direct links and indepen
     const link = card.children.find(child => child.textContent === "Download COG");
     assert.equal(link.href, `/api/processing/jobs/${id}/result`);
     card.children.at(-1).dispatchEvent(new Event("click")); assert.deepEqual(actions,[id]);
-    doc.querySelector("#map-tools-more-summary").textContent = "More";
+    doc.querySelector("#map-tools-more-summary").textContent = "Tools";
     view.render({ ...h.view.state, jobs: [{ ...job, status: "running" }] });
-    assert.equal(doc.querySelector("#map-tools-more-summary").textContent, "More");
+    assert.equal(doc.querySelector("#map-tools-more-summary").textContent, "Tools");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"clipping",completedBlocks:3,totalBlocks:10} }),"Clipping · 3 of 10 source blocks");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"preparing"} }), "Preparing clip…");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"calculating"} }), "Starting clip…");

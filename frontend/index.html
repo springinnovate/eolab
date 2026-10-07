@@ -565,16 +565,25 @@
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
-        <details id="map-tools-more" class="map-analysis-more">
-          <summary id="map-tools-more-summary" class="secondary-button">More</summary>
-          <div class="map-analysis-more-menu">
-            <button id="toggle-map-legend" class="secondary-button" type="button" aria-pressed="true">Hide legend</button>
-            <button id="open-raster-series" class="secondary-button" type="button"
-              aria-controls="raster-series">Plot raster stack</button>
-            <button id="open-raster-clips" class="secondary-button" type="button"
-              aria-controls="raster-clips-panel">Raster clips</button>
-          </div>
-        </details>
+        <button id="map-tools-more-summary" class="secondary-button" type="button"
+          popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
+          aria-label="Map and analysis tools">Tools</button>
+      </div>
+      <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
+        <div class="workspace-tool-actions-group">
+          <strong class="workspace-tool-actions-label">Analysis</strong>
+          <button id="open-raster-series" class="workspace-tool-action" type="button"
+            aria-controls="raster-series">Plot raster stack</button>
+        </div>
+        <div class="workspace-tool-actions-group">
+          <strong class="workspace-tool-actions-label">Export</strong>
+          <button id="open-raster-clips" class="workspace-tool-action" type="button"
+            aria-controls="raster-clips-panel">Raster clips</button>
+        </div>
+        <div class="workspace-tool-actions-group">
+          <strong class="workspace-tool-actions-label">Map display</strong>
+          <button id="toggle-map-legend" class="workspace-tool-action" type="button" aria-pressed="true">Hide legend</button>
+        </div>
       </div>
       <aside id="map-inspection" popover="manual" aria-labelledby="map-inspection-dock-title" aria-describedby="map-inspection-context">
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
@@ -583,16 +592,9 @@
           <button id="toggle-map-inspection-dock" class="secondary-button"
             type="button" aria-controls="map-click-summary map-inspection-tabs map-inspection-panels"
             aria-expanded="true">Minimize</button>
-          <details id="map-inspection-more" class="map-analysis-more">
-            <summary id="map-inspection-more-summary" class="secondary-button">More</summary>
-            <div class="map-analysis-more-menu">
-              <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
-              <button id="open-raster-series-dock" class="secondary-button" type="button"
-                aria-controls="raster-series">Plot raster stack</button>
-              <button id="open-raster-clips-dock" class="secondary-button" type="button"
-                aria-controls="raster-clips-panel">Raster clips</button>
-            </div>
-          </details>
+          <button id="map-inspection-more-summary" class="secondary-button" type="button"
+            popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
+            aria-label="Map and analysis tools">Tools</button>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <details id="map-click-disclosure" class="map-click-disclosure" hidden>
           <summary id="map-click-disclosure-label">Map click results</summary>
@@ -723,6 +725,7 @@
             <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
             <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
             <p id="calculations-area-description" class="summary-area-details"></p>
+            <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
             <section id="calculations-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
               <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
               <small data-vector-sampling="predicate"></small>
