@@ -27,6 +27,7 @@ export class MapInspectionController {
         this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
         this.calculationOpener = documentContext.querySelector("#open-calculations");
+        this.dockCalculationOpener = documentContext.querySelector("#open-calculations-dock");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.clickSummary = documentContext.querySelector("#map-click-summary");
         this.clickContext = documentContext.querySelector("#map-click-context");
@@ -751,6 +752,8 @@ export class MapInspectionController {
     /**
      * Render foreground task/source/scope, retained navigation and active-panel visibility.
      * Result cards replace their tabs; other open tools retain keyboard navigation.
+     * Show the Summarize opener only when its retained tab is unavailable, moving
+     * focus to that tab if opening the panel hides the focused opener.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
      *
@@ -794,6 +797,11 @@ export class MapInspectionController {
         this.tabList.hidden = visibleTabs.length === 0 || this.minimized;
         if (!visibleTabs.some(({tab}) => tab.tabIndex === 0) && visibleTabs.length > 0) {
             visibleTabs[0].tab.tabIndex = 0;
+        }
+        const openerFocused = this.document.activeElement === this.dockCalculationOpener;
+        this.dockCalculationOpener.hidden = !this.calculations.hidden && !this.minimized;
+        if (this.dockCalculationOpener.hidden && openerFocused) {
+            this.#tool("calculations").tab.focus();
         }
         const active = this.minimized ? null : this.activeTool;
         this.#renderClickSummary();

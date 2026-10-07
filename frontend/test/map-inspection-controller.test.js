@@ -135,6 +135,71 @@ test("task headers retain their own source and scope while clicks and peer conte
     assert.equal(h.doc.querySelector("#open-calculations").hidden, false);
 });
 
+test("one Summarize entry remains available through retained tabs, closing and minimization", () => {
+    const h = fixture(doc => {
+        const opener = doc.querySelector("#open-calculations-dock");
+        let hidden = opener.hidden;
+        Object.defineProperty(opener, "hidden", {
+            /** Read native-like visibility. @return {boolean} Whether hidden. */
+            get() { return hidden; },
+            /** Hiding a focused browser control clears its focus immediately.
+             * @param {boolean} value Whether to hide the opener. @return {void}
+             */
+            set(value) {
+                hidden = value;
+                if (value && doc.activeElement === opener) doc.activeElement = null;
+            },
+        });
+    });
+    const opener = h.doc.querySelector("#open-calculations-dock");
+    const tab = h.doc.querySelector("#map-inspection-tab-calculations");
+    const tabs = h.doc.querySelector("#map-inspection-tabs");
+    const context = h.doc.querySelector("#map-inspection-context");
+    h.controller.setToolContext("calculations", { source: "Resistance", scope: "Whole raster" });
+    h.controller.showStyle("Countries");
+    assert.equal(opener.hidden, false);
+    assert.equal(tab.hidden, true);
+
+    opener.focus();
+    h.controller.showCalculations();
+    assert.equal(opener.hidden, true);
+    assert.equal(tab.hidden, false);
+    assert.equal(tabs.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(h.doc.activeElement, tab, "focus follows the opener it replaces");
+    const end = new Event("keydown");
+    Object.defineProperty(end, "key", { value: "End" });
+    tab.dispatchEvent(end);
+    assert.equal(h.doc.activeElement, h.styleTab);
+    assert.equal(h.controller.activeTool, "style");
+    assert.equal(opener.hidden, true, "the retained summary tab replaces the opener in other tools too");
+    assert.equal(tab.hidden, false);
+    const home = new Event("keydown");
+    Object.defineProperty(home, "key", { value: "Home" });
+    h.styleTab.dispatchEvent(home);
+    assert.equal(h.doc.activeElement, tab);
+    assert.equal(context.textContent, "Resistance · Whole raster");
+
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(tabs.hidden, true);
+    assert.equal(opener.hidden, false, "a minimized dock still offers Summarize");
+    opener.focus();
+    h.controller.showCalculations();
+    assert.equal(tabs.hidden, false);
+    assert.equal(opener.hidden, true);
+    assert.equal(h.doc.activeElement, tab);
+    assert.equal(context.textContent, "Resistance · Whole raster");
+    h.map.focus();
+    h.controller.showCalculations();
+    assert.equal(h.doc.activeElement, h.map, "background presentation never steals focus");
+
+    h.controller.hideCalculations();
+    assert.equal(h.controller.activeTool, "style");
+    assert.equal(opener.hidden, false);
+    assert.equal(tab.hidden, true);
+    h.controller.destroy();
+});
+
 test("context validates its presentation boundary and vector identities clear without moving focus", () => {
     const h = fixture();
     for (const invalid of [{ source: 3, scope: "" }, { source: "Layer" }, "Layer"]) {

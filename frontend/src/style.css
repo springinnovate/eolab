@@ -4079,6 +4079,7 @@ article.raster-histogram-summary {
 
 #map-inspection:not(:popover-open),
 #open-calculations[hidden],
+#open-calculations-dock[hidden],
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
