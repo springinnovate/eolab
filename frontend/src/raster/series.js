@@ -4,6 +4,7 @@ import { isCanonicalWgs84Position } from "./geometry.js";
 const SERIES_STATISTICS = Object.freeze({
     pixel: { label: "Pixel value", expression: "pixelValue(a)" },
     mean: { label: "Mean", expression: "mean(a)" },
+    stdev: { label: "Standard deviation", expression: "stdev(a)" },
     min: { label: "Minimum", expression: "min(a)" },
     max: { label: "Maximum", expression: "max(a)" },
     sum: { label: "Sum", expression: "sum(a)" },

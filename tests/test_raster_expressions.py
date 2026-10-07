@@ -1,5 +1,7 @@
 """Hand-computed expression semantics and bounded grammar validation."""
 
+import statistics
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -36,6 +38,8 @@ def calculate(expression: str, data: list, valid: list | None = None) -> dict:
         ("sum(a > 10)", 2),
         ("sum(a, where=a > 10)", 50),
         ("mean(a)", 9.6),
+        ("stdev(a)", statistics.pstdev([-2, 0, 0, 20, 30])),
+        ("stdev(a * 2, where=a > 10)", 10),
         ("min(a)", -2),
         ("max(a)", 30),
         ("sum(a * 2 + 1)", 101),
@@ -74,6 +78,10 @@ def test_numeric_logical_conditional_and_scalar_arithmetic(
         "sum(sum(a))",
         "sum(a,where=mean(a)>0)",
         "mean(a>0)",
+        "stdev(a>0)",
+        "stdev(mean(a))",
+        "stdev(a,where=stdev(a)>0)",
+        "stddev(a)",
         "sum(a && 1)",
         "sum(!a)",
         "sum(a + (a>0))",
@@ -132,6 +140,91 @@ def test_counts_remain_lossless_decimal_integers() -> None:
     reduction.valid = reduction.matched = 2**53 + 1
     assert calculation.result()["value"] == "9007199254740993"
     assert calculation.result()["valueType"] == "integer"
+
+
+@pytest.mark.parametrize("tile_size", [1, 2, 7, 256, 1024])
+@pytest.mark.parametrize(
+    "values",
+    [
+        [-2.0, 0.0, 0.0, 20.0, 30.0],
+        [1e12 + (i % 17) * 0.125 for i in range(513)],
+        [1e15 + (i % 17) * 0.125 for i in range(513)],
+        [0.0, 1e200, -1e200, 2e200],
+        [0.0, 1e-250, -1e-250, 2e-250],
+        [1.0, 2.0, 1e308, -1e308, 0.0],
+        [np.finfo(np.float64).max, -np.finfo(np.float64).max],
+        [1e308] * 19,
+        [0.0] * 19,
+        [4.0],
+    ],
+)
+def test_stdev_matches_independent_population_reference_across_tiles(
+    values: list[float], tile_size: int
+) -> None:
+    """Preserve population moments for large offsets, extremes and uneven tiles.
+
+    Args:
+        values: Finite fixture values with exact-fraction reference arithmetic.
+        tile_size: Evaluation batch size, including singleton and partial tiles.
+    """
+    reference = statistics.pstdev(values)
+    calculation = Calculation(compile_expression("stdev(a)", "a"))
+    data = np.array(values, dtype=np.float64)
+    for start in range(0, len(data), tile_size):
+        tile = data[start : start + tile_size]
+        calculation.process_tile(tile, np.ones(tile.shape, dtype=bool))
+    result = calculation.result()
+    assert result["state"] == "ok"
+    assert result["valueType"] == "float"
+    assert result["unit"] is None
+    assert float(result["value"]) == pytest.approx(reference, rel=2e-14, abs=0)
+    assert result["aggregates"][0]["matchedPixels"] == len(values)
+
+
+@pytest.mark.parametrize(
+    "values,valid,state,value",
+    [
+        ([], [], "no_valid_data", None),
+        ([np.nan, np.inf], [False, False], "no_valid_data", None),
+        ([1, 99, 3], [True, False, True], "ok", "1.0"),
+        ([0, 0], [True, True], "ok", "0.0"),
+    ],
+)
+def test_stdev_preserves_missing_masked_zero_and_empty_semantics(
+    values: list[float], valid: list[bool], state: str, value: str | None
+) -> None:
+    """Missing data stays distinct from valid zero-valued population deviation.
+
+    Args:
+        values: Stored fixture values, including missing cells.
+        valid: Authoritative source/area mask.
+        state: Expected public classification.
+        value: Expected decimal-string result or missing value.
+    """
+    result = calculate("stdev(a)", values, valid)
+    assert result["state"] == state
+    assert result["value"] == value
+
+
+def test_stdev_where_arithmetic_and_scalar_combinations() -> None:
+    """Filtering and arithmetic failures use the established numeric contract."""
+    unmatched = calculate("stdev(a,where=a>10)", [0, 2])
+    assert unmatched["state"] == "no_matches"
+    assert unmatched["value"] is None
+    partial = calculate("stdev(10/a)", [0, 2, 5])
+    assert float(partial["value"]) == 1.5
+    assert partial["aggregates"][0] == {
+        "function": "stdev",
+        "validPixels": 3,
+        "matchedPixels": 2,
+        "invalidArithmeticPixels": 1,
+    }
+    assert calculate("stdev(10/a)", [0, 0])["state"] == "invalid_arithmetic"
+    condition = calculate("stdev(a,where=10/a>0)", [0, 2, 4])
+    assert float(condition["value"]) == 1.0
+    assert condition["aggregates"][0]["invalidArithmeticPixels"] == 1
+    assert calculate("stdev(a,where=10/a>0)", [0, 0])["state"] == "invalid_arithmetic"
+    assert float(calculate("stdev(a)/mean(a)", [2, 4])["value"]) == pytest.approx(1 / 3)
 
 
 @pytest.mark.parametrize("pixel_value", [0.0, -7.5, 12.25])
@@ -204,6 +297,7 @@ def test_pixel_value_combines_with_area_statistics_and_scalar_arithmetic() -> No
         {"selectedBounds": {"west": 0, "south": 0, "east": 1, "north": 1}},
         {"sources": {"a": SOURCE, "b": SOURCE}},
         {"sources": {"sum": SOURCE}},
+        {"sources": {"stdev": SOURCE}},
         {"path": "/scan-source/x.tif"},
         {"calculations": [{"label": "bad", "expression": "a>0"}]},
         {"calculations": [{"label": "same", "expression": "count(a)"}] * 2},

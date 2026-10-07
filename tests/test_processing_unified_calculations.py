@@ -1,8 +1,11 @@
 """One-request summaries through the real HTTP, database and native worker boundaries."""
 
 import asyncio
+import csv
 import hashlib
+import io
 import json
+import statistics
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -25,6 +28,56 @@ from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
 from test_processing_jobs import write_geopackage_layer, register_selection
 import eolab_app.processing.worker as worker_module
+
+
+def test_stdev_owned_job_inline_csv_provenance_and_cache(boundary: Any) -> None:
+    """Population statistics use real Processing lifecycle without map/GeoServer.
+
+    Args:
+        boundary: Catalog-authorized native raster, HTTP, database and worker.
+    """
+    client, worker, _, _, app = boundary
+    formula = {"label": "Standard deviation", "expression": "stdev(a,where=a>5000)"}
+    body = {
+        **request_body(wholeRaster=True),
+        "calculations": [formula],
+        "requestId": uuid4().hex,
+    }
+    submitted = client.post(ENDPOINT, json=body, headers=HEADERS)
+    assert submitted.status_code == 202, submitted.text
+    job_id = submitted.json()["jobId"]
+    assert client.post(ENDPOINT, json=body, headers=HEADERS).json()["jobId"] == job_id
+    assert asyncio.run(worker.run_once())
+    ready = client.get(f"/api/processing/jobs/{job_id}").json()
+    assert ready["status"] == "ready", ready
+    assert not ready["result"]["cacheHit"]
+    row = ready["result"]["rows"][0]
+    assert float(row["value"]) == pytest.approx(statistics.pstdev(range(5001, 10000)))
+    assert row["aggregates"] == [
+        {
+            "function": "stdev",
+            "validPixels": 10000,
+            "matchedPixels": 4999,
+            "invalidArithmeticPixels": 0,
+        }
+    ]
+    response = client.get(ready["result"]["url"])
+    assert response.status_code == 200
+    csv_row = next(csv.DictReader(io.StringIO(response.text)))
+    assert csv_row["expression"] == formula["expression"]
+    assert csv_row["value"] == row["value"]
+    assert client.get(ready["result"]["provenanceUrl"]).json()["rows"] == [row]
+    with TestClient(app, base_url="https://testserver") as stranger:
+        assert stranger.get(f"/api/processing/jobs/{job_id}").status_code == 404
+        assert stranger.get(ready["result"]["url"]).status_code == 404
+    cached = client.post(
+        ENDPOINT, json={**body, "requestId": uuid4().hex}, headers=HEADERS
+    ).json()
+    assert asyncio.run(worker.run_once())
+    cached = client.get(f"/api/processing/jobs/{cached['jobId']}").json()
+    assert cached["status"] == "ready", cached
+    assert cached["result"]["cacheHit"]
+    assert cached["result"]["rows"] == [row]
 
 
 def test_http_and_direct_submission_reuse_validated_inputs(

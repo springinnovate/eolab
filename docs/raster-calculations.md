@@ -137,6 +137,7 @@ aggregate results is allowed, for example `max(a) - min(a)`.
 | `count(a > 10)` or `sum(a > 10)` | Count cells satisfying the condition |
 | `sum(a, where=a > 10)` | Sum original values of the matching cells |
 | `mean(a * 2, where=a >= 0)` | Pixel-weighted mean of the transformed matching values |
+| `stdev(a)` / `stdev(a * 2, where=a >= 0)` | Population standard deviation of valid selected values / transformed matching values |
 | `min(a)` / `max(a)` | Smallest / largest selected valid value |
 | `areaha(a == 4)` | Ground hectares of class 4 intersecting the selection, including boundary fractions |
 | `100 * areaha(a > 10) / areaha(a == a)` | Percentage of valid selected ground area satisfying the condition |
@@ -152,7 +153,7 @@ one native cell even when Whole raster is selected. In mixed formulas such as
 use the same submission, worker, cancellation, recovery and result cache.
 
 `areaha` requires exactly one boolean pixel expression and does not accept `where`.
-Area numeric functions' optional `where` takes a boolean pixel expression. `mean`, `min`, and `max` take numbers;
+Area numeric functions' optional `where` takes a boolean pixel expression. `mean`, `stdev`, `min`, and `max` take numbers;
 `sum` and `count` also accept a condition. Scalar literals within a pixel aggregate
 broadcast over valid source cells. Scale/offset metadata is recorded but **not
 automatically applied**: calculations use the stored values, matching the current
@@ -167,6 +168,14 @@ Opt-in batching can combine those reads and enlarge evaluation tiles as describe
 below. Integers are converted exactly from the supported native integer types to
 float64 for pixel arithmetic. Numeric sums use float64 block sums with compensated
 combination across blocks; means use scaled block means and weighted combination.
+`stdev` divides by the matching pixel count (population semantics, `ddof=0`),
+using centered tile moments merged with a fixed origin and scaled differences.
+It retains only scalar moments between tiles, without collecting the full raster
+or subtracting squared raw values. One matching pixel or constant matching values
+give zero; no matches give null (`no_matches`), and an empty/all-NoData selection
+gives null (`no_valid_data`). Masked and nonfinite pixels are excluded; arithmetic
+errors in its argument or `where` use the same diagnostics as other aggregates.
+There is no sample-standard-deviation variant.
 Floating results are not arbitrary-precision decimal arithmetic. Count reductions
 remain integer accumulators. All returned values are decimal **strings** with
 `valueType: integer | float`, preserving integer counts across JSON/JavaScript.
@@ -192,7 +201,7 @@ not hectare totals. NoData contributes neither area nor numeric values.
 | State | Result |
 | --- | --- |
 | `ok` | Finite result; coverage diagnostics may report excluded arithmetic cells |
-| `no_matches` | Valid data exists but nothing matches: count/sum/areaha is zero, mean/min/max is null |
+| `no_matches` | Valid data exists but nothing matches: count/sum/areaha is zero, mean/stdev/min/max is null |
 | `no_valid_data` | No valid source cell in the area: null, including count |
 | `invalid_arithmetic` | All eligible source cells have invalid expression arithmetic, or final scalar arithmetic is undefined: null |
 | `overflow` | A numeric accumulation or final scalar result overflows: null |

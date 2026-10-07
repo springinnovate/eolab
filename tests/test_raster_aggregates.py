@@ -3,6 +3,7 @@
 from dataclasses import replace
 import csv
 import json
+import statistics
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -21,6 +22,7 @@ from eolab_app.processing.aggregate_models import (
     RasterAggregateLimits,
 )
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.raster_aggregate import (
     calculate_raster_statistics_for_area,
     plan_aggregate,
@@ -32,6 +34,114 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
 LIMITS = RasterAggregateLimits()
+
+
+@pytest.mark.parametrize("block_side", [16, 32, 64])
+@pytest.mark.parametrize("target_chunk_pixels", [None, 256, 4096])
+@pytest.mark.parametrize("area_kind", ["wholeRaster", "bounds", "polygons", "aoi"])
+def test_stdev_native_masks_selections_blocks_csv_and_provenance(
+    tmp_path: Path,
+    block_side: int,
+    target_chunk_pixels: int | None,
+    area_kind: str,
+) -> None:
+    """Real native reads preserve population semantics across block/batch layouts.
+
+    Args:
+        tmp_path: Private native source and artifacts.
+        block_side: GeoTIFF block shape, independent of evaluation tiling.
+        target_chunk_pixels: Optional Processing read/evaluation batch budget.
+        area_kind: Whole extent, map box, uploaded polygons or a historical AOI
+            containing a hole.
+    """
+    values = 1e12 + np.arange(65 * 73, dtype="float64").reshape(65, 73) % 29
+    values[12, 15] = -9999
+    values[13, 16] = np.nan
+    values[14, 17] = np.inf
+    values[15, 18] = -9999
+    valid = np.isfinite(values) & (values != -9999)
+    transform = from_origin(0, 10, 0.01, 0.01)
+    path = tmp_path / "source.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=73,
+        height=65,
+        count=1,
+        dtype="float64",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=-9999,
+        tiled=True,
+        blockxsize=block_side,
+        blockysize=block_side,
+    ) as dataset:
+        dataset.write(values, 1)
+    bounds = (0.101, 9.401, 0.599, 9.899)
+    inside = np.ones(values.shape, dtype=bool)
+    if area_kind != "wholeRaster":
+        inside[:] = False
+        inside[10:60, 10:60] = True
+    if area_kind in {"polygons", "aoi"}:
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [0.101, 9.401],
+                    [0.599, 9.401],
+                    [0.599, 9.899],
+                    [0.101, 9.899],
+                    [0.101, 9.401],
+                ],
+                [
+                    [0.201, 9.701],
+                    [0.201, 9.799],
+                    [0.299, 9.799],
+                    [0.299, 9.701],
+                    [0.201, 9.701],
+                ],
+            ],
+        }
+        if area_kind == "aoi":
+            inside[20:30, 20:30] = False
+            area = AggregateArea(kind="aoi", bounds=bounds, geometries=(geometry,))
+        else:
+            geometry["coordinates"] = geometry["coordinates"][:1]
+            polygons = PolygonSummaryInput(polygons=(geometry,))
+            area = AggregateArea(
+                kind="polygons",
+                bounds=polygons.bounds(),
+                geometryHash=polygons.geometry_hash(),
+                geometries=(geometry,),
+            )
+    else:
+        area = AggregateArea(
+            kind=area_kind, bounds=bounds if area_kind == "bounds" else None
+        )
+    expressions = ["stdev(a)", "stdev(a * 2 - 1, where=a < 1000000000010)"]
+    spec = make_spec(path, expressions, area, target_chunk_pixels=target_chunk_pixels)
+    artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
+    expected_values = values[valid & inside]
+    expected = [
+        statistics.pstdev(expected_values.tolist()),
+        statistics.pstdev(
+            (expected_values[expected_values < 1000000000010] * 2 - 1).tolist()
+        ),
+    ]
+    for row, reference in zip(artifact.rows, expected, strict=True):
+        assert row["state"] == "ok"
+        assert row["valueType"] == "float"
+        assert float(row["value"]) == pytest.approx(reference, rel=2e-13)
+        assert row["aggregates"][0]["validPixels"] == len(expected_values)
+    with (tmp_path / "result.csv").open(newline="", encoding="utf-8") as stream:
+        csv_rows = list(csv.DictReader(stream))
+    assert [row["expression"] for row in csv_rows] == expressions
+    assert [float(row["value"]) for row in csv_rows] == pytest.approx(expected)
+    provenance = json.loads((tmp_path / "provenance.json").read_text())
+    assert provenance["rows"] == artifact.rows
+    assert provenance["area"]["kind"] == area_kind
+    assert provenance["functionInclusion"]["numeric"] == "cell_center"
 
 
 def make_spec(

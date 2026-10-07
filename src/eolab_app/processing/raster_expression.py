@@ -9,7 +9,9 @@ import numpy as np
 
 from eolab_app.processing.models import ProcessingError
 
-FUNCTIONS = frozenset({"count", "sum", "mean", "min", "max", "areaha", "pixelValue"})
+FUNCTIONS = frozenset(
+    {"count", "sum", "mean", "stdev", "min", "max", "areaha", "pixelValue"}
+)
 MAX_NODES = 256
 MAX_DEPTH = 20
 TOKEN = re.compile(
@@ -293,7 +295,13 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
 
 
 class Reduction:
-    """Bounded running accumulator for one aggregate node."""
+    """Bounded running accumulator for one aggregate node.
+
+    stdev uses population moments of matching valid values, with a fixed origin
+    to retain precision for small spreads around large offsets. Only scalar
+    moments survive between tiles; source and expression validity are shared
+    with the other numeric aggregates.
+    """
 
     def __init__(self, node: Node, pixel_value: float | None = None) -> None:
         """Initialize an aggregate.
@@ -306,6 +314,9 @@ class Reduction:
         self.node = node
         self.valid = self.matched = self.invalid = 0
         self.total = self.compensation = self.mean = 0.0
+        self.origin: float | None = None
+        self.deviation: float = 0.0
+        self.deviation_scale: float = 1.0
         self.minimum = math.inf
         self.maximum = -math.inf
         self.overflow = False
@@ -321,6 +332,9 @@ class Reduction:
         self, data: np.ndarray, base: np.ndarray, hectares: np.ndarray | None = None
     ) -> None:
         """Merge one bounded input tile using conservative validity masks.
+
+        stdev merges centered population moments across tiles. Empty tiles do
+        not change those moments; a single matching pixel has deviation zero.
 
         Args:
             data: Float64 stored values in one tile.
@@ -381,6 +395,8 @@ class Reduction:
             return
         self.minimum = min(self.minimum, float(np.min(selected)))
         self.maximum = max(self.maximum, float(np.max(selected)))
+        if self.node.op == "stdev":
+            self.update_stdev(selected, prior_count)
         if self.node.op == "mean":
             scale = float(np.max(np.abs(selected)))
             block_mean = (
@@ -398,11 +414,58 @@ class Reduction:
             self.total = total
             self.overflow |= not math.isfinite(total)
 
+    def update_stdev(self, selected: np.ndarray, prior_count: int) -> None:
+        """Merge one nonempty tile's centered population moments.
+
+        A fixed origin avoids subtracting squared raw values or repeatedly
+        rounding a large absolute mean. Scaled centered differences and hypot
+        avoid squaring huge/tiny values. Halving extreme inputs also keeps
+        differences of opposite finite float64 values representable.
+
+        Args:
+            selected: Nonempty finite float64 values after the owning validity
+                and selection boundary has filtered this tile.
+            prior_count: Matched count before this tile; self.matched already
+                includes its values.
+        """
+        if (
+            self.deviation_scale == 1.0
+            and max(abs(self.minimum), abs(self.maximum)) > np.finfo(np.float64).max / 4
+        ):
+            self.deviation_scale = 2.0
+            if self.origin is not None:
+                self.origin /= 2
+                self.mean /= 2
+                self.deviation /= 2
+        if self.origin is None:
+            self.origin = float(selected[0]) / self.deviation_scale
+        shifted = selected / self.deviation_scale - self.origin
+        scale = float(np.max(np.abs(shifted)))
+        block_mean = 0.0 if scale == 0 else float(np.mean(shifted / scale)) * scale
+        centered = shifted - block_mean
+        scale = float(np.max(np.abs(centered)))
+        block_deviation = (
+            0.0
+            if scale == 0
+            else math.sqrt(float(np.mean(np.square(centered / scale)))) * scale
+        )
+        prior_weight = prior_count / self.matched
+        block_weight = selected.size / self.matched
+        delta = block_mean - self.mean
+        self.deviation = math.hypot(
+            self.deviation * math.sqrt(prior_weight),
+            block_deviation * math.sqrt(block_weight),
+            delta * math.sqrt(prior_weight * block_weight),
+        )
+        self.mean += delta * block_weight
+
     def result(self) -> tuple[int | float | None, str]:
         """Return the aggregate value and explicit empty/error classification.
 
         Returns:
             Native numeric result (counts remain Python integers) and status.
+            stdev is population standard deviation, zero for one matched pixel
+            and null for no valid data, no matches or invalid arithmetic.
         """
         if self.valid == 0:
             return None, "no_valid_data"
@@ -423,6 +486,7 @@ class Reduction:
         value = {
             "sum": self.total,
             "mean": self.mean,
+            "stdev": self.deviation * self.deviation_scale,
             "min": self.minimum,
             "max": self.maximum,
             "areaha": self.total,

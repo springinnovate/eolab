@@ -73,6 +73,19 @@ function fixture(overrides = {}, data = new Map()) {
     return {api,calculationRequests,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,advance,finish,open,close};
 }
 
+test("standard deviation submits the population formula per raster and retains results in series CSV", async () => {
+    const h = fixture(); h.controller.addFormula("stdev"); await h.open();
+    const submissions = h.requests.filter(([kind]) => kind === "submit");
+    assert.equal(submissions.length, 2);
+    for (const [, request] of submissions) assert.equal(request.calculations[1].expression, "stdev(a)");
+    await h.finish(); await h.finish("ready", true);
+    const statistic = h.view.state.statistics.find(row => row.expression === "stdev(a)");
+    assert.equal(statistic.label, "Standard deviation");
+    assert.deepEqual(statistic.rows.map(row => row.rawValue), ["22", "22"]);
+    assert.match(h.controller.exportCsv(), /"Standard deviation","stdev\(a\)"/);
+    h.close();
+});
+
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
     const h=fixture();h.controller.addFormula("area");await h.open();
     assert.equal(h.requests.filter(([k])=>k==="submit").length,2);
