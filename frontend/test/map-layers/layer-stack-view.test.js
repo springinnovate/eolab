@@ -488,7 +488,7 @@ test("heading counts retained types through mixed, hidden, single-type, and empt
   assert.equal(counts.textContent, "· Empty");
 });
 
-test("rows expose two-row identity, map, style, clipboard, and removal actions", () => {
+test("rows retain identity, map, style, clipboard, and removal actions", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
@@ -506,19 +506,13 @@ test("rows expose two-row identity, map, style, clipboard, and removal actions",
     assert.equal(actionControl(row, "info").textContent, "Info");
     assert.equal(actionControl(row, "copy-style").disabled, false);
     assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
-    assert.equal(
-      elementsByClass(actionControl(row, "copy-style"), "map-layer-style-copy-icon").length,
-      1,
-    );
+    assert.equal(actionControl(row, "copy-style").textContent, "Copy style");
     assert.equal(actionControl(row, "paste-style").disabled, true);
     assert.equal(
       actionControl(row, "paste-style").title,
       "Copy a layer style before pasting.",
     );
-    assert.equal(
-      elementsByClass(actionControl(row, "paste-style"), "map-layer-style-paste-icon").length,
-      1,
-    );
+    assert.equal(actionControl(row, "paste-style").textContent, "Paste style");
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
@@ -546,6 +540,74 @@ test("raster and vector rows use the same compact action layout", () => {
     assert.equal(elementsByClass(row, "map-layer-row-actions").length, 1);
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
   }
+});
+
+test("frequent layer actions and the legend stay outside the infrequent actions disclosure", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const raster = { ...LAYERS[0], datasetKind: "raster", legend: { kind: "fixed", label: "Raster" } };
+  const vector = { ...LAYERS[1], datasetKind: "vector", canFilter: true };
+  view.render([raster, vector], null);
+  for (const row of doc.querySelector("#raster-layer-list").children) {
+    const strip = elementsByClass(row, "map-layer-row-actions")[0];
+    const details = elementsByClass(row, "map-layer-actions")[0];
+    assert.equal(details.open, false);
+    assert.equal(details.children[0].textContent, "Actions");
+    assert.match(details.children[0].getAttribute("aria-label"), /^Actions for /);
+    assert.ok(strip.children.includes(actionControl(row, "style")));
+    assert.ok(strip.children.includes(actionControl(row, "zoom")));
+    for (const action of ["rename", "info", "copy-style", "paste-style"]) {
+      assert.ok(details.contains(actionControl(row, action)), `${action} belongs in Actions`);
+    }
+    assert.equal(details.getAttribute("role"), null, "native disclosure keeps normal Tab navigation");
+  }
+  const [rasterRow, vectorRow] = doc.querySelector("#raster-layer-list").children;
+  const strip = elementsByClass(rasterRow, "map-layer-row-actions")[0];
+  assert.ok(strip.children.includes(actionControl(rasterRow, "calculate")));
+  assert.ok(strip.children.includes(elementsByClass(rasterRow, "map-layer-legend")[0]));
+  assert.ok(elementsByClass(rasterRow, "map-layer-actions")[0].contains(actionControl(rasterRow, "download")));
+  assert.ok(elementsByClass(vectorRow, "map-layer-row-actions")[0].children.includes(actionControl(vectorRow, "filter")));
+});
+
+test("layer Actions retain open state and focus on refresh and reopen for a requested command", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const list = doc.querySelector("#raster-layer-list");
+  view.render(LAYERS, null);
+  elementsByClass(list.children[0], "map-layer-actions")[0].open = true;
+  actionControl(list.children[0], "info").focus();
+  view.render(LAYERS, null);
+  assert.equal(elementsByClass(list.children[0], "map-layer-actions")[0].open, true);
+  assert.equal(doc.activeElement, actionControl(list.children[0], "info"));
+  elementsByClass(list.children[0], "map-layer-actions")[0].open = false;
+  view.render(LAYERS, null, { key: LAYERS[0].key, action: "rename" });
+  assert.equal(elementsByClass(list.children[0], "map-layer-actions")[0].open, true);
+  assert.equal(doc.activeElement, actionControl(list.children[0], "rename"));
+  view.render([], null);
+  view.render(LAYERS, null);
+  assert.equal(elementsByClass(list.children[0], "map-layer-actions")[0].open, false);
+  elementsByClass(list.children[0], "map-layer-actions")[0].open = true;
+  view.unbind();
+  view.render(LAYERS, null);
+  assert.equal(elementsByClass(list.children[0], "map-layer-actions")[0].open, false);
+});
+
+test("Escape closes only an open Actions disclosure and returns focus to its summary", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  view.render(LAYERS, null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const details = elementsByClass(row, "map-layer-actions")[0];
+  details.open = true;
+  actionControl(row, "info").focus();
+  const escape = interactionEvent("keydown", { key: "Escape" });
+  details.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(details.open, false);
+  assert.equal(doc.activeElement, actionControl(row, "actions"));
+  const closedEscape = interactionEvent("keydown", { key: "Escape" });
+  details.dispatchEvent(closedEscape);
+  assert.equal(closedEscape.defaultPrevented, false, "closed disclosure leaves Escape to the workspace");
 });
 
 test("optional analysis role badges are visible and accessible", () => {

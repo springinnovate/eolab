@@ -65,14 +65,19 @@ Open **Map layers** to see the current stack. The first layer in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.
 
-Each layer row provides small, direct actions:
+Each layer row keeps its frequent actions visible:
 
 - the checkbox shows or hides the layer;
 - **Style** changes its appearance;
 - **Zoom to** fits the source layer's bounds;
-- **Info** opens the Catalog details;
-- **Copy** and **Paste** reuse a compatible style, including layer opacity;
+- **Summarize** opens raster analysis, and **Filter** is available for supported layers;
+- **Legend** expands the layer's values and its inclusion in the map legend;
 - **×** removes the layer from the map.
+
+Expand a row's **Actions** for **Rename**, Catalog **Info**, **Copy style**,
+**Paste style**, and raster **Download clip**. These use normal Tab navigation;
+Escape closes Actions and returns focus to its label. Long names, errors and
+expanded legends grow the row instead of being clipped.
 
 ![Map Layers and a raster style editor in EOLab](docs/images/eolab-layer-styling.png)
 

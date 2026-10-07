@@ -49,6 +49,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
  * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
+ * @property {(key: string) => void} [onCalculate] Open raster summarization through composition.
  * @property {(key: string) => void} onZoom Fit the map to one retained layer.
  * @property {(key: string) => void} onInfo Open one retained layer's Catalog
  * Item details.
@@ -127,6 +128,8 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         /** @type {Map<string,HTMLDetailsElement>} Last rendered legends, retaining disclosure state. */
         this.legends = new Map();
+        /** @type {Map<string,HTMLDetailsElement>} Per-layer action disclosures retained across snapshot refreshes. */
+        this.actions = new Map();
         this.renameEditor = null;
         this.layers = [];
         this.activeKey = null;
@@ -186,6 +189,7 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         this.handlers = null;
         this.legends.clear();
+        this.actions.clear();
         this.renameEditor = null;
     }
 
@@ -193,6 +197,8 @@ export class MapLayerStackView {
      * Render rows while keeping the visible portion of an unchanged layer order stationary.
      * Restore control focus without scrolling during refreshes and visibility changes;
      * explicit focus after reordering or removal may still bring its target into view.
+     * Action disclosures retain their open state; requested focus on a nested command
+     * reopens its disclosure before returning focus.
      *
      * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; primaryControl supplies a retained main action, attribution describes provenance above the title, typeLabel describes origin and stylePanelId identifies the owning style panel.
      * @param {string|null} activeKey Active layer key.
@@ -216,6 +222,9 @@ export class MapLayerStackView {
         if (this.renameEditor && !retainedKeys.has(this.renameEditor.key)) this.renameEditor = null;
         for (const key of this.legends.keys()) {
             if (!retainedKeys.has(key)) this.legends.delete(key);
+        }
+        for (const key of this.actions.keys()) {
+            if (!retainedKeys.has(key)) this.actions.delete(key);
         }
         this.#renderVisibilityActions(layers);
         this.sort.disabled = layers.length < 2;
@@ -264,6 +273,8 @@ export class MapLayerStackView {
             if (focusTarget === undefined && layers.length === 0) {
                 focusTarget = this.documentContext.querySelector("#toggle-map-layers") ?? this.status;
             }
+            const actions = this.actions.get(retainedFocus.key);
+            if (actions?.contains(focusTarget) && focusTarget !== actions.children[0]) actions.open = true;
             focusTarget?.focus({ preventScroll: preserveViewport });
         }
     }
@@ -345,7 +356,8 @@ export class MapLayerStackView {
     }
 
     /**
-     * Construct one semantic list row and register its focusable controls.
+     * Construct one semantic row with frequent actions, inline legend and infrequent
+     * action disclosure, registering controls by their stable layer/action identity.
      *
      * @param {Object} layer Layer presentation snapshot.
      * @param {number} index Top-first row index.
@@ -446,30 +458,28 @@ export class MapLayerStackView {
             sourceLabel: null,
             pasteReason: "Style copy and paste is unavailable.",
         };
-        const copyStyle = this.#styleIconButton(
-            "copy",
+        const copyStyle = this.#button(
+            "Copy style",
             `Copy style from ${accessibleName}`,
-            clipboard.canCopy
-                ? `Copy style and opacity from ${layer.label}`
-                : "Copying styles is unavailable for this layer.",
             layer.key,
             "copy-style",
             () => this.handlers?.onCopyStyle(layer.key),
-            focusTargets,
-            !clipboard.canCopy
+            focusTargets
         );
-        const pasteStyle = this.#styleIconButton(
-            "paste",
+        copyStyle.title = clipboard.canCopy ? `Copy style and opacity from ${layer.label}`
+            : "Copying styles is unavailable for this layer.";
+        copyStyle.disabled = !clipboard.canCopy;
+        const pasteStyle = this.#button(
+            "Paste style",
             `Paste copied style onto ${accessibleName}`,
-            clipboard.canPaste
-                ? `Paste style and opacity from ${clipboard.sourceLabel}`
-                : clipboard.pasteReason,
             layer.key,
             "paste-style",
             () => this.handlers?.onPasteStyle(layer.key),
-            focusTargets,
-            !clipboard.canPaste
+            focusTargets
         );
+        pasteStyle.title = clipboard.canPaste ? `Paste style and opacity from ${clipboard.sourceLabel}`
+            : clipboard.pasteReason;
+        pasteStyle.disabled = !clipboard.canPaste;
         if (this.allowRemoval) {
             const remove = this.#button(
                 "×",
@@ -492,24 +502,29 @@ export class MapLayerStackView {
         // Local editors supply their own Edit/Details action instead of the catalog Info action.
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
+            style,
+            ...filterActions,
+            ...(layer.datasetKind === "raster" ? [this.#button(
+                "Summarize", "Summarize " + accessibleName, layer.key,
+                "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
+            )] : []),
+            zoom
+        );
+        const legend = this.#buildLegend(layer, focusTargets);
+        if (legend !== null) rowActions.append(legend);
+        rowActions.append(this.#buildLayerActions(layer, [
             ...(layer.item !== null ? [this.#button(
                 "Rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
             )] : []),
-            style,
-            ...filterActions,
+            ...(!layer.detailsControl ? [info] : []),
+            copyStyle,
+            pasteStyle,
             ...(layer.datasetKind === "raster" ? [this.#button(
                 "Download clip", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
-            ), this.#button(
-                "Summarize", "Summarize " + accessibleName, layer.key,
-                "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : []),
-            zoom,
-            ...(!layer.detailsControl ? [info] : []),
-            copyStyle,
-            pasteStyle
-        );
+        ], focusTargets));
         row.append(reorder);
         if (layer.attribution) {
             const attribution = this.documentContext.createElement("p");
@@ -529,8 +544,6 @@ export class MapLayerStackView {
             filterStatus.classList.add("map-layer-filter-status");
             row.append(filterStatus);
         }
-        const legend = this.#buildLegend(layer, focusTargets);
-        if (legend !== null) row.append(legend);
         if (layer.controls) row.append(layer.controls);
         if (layer.error) {
             const error = this.documentContext.createElement("p");
@@ -539,6 +552,47 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Group infrequent commands in a native disclosure, preserving its state and focus.
+     * Enabled commands close it before their independent owner receives the intent.
+     * Escape closes only this disclosure and returns focus to its summary.
+     * @param {{key:string,label:string}} layer Layer key and display label.
+     * @param {HTMLButtonElement[]} buttons Existing layer-intent buttons.
+     * @param {Map<string,Element>} focusTargets Rendered focus targets.
+     * @return {HTMLDetailsElement} Labeled, keyboard-operable action disclosure.
+     */
+    #buildLayerActions(layer, buttons, focusTargets) {
+        const details = this.documentContext.createElement("details");
+        details.className = "map-layer-actions";
+        details.open = this.actions.get(layer.key)?.open ?? false;
+        this.actions.set(layer.key, details);
+        const summary = this.documentContext.createElement("summary");
+        summary.textContent = "Actions";
+        summary.setAttribute("aria-label", `Actions for ${layer.label}`);
+        summary.dataset.layerKey = layer.key;
+        summary.dataset.layerAction = "actions";
+        this.#rememberFocusTarget(focusTargets, summary);
+        const commands = this.documentContext.createElement("div");
+        commands.className = "map-layer-action-commands";
+        commands.append(...buttons);
+        details.append(summary, commands);
+        details.addEventListener("click", event => {
+            if (buttons.includes(event.target) && !event.target.disabled) {
+                details.open = false;
+                summary.focus({ preventScroll: true });
+            }
+        }, { capture: true });
+        details.addEventListener("keydown", event => {
+            if (event.key === "Escape" && details.open) {
+                event.preventDefault();
+                event.stopPropagation();
+                details.open = false;
+                summary.focus({ preventScroll: true });
+            }
+        });
+        return details;
     }
 
     /**
@@ -984,45 +1038,6 @@ export class MapLayerStackView {
         button.dataset.layerAction = action;
         button.addEventListener("click", callback);
         this.#rememberFocusTarget(focusTargets, button);
-        return button;
-    }
-
-    /**
-     * Create one compact icon button beside the primary Style action.
-     *
-     * The icon is presentation-only CSS so the accessible name and tooltip
-     * remain authoritative across pointer, keyboard, and assistive use.
-     *
-     * @param {"copy"|"paste"} icon Clipboard action icon.
-     * @param {string} accessibleName Full accessible action name.
-     * @param {string} title Pointer tooltip or disabled-state explanation.
-     * @param {string} key Stable layer key.
-     * @param {string} action Stable focus action.
-     * @param {() => void} callback Intent callback.
-     * @param {Map<string,Element>} focusTargets Rendered focus targets.
-     * @param {boolean} disabled Whether the action is unavailable.
-     * @return {HTMLButtonElement} Configured icon button.
-     */
-    #styleIconButton(
-        icon,
-        accessibleName,
-        title,
-        key,
-        action,
-        callback,
-        focusTargets,
-        disabled
-    ) {
-        const button = this.#button(
-            "", accessibleName, key, action, callback, focusTargets
-        );
-        button.classList.add("map-layer-style-icon-button");
-        button.title = title;
-        button.disabled = disabled;
-        const image = this.documentContext.createElement("span");
-        image.className = `map-layer-style-${icon}-icon`;
-        image.setAttribute("aria-hidden", "true");
-        button.append(image);
         return button;
     }
 
