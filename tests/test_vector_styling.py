@@ -411,7 +411,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
 
 
 def test_sld_generation_uses_typed_categories_and_separate_label_style() -> None:
-    """Keep equality, null, and else rules independent from label rendering."""
+    """Keep equality, null, and fallback rules independent from label rendering."""
     style = VectorStyle.model_validate({
         **default_vector_style("polygon").model_dump(by_alias=True),
         "categorical": {
@@ -452,10 +452,14 @@ def test_sld_generation_uses_typed_categories_and_separate_label_style() -> None
     assert len(geometry_rules) == 4
     assert [
         literal.text
-        for literal in feature_styles[0].findall(".//ogc:Literal", namespaces)
+        for rule in geometry_rules[:2]
+        for literal in rule.findall(".//ogc:Literal", namespaces)
     ] == ["High & rising", "Low"]
     assert feature_styles[0].find(".//ogc:PropertyIsNull", namespaces) is not None
-    assert feature_styles[0].find(".//sld:ElseFilter", namespaces) is not None
+    assert feature_styles[0].find(".//sld:ElseFilter", namespaces) is None
+    assert (
+        geometry_rules[-1].find("./ogc:Filter/ogc:Not/ogc:Or", namespaces) is not None
+    )
     assert feature_styles[1].find(".//sld:TextSymbolizer", namespaces) is not None
     fill_colors = [
         parameter.text

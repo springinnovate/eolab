@@ -2,10 +2,12 @@
 
 import json
 import math
+from copy import deepcopy
 from hashlib import sha256
 from xml.etree import ElementTree
 
 from eolab_app.vector.models import (
+    VectorCategoricalStyle,
     VectorGeometryKind,
     VectorLabelStyle,
     VectorStyle,
@@ -123,7 +125,9 @@ def build_vector_sld(
         geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
-        UTF-8 XML accepted by the GeoServer style REST boundary.
+        UTF-8 XML accepted by the GeoServer style REST boundary. Categorical
+        Other rules use an explicit complement so feature picking can combine
+        geometry and label rules without changing category membership.
 
     Raises:
         ValueError: If fixed labels have no authorized geometry attribute.
@@ -187,10 +191,7 @@ def build_vector_sld(
                 feature_type_style,
                 f"{{{SLD_NAMESPACE}}}Rule",
             )
-            ElementTree.SubElement(
-                rule,
-                f"{{{SLD_NAMESPACE}}}ElseFilter",
-            )
+            _append_category_fallback_filter(rule, feature_type_style, categorical)
             _append_symbolizer(
                 rule,
                 style,
@@ -358,6 +359,44 @@ def _append_category_filter(
         comparison,
         f"{{{OGC_NAMESPACE}}}Literal",
     ).text = _category_literal(value_kind, value)
+
+
+def _append_category_fallback_filter(
+    rule: ElementTree.Element,
+    feature_type_style: ElementTree.Element,
+    categorical: VectorCategoricalStyle,
+) -> None:
+    """Append Other's complement independently of any label rules.
+
+    Args:
+        rule: Empty fallback geometry rule receiving the predicate.
+        feature_type_style: Geometry rules already containing every typed
+            category predicate and the optional missing-value predicate.
+        categorical: Validated nonempty categories and fallback settings.
+
+    Returns:
+        None. Appends an ordinary OGC filter in place. Missing values belong to
+        Other only when there is no separate missing-value color. Explicit
+        categories remain excluded even when their opacity is zero.
+    """
+    predicates = [
+        deepcopy(existing[0])
+        for existing in feature_type_style.findall(
+            f"{{{SLD_NAMESPACE}}}Rule/{{{OGC_NAMESPACE}}}Filter"
+        )
+    ]
+    filter_element = ElementTree.SubElement(rule, f"{{{OGC_NAMESPACE}}}Filter")
+    parent = filter_element
+    if categorical.missing_color is None:
+        # Keep null membership explicit even for datastore SQL's three-valued
+        # logic, rather than relying on NOT(property = value) matching null.
+        parent = ElementTree.SubElement(parent, f"{{{OGC_NAMESPACE}}}Or")
+        _append_property_is_null(parent, categorical.field)
+    negation = ElementTree.SubElement(parent, f"{{{OGC_NAMESPACE}}}Not")
+    union = negation
+    if len(predicates) > 1:
+        union = ElementTree.SubElement(negation, f"{{{OGC_NAMESPACE}}}Or")
+    union.extend(predicates)
 
 
 def _append_numeric_range_filter(

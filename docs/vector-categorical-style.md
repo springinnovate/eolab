@@ -53,6 +53,11 @@ attribute. Saved/shared maps, local persistence, and compatible style copy/paste
 retain the table in the existing vector style definition. No catalog-wide
 defaults or source files are changed.
 
+Values outside the table use **Other**, including when feature labels are
+enabled. Missing/null values use **No value** when configured, otherwise Other.
+The category field matters: for example, a feature with `BIOME=13` and
+`G200_BIOME=0` matches category 13 only when the selected field is `BIOME`.
+
 ## Ownership and compatibility
 
 The vector editor owns file preview/replacement and cancellation. The vector CSV
