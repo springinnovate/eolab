@@ -159,12 +159,12 @@ test("category editor depends only on its local input contract and DOM lookup", 
     assert.doesNotMatch(source, /fetch\(|localStorage|Leaflet/);
 });
 
-test("category CSV boundary depends only on canonical raster appearance validation", async () => {
+test("raster category CSV depends on its appearance owner and neutral bounded syntax", async () => {
     const source = await readFile(
         new URL("../../src/raster/categorical-csv.js", import.meta.url), "utf8"
     );
     const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
         .map(match => match[1]);
-    assert.deepEqual(imports, ["./categorical-style.js"]);
+    assert.deepEqual(imports, ["./categorical-style.js", "../category-csv.js"]);
     assert.doesNotMatch(source, /fetch\(|localStorage|document\.|FileReader|GeoServer/);
 });

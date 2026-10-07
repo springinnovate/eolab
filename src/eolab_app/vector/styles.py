@@ -119,6 +119,7 @@ def build_vector_sld(
         style: Complete geometry-specific style state.
         layer_name: Optional published layer identity for an external SLD.
         opacity_multiplier: Neutral whole-layer opacity from zero through one.
+            Category opacity also multiplies each explicit rule's whole symbol.
         geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
@@ -127,6 +128,7 @@ def build_vector_sld(
     Raises:
         ValueError: If fixed labels have no authorized geometry attribute.
     """
+
     root = ElementTree.Element(
         f"{{{SLD_NAMESPACE}}}StyledLayerDescriptor",
         {"version": "1.0.0"},
@@ -166,7 +168,7 @@ def build_vector_sld(
                 rule,
                 style,
                 category_rule.color,
-                opacity_multiplier,
+                opacity_multiplier * category_rule.opacity,
             )
         if categorical.missing_color is not None:
             rule = ElementTree.SubElement(

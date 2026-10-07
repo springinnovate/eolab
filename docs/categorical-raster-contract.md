@@ -183,7 +183,8 @@ catalog metadata, a dataset's shared GeoServer style, or its source data.
 
 `frontend/src/raster/categorical-style.js` provides normalization for the manual
 editor, CSV input boundary, and retained appearance state. The domain-local
-`categorical-csv.js` parser owns CSV syntax and numeric text conversion; it returns
+`categorical-csv.js` parser owns numeric text conversion and uses the neutral
+`frontend/src/category-csv.js` bounded syntax reader shared with vector CSV input; it returns
 the same immutable appearance contract. Python's raster-owned `styles.py` validates the public input
 boundary independently. Neither module imports analysis or editor implementation
 state.

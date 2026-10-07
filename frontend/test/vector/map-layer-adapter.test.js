@@ -258,6 +258,18 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     }),
     /does not contain compatible category field/,
   );
+  const csvStyle = {
+    ...reappliedStyle,
+    categorical: { field: "name", limit: 2, otherColor: "#abcdef", missingColor: "#112233",
+      rules: [{ value: { kind: "string", value: "Z" }, color: "#0000ff", label: "Wetland", opacity: 0.25 },
+        { value: { kind: "string", value: "A" }, color: "#00ff00", label: "Hidden", opacity: 0 }] },
+  };
+  assert.equal(fitted.adapter.checkSavedStateCompatibility(record, { kind: "vector", definition: csvStyle }), null);
+  await fitted.adapter.applySavedState(record, { kind: "vector", definition: csvStyle });
+  assert.deepEqual(fitted.adapter.exportSavedState(record).definition.categorical, csvStyle.categorical);
+  const unknownCategoryField = structuredClone(csvStyle);
+  unknownCategoryField.categorical.rules[0].expression = "untrusted";
+  assert.match(fitted.adapter.checkSavedStateCompatibility(record, { kind: "vector", definition: unknownCategoryField }), /unsupported fields/);
   await fitted.adapter.applySavedState(record, {
     kind: "vector",
     definition: appliedStyle,

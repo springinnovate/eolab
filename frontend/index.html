@@ -1312,6 +1312,22 @@
               role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-category-list" class="vector-category-list"
               aria-label="Category colors"></div>
+            <div id="vector-category-csv-root" class="vector-category-csv-import" aria-busy="false">
+              <label for="vector-category-csv-file">Import categories from CSV</label>
+              <input id="vector-category-csv-file" type="file" accept=".csv,text/csv" aria-describedby="vector-category-csv-guidance vector-category-csv-status" />
+              <p id="vector-category-csv-guidance">Required headers: value, label, color. Optional opacity from 0 to 1 defaults to 1. Values match the selected attribute’s type; use #RRGGBB colors. Up to 50 categories and 128 KiB. Preview before replacing; Other and No value colors are preserved.</p>
+              <p id="vector-category-csv-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <div id="vector-category-csv-preview" class="vector-category-csv-preview" role="region" aria-label="Vector CSV import preview" aria-describedby="vector-category-csv-status" tabindex="-1" hidden>
+                <p id="vector-category-csv-summary"></p>
+                <div id="vector-category-csv-table" class="vector-category-csv-table" role="region" aria-label="Imported vector category rows" tabindex="0" hidden>
+                  <table><caption>CSV category preview</caption><thead><tr><th scope="col">Row</th><th scope="col">Value</th><th scope="col">Label</th><th scope="col">Color</th><th scope="col">Opacity</th></tr></thead><tbody id="vector-category-csv-rows"></tbody></table>
+                </div>
+                <div class="vector-category-csv-actions">
+                  <button id="vector-category-csv-apply" class="secondary-button" type="button" disabled>Replace categories</button>
+                  <button id="vector-category-csv-cancel" class="secondary-button" type="button" disabled>Cancel import</button>
+                </div>
+              </div>
+            </div>
           </fieldset>
           <fieldset id="vector-graduated-fields" class="vector-graduated-controls" hidden>
             <legend>Numeric ranges</legend>
