@@ -892,8 +892,8 @@ export function initializeRasterViewer(
      * sampling area.
      *
      * @param {Object} session Raster-owned retained interaction state.
-     * @return {{state:string,statistics:Object|null,scope:string}} Compact
-     * presentation state for the raster-analysis summary view.
+     * @return {{state:string,statistics:Object|null,scope:string,error:Error|null}}
+     * One sampling scope's result, lifecycle and failure for analysis/style presentation.
      */
     function getLayerHistogramPresentation(session) {
         if (session.selectedCatalogSelection !== null) {
@@ -901,6 +901,7 @@ export function initializeRasterViewer(
                 state: session.selectedRasterStatisticsState,
                 statistics: session.selectedRasterStatistics,
                 scope: `Vector selection · ${session.selectedCatalogSelection.filename}`,
+                error: session.selectedRasterStatisticsError,
             };
         }
         if (session.selectedRasterBounds !== null) {
@@ -910,12 +911,14 @@ export function initializeRasterViewer(
                 scope: session.selectedRasterWindowSizeKm === null
                     ? "Map sample"
                     : `${session.selectedRasterWindowSizeKm} km map sample`,
+                error: session.selectedRasterStatisticsError,
             };
         }
         return {
             state: session.wholeRasterStatisticsState,
             statistics: session.wholeRasterStatistics,
             scope: "Whole raster",
+            error: session.wholeRasterStatisticsError,
         };
     }
 
@@ -2616,54 +2619,25 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Describe the statistics scope retained by one keyed style target.
+     * Label the displayed result independently of a newer sampling request.
      *
-     * @param {Object} session Retained raster session being styled.
-     * @return {string} Readable whole-raster, map-sample, or polygon selection scope.
+     * @param {Object} statistics Actual distribution being displayed.
+     * @param {{state:string,statistics:Object|null,scope:string,error:Error|null}}
+     * presentation Current requested scope and its lifecycle.
+     * @return {string} Current scope or explicitly previous result scope.
      */
-    function styleHistogramScopeLabel(session) {
-        const scope = session.rasterStatistics?.scope;
-        if (scope === "catalogSelection" || (
-            scope === undefined && session.selectedCatalogSelection !== null
-        )) {
-            return session.selectedCatalogSelection === null
-                ? "Historical polygon selection"
-                : `Vector selection · ${session.selectedCatalogSelection.filename} · ` +
-                    session.selectedCatalogSelection.selectedDataset;
-        }
-        if (scope === "selectedArea" || (
-            scope === undefined && session.selectedRasterBounds !== null
-        )) {
-            return session.selectedRasterWindowSizeKm === null
-                ? "Map sample"
-                : `Map sample · ${session.selectedRasterWindowSizeKm} km × ` +
-                    `${session.selectedRasterWindowSizeKm} km`;
-        }
-        return "Whole raster";
+    function styleHistogramScopeLabel(statistics, presentation) {
+        if (presentation.state === "ready" && statistics === presentation.statistics) return presentation.scope;
+        const scope = statistics.scope === "catalogSelection"
+            ? `Vector selection · ${statistics.catalogSelection.layerName}`
+            : statistics.scope === "selectedArea" ? "Map sample" : "Whole raster";
+        return `Previous distribution · ${scope}`;
     }
 
     /**
-     * Return the lifecycle state associated with a style target's sample.
-     *
-     * @param {Object} session Retained raster session being styled.
-     * @return {{state:string,error:Error|null}} Statistics state and failure.
-     */
-    function styleHistogramLifecycle(session) {
-        const selected = session.selectedRasterBounds !== null ||
-            session.selectedCatalogSelection !== null;
-        return selected
-            ? {
-                state: session.selectedRasterStatisticsState,
-                error: session.selectedRasterStatisticsError,
-            }
-            : {
-                state: session.wholeRasterStatisticsState,
-                error: session.wholeRasterStatisticsError,
-            };
-    }
-
-    /**
-     * Render histogram context for the explicitly keyed style target.
+     * Render the keyed style target's sample with scope-specific lifecycle feedback.
+     * Current ready distributions take precedence. Compatible previous distributions
+     * remain available for reference, labeled separately from the current request.
      *
      * @param {Object|null} [style=null] Candidate style preview. The session's
      * committed style is used when omitted.
@@ -2678,43 +2652,37 @@ export function initializeRasterViewer(
             controlsView.clearStyleHistogram?.();
             return;
         }
-        const scopeLabel = styleHistogramScopeLabel(session);
-        if (editingAppearanceMode === "categorical") {
-            const presentation = getLayerHistogramPresentation(session);
-            if (session.appearanceMode === "categorical" && presentation.state === "ready" &&
-                rasterStatisticsMatchCategories(presentation.statistics, sessionCategoryValues(session))) {
-                controlsView.renderCategoricalStyleHistogram?.(
-                    presentCategoricalRasterDistribution(presentation.statistics, session.categoricalStyle), scopeLabel);
-            } else {
-                const lifecycle = styleHistogramLifecycle(session);
-                controlsView.renderStyleHistogramState?.(scopeLabel, lifecycle.state === "loading"
-                    ? "Calculating categorical ground areas…" : lifecycle.state === "error"
-                        ? `Histogram unavailable: ${lifecycle.error?.message ?? "Unknown error"}`
-                        : CATEGORICAL_HISTOGRAM_MESSAGE, lifecycle.state === "loading");
-            }
-            return;
+        const presentation = getLayerHistogramPresentation(session);
+        const categorical = editingAppearanceMode === "categorical";
+        const candidate = presentation.state === "ready" ? presentation.statistics : session.rasterStatistics;
+        const statistics = categorical && (session.appearanceMode !== "categorical" ||
+            !rasterStatisticsMatchCategories(candidate, sessionCategoryValues(session))) ? null : candidate;
+        let message = "";
+        if (presentation.state === "loading") {
+            message = categorical ? "Calculating categorical ground areas…" : "Calculating this raster's histogram…";
+        } else if (presentation.state === "error") {
+            message = `Histogram unavailable: ${presentation.error?.message ?? "Unknown error"}`;
+        } else if (presentation.state !== "ready" || statistics === null) {
+            message = categorical ? CATEGORICAL_HISTOGRAM_MESSAGE
+                : "Histogram not available yet. Open full analysis to calculate it.";
         }
-        if (session.rasterStatistics === null) {
-            const lifecycle = styleHistogramLifecycle(session);
-            const message = lifecycle.state === "loading"
-                ? "Calculating this raster's histogram…"
-                : lifecycle.state === "error"
-                    ? `Histogram unavailable: ${lifecycle.error?.message ?? "Unknown error"}`
-                    : "Histogram not available yet. Open full analysis to calculate it.";
-            controlsView.renderStyleHistogramState?.(
-                scopeLabel,
-                message,
-                lifecycle.state === "loading"
+        const feedback = { message: message ? `${presentation.scope}: ${message}` : "", isBusy: presentation.state === "loading" };
+        if (statistics === null) {
+            controlsView.renderStyleHistogramState?.(presentation.scope, feedback.message, feedback.isBusy);
+        } else if (categorical) {
+            controlsView.renderCategoricalStyleHistogram?.(
+                presentCategoricalRasterDistribution(statistics, session.categoricalStyle),
+                styleHistogramScopeLabel(statistics, presentation), feedback);
+        } else {
+            controlsView.renderStyleHistogram?.(
+                statistics,
+                style ?? session.rasterStyle,
+                styleHistogramScopeLabel(statistics, presentation),
+                getHistogramValueLabel(session.item),
+                percentiles,
+                feedback
             );
-            return;
         }
-        controlsView.renderStyleHistogram?.(
-            session.rasterStatistics,
-            style ?? session.rasterStyle,
-            scopeLabel,
-            getHistogramValueLabel(session.item),
-            percentiles
-        );
     }
 
     /**

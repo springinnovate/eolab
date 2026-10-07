@@ -380,10 +380,11 @@ export class RasterControlsView {
      * Render prepared categorical ground areas in the style editor.
      * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
      * @param {string} scopeLabel Readable sampling scope.
+     * @param {import("./style-histogram-view.js").RasterStyleHistogramFeedback} [feedback] Scoped request feedback alongside the distribution.
      * @return {void}
      */
-    renderCategoricalStyleHistogram(presentation, scopeLabel) {
-        this.#styleHistogramView.renderCategorical(presentation, scopeLabel);
+    renderCategoricalStyleHistogram(presentation, scopeLabel, feedback) {
+        this.#styleHistogramView.renderCategorical(presentation, scopeLabel, feedback);
     }
 
     /**
@@ -395,6 +396,7 @@ export class RasterControlsView {
      * @param {string} [valueLabel="Raster value"] Horizontal-axis label.
      * @param {{lower:number,middle:number,upper:number}|null}
      * [percentiles=null] Draft percentile positions, when applicable.
+     * @param {import("./style-histogram-view.js").RasterStyleHistogramFeedback} [feedback] Scoped request feedback alongside the distribution.
      * @return {void}
      */
     renderStyleHistogram(
@@ -402,14 +404,16 @@ export class RasterControlsView {
         style,
         scopeLabel,
         valueLabel = "Raster value",
-        percentiles = null
+        percentiles = null,
+        feedback
     ) {
         this.#styleHistogramView.render(
             statistics,
             style,
             scopeLabel,
             valueLabel,
-            percentiles
+            percentiles,
+            feedback
         );
     }
 
