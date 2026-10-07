@@ -520,15 +520,46 @@ class VectorLabelStyle(BaseModel):
 
 
 class VectorCategoryRule(BaseModel):
-    """Validated typed equality rule for one categorical vector value."""
+    """Typed equality rule with optional legend text and symbol opacity.
+
+    Existing rules default to their value label and full category opacity.
+    Labels are presentation text and never replace attribute equality values.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     value: VectorCategoryValue
+    label: str | None = Field(default=None, min_length=1, max_length=256, strict=True)
+    opacity: float = Field(default=1, ge=0, le=1, strict=True, allow_inf_nan=False)
     color: str = Field(
         pattern=r"^#[0-9A-Fa-f]{6}$",
         strict=True,
     )
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        """Validate literal legend text while allowing quoted line breaks.
+
+        Args:
+            value: Optional bounded category label.
+
+        Returns:
+            Trimmed label, or None for the established value-label default.
+
+        Raises:
+            ValueError: If text is empty or contains unsupported controls.
+        """
+        if value is None:
+            return None
+        if not value.strip() or any(
+            (ord(character) < 32 and character not in "\t\n\r") or ord(character) == 127
+            for character in value
+        ):
+            raise ValueError(
+                "Category label must contain text without invalid controls"
+            )
+        return value.strip()
 
     @field_validator("color")
     @classmethod

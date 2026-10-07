@@ -29,13 +29,22 @@ import {
 
 /**
  * Validate one untrusted saved vector style without accepting extra fields.
+ * Rules from supported older maps receive only the new optional presentation
+ * defaults; every other missing/extra field still fails the canonical check.
  *
  * @param {unknown} candidate Candidate saved style definition.
  * @return {Object} Canonical normalized vector style.
+ * @throws {TypeError|RangeError} If saved data violates its owner contract.
  */
 function normalizePortableVectorStyle(candidate) {
     const normalized = normalizeVectorStyle(candidate);
-    if (canonicalJson(candidate) !== canonicalJson(normalized)) {
+    const current = normalized.categorical === null ? candidate : {
+        ...candidate, categorical: { ...candidate.categorical,
+            rules: candidate.categorical.rules.map(rule => ({ ...rule,
+                label: rule.label === undefined ? null : rule.label,
+                opacity: rule.opacity === undefined ? 1 : rule.opacity })) },
+    };
+    if (canonicalJson(current) !== canonicalJson(normalized)) {
         throw new TypeError(
             "Saved vector style contains missing or unsupported fields."
         );

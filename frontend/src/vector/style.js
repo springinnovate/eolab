@@ -7,6 +7,13 @@ const LABEL_FONT_WEIGHTS = new Set(["normal", "bold"]);
 const LABEL_PLACEMENTS = new Set(["center", "above", "below", "follow-line"]);
 const CATEGORY_KINDS = new Set(["boolean", "integer", "number", "string"]);
 const CATEGORY_MAXIMUM_LIMIT = 50;
+export { CATEGORY_MAXIMUM_LIMIT };
+
+/**
+ * @typedef {{kind:"boolean"|"integer"|"number"|"string",value:boolean|number|string}} VectorCategoryValue
+ * @typedef {{value:VectorCategoryValue,color:string,label:string|null,opacity:number}} VectorCategoryRule
+ * @typedef {{field:string,limit:number,rules:ReadonlyArray<VectorCategoryRule>,otherColor:string|null,missingColor:string|null}} VectorCategoricalStyle
+ */
 const CLASSIFICATION_METHODS = new Set(["equal-interval", "quantile", "percentile-interval"]);
 const SEQUENTIAL_PALETTE_NAMES = new Set(["blues", "viridis", "yellow-red", "purples", "blue-yellow-red"]);
 const NUMERIC_MINIMUM_CLASS_COUNT = 2;
@@ -466,9 +473,9 @@ export function vectorStyleLegend(candidate) {
     }
     if (style.categorical !== null) {
         const entries = style.categorical.rules.map((rule) => Object.freeze({
-            label: formatCategoryValue(rule.value),
+            label: rule.label ?? formatCategoryValue(rule.value),
             color: rule.color,
-            symbol: vectorLegendSymbol(style, rule.color),
+            symbol: vectorLegendSymbol(style, rule.color, rule.opacity),
         }));
         if (style.categorical.otherColor !== null) {
             entries.push(Object.freeze({ label: "Other", color: style.categorical.otherColor,
@@ -495,15 +502,16 @@ export function vectorStyleLegend(candidate) {
  * Describe a vector's rendered symbol without exposing vector style rules to the layer list.
  * @param {Object} style Validated vector style.
  * @param {string|null} [classColor=null] Optional color for one category or numeric range.
+ * @param {number} [categoryOpacity=1] Validated category multiplier for the whole symbol.
  * @return {{shape:string,fill:string|null,fillOpacity:number,stroke:string,strokeOpacity:number,strokeWidth:number,pointSize:number|null}} Fill and stroke appearance before whole-layer opacity.
  */
-function vectorLegendSymbol(style, classColor = null) {
+function vectorLegendSymbol(style, classColor = null, categoryOpacity = 1) {
     return {
         shape: style.geometryKind,
         fill: style.geometryKind === "line" ? null : classColor ?? style.fillColor,
-        fillOpacity: style.fillOpacity ?? 0,
+        fillOpacity: (style.fillOpacity ?? 0) * categoryOpacity,
         stroke: style.geometryKind === "line" ? classColor ?? style.strokeColor : style.strokeColor,
-        strokeOpacity: style.strokeOpacity,
+        strokeOpacity: style.strokeOpacity * categoryOpacity,
         strokeWidth: style.strokeWidth,
         pointSize: style.pointSize,
     };
@@ -637,9 +645,13 @@ function color(value, label) {
  * Validate an optional categorical style block.
  *
  * @param {unknown} candidate Candidate category state or null.
- * @return {Object|null} Frozen normalized categorical state.
+ * Old rules without legend labels or opacity retain their value labels and
+ * opaque category multiplier. Labels are presentation only; values match the
+ * selected authoritative attribute with their explicit type.
+ * @return {Readonly<VectorCategoricalStyle>|null} Frozen normalized categorical state.
+ * @throws {TypeError|RangeError} If field, rules, values or appearance are invalid.
  */
-function normalizeVectorCategorical(candidate) {
+export function normalizeVectorCategorical(candidate) {
     if (candidate === undefined || candidate === null) return null;
     if (typeof candidate !== "object" || Array.isArray(candidate)) {
         throw new TypeError("Categorical style must be an object or null.");
@@ -655,15 +667,24 @@ function normalizeVectorCategorical(candidate) {
         throw new RangeError("Category rules exceed the selected limit.");
     }
     const seen = new Set();
-    const rules = candidate.rules.map((rule) => {
+    const rules = candidate.rules.map((rule, index) => {
+        const context = `Category ${index + 1}`;
         if (rule === null || typeof rule !== "object" || Array.isArray(rule)) {
             throw new TypeError("Category rule must be an object.");
         }
-        const value = normalizeCategoryValue(rule.value);
+        let value;
+        try { value = normalizeCategoryValue(rule.value); }
+        catch (error) { throw new TypeError(`${context} value ${error.message}`, { cause: error }); }
         const key = categoryValueKey(value);
-        if (seen.has(key)) throw new TypeError("Category rule values must be unique.");
+        if (seen.has(key)) throw new TypeError(`${context} value must be unique.`);
         seen.add(key);
-        return Object.freeze({ value, color: color(rule.color, "Category color") });
+        return Object.freeze({
+            value,
+            color: color(rule.color, `${context} color`),
+            label: rule.label === undefined || rule.label === null
+                ? null : normalizeCategoryLabel(rule.label, context),
+            opacity: boundedNumber(rule.opacity === undefined ? 1 : rule.opacity, 0, 1, `${context} opacity`),
+        });
     });
     return Object.freeze({
         field,
@@ -675,6 +696,21 @@ function normalizeVectorCategorical(candidate) {
             candidate.missingColor === undefined || candidate.missingColor === null
                 ? null : color(candidate.missingColor, "No value color"),
     });
+}
+
+/**
+ * Validate literal category legend text without excluding quoted line breaks.
+ * @param {unknown} value Untrusted label.
+ * @param {string} context One-based category description for local errors.
+ * @return {string} Trimmed bounded label, safe for text-only presentation.
+ * @throws {TypeError} If empty, too long or containing unsupported controls.
+ */
+function normalizeCategoryLabel(value, context) {
+    if (typeof value !== "string" || value.trim().length < 1 || value.trim().length > 256 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) {
+        throw new TypeError(`${context} label must contain 1–256 characters without invalid controls.`);
+    }
+    return value.trim();
 }
 
 /**

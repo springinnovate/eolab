@@ -717,6 +717,59 @@ def test_style_service_revalidates_categorical_field_and_value_types(
         asyncio.run(service.apply(request))
 
 
+def test_style_service_accepts_explicit_csv_appearance_without_count_reads(
+    tmp_path: Path,
+) -> None:
+    """Authorize explicit rules by current source field, never discovered counts.
+
+    Args:
+        tmp_path: Isolated mounted scan source.
+    """
+    item, _ = assessed_geopackage_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    registry = PublishedVectorRegistry()
+    registry.authorize(
+        f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
+        source,
+        vector_source_signature(source),
+        "vector-polygon",
+    )
+    styler = RecordingStyler()
+    service = VectorStyleService(
+        StaticCatalog(item), resolver, styler, registry, UnusedFieldReader()
+    )
+    style = polygon_request(item).style.model_dump(by_alias=True)
+    style["categorical"] = {
+        "field": "name",
+        "limit": 1,
+        "otherColor": "#abcdef",
+        "missingColor": "#112233",
+        "rules": [
+            {
+                "value": {"kind": "string", "value": "Not in discovered counts"},
+                "label": "Imported legend",
+                "color": "#0000ff",
+                "opacity": 0.25,
+            }
+        ],
+    }
+    request = CatalogVectorStyleRequest(
+        collectionId=item["collection"], itemId=item["id"], style=style
+    )
+    result = asyncio.run(service.apply(request))
+    assert result.style.categorical.rules[0].label == "Imported legend"
+    assert result.style.categorical.rules[0].opacity == 0.25
+    assert len(styler.requests) == 1
+    style["categorical"]["field"] = "missing-field"
+    invalid = CatalogVectorStyleRequest(
+        collectionId=item["collection"], itemId=item["id"], style=style
+    )
+    with pytest.raises(VectorConflictError, match="attribute"):
+        asyncio.run(service.apply(invalid))
+    assert len(styler.requests) == 1
+
+
 @pytest.mark.parametrize("method", ["equal-interval", "percentile-interval"])
 def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
     tmp_path: Path,

@@ -11,6 +11,7 @@ import {
     vectorCategoricalFields,
     vectorNumericFields,
 } from "./style.js";
+import { VectorCategoryCsvImport } from "./category-csv-import.js";
 
 import {
     defaultVectorLabelField,
@@ -48,6 +49,9 @@ export class VectorStyleControls {
         this.categoryRegenerate = documentContext.querySelector("#vector-category-regenerate");
         this.categoryStatus = documentContext.querySelector("#vector-category-status");
         this.categoryList = documentContext.querySelector("#vector-category-list");
+        this.categoryCsv = new VectorCategoryCsvImport(documentContext);
+        /** @type {{field:string,rules:import("./style.js").VectorCategoryRule[]}|null} */
+        this.categoryTable = null;
         this.graduatedFieldsRoot = documentContext.querySelector("#vector-graduated-fields");
         this.graduatedField = documentContext.querySelector("#vector-graduated-field");
         this.graduatedMethod = documentContext.querySelector("#vector-graduated-method");
@@ -147,6 +151,8 @@ export class VectorStyleControls {
         };
         /** Reset and reload categories after the selected field changes. @return {void} */
         this.onCategoryFieldChange = () => {
+            this.categoryCsv.cancel();
+            this.categoryTable = null;
             this.categorySummary = null;
             this.categoryColors.clear();
             this.paletteGeneration = 0;
@@ -207,6 +213,7 @@ export class VectorStyleControls {
         const style = normalizeVectorStyle(target.style);
         const changedTarget = this.target?.key !== target.key;
         if (changedTarget) {
+            this.categoryCsv.cancel();
             this.generation += 1;
             this.editRevision += 1;
             this.#cancelDebouncedApply();
@@ -267,6 +274,8 @@ export class VectorStyleControls {
             label?.minimumZoom ?? VECTOR_LABEL_DEFAULTS.minimumZoom,
         );
         const categorical = style.categorical;
+        this.categoryTable = categorical?.rules.some(rule => rule.label !== null || rule.opacity !== 1)
+            ? { field: categorical.field, rules: categorical.rules.map(rule => ({ ...rule })) } : null;
         const graduated = style.graduated;
         this.mode.value = categorical !== null
             ? "categories" : graduated !== null ? "graduated" : "single";
@@ -318,6 +327,9 @@ export class VectorStyleControls {
 
     /** Hide and forget the current target. @return {void} */
     hide() {
+        this.categoryCsv.cancel();
+        this.categoryCsv.enabled = false;
+        this.categoryTable = null;
         if (this.target !== null) this.generation += 1;
         this.editRevision += 1;
         this.#cancelDebouncedApply();
@@ -339,6 +351,7 @@ export class VectorStyleControls {
     /** Detach direct control listeners. @return {void} */
     destroy() {
         this.hide();
+        this.categoryCsv.destroy();
         this.mode.removeEventListener("change", this.onModeChange);
         this.categoryField.removeEventListener("change", this.onCategoryFieldChange);
         this.categoryLimit.removeEventListener("input", this.onCategoryLimitInput);
@@ -555,6 +568,10 @@ export class VectorStyleControls {
      * safe error is presented; stale requests leave current state unchanged.
      */
     async #loadCategories() {
+        if (this.categoryTable?.field === this.categoryField.value) {
+            this.#renderCategories();
+            return;
+        }
         if (
             this.target === null || this.mode.value !== "categories" ||
             !this.categoryFields.some(({ name }) => name === this.categoryField.value)
@@ -820,7 +837,8 @@ export class VectorStyleControls {
     }
 
     /**
-     * Build the complete categorical style block from the current summary.
+     * Build categorical state from an explicit table or current discovery.
+     * Imported values do not require source counts to authorize their rules.
      *
      * @return {Object} Validated-input category field, limit, typed rules, and
      * applicable Other and No value colors for the complete style request.
@@ -828,6 +846,11 @@ export class VectorStyleControls {
      * invalid.
      */
     #categoricalState() {
+        if (this.categoryTable?.field === this.categoryField.value) {
+            return { field: this.categoryTable.field, limit: this.categoryTable.rules.length,
+                rules: this.categoryTable.rules.map(rule => ({ ...rule, color: this.categoryColors.get(categoryValueKey(rule.value)) })),
+                otherColor: this.otherColor, missingColor: this.missingColor };
+        }
         const summary = this.categorySummary;
         if (summary === null || summary.field !== this.categoryField.value) {
             throw new TypeError("Wait for current category values before applying.");
@@ -889,10 +912,13 @@ export class VectorStyleControls {
         const disabled = this.categoryLoading || unavailable;
         this.mode.disabled = false;
         this.categoryField.disabled = disabled;
-        this.categoryLimit.disabled = disabled || !categorical;
+        this.categoryLimit.disabled = disabled || !categorical || this.categoryTable !== null;
         this.categoryRegenerate.disabled =
-            disabled || !categorical || this.categorySummary === null;
+            disabled || !categorical || (this.categorySummary === null && this.categoryTable === null);
         for (const input of this.categoryColorInputs) input.disabled = disabled;
+        const field = this.categoryFields.find(entry => entry.name === this.categoryField.value) ?? null;
+        this.categoryCsv.configure(field, { otherColor: this.otherColor, missingColor: this.missingColor },
+            categorical && field !== null && this.target !== null, table => this.#replaceCategoryTable(table));
     }
 
     /**
@@ -956,9 +982,9 @@ export class VectorStyleControls {
      * @return {boolean} Whether colors were regenerated.
      */
     #regenerateCategoryColors() {
-        if (this.categorySummary === null || this.categoryLoading) return false;
+        if ((this.categorySummary === null && this.categoryTable === null) || this.categoryLoading) return false;
         this.paletteGeneration += 1;
-        for (const [index, entry] of this.categorySummary.values.entries()) {
+        for (const [index, entry] of (this.categoryTable?.rules ?? this.categorySummary.values).entries()) {
             this.categoryColors.set(
                 categoryValueKey(entry.value),
                 qualitativeCategoryColor(index, this.paletteGeneration),
@@ -969,11 +995,15 @@ export class VectorStyleControls {
     }
 
     /**
-     * Render current explicit, Other, and No value category rows.
+     * Render retained imported rules or discovered category/count rows.
      *
      * @return {void}
      */
     #renderCategories() {
+        if (this.categoryTable?.field === this.categoryField.value) {
+            this.#renderCategoryTable();
+            return;
+        }
         const summary = this.categorySummary;
         if (summary === null) {
             this.categoryList.replaceChildren();
@@ -1025,6 +1055,64 @@ export class VectorStyleControls {
         }
         this.categoryList.replaceChildren(...rows);
         this.#renderCategoryStatus(selectedValues.length);
+        this.#synchronizeCategoryInputs();
+    }
+
+    /**
+     * Replace the category draft atomically through the existing apply queue.
+     * Pending discovery cannot overwrite the complete imported table.
+     * @param {Readonly<import("./style.js").VectorCategoricalStyle>} table Validated preview.
+     * @return {void}
+     */
+    #replaceCategoryTable(table) {
+        this.categoryRequest += 1;
+        this.categoryLoading = false;
+        this.categorySummary = null;
+        this.categoryTable = { field: table.field, rules: table.rules.map(rule => ({ ...rule })) };
+        this.categoryColors = new Map(table.rules.map(rule => [categoryValueKey(rule.value), rule.color]));
+        this.categoryLimit.value = String(table.rules.length);
+        this.#renderCategories();
+        this.#recordStyleChange();
+    }
+
+    /**
+     * Render editable imported labels, colors and opacity in retained order.
+     * Values stay explicit typed identities; missing/other colors remain local.
+     * @return {void}
+     */
+    #renderCategoryTable() {
+        this.categoryColorInputs = [];
+        const rows = this.categoryTable.rules.map(rule => {
+            const valueLabel = formatCategoryValue(rule.value);
+            const key = categoryValueKey(rule.value);
+            const container = this.document.createElement("div");
+            container.className = "vector-category-table-row";
+            container.append(this.#categoryRow(valueLabel, "", this.categoryColors.get(key), color => this.categoryColors.set(key, color)));
+            const fields = this.document.createElement("div");
+            fields.className = "vector-category-table-fields";
+            for (const [property, caption] of [["label", "Legend label"], ["opacity", "Opacity (0–1)"]]) {
+                const label = this.document.createElement("label");
+                const text = this.document.createElement("span"); text.textContent = caption;
+                const input = this.document.createElement("input");
+                input.type = property === "label" ? "text" : "number";
+                input.value = String(rule[property] ?? valueLabel);
+                input.setAttribute("aria-label", `${valueLabel} ${caption.toLowerCase()}`);
+                if (property === "label") input.maxLength = 256;
+                else { input.min = "0"; input.max = "1"; input.step = "0.01"; }
+                input.addEventListener("input", () => {
+                    rule[property] = property === "label" ? input.value : input.value.trim() === "" ? NaN : Number(input.value);
+                    this.#recordStyleChange();
+                });
+                this.categoryColorInputs.push(input);
+                label.append(text, input); fields.append(label);
+            }
+            container.append(fields);
+            return container;
+        });
+        rows.push(this.#categoryRow("Other", "", this.otherColor, color => { this.otherColor = color; }));
+        rows.push(this.#categoryRow("No value", "", this.missingColor, color => { this.missingColor = color; }));
+        this.categoryList.replaceChildren(...rows);
+        this.categoryStatus.textContent = `Styling ${this.categoryTable.rules.length} explicit values in table order; remaining values use Other. Change attribute to discover categories again.`;
         this.#synchronizeCategoryInputs();
     }
 

@@ -59,6 +59,7 @@ async function settleStyle(fixture) {
     await new Promise(resolve => setTimeout(resolve, 0));
 }
 
+/** @return {Object} Style controls, deterministic clock and narrow test target. */
 function styleFixture() {
     const documentContext = new FakeRasterControlDocument();
     const clock = debounceClock();
@@ -135,6 +136,123 @@ function styleFixture() {
         },
     };
 }
+
+/**
+ * Select one UTF-8 file through the real vector import boundary.
+ * @param {Object} fixture Active vector controls fixture.
+ * @param {string} text File contents.
+ * @return {Promise<void>} Resolves when the preview has finished reading.
+ */
+async function previewVectorCsv(fixture, text) {
+    const bytes = new TextEncoder().encode(text);
+    const file = fixture.controls.categoryCsv.controls.file;
+    file.files = [{ name: "categories.csv", size: bytes.length, async arrayBuffer() { return bytes.buffer; } }];
+    file.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/** @return {Object} A geometry-complete single-color polygon fixture. */
+function csvPolygonStyle() {
+    return { geometryKind: "polygon", fillColor: "#00ff00", fillOpacity: 0.4,
+        strokeColor: "#123456", strokeOpacity: 0.8, strokeWidth: 2 };
+}
+
+test("vector CSV preview replaces a complete ordered editable table through existing apply", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", csvPolygonStyle()));
+    fixture.controls.mode.value = "categories";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await settleStyle(fixture); fixture.applied.length = 0;
+    await previewVectorCsv(fixture, 'value,label,color,opacity\nZ,"<b>Last first</b>",#0000FF,.25\nA,First last,#FF0000,0');
+    const csv = fixture.controls.categoryCsv.controls;
+    assert.equal(csv.apply.disabled, false);
+    assert.equal(csv.rows.children[0].children[2].textContent, "<b>Last first</b>");
+    assert.equal(fixture.applied.length, 0);
+    csv.apply.dispatchEvent(new Event("click")); await settleStyle(fixture);
+    const table = fixture.applied[0].categorical;
+    assert.deepEqual(table.rules.map(rule => rule.value.value), ["Z", "A"]);
+    assert.equal(table.rules[0].color, "#0000ff"); assert.equal(table.rules[0].opacity, 0.25);
+    assert.equal(table.rules[1].opacity, 0); assert.equal(table.otherColor, "#9ca3af");
+    assert.equal(csv.preview.hidden, true); assert.equal(fixture.controls.categoryLimit.disabled, true);
+    const fields = fixture.controls.categoryList.children[0].children[1];
+    const label = fields.children[0].children[1]; const opacity = fields.children[1].children[1];
+    label.value = "Updated label"; label.dispatchEvent(new Event("input"));
+    opacity.value = "0.5"; opacity.dispatchEvent(new Event("input")); await settleStyle(fixture);
+    assert.equal(fixture.applied.at(-1).categorical.rules[0].label, "Updated label");
+    assert.equal(fixture.applied.at(-1).categorical.rules[0].opacity, 0.5);
+    opacity.value = ""; opacity.dispatchEvent(new Event("input")); await settleStyle(fixture);
+    assert.match(fixture.controls.status.textContent, /opacity/); assert.equal(fixture.applied.length, 2);
+    fixture.controls.destroy();
+});
+
+test("restored imported categories do not require discovery and survive mode changes", async () => {
+    const fixture = styleFixture();
+    const style = { ...csvPolygonStyle(), categorical: { field: "name", limit: 2, otherColor: "#abcdef", missingColor: "#112233",
+        rules: [{ value: { kind: "string", value: "Z" }, label: "Custom Z", color: "#ff0000", opacity: 0 },
+            { value: { kind: "string", value: "A" }, label: "Custom A", color: "#00ff00", opacity: 0.5 }] } };
+    const target = fixture.target("polygon", JSON.parse(JSON.stringify(style)));
+    target.summarize = async () => { assert.fail("Explicit styling must not require a category count"); };
+    fixture.controls.show(target);
+    fixture.controls.fillOpacity.value = "60"; fixture.controls.fillOpacity.dispatchEvent(new Event("input")); await settleStyle(fixture);
+    assert.deepEqual(fixture.applied[0].categorical, style.categorical);
+    fixture.controls.mode.value = "single"; fixture.controls.mode.dispatchEvent(new Event("change")); await new Promise(resolve => setTimeout(resolve, 0)); await settleStyle(fixture);
+    fixture.controls.mode.value = "categories"; fixture.controls.mode.dispatchEvent(new Event("change")); await new Promise(resolve => setTimeout(resolve, 0)); await settleStyle(fixture);
+    assert.deepEqual(fixture.applied.at(-1).categorical, style.categorical);
+    fixture.controls.destroy();
+});
+
+test("an imported table supersedes a late category discovery without changing its values", async () => {
+    const fixture = styleFixture(); const target = fixture.target("polygon", csvPolygonStyle());
+    const summary = await target.summarize("name"); let complete;
+    target.summarize = () => new Promise(resolve => { complete = resolve; });
+    fixture.controls.show(target); fixture.controls.mode.value = "categories";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+    await previewVectorCsv(fixture, "value,label,color\nZ,Not in the bounded count,#ff0000");
+    fixture.controls.categoryCsv.controls.apply.dispatchEvent(new Event("click")); await settleStyle(fixture);
+    complete(summary); await new Promise(resolve => setTimeout(resolve, 0)); await settleStyle(fixture);
+    assert.deepEqual(fixture.applied.at(-1).categorical.rules.map(rule => rule.value.value), ["Z"]);
+    fixture.controls.destroy();
+});
+
+test("invalid, cancelled and oversize vector files leave the style unchanged", async () => {
+    const fixture = styleFixture(); fixture.controls.show(fixture.target("polygon", csvPolygonStyle()));
+    fixture.controls.mode.value = "categories"; fixture.controls.mode.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0)); await settleStyle(fixture); fixture.applied.length = 0;
+    const csv = fixture.controls.categoryCsv.controls;
+    await previewVectorCsv(fixture, "value,label,color\nA,First,#000000\nA,Again,#ffffff");
+    assert.equal(csv.apply.disabled, true); assert.match(csv.status.textContent, /CSV row 3/);
+    await previewVectorCsv(fixture, "value,label,color\nA,First,#000000");
+    csv.cancel.dispatchEvent(new Event("click")); assert.equal(csv.preview.hidden, true);
+    csv.file.files = [{ name: "too-big.csv", size: 131073, arrayBuffer() { assert.fail("Oversize files must not be read"); } }];
+    csv.file.dispatchEvent(new Event("change")); await new Promise(resolve => setTimeout(resolve, 0));
+    assert.match(csv.status.textContent, /128 KiB/); assert.equal(csv.apply.disabled, true); assert.equal(fixture.applied.length, 0);
+    csv.file.files = [{ name: "invalid-utf8.csv", size: 2, async arrayBuffer() { return new Uint8Array([0xc3, 0x28]).buffer; } }];
+    csv.file.dispatchEvent(new Event("change")); await new Promise(resolve => setTimeout(resolve, 0));
+    assert.match(csv.status.textContent, /valid UTF-8/); assert.equal(csv.apply.disabled, true);
+    fixture.controls.destroy();
+});
+
+test("field, target, mode, cancellation and closing invalidate outstanding vector CSV reads", async () => {
+    for (const transition of ["field", "target", "mode", "cancel", "close"]) {
+        const fixture = styleFixture(); fixture.controls.show(fixture.target("polygon", csvPolygonStyle()));
+        fixture.controls.mode.value = "categories"; fixture.controls.mode.dispatchEvent(new Event("change"));
+        await new Promise(resolve => setTimeout(resolve, 0)); await settleStyle(fixture); fixture.applied.length = 0;
+        const csv = fixture.controls.categoryCsv.controls; let complete;
+        csv.file.files = [{ name: "slow.csv", size: 45, arrayBuffer: () => new Promise(resolve => { complete = resolve; }) }];
+        csv.file.dispatchEvent(new Event("change"));
+        if (transition === "close") fixture.controls.hide();
+        else if (transition === "cancel") csv.cancel.dispatchEvent(new Event("click"));
+        else if (transition === "mode") { fixture.controls.mode.value = "single"; fixture.controls.mode.dispatchEvent(new Event("change")); }
+        else if (transition === "target") { const target = fixture.target("polygon", csvPolygonStyle()); target.key = "different-source"; fixture.controls.show(target); }
+        else { fixture.controls.categoryField.value = "value"; fixture.controls.categoryField.dispatchEvent(new Event("change")); }
+        complete(new TextEncoder().encode("value,label,color\nA,Wrong field,#000000").buffer);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(csv.preview.hidden, true); assert.equal(csv.apply.disabled, true);
+        assert.equal(fixture.controls.categoryTable, null);
+        fixture.controls.destroy();
+    }
+});
 
 test("vector style controls show fields owned by each geometry", () => {
     const fixture = styleFixture();

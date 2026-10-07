@@ -25,6 +25,20 @@ import {
   serializeSavedMapView,
 } from "../../src/saved-map-view/model.js";
 
+test("saved map serialization preserves vector CSV rules as an opaque owner definition", async () => {
+  const { parseCategoricalVectorCsv } = await import("../../src/vector/categorical-csv.js");
+  const { normalizeVectorStyle } = await import("../../src/vector/style.js");
+  const categorical = parseCategoricalVectorCsv("value,label,color,opacity\n01,Wetland,#0000ff,0.25\nA,Hidden,#00ff00,0", { name: "class", type: "str" }, { otherColor: "#abcdef", missingColor: "#112233" });
+  const definition = normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#ffffff", fillOpacity: 0.4,
+    strokeColor: "#123456", strokeOpacity: 0.8, strokeWidth: 2, categorical });
+  const candidate = savedMapCandidate();
+  candidate.layers[0].catalogItem = { collection: "vectors", id: "landcover" };
+  candidate.layers[0].style = { kind: "vector", definition };
+  const restored = parseSavedMapView(serializeSavedMapView(createSavedMapView(candidate)));
+  assert.deepEqual(normalizeVectorStyle(restored.layers[0].style.definition), definition);
+  assert.deepEqual(restored.layers[0].catalogItem, candidate.layers[0].catalogItem);
+});
+
 test("backend parity fixture preserves the browser saved-map document", () => {
   const text = readFileSync(new URL("../../../tests/fixtures/saved-map-v1.json", import.meta.url), "utf8");
   assert.deepEqual(parseSavedMapView(text), JSON.parse(text));
