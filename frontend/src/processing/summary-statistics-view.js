@@ -15,13 +15,19 @@ export class SummaryStatisticsView {
      * @param {Object} [browserContext] Browser capabilities supplied at the view boundary.
      * @param {{writeText:(text:string)=>Promise<void>}|null} [browserContext.clipboard]
      * Clipboard writer; unavailable or denied access is presented in the card.
+     * @param {(context:{source:string,scope:string})=>void} [browserContext.onContextChange]
+     * Publish display-only source/area context through browser composition.
      */
-    constructor(documentContext = globalThis.document, { clipboard = documentContext.defaultView?.navigator?.clipboard ?? null } = {}) {
+    constructor(documentContext = globalThis.document, {
+        clipboard = documentContext.defaultView?.navigator?.clipboard ?? null,
+        onContextChange = () => {},
+    } = {}) {
         this.document = documentContext;
+        this.onContextChange = onContextChange;
         this.elements = Object.fromEntries(["area", "area-description", "rows", "result", "history",
             "refresh", "retry", "close", "edit-area", "template"]
             .map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
-        this.openers = [documentContext.querySelector("#open-calculations")];
+        this.openers = ["open-calculations", "open-calculations-dock"].map(id => documentContext.querySelector(`#${id}`));
         this.listeners = [];
         this.signatures = {};
         this.clipboard = clipboard;
@@ -125,6 +131,11 @@ export class SummaryStatisticsView {
      */
     render(state) {
         this.latestState = state;
+        const sources = [...new Map(state.statistics.filter(card => card.source).map(card =>
+            [JSON.stringify([card.source.collectionId, card.source.itemId]), card.source.label])).values()];
+        this.onContextChange({ source: sources.length === 1 ? sources[0]
+            : sources.length ? `${sources.length} rasters in statistic cards` : "No raster selected",
+            scope: this.areaDescription(state) });
         const label = state.statistics.some(card => card.pending) ? "Summarize · working" : "Summarize";
         for (const opener of this.openers) if (opener.textContent !== label) opener.textContent = label;
         if (!state.active) {
@@ -229,10 +240,7 @@ export class SummaryStatisticsView {
         e.area.value = state.areaChoice;
         this.vectorAreaControls.hidden = state.areaChoice !== "vector";
         e["edit-area"].hidden = state.areaChoice === "vector" || state.areaChoice === "whole";
-        e["area-description"].textContent = state.areaChoice === "vector" && state.area && state.vectorArea
-            ? `Vector selection · ${state.vectorArea.label}` : state.areaChoice === "vector"
-                ? "Choose a polygon layer below. Edit its filter, then use the matching features."
-                : describeClipArea(state.area);
+        e["area-description"].textContent = this.areaDescription(state);
         x.auto.checked = state.automatic;
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;
@@ -246,6 +254,16 @@ export class SummaryStatisticsView {
             x["saved-result"].open = true; this.signatures.saved = JSON.stringify(state.saved);
         }
         this.renderHistory(state);
+    }
+    /** Describe the summary's own area choice, including its missing-input guidance.
+     * @param {{areaChoice:string,area:Object|null,vectorArea:Object|null}} state Current summary presentation.
+     * @return {string} Source-independent area label used by the view and composed task context.
+     */
+    areaDescription(state) {
+        return state.areaChoice === "vector" && state.area && state.vectorArea
+            ? `Vector selection · ${state.vectorArea.label}` : state.areaChoice === "vector"
+                ? "Choose a polygon layer below. Edit its filter, then use the matching features."
+                : describeClipArea(state.area);
     }
     /**
      * Copy the exact scalar from the current result, without display rounding or units.

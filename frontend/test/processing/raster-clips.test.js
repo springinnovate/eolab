@@ -191,10 +191,14 @@ test("download navigation is limited to direct owned artifact endpoints", () => 
 
 test("clip form and job cards show grid, real progress, direct links and independent actions", async () => {
     const h = fixture();
-    const doc = new FakeRasterControlDocument(); const view = new RasterClipsView(doc);
+    const contexts = [];
+    const doc = new FakeRasterControlDocument(); const view = new RasterClipsView(doc, { onContextChange: context => contexts.push(context) });
     const actions=[]; view.bind({ onOpen() {}, onClose() {}, onSource() {}, onArea() {}, onCreate() {}, onRetrySubmission() {}, onRefresh() {}, onEditArea() {}, onCancel: id => actions.push(id), onDelete: id => actions.push(id) });
     h.controller.open();
     view.render(h.view.state);
+    assert.equal(contexts.at(-1).source, source.label);
+    assert.equal(contexts.at(-1).scope, doc.querySelector("#raster-clips-area-description").textContent);
+    assert.match(contexts.at(-1).scope, /W 77\.0000/);
     const text = element => element.textContent + element.children.map(text).join(" ");
     assert.equal(doc.querySelector("#raster-clips-create").disabled, false);
     h.view.state.jobs = [{ ...job, status:"ready", expiresAt: plan.expiresAt,

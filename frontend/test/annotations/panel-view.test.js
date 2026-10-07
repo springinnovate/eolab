@@ -25,13 +25,14 @@ function setup() {
         if (!elements.has(selector)) elements.set(selector, new Element(document));
         return elements.get(selector);
     } };
-    const events = [];
-    const view = new AnnotationPanelView({ document, onOpen: () => events.push("open"), onClose: () => events.push("close") });
-    return { document, events, view };
+    const events = [], contexts = [];
+    const view = new AnnotationPanelView({ document, onOpen: () => events.push("open"), onClose: () => events.push("close"),
+        onContextChange: context => contexts.push(context) });
+    return { document, events, view, contexts };
 }
 
 test("loading and renaming layers never open the panel or replace the editor's fields", () => {
-    const { document, events, view } = setup();
+    const { document, events, view, contexts } = setup();
     const local = document.createElement(); local.value = "Unfinished note";
     const shared = document.createElement();
     view.registerLayerControls("local", "My annotations", local);
@@ -39,8 +40,10 @@ test("loading and renaming layers never open the panel or replace the editor's f
     assert.deepEqual(events, []);
     view.showLayer("local");
     view.renameLayer("local", "New name");
+    assert.deepEqual(contexts.at(-1), { source: "New name", scope: "Shared annotation layer" });
     assert.equal(view.content.children[0], local);
     view.showLayer("shared");
+    assert.equal(contexts.at(-1).source, "Maria · Wetlands");
     view.selector.value = "local";
     view.selector.dispatchEvent(new Event("change"));
     assert.equal(view.content.children[0], local);

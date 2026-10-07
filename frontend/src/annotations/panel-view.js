@@ -7,10 +7,12 @@ export class AnnotationPanelView {
      * @param {Document} options.document Browser document.
      * @param {()=>void} options.onOpen Reveal the panel in the existing map-tool container.
      * @param {()=>void} options.onClose Hide the panel without discarding controls.
+     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only selected-layer context.
      */
-    constructor({ document, onOpen, onClose }) {
+    constructor({ document, onOpen, onClose, onContextChange = () => {} }) {
         this.document = document;
         this.onOpen = onOpen;
+        this.onContextChange = onContextChange;
         this.layers = new Map();
         this.selectedKey = null;
         this.entry = document.querySelector("#toggle-map-layers");
@@ -52,6 +54,7 @@ export class AnnotationPanelView {
     renameLayer(key, label) {
         const layer = this.layers.get(key);
         if (layer) layer.option.textContent = label;
+        if (layer && this.selectedKey === key) this.onContextChange({ source: label, scope: "Shared annotation layer" });
     }
 
     /**
@@ -77,6 +80,7 @@ export class AnnotationPanelView {
         this.content.replaceChildren(...(layer ? [layer.controls] : []));
         this.layerField.hidden = !layer;
         this.empty.hidden = !!layer;
+        this.onContextChange({ source: layer?.option.textContent ?? "No shared layer selected", scope: layer ? "Shared annotation layer" : "" });
     }
 
     /**

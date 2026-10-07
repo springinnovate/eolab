@@ -15,6 +15,15 @@ const MAP_LAYER_MODULES = [
     "leaflet-layer-set.js",
 ];
 
+test("dock context stays display-only and does not import tool implementations", async () => {
+    const source = await readFile(new URL("../../src/map-inspection-controller.js", import.meta.url), "utf8");
+    assert.deepEqual([...source.matchAll(/(?:import|export)\s.*from\s+["']([^"']+)["']/g)], []);
+    for (const ownedStateControl of ["#calculations-area", "#raster-clips-source", "#raster-series-area", "#annotation-panel-layer"]) {
+        assert.equal(source.includes(`querySelector("${ownedStateControl}")`), false,
+            `dock receives context through composition rather than reading ${ownedStateControl}`);
+    }
+});
+
 test("map-layer modules depend only on peers and Catalog identity", async () => {
     for (const moduleName of MAP_LAYER_MODULES) {
         const source = await readFile(

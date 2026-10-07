@@ -5,6 +5,12 @@ results, and understand the calculation limits.
 
 Use **Summarize** to calculate statistics over a sampling box, a filtered
 [vector layer](vector-sampling.md), or an explicitly selected whole raster.
+Open it from **Analysis → Summarize** in the right dock, the right-side map
+opener when the dock is closed, or a layer/histogram shortcut. The dock heading
+identifies the active task; its context line shows the summary's raster bindings
+and selected area. Switching tools preserves each tool's own context.
+Incoming point/area inspection remains under **Map click results**, with updating,
+unavailable and new-result feedback visible even when that disclosure is collapsed.
 Each of the five available cards has a name, formula, raster binding (`a`),
 and result. Different cards can use different rasters, but each formula uses
 only one raster. **Formula reference** in the panel lists the supported functions.

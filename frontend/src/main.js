@@ -858,7 +858,9 @@ async function initializeCatalog(
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     calculations = new SummaryStatisticsController({
-        api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(),
+        api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(document, {
+            onContextChange: context => mapInspection.setToolContext("calculations", context),
+        }),
         calculationRequests,
         onAreaChange: updateRasterSeriesArea, getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
@@ -867,7 +869,9 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
     const rasterClips = new RasterClipsController({
-        api: processingApi, jobs: processingJobs, view: new RasterClipsView(),
+        api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
+            onContextChange: context => mapInspection.setToolContext("raster-clips", context),
+        }),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
         onOpen: () => mapInspection.showRasterClips(),
@@ -904,6 +908,7 @@ async function initializeCatalog(
         }),
         onHistogramChange: snapshot => {
             latestHistogramPresentation = snapshot;
+            mapInspection.setToolContext("histogram", snapshot === null ? null : { source: snapshot.source, scope: snapshot.scope });
             if (rasterClickSelected) mapInspection.setClickResult("histogram", snapshot);
         },
         onStyleRequested: (key) => layerStyleEditor?.open(key),
@@ -1104,7 +1109,9 @@ async function initializeCatalog(
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         onEditArea: () => calculations.open(),
-        view: new RasterSeriesView(),
+        view: new RasterSeriesView(document, {
+            onContextChange: context => mapInspection.setToolContext("raster-series", context),
+        }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
     rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
@@ -1261,6 +1268,7 @@ async function initializeCatalog(
     {
         const annotationPanel = new AnnotationPanelView({ document,
             onOpen: () => mapInspection.showAnnotations(),
+            onContextChange: context => mapInspection.setToolContext("annotations", context),
             onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
             panel: annotationPanel,

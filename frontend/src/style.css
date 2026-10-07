@@ -3882,13 +3882,63 @@ article.raster-histogram-summary {
 
 .map-inspection-dock-title {
   min-width: 0;
-  overflow: hidden;
   padding-inline: 6px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   font-size: 0.82rem;
   font-weight: 700;
 }
+
+.map-inspection-context {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding-inline: 6px;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.map-inspection-context[hidden] { display: none; }
+
+.map-inspection-navigation {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding-inline: 6px;
+}
+
+.map-inspection-analysis {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+
+.map-inspection-analysis .secondary-button {
+  padding: 6px 9px;
+  font-size: 0.74rem;
+}
+
+.map-inspection-navigation > .map-inspection-tabs:not([hidden]) { display: contents; }
+
+.map-click-summary > .map-inspection-context { margin-bottom: 6px; }
+
+.map-click-disclosure {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-inline: 6px;
+  font-size: 0.76rem;
+  color: var(--text-2);
+}
+.map-click-disclosure[hidden] { display: none; }
+.map-click-disclosure > summary { min-height: 24px; cursor: pointer; }
+.map-click-disclosure > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.map-click-disclosure > .map-click-summary { margin-top: 6px; }
 
 .map-inspection-tabs {
   grid-column: 1 / -1;
@@ -4028,6 +4078,8 @@ article.raster-histogram-summary {
 }
 
 #map-inspection:not(:popover-open),
+#open-calculations[hidden],
+#open-calculations-dock[hidden],
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],

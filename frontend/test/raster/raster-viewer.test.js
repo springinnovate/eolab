@@ -678,11 +678,15 @@ test("inspection summaries describe bounded raster participation and asynchronou
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
     assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
+    assert.equal(snapshots.at(-1).source, "Top 16 of 17 visible rasters");
+    assert.match(snapshots.at(-1).scope, /map sample/);
     assert.match(snapshots.at(-1).message, /map sample/);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
     assert.match(snapshots.at(-1).message, /2D/);
+    assert.equal(snapshots.at(-1).source, "Top 2 of 17 visible rasters");
+    assert.match(snapshots.at(-1).scope, /2D/);
     assert.match(snapshots.at(-1).message, /Top 2 of 17 visible rasters/);
     assert.equal(h.controlsView.layerHistograms.length, 2);
     h.controlsView.handlers.onBivariateModeChange("overlay");

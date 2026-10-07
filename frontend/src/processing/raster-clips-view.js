@@ -7,9 +7,14 @@ export { describeClipCrs, formatDownloadBytes, describeClipArea, describeJobProg
 
 /** Own fixed controls, review details, and retained job cards. */
 export class RasterClipsView {
-    /** @param {Document} [documentContext=globalThis.document] Owning document. */
-    constructor(documentContext = globalThis.document) {
+    /** Find clip controls and publish their owned review context through composition.
+     * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {Object} [options] Presentation callbacks.
+     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only source/area context.
+     */
+    constructor(documentContext = globalThis.document, { onContextChange = () => {} } = {}) {
         this.document = documentContext;
+        this.onContextChange = onContextChange;
         this.elements = Object.fromEntries([
             "source", "area", "area-description", "create", "message", "jobs", "job-message",
             "pending", "retry-submission", "refresh", "edit-area", "close", "form",
@@ -88,6 +93,7 @@ export class RasterClipsView {
         e.area.disabled = locked;
         e["edit-area"].disabled = locked;
         e["area-description"].textContent = describeClipArea(state.area);
+        this.onContextChange({ source: state.source?.label ?? "No raster selected", scope: e["area-description"].textContent });
         e.create.disabled = locked || !state.source || !state.area;
         e.create.textContent = state.submitting ? "Submitting clip…" : "Create clip";
         e.message.textContent = state.message;

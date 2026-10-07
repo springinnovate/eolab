@@ -216,7 +216,9 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map tools/);
+    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Analysis · Map results/);
+    assert.match(inspection.source, /class="map-inspection-analysis" aria-label="Analysis"/);
+    assert.match(inspection.source, /id="open-calculations-dock"[\s\S]*?aria-controls="calculations-panel"/);
     assert.match(inspection.source, /id="map-inspection-more-summary"[^>]*>More/);
     assert.match(inspection.source, /id="open-raster-clips-dock"[\s\S]*?>Raster clips/);
     assert.match(
@@ -397,11 +399,11 @@ test("inspection header contains result navigation in consistent raster then fea
 
 test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(requireElementRange("map-histogram-heading").source,
-        />Raster value histograms</);
+        />Raster distributions</);
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histogram">×/);
     assert.match(requireElementRange("map-inspection-tab-histogram").source,
-        />Raster histograms</);
+        />Raster distributions</);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
