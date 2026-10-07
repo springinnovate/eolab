@@ -42,6 +42,18 @@ function controlsFixture() {
     return { ...h, plots, state, draw };
 }
 
+test("series publishes selected raster and owned area context while inactive without drawing", () => {
+    const h = controlsFixture(), contexts = [];
+    const view = new RasterSeriesView(h.document, { onContextChange: context => contexts.push(context) });
+    view.render({ ...h.state, active: false });
+    assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole extent of each raster" });
+    assert.equal(h.frames.size, 0);
+    view.render({ ...h.state, active: false, sources: [...h.state.sources, { label: "Raster B", selected: true }],
+        area: { ...h.state.area, areaChoice: "selection", areaLabel: "Selected watershed polygons" } });
+    assert.deepEqual(contexts.at(-1), { source: "2 selected rasters", scope: "Selected watershed polygons" });
+    assert.equal(h.frames.size, 0);
+});
+
 /** Observe writes to existing controls, including redundant assignments a fake DOM normally hides.
  * @param {FakeRasterControlDocument} document Fake owning document.
  * @return {Object[]} Mutable log of presentation writes.
@@ -121,11 +133,11 @@ test("series renders each statistic through the same plots and values table", ()
 test("results return immediately and a burst draws only its latest snapshot", () => {
     const h = fixture(), drawn = [];
     h.view.draw = state => drawn.push(state);
-    for (let i = 0; i < 25; i++) h.view.render({ active: true, completed: i + 1 });
+    for (let i = 0; i < 25; i++) h.view.render({ active: true, completed: i + 1, sources: [], area: {} });
     assert.equal(drawn.length, 0, "receiving results never calls drawing synchronously");
     assert.equal(h.frames.size, 1);
     h.frame();
-    assert.deepEqual(drawn, [{ active: true, completed: 25 }]);
+    assert.deepEqual(drawn, [{ active: true, completed: 25, sources: [], area: {} }]);
     assert.equal(h.frames.size, 0);
 });
 
@@ -134,11 +146,11 @@ test("updates during drawing schedule one subsequent frame with the latest state
     h.view.draw = state => {
         drawn.push(state.completed);
         if (state.completed === 1) {
-            h.view.render({ active: true, completed: 2 });
-            h.view.render({ active: true, completed: 3 });
+            h.view.render({ active: true, completed: 2, sources: [], area: {} });
+            h.view.render({ active: true, completed: 3, sources: [], area: {} });
         }
     };
-    h.view.render({ active: true, completed: 1 });
+    h.view.render({ active: true, completed: 1, sources: [], area: {} });
     h.frame();
     assert.deepEqual(drawn, [1]);
     assert.equal(h.frames.size, 1);
@@ -148,14 +160,14 @@ test("updates during drawing schedule one subsequent frame with the latest state
 
 test("closing cancels drawing; reopening draws current inputs rather than an old area", () => {
     const h = fixture(), drawn = [];
-    h.view.draw = state => drawn.push(state.area);
-    h.view.render({ active: true, area: "old" });
-    h.view.render({ active: false, area: "old" });
+    h.view.draw = state => drawn.push(state.area.areaLabel);
+    h.view.render({ active: true, sources: [], area: { areaLabel: "old" } });
+    h.view.render({ active: false, sources: [], area: { areaLabel: "old" } });
     assert.equal(h.frames.size, 0);
-    h.view.render({ active: false, area: "new" });
+    h.view.render({ active: false, sources: [], area: { areaLabel: "new" } });
     h.frame();
     assert.deepEqual(drawn, []);
-    h.view.render({ active: true, area: "new" });
+    h.view.render({ active: true, sources: [], area: { areaLabel: "new" } });
     h.frame();
     assert.deepEqual(drawn, ["new"]);
 });

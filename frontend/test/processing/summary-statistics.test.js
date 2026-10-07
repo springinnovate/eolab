@@ -19,6 +19,31 @@ const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4, decod
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 
+test("both summary openers share the workflow and publish owned source/area context without submitting", async () => {
+    const contexts = [];
+    const h = fixture({}, new Map(), { onContextChange: context => contexts.push(context) });
+    for (const id of ["open-calculations", "open-calculations-dock"]) {
+        h.document.querySelector(`#${id}`).dispatchEvent(new Event("click"));
+        await h.tick();
+        assert.equal(h.controller.state.active, true);
+        assert.match(contexts.at(-1).source, /Human footprint/);
+        assert.match(contexts.at(-1).scope, /Box/);
+        assert.equal(h.submits(), 0, "opening a destination never submits a calculation");
+        h.controller.close();
+    }
+    await h.open(); h.controller.setAutomatic(false);
+    h.view.elements.area.value = "whole";
+    h.view.elements.area.dispatchEvent(new Event("change"));
+    assert.equal(contexts.at(-1).scope, "Whole raster");
+    h.controller.editStatistic(h.controller.state.statistics[0].id, { source: resistance });
+    assert.match(contexts.at(-1).source, /Resistance/);
+    h.view.render({ ...h.controller.state, active: false,
+        statistics: [{ source }, { source: { ...resistance, label: source.label } }] });
+    assert.equal(contexts.at(-1).source, "2 rasters in statistic cards", "duplicate display names retain distinct catalog identities");
+    assert.equal(h.submits(), 0);
+    h.controller.destroy();
+});
+
 test("standard deviation preset is editable and submits the population formula through summary controls", async () => {
     const h = fixture(); await h.open(); h.controller.setAutomatic(false);
     h.view.elements.template.value = "stdev";

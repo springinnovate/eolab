@@ -93,6 +93,89 @@ test("automatic presentation does not move focus and close retains results", () 
     h.controller.destroy();
 });
 
+test("task headers retain their own source and scope while clicks and peer contexts change", () => {
+    const h = fixture();
+    const context = h.doc.querySelector("#map-inspection-context");
+    const histogramContext = { source: "6 raster layers", scope: "200 km map sample" };
+    h.controller.setToolContext("histogram", histogramContext);
+    histogramContext.scope = "Mutated caller state";
+    assert.equal(h.controller.isOpen, false, "context does not open a tool");
+    h.controller.showStyle("GEA South Africa");
+    h.map.focus();
+    h.controller.beginMapClick({ lat: 37.5, lng: 14 });
+    h.controller.setClickResult("histogram", { state: "ready", message: "Ready" });
+    assert.equal(h.dockTitle.textContent, "Appearance · Style");
+    assert.equal(context.textContent, "GEA South Africa");
+    assert.match(h.doc.querySelector("#map-click-context").textContent, /37\.5000, 14\.0000/);
+    assert.equal(h.doc.activeElement, h.map);
+    h.controller.updateLayerEditorName("style", "South Africa renamed");
+    assert.equal(context.textContent, "South Africa renamed");
+    h.controller.showFilter("WWF Biomes");
+    assert.equal(h.dockTitle.textContent, "Data selection · Filter");
+    assert.equal(context.textContent, "WWF Biomes");
+    h.controller.setToolContext("calculations", { source: "GEA Italy", scope: "Whole raster" });
+    h.controller.showCalculations();
+    h.controller.setToolContext("histogram", { source: "6 raster layers", scope: "New map sample" });
+    assert.equal(h.dockTitle.textContent, "Analysis · Summarize");
+    assert.equal(context.textContent, "GEA Italy · Whole raster");
+    h.controller.setToolContext("raster-clips", { source: "GEA Chile", scope: "Captured box" });
+    h.controller.showRasterClips();
+    h.controller.beginMapClick({ lat: 40, lng: 20 });
+    assert.equal(h.dockTitle.textContent, "Export · Raster clips");
+    assert.equal(context.textContent, "GEA Chile · Captured box");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.dockTitle.textContent, "Export · Raster clips");
+    assert.equal(context.textContent, "GEA Chile · Captured box");
+    h.controller.showHistogram();
+    assert.equal(h.dockTitle.textContent, "Analysis · Raster distributions");
+    assert.equal(context.textContent, "6 raster layers · New map sample");
+    h.controller.showFeatureInspector();
+    assert.match(context.textContent, /Visible vector layers · Point · 40\.0000, 20\.0000/);
+    h.controller.destroy();
+    assert.equal(h.doc.querySelector("#open-calculations").hidden, false);
+});
+
+test("context validates its presentation boundary and vector identities clear without moving focus", () => {
+    const h = fixture();
+    for (const invalid of [{ source: 3, scope: "" }, { source: "Layer" }, "Layer"]) {
+        assert.throws(() => h.controller.setToolContext("calculations", invalid), TypeError);
+    }
+    assert.throws(() => h.controller.setToolContext("unknown", null), RangeError);
+    h.controller.showVectorTimeSeries();
+    h.map.focus();
+    h.controller.setVectorTimeSeriesIdentity({ label: "Temperature", title: "Climate zones · Temperature" });
+    assert.equal(h.doc.querySelector("#map-inspection-context").textContent,
+        "Climate zones · Temperature · Across sampled vector features");
+    assert.equal(h.doc.activeElement, h.map);
+    h.controller.setVectorTimeSeriesIdentity(null);
+    assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
+    h.controller.destroy();
+});
+
+test("secondary click results preserve disclosure choices and show unread/failure feedback", () => {
+    const h = fixture();
+    const disclosure = h.doc.querySelector("#map-click-disclosure");
+    const label = h.doc.querySelector("#map-click-disclosure-label");
+    h.controller.showStyle("GEA Italy");
+    h.controller.beginMapClick({ lat: 37.5, lng: 14 });
+    h.controller.setClickResult("histogram", { state: "loading", message: "Updating this area" });
+    assert.equal(disclosure.hidden, false);
+    assert.equal(disclosure.open, false, "secondary results do not displace the styling task");
+    assert.match(label.textContent, /Updating/);
+    disclosure.open = true;
+    h.controller.setClickResult("histogram", { state: "error", message: "No overlap" });
+    assert.equal(disclosure.open, true, "a result update preserves the user's disclosure choice");
+    assert.match(label.textContent, /Some unavailable.*New results/);
+    h.doc.querySelector("#map-click-histogram").dispatchEvent(new Event("click"));
+    assert.equal(disclosure.open, true);
+    assert.doesNotMatch(label.textContent, /New results/);
+    h.controller.showCalculations();
+    assert.equal(disclosure.open, false, "switching tasks restores secondary-result priority");
+    h.controller.closeHistogram();
+    assert.equal(disclosure.hidden, false, "closing a tool retains its click stream's recovery entry");
+    h.controller.destroy();
+});
+
 test("map-click summaries retain the chosen panel and expose unseen peer results", () => {
     const h = fixture();
     h.controller.showHistogram();
@@ -117,7 +200,7 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     h.controller.showFeatureInspector({activate: false});
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.histogramTab.getAttribute("data-unread"), "false");
-    assert.match(h.dockTitle.textContent, /24\.0000, 80\.0000/);
+    assert.match(h.doc.querySelector("#map-inspection-context").textContent, /24\.0000, 80\.0000/);
     h.controller.destroy();
 });
 
@@ -128,7 +211,7 @@ test("result cards replace duplicate tabs while other tools remain keyboard acce
     const feature = h.doc.querySelector("#map-click-feature");
     h.controller.showHistogram();
     h.controller.showFeatureInspector({activate: false});
-    assert.equal(h.dockTitle.textContent, "Map tools");
+    assert.equal(h.dockTitle.textContent, "Analysis · Raster distributions");
     assert.equal(h.histogramTab.hidden, false);
     h.controller.beginMapClick({lat: 22, lng: 78});
     h.controller.setClickResult("histogram", {state: "ready", message: "Ready"});
@@ -208,9 +291,9 @@ test("active-tool subscriptions report expanded presentation, support detachment
     h.controller.showFeatureInspector({activate:false});
     assert.deepEqual(changes, [null, "calculations"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Map tools · Summarize");
+    assert.equal(h.dockTitle.textContent, "Analysis · Summarize");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Map tools");
+    assert.equal(h.dockTitle.textContent, "Analysis · Summarize");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.deepEqual(changes, [null, "calculations", null, "calculations", "histogram"]);
     unsubscribe(); h.controller.showRasterClips();
@@ -323,7 +406,7 @@ test("histogram and style have independent visibility on one persistent surface"
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.hidden, false);
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.histogramTab.textContent, "Raster histograms");
+    assert.equal(h.histogramTab.textContent, "Raster distributions");
     assert.equal(h.histogramTab.title, "2 raster results");
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);

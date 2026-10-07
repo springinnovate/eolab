@@ -164,8 +164,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
- * @property {(snapshot:{state:string,message:string}|null)=>void} [onHistogramChange]
- * Receives current histogram participation and status without exposing analysis state.
+ * @property {(snapshot:{state:string,message:string,source:string,scope:string}|null)=>void} [onHistogramChange]
+ * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
  * @property {(item:Object,area:Readonly<Object>|null)=>void} [onDownloadRequested]
@@ -1313,7 +1313,7 @@ export function initializeRasterViewer(
             : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
         const progress = loading ? "Updating for this selection…" : failures
             ? "Some histograms unavailable — see details" : "Ready";
-        onHistogramChange(Object.freeze({state, message: `${participation} · ${scope} · ${progress}`}));
+        onHistogramChange(Object.freeze({state, source: participation, scope, message: `${participation} · ${scope} · ${progress}`}));
     }
 
     /**

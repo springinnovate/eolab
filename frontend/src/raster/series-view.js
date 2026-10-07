@@ -9,9 +9,12 @@ export class RasterSeriesView {
     /**
      * Find the plot's existing markup.
      * @param {Document} [documentContext=document] Owning browser document.
+     * @param {Object} [options] Presentation callbacks.
+     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only chosen source/area context.
      */
-    constructor(documentContext = document) {
+    constructor(documentContext = document, { onContextChange = () => {} } = {}) {
         this.document = documentContext;
+        this.onContextChange = onContextChange;
         this.root = documentContext.querySelector("#raster-series");
         this.context = documentContext.querySelector("#raster-series-context");
         this.status = documentContext.querySelector("#raster-series-status");
@@ -89,6 +92,9 @@ export class RasterSeriesView {
      * @return {void}
      */
     render(state) {
+        const sources = state.sources.filter(source => source.selected);
+        this.onContextChange({ source: sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
+            scope: state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected" });
         this.pendingState = state;
         if (!state.active) {
             if (this.frame !== null) this.document.defaultView.cancelAnimationFrame(this.frame);

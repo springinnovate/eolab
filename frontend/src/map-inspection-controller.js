@@ -1,7 +1,13 @@
+/**
+ * @typedef {Object} MapInspectionToolContext
+ * @property {string} source Tool-owned source or source-group display label.
+ * @property {string} scope Tool-owned spatial or feature scope; empty when inapplicable.
+ */
+
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
-     * Bind independent close controls for the shared exploration surface.
+     * Bind retained task context, navigation and independent close controls.
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
@@ -19,8 +25,14 @@ export class MapInspectionController {
         this.root = documentContext.querySelector("#map-inspection");
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
+        this.dockContext = documentContext.querySelector("#map-inspection-context");
+        this.calculationOpener = documentContext.querySelector("#open-calculations");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.clickSummary = documentContext.querySelector("#map-click-summary");
+        this.clickContext = documentContext.querySelector("#map-click-context");
+        this.clickDisclosure = documentContext.querySelector("#map-click-disclosure");
+        this.clickDisclosureLabel = documentContext.querySelector("#map-click-disclosure-label");
+        this.clickDisclosureTool = undefined;
         this.clickLabel = "";
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(`#map-click-${name}`),
@@ -74,7 +86,7 @@ export class MapInspectionController {
             },
             {
                 name: "histogram",
-                label: "Raster histograms",
+                label: "Raster distributions",
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-inspection-tab-histogram"),
             },
@@ -109,6 +121,14 @@ export class MapInspectionController {
                 tab: documentContext.querySelector("#map-inspection-tab-style"),
             },
         ];
+        const tasks = {
+            style: "Appearance", filter: "Data selection", annotations: "Shared layers",
+            "raster-clips": "Export",
+        };
+        for (const tool of this.tools) {
+            tool.task = tasks[tool.name] ?? "Analysis";
+            tool.context = null;
+        }
         this.isOpen = false;
         this.activeTool = null;
         this.activationOrder = [];
@@ -166,7 +186,7 @@ export class MapInspectionController {
         }
         this.#setToolLabel(
             "histogram",
-            "Raster histograms",
+            "Raster distributions",
             resultCount === null ? "" : String(resultCount) + " raster results"
         );
         this.#showTool("histogram", options);
@@ -189,6 +209,7 @@ export class MapInspectionController {
      *
      * @param {string|null} [layerLabel=null] User-facing style target label.
      * @return {void}
+     * @throws {TypeError} When a supplied layer label is empty or not a string.
      */
     showStyle(layerLabel = null) {
         if (layerLabel !== null && (
@@ -201,6 +222,7 @@ export class MapInspectionController {
             layerLabel === null ? "Style" : `Style · ${layerLabel}`,
             layerLabel === null ? "" : `Style ${layerLabel}`
         );
+        this.setToolContext("style", { source: layerLabel ?? "Selected layer", scope: "" });
         this.#showTool("style");
     }
 
@@ -217,16 +239,39 @@ export class MapInspectionController {
         }
         const action = editor === "style" ? "Style" : "Filter";
         this.#setToolLabel(editor, `${action} · ${layerLabel}`, `${action} ${layerLabel}`);
+        this.setToolContext(editor, { source: layerLabel, scope: "" });
     }
 
     /**
      * Reveal a dedicated layer filter editor.
      * @param {string} layerLabel User-facing retained layer label.
      * @return {void}
+     * @throws {TypeError} When the layer label is not a string.
      */
     showFilter(layerLabel) {
         this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
+        this.setToolContext("filter", { source: layerLabel, scope: "" });
         this.#showTool("filter");
+    }
+
+    /**
+     * Retain display-only context supplied by a tool owner through composition.
+     * Updating an inactive tool does not open it, change analytical scope, or move focus.
+     * @param {string} name Existing tool's stable presentation identity.
+     * @param {MapInspectionToolContext|null} context Source/scope labels, or null to clear.
+     * @return {void}
+     * @throws {RangeError} When the tool is unknown.
+     * @throws {TypeError} When supplied display labels are not strings.
+     */
+    setToolContext(name, context) {
+        const tool = this.#tool(name);
+        if (context !== null && (typeof context !== "object" ||
+            typeof context.source !== "string" || typeof context.scope !== "string")) {
+            throw new TypeError("Map tool context requires source and scope display strings.");
+        }
+        if (tool.context?.source === context?.source && tool.context?.scope === context?.scope) return;
+        tool.context = context === null ? null : { source: context.source, scope: context.scope };
+        this.#renderDock();
     }
 
     /** Reveal annotation tools without changing other tools or their data. @return {void} */
@@ -284,7 +329,7 @@ export class MapInspectionController {
      */
     beginMapClick(position) {
         this.hasClick = true;
-        this.clickLabel = `Map click · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}`;
+        this.clickLabel = `Point · ${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}`;
         for (const entry of this.clickResults) {
             entry.snapshot = null;
             entry.unread = false;
@@ -317,10 +362,24 @@ export class MapInspectionController {
     }
 
     /** Render both streams without moving focus or interpreting analysis data.
+     * Task switches prioritize foreground click streams; subsequent result updates
+     * preserve the user's disclosure choice and expose unread/failure feedback.
      * @return {void}
      */
     #renderClickSummary() {
         this.clickSummary.hidden = !this.hasClick || this.minimized;
+        this.clickDisclosure.hidden = this.clickSummary.hidden;
+        if (this.activeTool !== this.clickDisclosureTool) {
+            this.clickDisclosure.open = [null, "histogram", "feature"].includes(this.activeTool);
+            this.clickDisclosureTool = this.activeTool;
+        }
+        const updating = this.clickResults.some(entry => entry.snapshot?.state === "loading");
+        const unavailable = this.clickResults.some(entry => entry.snapshot?.state === "error");
+        const unread = this.clickResults.some(entry => entry.unread);
+        this.clickDisclosureLabel.textContent = "Map click results" +
+            (updating ? " · Updating…" : "") + (unavailable ? " · Some unavailable" : "") +
+            (unread ? " · New results" : "");
+        this.clickContext.textContent = this.clickLabel;
         for (const entry of this.clickResults) {
             const {name, button, status, snapshot} = entry;
             const loading = snapshot?.state === "loading";
@@ -519,7 +578,7 @@ export class MapInspectionController {
      * Resolve one controller-owned presentation descriptor.
      *
      * @param {string} name Stable presentation name.
-     * @return {{name:string,label:string,panel:HTMLElement,tab:HTMLButtonElement}}
+     * @return {{name:string,label:string,task:string,context:MapInspectionToolContext|null,panel:HTMLElement,tab:HTMLButtonElement}}
      * Tool descriptor.
      * @throws {RangeError} When the controller receives an unknown tool name.
      */
@@ -561,13 +620,14 @@ export class MapInspectionController {
     }
 
     /**
-     * Restore one dock tool's stable base label.
+     * Restore one dock tool's stable base label and clear its retained context.
      *
      * @param {string} name Stable presentation name.
      * @return {void}
      */
     #resetToolLabel(name) {
         const tool = this.#tool(name);
+        tool.context = null;
         this.#setToolLabel(name, tool.label);
     }
 
@@ -577,10 +637,12 @@ export class MapInspectionController {
      * @param {string} name Stable presentation name.
      * @param {{label:string,title:string}|null} identity Presentation identity.
      * @return {void}
+     * @throws {TypeError} When a supplied label or title is empty or not a string.
      */
     #setToolIdentity(name, identity) {
         if (identity === null) {
             this.#resetToolLabel(name);
+            this.#renderDock();
             return;
         }
         if (
@@ -595,6 +657,10 @@ export class MapInspectionController {
             );
         }
         this.#setToolLabel(name, identity.label, identity.title);
+        this.setToolContext(name, {
+            source: identity.title,
+            scope: name === "time-series" ? "Across sampled vector features" : "Selected vector feature",
+        });
     }
 
     /**
@@ -683,7 +749,7 @@ export class MapInspectionController {
     }
 
     /**
-     * Render the combined header, unique navigation, and active-panel visibility.
+     * Render foreground task/source/scope, retained navigation and active-panel visibility.
      * Result cards replace their tabs; other open tools retain keyboard navigation.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
@@ -694,13 +760,15 @@ export class MapInspectionController {
         this.panels.hidden = this.minimized || this.activeTool === null;
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
-        const activeLabel = this.activeTool === null
-            ? ""
-            : this.#tool(this.activeTool).label;
-        this.dockTitle.textContent = this.minimized && activeLabel
-            ? "Map tools \u00b7 " + activeLabel
-            : this.hasClick ? this.clickLabel : "Map tools";
+        const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
+        this.dockTitle.textContent = tool === null ? "Analysis · Map results" : `${tool.task} · ${tool.label}`;
         this.dockTitle.title = this.dockTitle.textContent;
+        const context = tool?.context ?? (this.activeTool === "feature"
+            ? { source: "Visible vector layers", scope: this.clickLabel }
+            : { source: "", scope: "" });
+        this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
+        this.dockContext.hidden = !this.dockContext.textContent;
+        this.calculationOpener.hidden = this.isOpen;
         this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
         this.minimizeButton.setAttribute(
             "aria-expanded", String(!this.minimized)
