@@ -63,6 +63,11 @@ class FakeLayoutElement extends EventTarget {
         this.focused = false;
         this.ownerDocument = null;
         this.tagName = tagName;
+        const properties = new Map();
+        this.style = {
+            getPropertyValue: name => properties.get(name) ?? "",
+            setProperty: (name, value) => properties.set(name, value),
+        };
     }
 
     /**
@@ -284,7 +289,10 @@ test("inspection layout changes only the changed shell attributes without schedu
     const writes = [];
     const setAttribute = fixture.app.setAttribute.bind(fixture.app);
     fixture.app.setAttribute = (name, value) => { writes.push([name, value]); setAttribute(name, value); };
-    const state = { open: true, expanded: true, wide: false };
+    const heights = [];
+    const setProperty = fixture.app.style.setProperty;
+    fixture.app.style.setProperty = (name, value) => { heights.push(value); setProperty(name, value); };
+    const state = { open: true, expanded: true, wide: false, compactHeight: 0 };
     layout.setInspectionLayout(state);
     assert.deepEqual(writes, [
         ["data-inspection-open", "true"], ["data-inspection-expanded", "true"],
@@ -293,8 +301,11 @@ test("inspection layout changes only the changed shell attributes without schedu
     writes.length = 0;
     for (let i = 0; i < 25; i++) layout.setInspectionLayout({ ...state });
     assert.deepEqual(writes, []);
-    layout.setInspectionLayout({ ...state, expanded: false });
+    layout.setInspectionLayout({ ...state, expanded: false, compactHeight: 48 });
     assert.deepEqual(writes, [["data-inspection-expanded", "false"]]);
+    assert.deepEqual(heights, ["0px", "48px"]);
+    layout.setInspectionLayout({ ...state, expanded: false, compactHeight: 72 });
+    assert.equal(fixture.app.style.getPropertyValue("--inspection-compact-height"), "72px");
     assert.equal(fixture.app.getAttribute("data-inspection-open"), "true");
     assert.deepEqual(fixture.timers, [], "the existing map ResizeObserver owns actual viewport resizing");
     layout.destroy();
