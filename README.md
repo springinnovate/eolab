@@ -69,15 +69,17 @@ Each layer row keeps its frequent actions visible:
 
 - the checkbox shows or hides the layer;
 - **Style** changes its appearance;
-- **Zoom to** fits the source layer's bounds;
-- **Summarize** opens raster analysis, and **Filter** is available for supported layers;
-- **Legend** expands the layer's values and its inclusion in the map legend;
+- **Summarize** opens raster analysis;
+- the color swatch opens the full legend in place of the swatch, including its
+  values and its inclusion in the map legend;
 - **×** removes the layer from the map.
 
-Expand a row's **Actions** for **Rename**, Catalog **Info**, **Copy style**,
-**Paste style**, and raster **Download clip**. These use normal Tab navigation;
-Escape closes Actions and returns focus to its label. Long names, errors and
-expanded legends grow the row instead of being clipped.
+The utility icons provide **Filter** (supported layers), **Zoom to**, **Rename**,
+Catalog **Info**, **Copy style**, **Paste style**, and raster **Download clip**.
+Each has a tooltip and a layer-specific accessible name. All controls use normal
+Tab navigation; collapse the legend with its upward chevron or Escape to return
+to the swatch. Long names, errors and expanded legends grow the row instead of
+being clipped. Touch layouts use larger targets and wrap the utility icons.
 
 ![Map Layers and a raster style editor in EOLab](docs/images/eolab-layer-styling.png)
 

@@ -26,6 +26,30 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string} [gradient] CSS color ramp supplied by the raster owner.
  * @property {number[]} [labels] Minimum, midpoint, and maximum raster values.
  * @property {string} [description] Accessible description of a raster ramp.
+ *
+ * @typedef {Object} MapLayerStackSnapshot
+ * @property {string} key Stable retained-layer identity.
+ * @property {string} label Current display name.
+ * @property {{collection:string,id:string}|null} item Catalog identity, or null for an owner-supplied layer.
+ * @property {string} datasetKind Owner-reported layer type.
+ * @property {boolean} visible Independent map visibility.
+ * @property {number} opacity Whole-layer opacity.
+ * @property {number} [effectiveOpacity] Display opacity when the owner locks opacity.
+ * @property {LayerLegend|null} legend Owner-supplied legend appearance.
+ * @property {boolean} [legendIncluded] Include in the map legend unless false.
+ * @property {{canCopy:boolean,canPaste:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported style compatibility.
+ * @property {string|null} error Visible layer failure, when present.
+ * @property {string} [sourceName] Original catalog name for resetting custom names.
+ * @property {boolean} [canFilter] Owner supports filtering.
+ * @property {boolean} [filterActive] A filter is currently applied.
+ * @property {string} [filterStatus] Actionable filter result summary.
+ * @property {{label:string,description:string}|null} [roleBadge] Analysis role supplied by the owner.
+ * @property {string} [typeLabel] Owner-supplied type or origin label.
+ * @property {string} [attribution] Shared-layer provenance.
+ * @property {string} [stylePanelId] Owning style panel identifier.
+ * @property {HTMLElement} [detailsControl] Retained owner action replacing Catalog Info.
+ * @property {HTMLElement} [primaryControl] Retained owner main action.
+ * @property {HTMLElement} [controls] Retained owner controls below the action strip.
  */
 
 /**
@@ -126,10 +150,8 @@ export class MapLayerStackView {
         this.pointerDrag = null;
         /** @type {{key:string,originIndex:number}|null} */
         this.keyboardDrag = null;
-        /** @type {Map<string,HTMLDetailsElement>} Last rendered legends, retaining disclosure state. */
+        /** @type {Map<string,{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}>} Presentation-owned legend state and controls. */
         this.legends = new Map();
-        /** @type {Map<string,HTMLDetailsElement>} Per-layer action disclosures retained across snapshot refreshes. */
-        this.actions = new Map();
         this.renameEditor = null;
         this.layers = [];
         this.activeKey = null;
@@ -189,7 +211,6 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         this.handlers = null;
         this.legends.clear();
-        this.actions.clear();
         this.renameEditor = null;
     }
 
@@ -197,10 +218,10 @@ export class MapLayerStackView {
      * Render rows while keeping the visible portion of an unchanged layer order stationary.
      * Restore control focus without scrolling during refreshes and visibility changes;
      * explicit focus after reordering or removal may still bring its target into view.
-     * Action disclosures retain their open state; requested focus on a nested command
-     * reopens its disclosure before returning focus.
+     * Legends retain expansion; focus returns to the visible legend control when
+     * its collapsed swatch has been replaced by the full graphic.
      *
-     * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; primaryControl supplies a retained main action, attribution describes provenance above the title, typeLabel describes origin and stylePanelId identifies the owning style panel.
+     * @param {MapLayerStackSnapshot[]} layers Owner-supplied layer snapshots and retained controls.
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
      * focus target after a layer action, such as toggling visibility, reordering or removal.
@@ -222,9 +243,6 @@ export class MapLayerStackView {
         if (this.renameEditor && !retainedKeys.has(this.renameEditor.key)) this.renameEditor = null;
         for (const key of this.legends.keys()) {
             if (!retainedKeys.has(key)) this.legends.delete(key);
-        }
-        for (const key of this.actions.keys()) {
-            if (!retainedKeys.has(key)) this.actions.delete(key);
         }
         this.#renderVisibilityActions(layers);
         this.sort.disabled = layers.length < 2;
@@ -273,8 +291,11 @@ export class MapLayerStackView {
             if (focusTarget === undefined && layers.length === 0) {
                 focusTarget = this.documentContext.querySelector("#toggle-map-layers") ?? this.status;
             }
-            const actions = this.actions.get(retainedFocus.key);
-            if (actions?.contains(focusTarget) && focusTarget !== actions.children[0]) actions.open = true;
+            const legend = this.legends.get(retainedFocus.key);
+            if (legend?.panel.contains(focusTarget)) this.#toggleLegend(retainedFocus.key, true, false);
+            if (legend?.expanded && focusTarget === legend.trigger) {
+                focusTarget = focusTargets.get(`${retainedFocus.key}\u0000legend-collapse`);
+            }
             focusTarget?.focus({ preventScroll: preserveViewport });
         }
     }
@@ -356,10 +377,10 @@ export class MapLayerStackView {
     }
 
     /**
-     * Construct one semantic row with frequent actions, inline legend and infrequent
-     * action disclosure, registering controls by their stable layer/action identity.
+     * Construct a semantic row with text style/analysis actions, direct utility icons
+     * and a swatch that becomes the full legend, retaining stable action identities.
      *
-     * @param {Object} layer Layer presentation snapshot.
+     * @param {MapLayerStackSnapshot} layer Layer presentation snapshot.
      * @param {number} index Top-first row index.
      * @param {number} layerCount Total retained layers.
      * @param {string|null} activeKey Active layer key.
@@ -412,8 +433,6 @@ export class MapLayerStackView {
         name.textContent = layer.label;
         name.title = accessibleName;
         label.append(visibility);
-        const key = this.#buildLegendKey(layer.legend, layer.effectiveOpacity ?? layer.opacity);
-        if (key) label.append(key);
         const title = this.documentContext.createElement("span");
         title.className = "map-layer-title";
         title.append(name);
@@ -442,13 +461,13 @@ export class MapLayerStackView {
             style.setAttribute("aria-haspopup", "dialog");
             style.setAttribute("aria-controls", "layer-style-editor");
         }
-        const zoom = this.#button(
-            "Zoom to", `Zoom to ${accessibleName}`, layer.key, "zoom",
+        const zoom = this.#iconButton(
+            "zoom", `Zoom to ${accessibleName}`, layer.key, "zoom",
             () => this.handlers?.onZoom(layer.key), focusTargets
         );
         zoom.title = `Zoom to ${layer.label}`;
-        const info = layer.detailsControl ? null : this.#button(
-            "Info", `View details for ${accessibleName}`, layer.key, "info",
+        const info = layer.detailsControl ? null : this.#iconButton(
+            "info", `View details for ${accessibleName}`, layer.key, "info",
             () => this.handlers?.onInfo(layer.key), focusTargets
         );
         if (info) info.title = `View details for ${layer.label}`;
@@ -458,8 +477,8 @@ export class MapLayerStackView {
             sourceLabel: null,
             pasteReason: "Style copy and paste is unavailable.",
         };
-        const copyStyle = this.#button(
-            "Copy style",
+        const copyStyle = this.#iconButton(
+            "copy",
             `Copy style from ${accessibleName}`,
             layer.key,
             "copy-style",
@@ -469,8 +488,8 @@ export class MapLayerStackView {
         copyStyle.title = clipboard.canCopy ? `Copy style and opacity from ${layer.label}`
             : "Copying styles is unavailable for this layer.";
         copyStyle.disabled = !clipboard.canCopy;
-        const pasteStyle = this.#button(
-            "Paste style",
+        const pasteStyle = this.#iconButton(
+            "paste",
             `Paste copied style onto ${accessibleName}`,
             layer.key,
             "paste-style",
@@ -480,6 +499,8 @@ export class MapLayerStackView {
         pasteStyle.title = clipboard.canPaste ? `Paste style and opacity from ${clipboard.sourceLabel}`
             : clipboard.pasteReason;
         pasteStyle.disabled = !clipboard.canPaste;
+        const legend = this.#buildLegend(layer, focusTargets);
+        if (legend !== null) primary.append(legend.trigger);
         if (this.allowRemoval) {
             const remove = this.#button(
                 "×",
@@ -495,36 +516,38 @@ export class MapLayerStackView {
         }
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
-        const filterActions = layer.canFilter ? [this.#button(
-            layer.filterActive ? "Filter ●" : "Filter", `Filter ${accessibleName}`,
+        const filter = layer.canFilter ? this.#iconButton(
+            "filter", `${layer.filterActive ? "Edit active filter for" : "Filter"} ${accessibleName}`,
             layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
-        )] : [];
+        ) : null;
+        if (filter) filter.classList.toggle("has-active-filter", Boolean(layer.filterActive));
         // Local editors supply their own Edit/Details action instead of the catalog Info action.
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
-            ...filterActions,
             ...(layer.datasetKind === "raster" ? [this.#button(
                 "Summarize", "Summarize " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
-            )] : []),
-            zoom
+            )] : [])
         );
-        const legend = this.#buildLegend(layer, focusTargets);
-        if (legend !== null) rowActions.append(legend);
-        rowActions.append(this.#buildLayerActions(layer, [
-            ...(layer.item !== null ? [this.#button(
-                "Rename", `Rename ${accessibleName}`, layer.key, "rename",
+        const utilities = this.documentContext.createElement("div");
+        utilities.className = "map-layer-utility-actions";
+        utilities.append(
+            ...(filter ? [filter] : []),
+            zoom,
+            ...(layer.item !== null ? [this.#iconButton(
+                "rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
             )] : []),
             ...(!layer.detailsControl ? [info] : []),
             copyStyle,
             pasteStyle,
-            ...(layer.datasetKind === "raster" ? [this.#button(
-                "Download clip", `Download clip of ${accessibleName}`, layer.key,
+            ...(layer.datasetKind === "raster" ? [this.#iconButton(
+                "download", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
-            )] : []),
-        ], focusTargets));
+            )] : [])
+        );
+        rowActions.append(utilities);
         row.append(reorder);
         if (layer.attribution) {
             const attribution = this.documentContext.createElement("p");
@@ -535,6 +558,7 @@ export class MapLayerStackView {
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
         row.append(rowActions);
+        if (legend !== null) row.append(legend.panel);
         if (this.renameEditor?.key === layer.key) row.append(this.renameEditor.form);
         if (layer.filterStatus) {
             const filterStatus = this.#button(
@@ -552,47 +576,6 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
-    }
-
-    /**
-     * Group infrequent commands in a native disclosure, preserving its state and focus.
-     * Enabled commands close it before their independent owner receives the intent.
-     * Escape closes only this disclosure and returns focus to its summary.
-     * @param {{key:string,label:string}} layer Layer key and display label.
-     * @param {HTMLButtonElement[]} buttons Existing layer-intent buttons.
-     * @param {Map<string,Element>} focusTargets Rendered focus targets.
-     * @return {HTMLDetailsElement} Labeled, keyboard-operable action disclosure.
-     */
-    #buildLayerActions(layer, buttons, focusTargets) {
-        const details = this.documentContext.createElement("details");
-        details.className = "map-layer-actions";
-        details.open = this.actions.get(layer.key)?.open ?? false;
-        this.actions.set(layer.key, details);
-        const summary = this.documentContext.createElement("summary");
-        summary.textContent = "Actions";
-        summary.setAttribute("aria-label", `Actions for ${layer.label}`);
-        summary.dataset.layerKey = layer.key;
-        summary.dataset.layerAction = "actions";
-        this.#rememberFocusTarget(focusTargets, summary);
-        const commands = this.documentContext.createElement("div");
-        commands.className = "map-layer-action-commands";
-        commands.append(...buttons);
-        details.append(summary, commands);
-        details.addEventListener("click", event => {
-            if (buttons.includes(event.target) && !event.target.disabled) {
-                details.open = false;
-                summary.focus({ preventScroll: true });
-            }
-        }, { capture: true });
-        details.addEventListener("keydown", event => {
-            if (event.key === "Escape" && details.open) {
-                event.preventDefault();
-                event.stopPropagation();
-                details.open = false;
-                summary.focus({ preventScroll: true });
-            }
-        });
-        return details;
     }
 
     /**
@@ -929,7 +912,7 @@ export class MapLayerStackView {
     }
 
     /**
-     * Draw the compact color key beside a layer's name, including fixed styles.
+     * Draw the compact color key for the legend trigger, including fixed styles.
      * Class keys include every class color; full symbols and labels are in Legend.
      * @param {LayerLegend|null} legend Adapter-owned appearance.
      * @param {number} opacity Effective whole-layer opacity.
@@ -978,11 +961,13 @@ export class MapLayerStackView {
     }
 
     /**
-     * Build a layer legend and its on-map inclusion control.
+     * Build a swatch trigger and the full legend that replaces it when expanded.
+     * Keep inclusion independent of expansion, with an explicit collapse control
+     * and Escape returning focus to the swatch without changing layer visibility.
      *
-     * @param {Object} layer Layer identity, legend and effective opacity.
+     * @param {MapLayerStackSnapshot} layer Layer identity, legend and effective opacity.
      * @param {Map<string,Element>} focusTargets Controls retained across style updates.
-     * @return {HTMLDetailsElement|null} Legend details, preserving open state and keyboard focus.
+     * @return {{expanded:boolean,trigger:HTMLButtonElement,panel:HTMLDivElement}|null} Legend controls, or null without a legend.
      */
     #buildLegend(layer, focusTargets) {
         const legend = layer.legend;
@@ -991,16 +976,27 @@ export class MapLayerStackView {
             this.legends.delete(layer.key);
             return null;
         }
-        const details = this.documentContext.createElement("details");
-        details.className = "map-layer-legend";
-        details.open = this.legends.get(layer.key)?.open ?? false;
-        this.legends.set(layer.key, details);
-        const summary = this.documentContext.createElement("summary");
-        summary.textContent = "Legend";
-        summary.dataset.layerKey = layer.key;
-        summary.dataset.layerAction = "legend";
-        summary.setAttribute("aria-label", `Legend for ${layer.label}`);
-        this.#rememberFocusTarget(focusTargets, summary);
+        const panel = this.documentContext.createElement("div");
+        panel.className = "map-layer-legend";
+        panel.id = `map-layer-legend-${encodeURIComponent(layer.key)}`;
+        panel.setAttribute("role", "group");
+        panel.setAttribute("aria-label", `Legend for ${layer.label}`);
+        const trigger = this.#button(
+            "", `Show legend for ${layer.label}`, layer.key, "legend",
+            () => this.#toggleLegend(layer.key, true), focusTargets,
+        );
+        trigger.classList.add("map-layer-legend-trigger");
+        trigger.title = `Show legend for ${layer.label}`;
+        trigger.setAttribute("aria-controls", panel.id);
+        const key = this.#buildLegendKey(legend, opacity);
+        if (key) trigger.append(key);
+        else trigger.textContent = "Legend";
+        const collapse = this.#iconButton(
+            "collapse", `Collapse legend for ${layer.label}`, layer.key, "legend-collapse",
+            () => this.#toggleLegend(layer.key, false), focusTargets,
+        );
+        collapse.classList.add("map-layer-legend-collapse");
+        collapse.setAttribute("aria-controls", panel.id);
         const include = this.documentContext.createElement("label");
         include.className = "map-legend-inclusion";
         const checkbox = this.documentContext.createElement("input");
@@ -1013,8 +1009,76 @@ export class MapLayerStackView {
         const text = this.documentContext.createElement("span");
         text.textContent = "Include in map legend";
         include.append(checkbox, text);
-        details.append(summary, include, buildLegendContents(this.documentContext, legend, opacity));
-        return details;
+        panel.append(collapse, buildLegendContents(this.documentContext, legend, opacity), include);
+        panel.addEventListener("keydown", event => {
+            if (event.key === "Escape" && this.legends.get(layer.key)?.expanded) {
+                event.preventDefault();
+                event.stopPropagation();
+                this.#toggleLegend(layer.key, false);
+            }
+        });
+        const state = { expanded: this.legends.get(layer.key)?.expanded ?? false, trigger, panel };
+        this.legends.set(layer.key, state);
+        this.#toggleLegend(layer.key, state.expanded, false);
+        return state;
+    }
+
+    /**
+     * Replace a legend swatch with its graphic, or restore the swatch on collapse.
+     * @param {string} key Retained layer identity.
+     * @param {boolean} expanded Whether the full legend should be visible.
+     * @param {boolean} [moveFocus=true] Move focus to the newly visible control for user actions.
+     * @return {void}
+     */
+    #toggleLegend(key, expanded, moveFocus = true) {
+        const state = this.legends.get(key);
+        if (!state) return;
+        state.expanded = expanded;
+        state.trigger.hidden = expanded;
+        state.trigger.setAttribute("aria-expanded", String(expanded));
+        state.panel.hidden = !expanded;
+        if (moveFocus) (expanded ? state.panel.children[0] : state.trigger).focus({ preventScroll: true });
+    }
+
+    /**
+     * Create a direct utility action with a decorative SVG and explicit accessible name.
+     * Tooltips describe the same intent; callers may supply a disabled-state reason.
+     * @param {"zoom"|"rename"|"info"|"copy"|"paste"|"filter"|"download"|"collapse"} icon Local utility symbol.
+     * @param {string} accessibleName Complete layer-specific action description.
+     * @param {string} key Stable layer identity.
+     * @param {string} action Stable intent/focus identity.
+     * @param {()=>void} callback Existing owner intent callback.
+     * @param {Map<string,Element>} focusTargets Rendered focus targets.
+     * @return {HTMLButtonElement} Named utility button with a tooltip.
+     */
+    #iconButton(icon, accessibleName, key, action, callback, focusTargets) {
+        const paths = {
+            zoom: "M8 3H3v5m0-5 5 5m8-5h5v5m0-5-5 5M3 16v5h5m-5 0 5-5m13 0v5h-5m5 0-5-5",
+            rename: "m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z",
+            info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Zm0-11v6m0-10v.1",
+            copy: "M8 8h13v13H8ZM16 5V2H2v14h3",
+            paste: "M9 4H5v17h14V4h-4M9 2h6v4H9ZM9 11h6m-6 4h6",
+            filter: "M3 3h18l-7 8v8l-4 2V11Z",
+            download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5",
+            collapse: "m6 15 6-6 6 6",
+        };
+        const button = this.#button("", accessibleName, key, action, callback, focusTargets);
+        button.classList.add("map-layer-icon-button");
+        button.title = accessibleName;
+        const svg = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("focusable", "false");
+        const path = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", paths[icon]);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "currentColor");
+        path.setAttribute("stroke-width", "1.7");
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("stroke-linejoin", "round");
+        svg.append(path);
+        button.append(svg);
+        return button;
     }
 
     /**
