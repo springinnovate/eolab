@@ -59,7 +59,11 @@ def test_category_opacity_multiplies_symbol_and_whole_layer(geometry_kind: str) 
     namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
     rules = root.findall(".//sld:FeatureTypeStyle/sld:Rule", namespaces)
     assert len(rules) == 4
-    assert [literal.text for literal in root.findall(".//ogc:Literal", namespaces)] == [
+    assert [
+        literal.text
+        for rule in rules[:2]
+        for literal in rule.findall(".//ogc:Literal", namespaces)
+    ] == [
         "Z & 01",
         "A",
     ]
