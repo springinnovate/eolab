@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import {
     RasterStyleHistogramView,
 } from "../../src/raster/style-histogram-view.js";
+import { RasterControlsView } from "../../src/raster/controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import { RASTER_STATISTICS } from "../../test-support/raster/fixtures.js";
 import {
@@ -83,3 +84,32 @@ test("style distribution markup is outside mode-specific control groups", () => 
     assert.ok(continuous > distribution && categorical > continuous);
     assert.doesNotMatch(markup, /Categorical distributions and area proportions are not available yet/);
 });
+
+for (const boundary of ["view", "controls facade"]) {
+    test(`${boundary} displays current scoped feedback alongside a previous distribution and clears it on success`, () => {
+        const documentContext = new FakeRasterControlDocument();
+        const direct = boundary === "view";
+        const view = direct ? new RasterStyleHistogramView(documentContext) : new RasterControlsView(documentContext);
+        const numeric = (...args) => direct ? view.render(...args) : view.renderStyleHistogram(...args);
+        const categorical = (...args) => direct ? view.renderCategorical(...args) : view.renderCategoricalStyleHistogram(...args);
+        const root = documentContext.querySelector("#raster-style-histogram");
+        const scope = documentContext.querySelector("#raster-style-histogram-scope");
+        const status = documentContext.querySelector("#raster-style-histogram-status");
+        const feedback = { message: "200 km map sample: Calculating…", isBusy: true };
+        numeric(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, "Previous distribution · Whole raster", "Raster value", null, feedback);
+        assert.equal(scope.textContent, "Previous distribution · Whole raster");
+        assert.equal(status.textContent, feedback.message); assert.equal(root.getAttribute("aria-busy"), "true");
+        const presentation = { validHectares: 1, nodataHectares: 0, sampledPixelCount: 1,
+            rows: [{ code: 41, label: "Forest", hectares: 1, percentage: 100, color: "#008800", opacity: 1 }] };
+        feedback.message = "200 km map sample: Histogram unavailable: No overlap"; feedback.isBusy = false;
+        categorical(presentation, "Previous distribution · Whole raster", feedback);
+        assert.equal(scope.textContent, "Previous distribution · Whole raster");
+        assert.equal(status.textContent, feedback.message); assert.equal(root.getAttribute("aria-busy"), "false");
+        assert.equal(root.children.at(-1).children.length, 1, "Categorical distribution stays visible beside the error");
+        categorical(presentation, "200 km map sample");
+        assert.equal(scope.textContent, "200 km map sample"); assert.equal(status.textContent, "");
+        numeric(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, "Whole raster");
+        assert.equal(scope.textContent, "Whole raster"); assert.equal(status.textContent, "");
+        assert.equal(root.getAttribute("aria-busy"), "false");
+    });
+}

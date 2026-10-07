@@ -325,12 +325,19 @@ function createFakeControlsView() {
             this.histogramValueLabel = valueLabel;
             this.renderedStatistics.push(statistics);
         },
+        /** Record numeric distribution and scoped request feedback.
+         * @param {Object} statistics Distribution. @param {Object} style Preview style.
+         * @param {string} scopeLabel Displayed sample scope. @param {string} valueLabel Axis label.
+         * @param {Object|null} percentiles Draft percentiles.
+         * @param {Object} [feedback] Current request feedback. @return {void}
+         */
         renderStyleHistogram(
             statistics,
             style,
             scopeLabel,
             valueLabel,
-            percentiles
+            percentiles,
+            feedback
         ) {
             this.styleHistogram = {
                 statistics,
@@ -340,21 +347,34 @@ function createFakeControlsView() {
                 percentiles: percentiles === null
                     ? null
                     : { ...percentiles },
+                feedback,
             };
+            this.categoricalStyleHistogram = null;
             this.styleHistogramState = null;
         },
+        /** Record unavailable state and remove both kinds of prior distribution.
+         * @param {string} scopeLabel Current scope. @param {string} message Feedback.
+         * @param {boolean} isBusy Whether loading. @return {void}
+         */
         renderStyleHistogramState(scopeLabel, message, isBusy) {
             this.styleHistogram = null;
+            this.categoricalStyleHistogram = null;
             this.styleHistogramState = { scopeLabel, message, isBusy };
         },
+        /** Clear distribution and request feedback for a closed style target. @return {void} */
         clearStyleHistogram() {
             this.styleHistogram = null;
+            this.categoricalStyleHistogram = null;
             this.styleHistogramState = null;
         },
         /** @param {Object} presentation Category rows. @return {void} */
         renderCategoricalHistogram(presentation) { this.categoricalHistogram = presentation; },
-        /** @param {Object} presentation Category rows. @param {string} scopeLabel Scope. @return {void} */
-        renderCategoricalStyleHistogram(presentation, scopeLabel) { this.categoricalStyleHistogram = { presentation, scopeLabel }; },
+        /** @param {Object} presentation Category rows. @param {string} scopeLabel Scope.
+         * @param {Object} [feedback] Current request feedback. @return {void} */
+        renderCategoricalStyleHistogram(presentation, scopeLabel, feedback) {
+            this.categoricalStyleHistogram = { presentation, scopeLabel, feedback };
+            this.styleHistogram = null; this.styleHistogramState = null;
+        },
         clearHistogram() {
             this.categoricalHistogram = null;
             this.displayedStatistics = null;
@@ -936,6 +956,114 @@ test("keyed raster styling previews histogram thresholds and links both tools", 
 
     h.viewer.closeStyle();
     assert.equal(h.controlsView.styleHistogram, null);
+    h.destroy();
+});
+
+for (const mode of ["continuous", "categorical"]) {
+    test(`${mode} style keeps a previous whole distribution separate from a failed map request`, async () => {
+        const reads = [];
+        const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+            const pending = createDeferred(); reads.push({ item, area, signal, codes, pending });
+            return area.kind === "wholeRaster" ? Promise.resolve(createCategoryStatistics(item, null, codes)) : pending.promise;
+        });
+        const item = createRasterItem(`style-scope-${mode}`);
+        await h.viewer.show(item); await flushPromises();
+        const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
+        if (mode === "categorical") { editCategoricalAppearance(h, key); await flushPromises(); }
+        const whole = record.state.wholeRasterStatistics;
+        await h.viewer.show(createRasterItem("style-scope-neighbor")); await flushPromises();
+        h.viewer.openStyle(key);
+        const preview = () => mode === "categorical" ? h.controlsView.categoricalStyleHistogram : h.controlsView.styleHistogram;
+        assert.equal(preview().scopeLabel, "Whole raster");
+        h.viewer.closeStyle(); h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
+        h.viewer.openStyle(key);
+        assert.equal(preview().scopeLabel, "Previous distribution · Whole raster");
+        assert.match(preview().feedback.message, /map sample: Calculating/i);
+        assert.equal(preview().feedback.isBusy, true);
+        const selectedRead = reads.find(read => read.item === item && read.area.kind === "selectedArea");
+        selectedRead.pending.reject(new Error("The selected area does not overlap the raster")); await flushPromises();
+        h.viewer.closeStyle(); h.viewer.openStyle(key);
+        assert.equal(preview().scopeLabel, "Previous distribution · Whole raster");
+        assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
+        assert.equal(preview().feedback.isBusy, false);
+        assert.equal(record.state.wholeRasterStatistics, whole, "Retained whole data remains available");
+        assert.equal(record.state.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
+        if (mode === "continuous") assert.equal(preview().statistics, whole);
+        h.controlsView.handlers.onClearSampleWindow(); await flushPromises(); h.viewer.openStyle(key);
+        assert.equal(preview().scopeLabel, "Whole raster"); assert.equal(preview().feedback.message, "");
+        assert.equal(record.state.wholeRasterStatistics.itemId, item.id);
+        h.destroy();
+    });
+
+    test(`${mode} style scopes successful polygons and labels a cancelled replacement as previous`, async () => {
+        const reads = [];
+        const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+            if (area.kind === "wholeRaster") return Promise.resolve(createCategoryStatistics(item, null, codes));
+            const pending = createDeferred(); reads.push({ item, area, signal, codes, pending }); return pending.promise;
+        });
+        const item = createRasterItem(`style-polygon-${mode}`);
+        await h.viewer.show(item); await flushPromises();
+        const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
+        if (mode === "categorical") { editCategoricalAppearance(h, key); await flushPromises(); }
+        const selection = { selection: CATALOG_SELECTION, label: "Countries.gpkg" };
+        h.viewer.setVectorSelection(selection); await flushPromises();
+        const polygonRead = reads.at(-1);
+        polygonRead.pending.resolve({ ...createCategoryStatistics(item, null, polygonRead.codes),
+            scope: "catalogSelection", catalogSelection: CATALOG_SELECTION }); await flushPromises();
+        h.viewer.openStyle(key);
+        const preview = () => mode === "categorical" ? h.controlsView.categoricalStyleHistogram : h.controlsView.styleHistogram;
+        assert.equal(preview().scopeLabel, "Vector selection · Countries.gpkg");
+        assert.equal(preview().feedback.message, "");
+        h.controlsView.handlers.onUseMapWindow(); await flushPromises(); h.viewer.openStyle(key);
+        assert.equal(preview().scopeLabel, "Previous distribution · Vector selection · countries");
+        const mapRead = reads.at(-1);
+        mapRead.pending.resolve(createCategoryStatistics(item, mapRead.area.selectedBounds, mapRead.codes)); await flushPromises();
+        assert.match(preview().scopeLabel, /map sample$/i);
+        assert.equal(preview().feedback.message, ""); assert.equal(preview().feedback.isBusy, false);
+        h.viewer.exploreAt({ lng: 15, lat: 38 }); await flushPromises();
+        const replacement = reads.at(-1);
+        assert.notEqual(replacement, mapRead);
+        h.layerStackView.handlers.onAllVisibility(false); h.viewer.openStyle(key);
+        assert.equal(replacement.signal.aborted, true);
+        assert.equal(preview().feedback.isBusy, false);
+        assert.equal(preview().scopeLabel, "Previous distribution · Map sample");
+        assert.match(preview().feedback.message, /map sample:/i);
+        replacement.pending.resolve(createCategoryStatistics(item, replacement.area.selectedBounds, replacement.codes)); await flushPromises();
+        assert.equal(preview().scopeLabel, "Previous distribution · Map sample", "Late cancelled reply cannot relabel the preview");
+        h.destroy();
+    });
+}
+
+test("style category changes preserve map scope and never display unmatched cached codes", async () => {
+    const reads = [];
+    const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+        if (area.kind === "wholeRaster") return Promise.resolve(createCategoryStatistics(item, null, codes));
+        const pending = createDeferred(); reads.push({ item, area, signal, codes, pending }); return pending.promise;
+    });
+    const item = createRasterItem("style-category-scope");
+    await h.viewer.show(item); await flushPromises();
+    const key = h.mapLayers.retainedRecords[0].entry.key;
+    editCategoricalAppearance(h, key); await flushPromises();
+    h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
+    reads[0].pending.resolve(createCategoryStatistics(item, reads[0].area.selectedBounds, reads[0].codes)); await flushPromises();
+    h.viewer.openStyle(key);
+    const changed = categoricalAppearance(); changed.categories[0].value = 42;
+    editCategoricalAppearance(h, key, changed);
+    assert.equal(h.controlsView.categoricalStyleHistogram, null);
+    assert.match(h.controlsView.styleHistogramState.scopeLabel, /map sample$/i);
+    assert.equal(h.controlsView.styleHistogramState.isBusy, true);
+    const read = reads.at(-1);
+    read.pending.resolve(createCategoryStatistics(item, read.area.selectedBounds, read.codes)); await flushPromises();
+    const count = reads.length;
+    changed.categories[0] = { ...changed.categories[0], label: "Renamed forest", color: "#112233", opacity: 0.2 };
+    editCategoricalAppearance(h, key, changed); await flushPromises();
+    const preview = h.controlsView.categoricalStyleHistogram;
+    assert.equal(reads.length, count, "Presentation-only changes reuse the sample");
+    assert.match(preview.scopeLabel, /map sample$/i); assert.equal(preview.feedback.message, "");
+    assert.deepEqual(preview.presentation.rows.find(row => row.code === 42), {
+        code: 42, label: "Renamed forest", color: "#112233", opacity: 0.2, hectares: 10, percentage: 100 * 10 / 35,
+    });
+    assert.equal(preview.presentation.rows.some(row => row.code === 41), false);
     h.destroy();
 });
 

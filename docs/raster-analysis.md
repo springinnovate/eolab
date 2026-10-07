@@ -46,6 +46,12 @@ domains fail explicitly.
 
 Label, color, opacity and row-order edits reuse the current numeric result;
 category-code or mode changes cancel obsolete requests and refresh statistics.
+
+In **Style → Distribution**, a retained sample is labeled **Previous distribution**
+with its own scope while a replacement is loading or unavailable. The status names
+the current map or vector selection, so a no-overlap error cannot be mistaken for
+a failure of the retained whole-raster distribution. A successful replacement
+shows its current scope and clears the earlier feedback.
 Saved maps retain the layer-specific category table through the existing
 appearance contract. Percentile stretches and 2D comparisons require continuous
 layers. Processing continues to use unchanged source values and its native

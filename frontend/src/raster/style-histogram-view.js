@@ -23,6 +23,12 @@ const STYLE_STOPS = Object.freeze([
  * @property {() => void} onOpenHistogram Opens the full raster-analysis view.
  */
 
+/**
+ * @typedef {Object} RasterStyleHistogramFeedback
+ * @property {string} message Scoped current-request feedback, separate from displayed result scope.
+ * @property {boolean} isBusy Whether the current sampling request is loading.
+ */
+
 /** Own the style editor's read-only distribution preview and navigation. */
 export class RasterStyleHistogramView {
     /**
@@ -92,6 +98,7 @@ export class RasterStyleHistogramView {
      * @param {string} [valueLabel="Raster value"] Horizontal-axis label.
      * @param {{lower:number,middle:number,upper:number}|null}
      * [percentiles=null] Draft percentile positions, when applicable.
+     * @param {RasterStyleHistogramFeedback} [feedback] Current request feedback alongside a retained distribution.
      * @return {void}
      */
     render(
@@ -99,7 +106,8 @@ export class RasterStyleHistogramView {
         style,
         scopeLabel,
         valueLabel = "Raster value",
-        percentiles = null
+        percentiles = null,
+        feedback = { message: "", isBusy: false }
     ) {
         this.categoryHost.replaceChildren();
         this.chart.hidden = false;
@@ -113,9 +121,9 @@ export class RasterStyleHistogramView {
             })
         );
         this.root.hidden = false;
-        this.root.setAttribute("aria-busy", "false");
+        this.root.setAttribute("aria-busy", String(feedback.isBusy));
         this.scope.textContent = scopeLabel;
-        this.status.textContent = "";
+        this.status.textContent = feedback.message;
         renderRasterHistogramChart(
             this.chart,
             statistics,
@@ -130,15 +138,16 @@ export class RasterStyleHistogramView {
      * Render category rows for the keyed style target.
      * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
      * @param {string} scopeLabel Readable sampling scope.
+     * @param {RasterStyleHistogramFeedback} [feedback] Current request feedback alongside a retained distribution.
      * @return {void}
      */
-    renderCategorical(presentation, scopeLabel) {
+    renderCategorical(presentation, scopeLabel, feedback = { message: "", isBusy: false }) {
         clearRasterHistogramChart(this.chart);
         this.chart.hidden = true;
         this.root.hidden = false;
-        this.root.setAttribute("aria-busy", "false");
+        this.root.setAttribute("aria-busy", String(feedback.isBusy));
         this.scope.textContent = scopeLabel;
-        this.status.textContent = "";
+        this.status.textContent = feedback.message;
         this.categoryHost.replaceChildren(createCategoricalRasterHistogram(presentation, this.documentContext));
     }
 
