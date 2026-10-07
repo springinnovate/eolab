@@ -4873,12 +4873,21 @@ summary:hover > .raster-disclosure-chevron {
 
 /* Small screens dock tools below the map instead of covering its edge. */
 @media (max-width: 1199px) {
-  #app { --inspection-space: 0px; }
+  #app { --inspection-space: 0px; --inspection-compact-height: 0px; }
+  #app[data-inspection-open="true"]:not([data-inspection-expanded="true"]) {
+    --inspection-space: calc(var(--inspection-compact-height) + 16px);
+  }
   #app[data-inspection-expanded="true"] {
     --inspection-space: 45dvh;
   }
   #map, #app.is-control-panel-collapsed #map {
     inset: 0 0 var(--inspection-space);
+  }
+  #app[data-inspection-open="true"] #control-panel {
+    top: 16px;
+    bottom: calc(var(--inspection-space) + 16px);
+    height: auto;
+    max-height: calc(100dvh - var(--inspection-space) - 32px);
   }
   #map-inspection {
     inset: auto 8px 8px;
@@ -4888,13 +4897,24 @@ summary:hover > .raster-disclosure-chevron {
   }
   #map-inspection[data-minimized="true"],
   #map-inspection[data-active-tool=""] {
-    inset: 30px 65px auto auto;
-    width: min(420px, calc(100vw - 130px));
+    inset: auto 8px 8px;
+    width: auto;
     height: auto;
-    max-height: none;
+    max-height: calc(45dvh - 16px);
+  }
+  .map-inspection-tabs, .map-click-summary {
+    min-height: 0;
+    max-height: calc((45dvh - 80px) / 3);
+    overflow-y: auto;
+  }
+  #map-inspection-more .map-analysis-more-menu {
+    top: auto;
+    bottom: calc(100% + 6px);
+    max-height: calc(55dvh - 32px);
+    overflow-y: auto;
   }
   #app[data-inspection-open="true"] .panel-opener {
-    inset: 90px auto auto 75px;
+    inset: 16px auto auto 16px;
   }
 }
 

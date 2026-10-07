@@ -266,15 +266,20 @@ export class EomapLayoutController {
      * @param {boolean} layout.open Whether the map-tool popover is open.
      * @param {boolean} layout.expanded Whether it occupies space for an active panel.
      * @param {boolean} layout.wide Whether its active panel uses the wider layout.
+     * @param {number} layout.compactHeight Compact dock border-box height in CSS pixels.
      * @return {void}
      */
-    setInspectionLayout({ open, expanded, wide }) {
+    setInspectionLayout({ open, expanded, wide, compactHeight }) {
         for (const [name, value] of Object.entries({ open, expanded, wide })) {
             const attribute = `data-inspection-${name}`;
             const text = String(value);
             if (this.appElement.getAttribute(attribute) !== text) {
                 this.appElement.setAttribute(attribute, text);
             }
+        }
+        const height = `${compactHeight}px`;
+        if (this.appElement.style.getPropertyValue("--inspection-compact-height") !== height) {
+            this.appElement.style.setProperty("--inspection-compact-height", height);
         }
     }
 

@@ -5,10 +5,12 @@ export class MapInspectionController {
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
-     * @param {function({open: boolean, expanded: boolean, wide: boolean}):void}
+     * @param {function({open: boolean, expanded: boolean, wide: boolean, compactHeight: number}):void}
      * [dependencies.onLayoutChange] Receives initial layout and subsequent changes.
      * Expanded means an open, non-minimized panel has an active tool; wide selects
-     * the wider vector-chart presentation. Result updates do not report a change.
+     * the wider vector-chart presentation. Compact height is the rendered dock's
+     * border-box height in CSS pixels, zero when closed or expanded. Result updates
+     * report a change only when they change this presentation geometry.
      */
     constructor({ documentContext = document, onLayoutChange = () => {} } = {}) {
         this.document = documentContext;
@@ -143,6 +145,11 @@ export class MapInspectionController {
         );
         this.document.addEventListener("keydown", this.onKeydown);
         this.#renderDock();
+        const ResizeObserverClass = documentContext.defaultView?.ResizeObserver;
+        this.dockObserver = ResizeObserverClass
+            ? new ResizeObserverClass(() => this.#reportLayoutChange())
+            : null;
+        this.dockObserver?.observe(this.root);
     }
 
     /**
@@ -661,6 +668,7 @@ export class MapInspectionController {
         if (openChanged) {
             if (shouldOpen) this.root.showPopover();
             else this.root.hidePopover();
+            this.#reportLayoutChange();
         }
     }
 
@@ -729,25 +737,31 @@ export class MapInspectionController {
     }
 
     /** Report only changes that affect the space or placement of map tools.
-     * The composition root forwards this presentation to the app layout owner;
-     * neither controller needs to inspect the other's DOM or implementation.
+     * Compact height follows the dock's rendered border box, including wrapping
+     * after viewport or text-size changes. The composition root forwards it to
+     * the app layout owner; neither controller inspects its peer's implementation.
      * @return {void}
      */
     #reportLayoutChange() {
+        const expanded = this.isOpen && !this.minimized && this.activeTool !== null;
         const layout = {
             open: this.isOpen,
-            expanded: this.isOpen && !this.minimized && this.activeTool !== null,
+            expanded,
             wide: this.activeTool === "time-series" || this.activeTool === "feature-profile",
+            compactHeight: this.isOpen && !expanded
+                ? Math.ceil(this.root.getBoundingClientRect().height) : 0,
         };
         const previous = this.reportedLayout;
         if (previous && previous.open === layout.open &&
-            previous.expanded === layout.expanded && previous.wide === layout.wide) return;
+            previous.expanded === layout.expanded && previous.wide === layout.wide &&
+            previous.compactHeight === layout.compactHeight) return;
         this.reportedLayout = layout;
         this.onLayoutChange({ ...layout });
     }
 
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
+        this.dockObserver?.disconnect();
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);

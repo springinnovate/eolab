@@ -221,12 +221,12 @@ test("active-tool subscriptions report expanded presentation, support detachment
 
 test("layout reports follow dock transitions, not repeated result updates", () => {
     const h = fixture();
-    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false }]);
+    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false, compactHeight: 0 }]);
     h.controller.beginMapClick({ lat: 0, lng: 0 });
     h.controller.setClickResult("feature", { state: "empty", message: "No features" });
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 48 });
     h.controller.showHistogram();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
     const count = h.layouts.length;
     for (let i = 0; i < 25; i++) {
         h.controller.showHistogram(i, { activate: false });
@@ -234,17 +234,78 @@ test("layout reports follow dock transitions, not repeated result updates", () =
     }
     assert.equal(h.layouts.length, count, "result content does not change shell layout");
     h.controller.showVectorTimeSeries();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, compactHeight: 48 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
     h.controller.hideVectorTimeSeries();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
     h.controller.closeHistogram();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 48 });
     h.controller.destroy();
-    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false });
+    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false, compactHeight: 0 });
+});
+
+test("compact geometry follows dock reflow without losing tools or reporting unchanged sizes", () => {
+    let notifyResize;
+    let observed;
+    let disconnected = false;
+    let height = 48;
+    const h = fixture(doc => {
+        doc.querySelector("#map-inspection").getBoundingClientRect = () => ({ height });
+        doc.defaultView.ResizeObserver = class {
+            /** Capture the native resize callback for deterministic delivery.
+             * @param {ResizeObserverCallback} callback Geometry notification.
+             */
+            constructor(callback) { notifyResize = callback; }
+            /** Record the owned presentation element.
+             * @param {Element} element Observed dock.
+             * @return {void}
+             */
+            observe(element) { observed = element; }
+            /** Record lifecycle cleanup. @return {void} */
+            disconnect() { disconnected = true; }
+        };
+    });
+    assert.equal(observed, h.doc.querySelector("#map-inspection"));
+    h.controller.showHistogram();
+    h.controller.showStyle("Countries");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.layouts.at(-1).compactHeight, 48);
+    const count = h.layouts.length;
+    notifyResize();
+    assert.equal(h.layouts.length, count);
+    height = 72.25;
+    notifyResize();
+    assert.equal(h.layouts.at(-1).compactHeight, 73);
+    assert.equal(h.histogram.hidden, false);
+    assert.equal(h.style.hidden, false);
+    assert.equal(h.controller.activeTool, "style");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.layouts.at(-1).compactHeight, 0);
+    height = 96;
+    notifyResize();
+    assert.equal(h.layouts.at(-1).compactHeight, 0);
+    h.controller.destroy();
+    assert.equal(disconnected, true);
+    assert.equal(h.layouts.at(-1).open, false);
+});
+
+test("compact opening measures its visible popover before a resize notification", () => {
+    let visible = false;
+    const h = fixture(doc => {
+        const root = doc.querySelector("#map-inspection");
+        root.showPopover = () => { visible = true; };
+        root.hidePopover = () => { visible = false; };
+        root.getBoundingClientRect = () => ({ height: visible ? 64 : 0 });
+    });
+    h.controller.beginMapClick({ lat: 0, lng: 0 });
+    h.controller.setClickResult("feature", { state: "empty", message: "No features" });
+    assert.equal(h.layouts.at(-1).compactHeight, 64);
+    assert.equal(h.layouts.at(-1).expanded, false);
+    h.controller.destroy();
+    assert.equal(h.layouts.at(-1).compactHeight, 0);
 });
 
 test("histogram and style have independent visibility on one persistent surface", () => {
