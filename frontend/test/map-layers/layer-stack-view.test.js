@@ -336,6 +336,9 @@ test("active filter summaries remain actionable in map and dock slots", () => {
   const layer = { ...LAYERS[0], canFilter: true, filterActive: true,
     filterStatus: "5 of 100 features match" };
   view.render([layer], layer.key);
+  const filter = actionControl(documentContext.querySelector("#raster-layer-list").children[0], "filter");
+  assert.equal(filter.classList.contains("has-active-filter"), true);
+  assert.match(filter.getAttribute("aria-label"), /^Edit active filter for /);
   for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
     const slot = documentContext.querySelector(selector);
     assert.equal(slot.hidden, false);
@@ -488,7 +491,7 @@ test("heading counts retained types through mixed, hidden, single-type, and empt
   assert.equal(counts.textContent, "· Empty");
 });
 
-test("rows expose two-row identity, map, style, clipboard, and removal actions", () => {
+test("rows retain identity, map, style, clipboard, and removal actions", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
@@ -502,23 +505,17 @@ test("rows expose two-row identity, map, style, clipboard, and removal actions",
     assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
     assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
     assert.equal(actionControl(row, "style").textContent, "Style");
-    assert.equal(actionControl(row, "zoom").textContent, "Zoom to");
-    assert.equal(actionControl(row, "info").textContent, "Info");
+    assert.match(actionControl(row, "zoom").getAttribute("aria-label"), /^Zoom to /);
+    assert.match(actionControl(row, "info").getAttribute("aria-label"), /^View details for /);
     assert.equal(actionControl(row, "copy-style").disabled, false);
     assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
-    assert.equal(
-      elementsByClass(actionControl(row, "copy-style"), "map-layer-style-copy-icon").length,
-      1,
-    );
+    assert.match(actionControl(row, "copy-style").getAttribute("aria-label"), /^Copy style from /);
     assert.equal(actionControl(row, "paste-style").disabled, true);
     assert.equal(
       actionControl(row, "paste-style").title,
       "Copy a layer style before pasting.",
     );
-    assert.equal(
-      elementsByClass(actionControl(row, "paste-style"), "map-layer-style-paste-icon").length,
-      1,
-    );
+    assert.match(actionControl(row, "paste-style").getAttribute("aria-label"), /^Paste copied style onto /);
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
@@ -548,6 +545,110 @@ test("raster and vector rows use the same compact action layout", () => {
   }
 });
 
+test("utility icons stay directly accessible with tooltips and layer-specific names", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const raster = { ...LAYERS[0], datasetKind: "raster", legend: { kind: "fixed", label: "Raster" } };
+  const vector = { ...LAYERS[1], datasetKind: "vector", canFilter: true };
+  view.render([raster, vector], null);
+  for (const row of doc.querySelector("#raster-layer-list").children) {
+    const strip = elementsByClass(row, "map-layer-row-actions")[0];
+    const utilities = elementsByClass(row, "map-layer-utility-actions")[0];
+    assert.equal(elementsByClass(row, "map-layer-actions").length, 0);
+    assert.ok(strip.children.includes(actionControl(row, "style")));
+    for (const action of ["zoom", "rename", "info", "copy-style", "paste-style"]) {
+      const button = actionControl(row, action);
+      assert.ok(utilities.contains(button), `${action} is a direct utility action`);
+      assert.equal(button.tagName, "BUTTON");
+      assert.equal(button.hidden, false);
+      assert.match(button.getAttribute("aria-label"), /Catalog Item/);
+      assert.ok(button.title);
+      assert.equal(button.children[0].tagName, "SVG");
+      assert.equal(button.children[0].getAttribute("aria-hidden"), "true");
+      assert.equal(button.children[0].getAttribute("focusable"), "false");
+    }
+  }
+  const [rasterRow, vectorRow] = doc.querySelector("#raster-layer-list").children;
+  const strip = elementsByClass(rasterRow, "map-layer-row-actions")[0];
+  assert.ok(strip.children.includes(actionControl(rasterRow, "calculate")));
+  assert.ok(elementsByClass(rasterRow, "map-layer-primary-row")[0].children.includes(actionControl(rasterRow, "legend")));
+  assert.ok(elementsByClass(rasterRow, "map-layer-utility-actions")[0].contains(actionControl(rasterRow, "download")));
+  assert.ok(elementsByClass(vectorRow, "map-layer-utility-actions")[0].children.includes(actionControl(vectorRow, "filter")));
+});
+
+test("direct utility actions retain focus on refresh and after inline naming", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const list = doc.querySelector("#raster-layer-list");
+  view.render(LAYERS, null);
+  actionControl(list.children[0], "info").focus();
+  view.render(LAYERS, null);
+  assert.equal(doc.activeElement, actionControl(list.children[0], "info"));
+  view.render(LAYERS, null, { key: LAYERS[0].key, action: "rename" });
+  assert.equal(doc.activeElement, actionControl(list.children[0], "rename"));
+  assert.equal(doc.activeElement.hidden, false);
+});
+
+test("the legend graphic replaces its swatch without toggling layer visibility", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const visibility = [];
+  view.bind({ onVisibility: (...args) => visibility.push(args) });
+  view.render(LAYERS, null);
+  const list = doc.querySelector("#raster-layer-list");
+  let row = list.children[0];
+  const trigger = actionControl(row, "legend"), panel = elementsByClass(row, "map-layer-legend")[0];
+  assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  assert.equal(trigger.getAttribute("aria-controls"), panel.id);
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.getAttribute("role"), "group");
+  assert.match(panel.getAttribute("aria-label"), /^Legend for /);
+  assert.equal(elementsByClass(row, "raster-layer-visibility")[0].contains(trigger), false);
+  trigger.dispatchEvent(new Event("click"));
+  assert.equal(trigger.hidden, true, "the collapsed swatch no longer takes space");
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  assert.equal(panel.hidden, false);
+  assert.equal(doc.activeElement, actionControl(row, "legend-collapse"));
+  actionControl(row, "legend-inclusion").focus();
+  view.render(LAYERS, null);
+  row = list.children[0];
+  assert.equal(elementsByClass(row, "map-layer-legend")[0].hidden, false);
+  assert.equal(doc.activeElement, actionControl(row, "legend-inclusion"));
+  actionControl(row, "legend-collapse").dispatchEvent(new Event("click"));
+  assert.equal(actionControl(row, "legend").hidden, false);
+  assert.equal(doc.activeElement, actionControl(row, "legend"));
+  assert.deepEqual(visibility, []);
+  assert.equal(actionControl(row, "visibility").checked, true);
+  view.render(LAYERS, null, { key: LAYERS[0].key, action: "legend-inclusion" });
+  assert.equal(elementsByClass(list.children[0], "map-layer-legend")[0].hidden, false, "requested legend focus reveals its target");
+  view.render([], null);
+  doc.activeElement = null;
+  view.render(LAYERS, null);
+  assert.equal(elementsByClass(list.children[0], "map-layer-legend")[0].hidden, true);
+  actionControl(list.children[0], "legend").dispatchEvent(new Event("click"));
+  view.unbind();
+  doc.activeElement = null;
+  view.render(LAYERS, null);
+  assert.equal(elementsByClass(list.children[0], "map-layer-legend")[0].hidden, true);
+});
+
+test("Escape collapses only an expanded legend and returns focus to the swatch", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  view.render(LAYERS, null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const panel = elementsByClass(row, "map-layer-legend")[0];
+  actionControl(row, "legend").dispatchEvent(new Event("click"));
+  actionControl(row, "legend-inclusion").focus();
+  const escape = interactionEvent("keydown", { key: "Escape" });
+  panel.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(panel.hidden, true);
+  assert.equal(doc.activeElement, actionControl(row, "legend"));
+  const closedEscape = interactionEvent("keydown", { key: "Escape" });
+  panel.dispatchEvent(closedEscape);
+  assert.equal(closedEscape.defaultPrevented, false, "collapsed legend leaves Escape to the workspace");
+});
+
 test("optional analysis role badges are visible and accessible", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
@@ -571,7 +672,7 @@ test("optional analysis role badges are visible and accessible", () => {
   );
 });
 
-test("neutral classified legends render as compact layer disclosures", () => {
+test("neutral classified legends retain their graphic, expansion and focus across updates", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const vector = {
@@ -591,7 +692,7 @@ test("neutral classified legends render as compact layer disclosures", () => {
   const legend = elementsByClass(row, "map-layer-legend")[0];
   const swatches = elementsByClass(legend, "map-layer-legend-swatch");
 
-  assert.equal(legend.tagName, "DETAILS");
+  assert.equal(legend.tagName, "DIV");
   assert.equal(elementsByClass(legend, "map-layer-legend-field")[0].textContent, "risk score");
   assert.equal(swatches.length, 2);
   const polygon = swatches[0].children[0].children[0];
@@ -599,18 +700,17 @@ test("neutral classified legends render as compact layer disclosures", () => {
   assert.equal(polygon.getAttribute("stroke"), "#222222");
   assert.equal(polygon.getAttribute("fill-opacity"), String(0.4 * vector.opacity));
   assert.equal(polygon.getAttribute("stroke-opacity"), String(0.8 * vector.opacity));
-  legend.open = true;
-  actionControl(row, "legend").focus();
+  actionControl(row, "legend").dispatchEvent(new Event("click"));
   const updated = { ...vector, opacity: 0.2 };
   view.render([updated], null);
   const nextRow = doc.querySelector("#raster-layer-list").children[0];
-  assert.equal(elementsByClass(nextRow, "map-layer-legend")[0].open, true);
-  assert.equal(doc.activeElement, actionControl(nextRow, "legend"));
+  assert.equal(elementsByClass(nextRow, "map-layer-legend")[0].hidden, false);
+  assert.equal(doc.activeElement, actionControl(nextRow, "legend-collapse"));
   const nextSymbol = elementsByClass(nextRow, "map-layer-legend-swatch")[0].children[0].children[0];
   assert.equal(nextSymbol.getAttribute("fill-opacity"), String(0.4 * 0.2));
   view.render([], null);
   view.render([updated], null);
-  assert.equal(elementsByClass(doc.querySelector("#raster-layer-list"), "map-layer-legend")[0].open, false);
+  assert.equal(elementsByClass(doc.querySelector("#raster-layer-list"), "map-layer-legend")[0].hidden, true);
 });
 
 test("fixed symbols retain their compact key and expose on-map inclusion in Legend", () => {
