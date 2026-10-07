@@ -10,7 +10,7 @@ whole-raster exports are not offered.
 
 Use **Download clip** on a raster in Map layers or an individual 1D histogram.
 The 2D histogram has separate **Download X clip** and **Download Y clip** actions.
-Use **More → Raster clips** to return to your clips while other tools are open.
+Use **Tools → Raster clips** to return to your clips while other tools are open.
 
 Raster clips captures the explicit selected histogram area when opened. The 1D and
 2D selections remain distinct; whole-raster and whole-overlap sampling do not
@@ -69,7 +69,7 @@ this feature does not weaken the existing source reader to enable that path.
 Results expire 24 hours after completion. Keep the same browser session to inspect,
 cancel, delete or download your jobs; knowing a job ID is not sufficient.
 Downloads support resume. An accepted job can continue after the browser closes;
-recover it through **More → Raster clips**. A failed job does not expose a partial TIFF.
+recover it through **Tools → Raster clips**. A failed job does not expose a partial TIFF.
 Deployments and worker restarts interrupt unfinished jobs; submit them again.
 Completed results remain available until expiry.
 

@@ -1144,9 +1144,9 @@ test("layer provenance precedes its title and its primary action retains focus",
 
 test("both legend presentations share all colors, selection, ordering and disclosure state", async () => {
   const { OnMapLegend } = await import("../../src/map-layers/on-map-legend.js");
-  const doc = new FakeLayerStackDocument(), toggleButton = doc.createElement("button"), more = doc.createElement("details");
-  toggleButton.closest = () => more;
-  let changes = 0, removed = false;
+  const doc = new FakeLayerStackDocument(), toggleButton = doc.createElement("button");
+  toggleButton.closest = () => { throw new Error("Legend must not inspect shell menu state"); };
+  let changes = 0, removed = false, restoreRequests = 0;
   const map = { getContainer: () => ({ ownerDocument: doc }), getSize: () => ({ x: 800, y: 720 }), on() {}, off() {} };
   const leaflet = { DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} },
     control: () => ({ addTo() {}, remove() { removed = true; } }) };
@@ -1160,7 +1160,8 @@ test("both legend presentations share all colors, selection, ordering and disclo
     legend.update(layers);
   };
   view.bind({ onLegendInclusion: setIncluded });
-  const legend = new OnMapLegend(leaflet, map, { toggleButton, onInclusion: setIncluded, onChange: () => changes++ });
+  const legend = new OnMapLegend(leaflet, map, { toggleButton, onInclusion: setIncluded,
+    onChange: () => changes++, onRestoreRequested: () => restoreRequests++ });
   view.render(layers, null);
   legend.update(layers);
   assert.equal(legend.contents.children.length, layers.length);
@@ -1187,6 +1188,7 @@ test("both legend presentations share all colors, selection, ordering and disclo
   legend.root.children[0].children[1].dispatchEvent(new Event("click"));
   assert.equal(legend.root.hidden, true);
   assert.equal(toggleButton.textContent, "Show legend");
+  assert.equal(restoreRequests, 1, "restore presentation is requested through composition");
   assert.equal(doc.activeElement, toggleButton);
   toggleButton.dispatchEvent(new Event("click"));
   assert.equal(legend.root.hidden, false);

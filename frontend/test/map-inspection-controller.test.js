@@ -36,6 +36,30 @@ function fixture(configureDocument = () => {}) {
     const calls = [];
     root.showPopover = () => calls.push("show");
     root.hidePopover = () => calls.push("hide");
+    const toolActions = doc.querySelector("#workspace-tool-actions");
+    const mapToolsButton = doc.querySelector("#map-tools-more-summary");
+    const dockToolsButton = doc.querySelector("#map-inspection-more-summary");
+    const toolActionsCalls = [];
+    let actionsOpen = false;
+    let invoker = mapToolsButton;
+    /** Model native state events and focus return; dismissal itself is browser-tested.
+     * @param {boolean} open Whether to open the popover. @return {void}
+     */
+    const changeActions = open => {
+        actionsOpen = open;
+        const event = new Event("beforetoggle");
+        Object.defineProperty(event, "newState", { value: open ? "open" : "closed" });
+        toolActions.dispatchEvent(event);
+        toolActionsCalls.push(open ? "show" : "hide");
+        if (!open && toolActions.contains(doc.activeElement)) invoker.focus();
+        toolActions.dispatchEvent(new Event("toggle"));
+    };
+    for (const button of [mapToolsButton, dockToolsButton]) {
+        button.click = () => { invoker = button; changeActions(!actionsOpen); };
+        button.getBoundingClientRect = () => ({ top: 16, bottom: 56, left: 820, right: 920 });
+    }
+    toolActions.hidePopover = () => changeActions(false);
+    toolActions.getBoundingClientRect = () => ({ width: 240, height: 240 });
     configureDocument(doc);
     const layouts = [];
     const controller = new MapInspectionController({
@@ -43,6 +67,7 @@ function fixture(configureDocument = () => {}) {
     });
     return {
         layouts,
+        toolActions, mapToolsButton, dockToolsButton, toolActionsCalls,
         doc,
         histogram,
         style,
@@ -66,6 +91,77 @@ function fixture(configureDocument = () => {}) {
         map: doc.querySelector("#map"),
     };
 }
+
+test("Tools has one visible home, dismisses on a home change and transfers invoker focus", () => {
+    const h = fixture();
+    const command = h.doc.createElement();
+    h.toolActions.append(command);
+    assert.equal(h.mapToolsButton.hidden, false);
+    assert.equal(h.dockToolsButton.hidden, true);
+    h.controller.showToolActions();
+    h.controller.showToolActions();
+    assert.deepEqual(h.toolActionsCalls, ["show"], "a restore request does not toggle an open popover closed");
+    command.focus();
+    h.controller.showStyle("Resistance");
+    assert.deepEqual(h.toolActionsCalls, ["show", "hide"]);
+    assert.equal(h.mapToolsButton.hidden, true);
+    assert.equal(h.dockToolsButton.hidden, false);
+    assert.equal(h.doc.activeElement, h.dockToolsButton);
+
+    h.controller.showToolActions();
+    command.focus();
+    h.controller.hideStyle();
+    assert.equal(h.mapToolsButton.hidden, false);
+    assert.equal(h.dockToolsButton.hidden, true);
+    assert.equal(h.doc.activeElement, h.mapToolsButton);
+    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show", "hide"]);
+    h.map.focus();
+    h.controller.showStyle("Resistance");
+    assert.equal(h.doc.activeElement, h.map, "passive presentation never steals focus");
+    h.controller.showToolActions();
+    h.controller.destroy();
+    assert.equal(h.toolActionsCalls.at(-1), "hide");
+    const count = h.toolActionsCalls.length;
+    h.mapToolsButton.click();
+    h.controller.destroy();
+    assert.equal(h.toolActionsCalls.length, count + 1, "destroy detaches popover state listeners");
+});
+
+test("Tools placement flips above a low invoker and clamps both viewport edges", () => {
+    const h = fixture(doc => {
+        doc.defaultView.innerWidth = 320;
+        doc.defaultView.innerHeight = 568;
+        doc.querySelector("#map-tools-more-summary").getBoundingClientRect = () =>
+            ({ top: 510, bottom: 550, right: 315 });
+    });
+    h.controller.showToolActions();
+    assert.equal(h.toolActions.style.top, "264px");
+    assert.equal(h.toolActions.style.left, "72px");
+    h.toolActions.getBoundingClientRect = () => ({ width: 304, height: 552 });
+    h.toolActions.dispatchEvent(new Event("toggle"));
+    assert.equal(h.toolActions.style.top, "8px");
+    assert.equal(h.toolActions.style.left, "8px");
+    h.controller.destroy();
+});
+
+test("Tools dismisses enabled action rows before their owner runs, leaving disabled rows alone", () => {
+    const h = fixture();
+    const button = h.doc.createElement();
+    button.closest = () => button;
+    h.toolActions.append(button);
+    h.controller.showToolActions();
+    button.focus();
+    const click = new Event("click");
+    Object.defineProperty(click, "target", { value: button });
+    button.disabled = true;
+    h.toolActions.dispatchEvent(click);
+    assert.equal(h.toolActionsCalls.at(-1), "show");
+    button.disabled = false;
+    h.toolActions.dispatchEvent(click);
+    assert.equal(h.toolActionsCalls.at(-1), "hide");
+    assert.equal(h.doc.activeElement, h.mapToolsButton);
+    h.controller.destroy();
+});
 
 test("automatic presentation does not move focus and close retains results", () => {
     const h = fixture();
@@ -397,7 +493,7 @@ test("layout reports follow dock transitions, not repeated result updates", () =
 
 test("compact geometry follows dock reflow without losing tools or reporting unchanged sizes", () => {
     let notifyResize;
-    let observed;
+    const observed = [];
     let disconnected = false;
     let height = 48;
     const h = fixture(doc => {
@@ -407,16 +503,16 @@ test("compact geometry follows dock reflow without losing tools or reporting unc
              * @param {ResizeObserverCallback} callback Geometry notification.
              */
             constructor(callback) { notifyResize = callback; }
-            /** Record the owned presentation element.
-             * @param {Element} element Observed dock.
+            /** Record each owned presentation element.
+             * @param {Element} element Observed dock or Tools popover.
              * @return {void}
              */
-            observe(element) { observed = element; }
+            observe(element) { observed.push(element); }
             /** Record lifecycle cleanup. @return {void} */
             disconnect() { disconnected = true; }
         };
     });
-    assert.equal(observed, h.doc.querySelector("#map-inspection"));
+    assert.deepEqual(observed, [h.doc.querySelector("#map-inspection"), h.toolActions]);
     h.controller.showHistogram();
     h.controller.showStyle("Countries");
     h.minimizeButton.dispatchEvent(new Event("click"));

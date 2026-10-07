@@ -19,32 +19,30 @@ export class RasterClipsView {
             "source", "area", "area-description", "create", "message", "jobs", "job-message",
             "pending", "retry-submission", "refresh", "edit-area", "close", "form",
         ].map(name => [name, documentContext.querySelector(`#raster-clips-${name}`)]));
-        this.openers = [
-            documentContext.querySelector("#open-raster-clips"),
-            documentContext.querySelector("#open-raster-clips-dock"),
-        ];
-        this.moreMenus = [
-            documentContext.querySelector("#map-tools-more"),
-            documentContext.querySelector("#map-inspection-more"),
-        ];
+        this.opener = documentContext.querySelector("#open-raster-clips");
         this.listeners = [];
         this.sourceSignature = "";
         this.jobSignature = "";
     }
 
-    /** Connect fixed controls to semantic callbacks. @param {Object} handlers User intent handlers. @return {void} */
+    /** Connect fixed controls to semantic callbacks without owning shell navigation.
+     * @param {Object} handlers User intent handlers.
+     * @param {()=>void} handlers.onOpen Open clip review.
+     * @param {()=>void} handlers.onClose Close clip review.
+     * @param {(index:number)=>void} handlers.onSource Select a raster.
+     * @param {(choice:string)=>void} handlers.onArea Select an area choice.
+     * @param {()=>void} handlers.onCreate Submit current intent.
+     * @param {()=>void} handlers.onRetrySubmission Recover an uncertain submission.
+     * @param {()=>void} handlers.onRefresh Refresh owned jobs.
+     * @param {()=>void} handlers.onEditArea Edit the selected area.
+     * @param {(id:string)=>void} handlers.onCancel Cancel an owned job.
+     * @param {(id:string)=>void} handlers.onDelete Delete an owned job.
+     * @return {void}
+     */
     bind(handlers) {
         this.handlers = handlers;
-        const openEvents = this.openers.map((opener, index) => [
-            opener,
-            "click",
-            () => {
-                this.moreMenus[index].open = false;
-                handlers.onOpen();
-            },
-        ]);
         const events = [
-            ...openEvents,
+            [this.opener, "click", handlers.onOpen],
             [this.elements.close, "click", handlers.onClose],
             [this.elements.source, "change", () => handlers.onSource(Number(this.elements.source.value))],
             [this.elements.area, "change", () => handlers.onArea(this.elements.area.value)],

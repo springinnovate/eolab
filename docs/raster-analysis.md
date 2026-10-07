@@ -60,7 +60,7 @@ its ordinary numeric presentation.
 
 ## Plot values across raster layers
 
-Choose **Plot raster stack** beneath a histogram or in the map's **More** menu.
+Choose **Plot raster stack** beneath a histogram or in **Tools** on the map or dock.
 **Raster series** runs the same formulas across your selected rasters using
 [raster calculations](raster-calculations.md#plotting-statistics-across-rasters).
 Visible raster layers start selected; expand **Rasters** to choose a different

@@ -11,6 +11,9 @@ identifies the active task; its context line shows the summary's raster bindings
 and selected area. Switching tools preserves each tool's own context.
 Incoming point/area inspection remains under **Map click results**, with updating,
 unavailable and new-result feedback visible even when that disclosure is collapsed.
+**Tools** opens one shared list of analysis, export and map-display actions. Its
+button appears in the dock while open and on the map when the dock is closed;
+press Escape or click outside the list to dismiss it.
 Each of the five available cards has a name, formula, raster binding (`a`),
 and result. Different cards can use different rasters, but each formula uses
 only one raster. **Formula reference** in the panel lists the supported functions.
@@ -34,7 +37,7 @@ uses that histogram's raster; other cards keep their raster bindings. If no area
 has been selected, the result position says **Click the map to calculate**. Click
 the map to select a sampling box; the automatic-update policy below then applies.
 
-**Update statistics automatically**, in the dock's **More** menu, is on by default.
+**Update statistics automatically**, beside the summary's area controls, is on by default.
 With Summarize active, a new map box can update statistics automatically.
 Each calculation is submitted as one job. The worker prepares the raster grid
 and work estimates, then immediately calculates the result. Progress changes
@@ -61,7 +64,7 @@ you later edit its card.
 
 ## Plotting statistics across rasters
 
-Open **Raster series** from **More** or a raster histogram. Use the raster
+Open **Raster series** from **Tools** or a raster histogram. Use the raster
 checklist to choose the rasters to calculate. There is one formula workflow,
 with no fixed raster-count limit.
 The same formulas run independently on each raster's native grid, over the

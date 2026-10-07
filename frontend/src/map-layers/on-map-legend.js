@@ -34,14 +34,16 @@ export class OnMapLegend {
      * @param {Object} leaflet Leaflet namespace.
      * @param {Object} map Leaflet map.
      * @param {Object} options Composition callbacks and controls.
-     * @param {HTMLButtonElement} options.toggleButton Persistent show/hide command in More.
+     * @param {HTMLButtonElement} options.toggleButton Persistent show/hide command.
+     * @param {()=>void} [options.onRestoreRequested] Reveal the restore command through composition.
      * @param {(key:string,included:boolean)=>void} options.onInclusion Change one layer's legend setting.
      * @param {()=>void} options.onChange Remember legend visibility or collapse changes.
      */
-    constructor(leaflet, map, { toggleButton, onInclusion, onChange }) {
+    constructor(leaflet, map, { toggleButton, onInclusion, onChange, onRestoreRequested = () => {} }) {
         this.document = map.getContainer().ownerDocument;
         this.onInclusion = onInclusion;
         this.onChange = onChange;
+        this.onRestoreRequested = onRestoreRequested;
         this.toggleButton = toggleButton;
         this.visible = true;
         this.collapsed = false;
@@ -63,12 +65,12 @@ export class OnMapLegend {
         const hide = this.document.createElement("button");
         hide.type = "button";
         hide.textContent = "×";
-        hide.title = "Hide legend; restore from More";
+        hide.title = "Hide legend; restore from Tools";
         hide.setAttribute("aria-label", "Hide map legend");
         hide.addEventListener("click", () => {
             this.visible = false;
             this.refreshVisibility();
-            this.toggleButton.closest("details").open = true;
+            this.onRestoreRequested();
             this.toggleButton.focus();
             this.onChange();
         });
@@ -92,7 +94,6 @@ export class OnMapLegend {
             this.visible = !this.visible;
             this.refreshVisibility();
             if (this.visible) this.collapse.focus();
-            this.toggleButton.closest("details").open = false;
             this.onChange();
         };
         toggleButton.addEventListener("click", this.onToggle);

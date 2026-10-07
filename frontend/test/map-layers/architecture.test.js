@@ -46,6 +46,13 @@ test("map-layer modules depend only on peers and Catalog identity", async () => 
     }
 });
 
+test("tool views leave workspace action visibility and dismissal to shell presentation", async () => {
+    const clip = await readFile(new URL("../../src/processing/raster-clips-view.js", import.meta.url), "utf8");
+    const legend = await readFile(new URL("../../src/map-layers/on-map-legend.js", import.meta.url), "utf8");
+    assert.doesNotMatch(clip, /map-tools-more|map-inspection-more|workspace-tool-actions|MapInspectionController/);
+    assert.doesNotMatch(legend, /closest\(["']details["']\)|MapInspectionController/);
+});
+
 test("composition owns the controller and raster consumes it", async () => {
     const compositionSource = await readFile(
         new URL("../../src/main.js", import.meta.url),
