@@ -1,5 +1,32 @@
 import { buildLegendContents, buildLegendSymbol } from "./legend-view.js";
 
+/** @typedef {import('./layer-stack-view.js').LayerLegend} LayerLegend */
+/**
+ * @typedef {Object} LegendLayer
+ * @property {string} key Stable layer identity.
+ * @property {string} label Display name.
+ * @property {boolean} visible Whether the layer is shown on the map.
+ * @property {boolean} [legendIncluded] Whether the layer contributes to the map legend.
+ * @property {number} opacity Whole-layer opacity.
+ * @property {number} [effectiveOpacity] Composed opacity, when supplied by the layer owner.
+ * @property {LayerLegend|null} legend Neutral layer-owned presentation.
+ */
+
+/**
+ * Identify identical ordered categorical presentations independently of object property order.
+ * Labels include raster codes and Unmapped when supplied by the owning adapter.
+ * @param {LayerLegend} legend Neutral categorical legend.
+ * @param {number} opacity Effective whole-layer opacity.
+ * @return {string} Canonical key for the caption, ordered entries and complete symbols.
+ */
+function categoricalLegendKey(legend, opacity) {
+    const entries = legend.entries ?? (legend.symbol ? [{ label: legend.label ?? "", symbol: legend.symbol }] : []);
+    return JSON.stringify([legend.label ?? "", opacity, entries.map(({ label, symbol }) => [
+        label, symbol.shape, symbol.fill, symbol.fillOpacity, symbol.stroke,
+        symbol.strokeOpacity, symbol.strokeWidth, symbol.pointSize ?? null,
+    ])]);
+}
+
 /** Present the retained layers' symbol keys on the map without owning their styles. */
 export class OnMapLegend {
     /**
@@ -19,6 +46,8 @@ export class OnMapLegend {
         this.visible = true;
         this.collapsed = false;
         this.signature = null;
+        /** @type {Map<string, HTMLDetailsElement>} Retained member disclosures by layer-key set. */
+        this.memberDisclosures = new Map();
         this.root = this.document.createElement("section");
         this.root.className = "on-map-legend";
         this.root.setAttribute("aria-label", "Map legend");
@@ -82,9 +111,10 @@ export class OnMapLegend {
     }
 
     /**
-     * Display visible, included layers in map order; keep all loaded layers in the chooser.
+     * Display visible, included layers in map order, sharing identical category tables.
+     * Keep independent layer choices and retain shared-member disclosure and keyboard focus.
      * Layer snapshots contain only presentation data from their owning adapters.
-     * @param {Object[]} layers Top-first retained layer snapshots.
+     * @param {LegendLayer[]} layers Top-first retained layer snapshots.
      * @return {void}
      */
     update(layers) {
@@ -97,8 +127,10 @@ export class OnMapLegend {
         if (signature === this.signature) return;
         this.signature = signature;
         const focusedKey = this.document.activeElement?.dataset?.legendKey;
+        const focusedGroup = this.document.activeElement?.dataset?.legendGroup;
         const choices = [];
-        const legends = [];
+        const groups = [];
+        const matchingCategories = new Map();
         for (const layer of entries) {
             const label = this.document.createElement("label");
             const input = this.document.createElement("input");
@@ -111,10 +143,26 @@ export class OnMapLegend {
             label.append(input, name);
             choices.push(label);
             if (!layer.visible || !layer.included) continue;
+            const key = layer.legend.kind === "categories" ? categoricalLegendKey(layer.legend, layer.opacity) : null;
+            const existing = key === null ? null : matchingCategories.get(key);
+            if (existing) {
+                existing.push(layer);
+            } else {
+                const group = [layer];
+                groups.push(group);
+                if (key !== null) matchingCategories.set(key, group);
+            }
+        }
+        const previousDisclosures = this.memberDisclosures;
+        this.memberDisclosures = new Map();
+        const legends = [];
+        for (const group of groups) {
+            const layer = group[0];
             const section = this.document.createElement("section");
             section.className = "on-map-legend-layer";
             const title = this.document.createElement("strong");
-            title.textContent = layer.label;
+            title.textContent = group.length > 1 ? "Shared categories" : layer.label;
+            if (layer.legend.kind === "categories") section.classList.add("on-map-legend-layer--categories");
             if (layer.legend.kind === "fixed" && layer.legend.symbol) {
                 section.classList.add("on-map-legend-layer--fixed");
                 const swatch = this.document.createElement("span");
@@ -123,7 +171,27 @@ export class OnMapLegend {
                 swatch.append(buildLegendSymbol(this.document, layer.legend.symbol, layer.opacity));
                 section.append(swatch, title);
             } else {
-                section.append(title, buildLegendContents(this.document, layer.legend, layer.opacity, true));
+                section.append(title);
+                if (group.length > 1) {
+                    const key = JSON.stringify(group.map(member => member.key).sort());
+                    const members = this.document.createElement("details");
+                    members.className = "on-map-legend-members";
+                    members.open = previousDisclosures.get(key)?.open ?? false;
+                    members.addEventListener("toggle", () => this.updateLayout());
+                    const summary = this.document.createElement("summary");
+                    summary.textContent = `${group.length} layers`;
+                    summary.dataset.legendGroup = key;
+                    const names = this.document.createElement("ul");
+                    for (const member of group) {
+                        const name = this.document.createElement("li");
+                        name.textContent = member.label;
+                        names.append(name);
+                    }
+                    members.append(summary, names);
+                    section.append(members);
+                    this.memberDisclosures.set(key, members);
+                }
+                section.append(buildLegendContents(this.document, layer.legend, layer.opacity, true));
             }
             legends.push(section);
         }
@@ -136,6 +204,10 @@ export class OnMapLegend {
         }
         for (const label of choices) {
             if (label.children[0].dataset.legendKey === focusedKey) label.children[0].focus({ preventScroll: true });
+        }
+        if (focusedGroup !== undefined) {
+            const summary = this.memberDisclosures.get(focusedGroup)?.children[0];
+            (summary ?? this.body).focus({ preventScroll: true });
         }
         this.updateLayout();
     }
