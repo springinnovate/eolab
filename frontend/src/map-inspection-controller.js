@@ -48,8 +48,8 @@ export class MapInspectionController {
         this.document.defaultView?.addEventListener?.("resize", this.onToolActionsLayout);
         this.clickSummary = documentContext.querySelector("#map-click-summary");
         this.clickContext = documentContext.querySelector("#map-click-context");
-        this.clickDisclosure = documentContext.querySelector("#map-click-disclosure");
-        this.clickDisclosureLabel = documentContext.querySelector("#map-click-disclosure-label");
+        this.pointNavigation = documentContext.querySelector("#map-click-navigation");
+        this.pointNavigationLabel = documentContext.querySelector("#map-click-navigation-label");
         this.clickLabel = "";
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(`#map-click-${name}`),
@@ -416,20 +416,19 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Render raster feedback beside raster navigation and point feedback in its own disclosure.
-     * Point navigation starts expanded in markup, alongside raster navigation.
-     * Tool switches and result updates preserve the user's native disclosure choice
-     * and independent unread/failure feedback.
+    /** Render independent raster and point feedback beside their persistent navigation.
+     * Point navigation stays visible while point inspection participates and the
+     * dock is not minimized, irrespective of tool switches or result updates.
      * @return {void}
      */
     #renderClickSummary() {
         const feature = this.clickResults.find(entry => entry.name === "feature");
         this.clickSummary.hidden = !this.hasClick || feature.snapshot === null || this.minimized;
-        this.clickDisclosure.hidden = this.clickSummary.hidden;
+        this.pointNavigation.hidden = this.clickSummary.hidden;
         const updating = feature.snapshot?.state === "loading";
         const unavailable = feature.snapshot?.state === "error";
         const unread = feature.unread;
-        this.clickDisclosureLabel.textContent = "Features at clicked point" +
+        this.pointNavigationLabel.textContent = "Features at clicked point" +
             (updating ? " · Updating…" : "") + (unavailable ? " · Some unavailable" : "") +
             (unread ? " · New results" : "");
         this.clickContext.textContent = this.clickLabel;

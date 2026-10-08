@@ -3912,20 +3912,17 @@ article.raster-histogram-summary {
 
 .map-click-summary > .map-inspection-context { margin-bottom: 6px; }
 
-.map-click-disclosure {
+.map-click-navigation {
   grid-column: 1 / -1;
   min-width: 0;
   padding-inline: 6px;
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   color: var(--text-2);
 }
-.map-click-disclosure[hidden] { display: none; }
-.map-click-disclosure > summary { min-height: 24px; cursor: pointer; }
-.map-click-disclosure > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.map-click-disclosure > .map-click-summary { margin-top: 6px; }
+.map-click-navigation[hidden] { display: none; }
+.map-click-navigation > .map-click-summary { margin-top: 6px; }
 @media (pointer: coarse) {
-  .map-inspection-raster-actions button,
-  .map-click-disclosure > summary { min-height: 44px; }
+  .map-inspection-raster-actions button { min-height: 44px; }
 }
 
 .map-inspection-tabs {

@@ -10,9 +10,10 @@ opener when the dock is closed, or a layer/histogram shortcut. The dock heading
 identifies the active task; its context line shows the summary's raster bindings
 and selected area. Switching tools preserves each tool's own context.
 **Distributions** and **Raster stack** are adjacent raster-analysis destinations.
-Point inspection remains under **Features at clicked point**, open by default
-alongside raster analysis. You can collapse it, with its own updating, unavailable
-and new-result feedback still visible; switching tools preserves your choice.
+Point inspection remains under **Features at clicked point**, visible alongside
+raster analysis with its own updating, unavailable and new-result feedback.
+Both navigation groups stay visible across tool switches and result updates;
+**Minimize** collapses the whole dock.
 Raster distribution feedback stays in the raster-analysis group.
 **Tools** opens one shared list of analysis, export and map-display actions. Its
 button appears in the dock while open and on the map when the dock is closed;

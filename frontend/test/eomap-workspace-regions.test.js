@@ -391,9 +391,15 @@ test("inspection header groups three raster destinations separately from clicked
     assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
     assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
     const raster = requireElementRange("map-inspection-raster-analysis");
-    const point = requireElementRange("map-click-disclosure");
+    const point = requireElementRange("map-click-navigation");
     assert.ok(raster.end < point.start);
-    assert.match(point.source, /^<details[^>]*\bopen\b/);
+    assert.match(point.source, /^<nav[^>]*aria-labelledby="map-click-navigation-label"/);
+    assert.match(requireElementRange("map-click-navigation-label").source,
+        /^<strong[^>]*>Features at clicked point<\/strong>$/);
+    assert.doesNotMatch(point.source, /<details\b|<summary\b/);
+    assert.equal(countMarkupId("map-click-disclosure"), 0);
+    assert.equal(countMarkupId("map-click-navigation"), 1);
+    assert.equal(countMarkupId("map-click-navigation-label"), 1);
     assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\],\s*#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px\)/s);
     assert.match(point.source, /Features at clicked point/);
     for (const [id, panel, caption] of [

@@ -15,7 +15,6 @@ function fixture(configureDocument = () => {}) {
     doc.removeEventListener = events.removeEventListener.bind(events);
     doc.dispatchEvent = events.dispatchEvent.bind(events);
     const root = doc.querySelector("#map-inspection");
-    doc.querySelector("#map-click-disclosure").open = true;
     const histogram = doc.querySelector("#map-histogram-panel");
     const style = doc.querySelector("#layer-style-editor");
     const feature = doc.querySelector("#vector-feature-inspector");
@@ -303,62 +302,59 @@ test("context validates its presentation boundary and vector identities clear wi
     h.controller.destroy();
 });
 
-test("point disclosure preserves choices and its feedback excludes area distributions", () => {
+test("persistent point navigation keeps its feedback separate from area distributions", () => {
     const h = fixture();
-    const disclosure = h.doc.querySelector("#map-click-disclosure");
-    const label = h.doc.querySelector("#map-click-disclosure-label");
+    const navigation = h.doc.querySelector("#map-click-navigation");
+    const label = h.doc.querySelector("#map-click-navigation-label");
     h.controller.showStyle("GEA Italy");
     h.controller.beginMapClick({ lat: 37.5, lng: 14 });
     h.controller.setClickResult("histogram", { state: "loading", message: "Updating this area" });
-    assert.equal(disclosure.hidden, true, "area results do not create a point-feature disclosure");
+    assert.equal(navigation.hidden, true, "area results do not create point-feature navigation");
     h.controller.setClickResult("feature", { state: "loading", message: "Inspecting this point" });
-    assert.equal(disclosure.hidden, false);
-    assert.equal(disclosure.open, true, "point and raster navigation are both expanded by default");
+    assert.equal(navigation.hidden, false);
     assert.match(label.textContent, /Updating/);
     h.controller.setClickResult("histogram", { state: "error", message: "No overlap" });
     assert.doesNotMatch(label.textContent, /unavailable/);
     assert.match(h.doc.querySelector("#map-click-histogram-status").textContent, /No overlap.*New results/);
     h.controller.setClickResult("feature", { state: "error", message: "Point inspection failed" });
-    assert.equal(disclosure.open, true, "a result update preserves the user's disclosure choice");
+    assert.equal(navigation.hidden, false, "result updates keep point navigation visible");
     assert.match(label.textContent, /Some unavailable.*New results/);
     h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
-    assert.equal(disclosure.open, true);
+    assert.equal(navigation.hidden, false);
     assert.doesNotMatch(label.textContent, /New results/);
     h.controller.showCalculations();
-    assert.equal(disclosure.open, true, "switching tasks preserves expanded point navigation");
+    assert.equal(navigation.hidden, false, "switching tasks keeps point navigation visible");
     h.controller.closeHistogram();
-    assert.equal(disclosure.hidden, false, "closing an area tool retains independent point recovery");
+    assert.equal(navigation.hidden, false, "closing an area tool retains independent point recovery");
     h.controller.destroy();
 });
 
-test("manual point collapse survives tool switches, new clicks and minimization", () => {
+test("point navigation stays visible across tools and new results and follows dock minimization", () => {
     const h = fixture();
-    const disclosure = h.doc.querySelector("#map-click-disclosure");
+    const navigation = h.doc.querySelector("#map-click-navigation");
     h.controller.showHistogram();
     h.controller.beginMapClick({ lat: 22, lng: 78 });
     h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
-    assert.equal(disclosure.open, true);
-    disclosure.open = false;
+    assert.equal(navigation.hidden, false);
     h.map.focus();
     h.controller.showCalculations();
+    assert.equal(navigation.hidden, false);
     h.controller.showRasterSeries();
+    assert.equal(navigation.hidden, false);
     h.controller.showFeatureInspector();
-    assert.equal(disclosure.open, false);
+    assert.equal(navigation.hidden, false);
     h.controller.setClickResult("feature", { state: "error", message: "Point unavailable" });
-    assert.equal(disclosure.open, false);
+    assert.equal(navigation.hidden, false);
     h.controller.beginMapClick({ lat: 23, lng: 79 });
     h.controller.setClickResult("feature", { state: "loading", message: "Inspecting point" });
-    assert.equal(disclosure.hidden, false);
-    assert.equal(disclosure.open, false);
+    assert.equal(navigation.hidden, false);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(disclosure.hidden, true);
+    assert.equal(navigation.hidden, true);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(disclosure.hidden, false);
-    assert.equal(disclosure.open, false);
+    assert.equal(navigation.hidden, false);
     assert.equal(h.doc.activeElement, h.map, "updates never steal focus");
-    disclosure.open = true;
     h.controller.showStyle("Countries");
-    assert.equal(disclosure.open, true, "manual expansion also survives a tool switch");
+    assert.equal(navigation.hidden, false, "styling also keeps point navigation visible");
     h.controller.destroy();
 });
 
@@ -434,7 +430,7 @@ test("distributions remain reachable before a click and after empty or failed ar
     button.dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.controller.hasClick, false, "opening a view does not fabricate a map click");
-    assert.equal(h.doc.querySelector("#map-click-disclosure").hidden, true);
+    assert.equal(h.doc.querySelector("#map-click-navigation").hidden, true);
     for (const state of ["empty", "error", "invalidated"]) {
         h.controller.showStyle("Countries");
         h.controller.setClickResult("histogram", { state, message: `${state} distribution` });
@@ -442,7 +438,7 @@ test("distributions remain reachable before a click and after empty or failed ar
         button.dispatchEvent(new Event("click"));
         assert.equal(h.controller.activeTool, "histogram");
         assert.equal(h.doc.querySelector("#map-inspection-context").textContent, "Visible rasters · Whole raster");
-        assert.equal(h.doc.querySelector("#map-click-disclosure").hidden, true);
+        assert.equal(h.doc.querySelector("#map-click-navigation").hidden, true);
     }
     h.controller.destroy();
 });
