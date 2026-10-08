@@ -18,24 +18,23 @@ function explicitArea(area) {
 
 /** Retain clip state and show it only while the raster clip tool is active. */
 export class RasterClipsController {
-    /**
+    /** Retain clip review and owned job state through existing composition adapters.
      * @param {Object} dependencies Owned adapters and composition callbacks.
-     * @param {Object} dependencies.api Processing API client.
+     * @param {import("./api.js").ProcessingApiClient} dependencies.api Processing API client.
      * @param {ProcessingJobs} [dependencies.jobs] Shared session polling/history.
-     * @param {Object} dependencies.view Raster clip DOM adapter.
-     * @param {Object} dependencies.storage Pending-submission storage.
-     * @param {Function} dependencies.getContext Returns catalog sources and the presented area.
-     * @param {Function} dependencies.onOpen Opens the dock's raster clip tool.
-     * @param {Function} dependencies.onClose Closes that tool.
-     * @param {Function} dependencies.onEditArea Opens existing sampling controls.
+     * @param {import("./raster-clips-view.js").RasterClipsView} dependencies.view Raster clip DOM adapter.
+     * @param {import("./pending-submission.js").PendingSubmissionStorage} dependencies.storage Pending-submission storage.
+     * @param {()=>{sources:Object[],area:Object|null}} dependencies.getContext Catalog sources and the presented area.
+     * @param {()=>void} dependencies.onOpen Opens the dock's raster clip tool.
+     * @param {()=>void} dependencies.onClose Closes that tool.
+     * @param {()=>void} dependencies.onEditArea Opens existing sampling controls.
      * @param {Object} [dependencies.clock=globalThis] Timer provider.
-     * @param {Function} [dependencies.requestId] Generates a unique idempotency key.
+     * @param {()=>string} [dependencies.requestId] Generates a unique idempotency key.
      */
     constructor({ api, jobs, view, storage, getContext, onOpen, onClose, onEditArea,
         clock = globalThis, requestId = () => globalThis.crypto.randomUUID() }) {
-        Object.assign(this, { api, view, storage, getContext, onOpen, clock, requestId });
-        this.state = { sources: [], source: null, area: null, selectedArea: null,
-            areaChoice: "selection", jobs: [],
+        Object.assign(this, { api, view, storage, getContext, onOpen, onEditArea, clock, requestId });
+        this.state = { sources: [], source: null, area: null, jobs: [], currentJobId: null, review: false,
             message: "", jobMessage: "", pending: storage.read(),
             submitting: false, jobActions: new Set() };
         this.destroyed = false;
@@ -44,17 +43,20 @@ export class RasterClipsController {
         this.jobs = jobs ?? new ProcessingJobs(api, clock);
         this.unsubscribe = this.jobs.subscribe(store => {
             this.state.jobs = store.jobs.filter(job => job.operation === "raster.clip.v1");
+            if (!this.state.jobs.some(job => job.jobId === this.state.currentJobId && job.status !== "deleted")) {
+                this.state.currentJobId = this.state.jobs.find(job => job.status !== "deleted")?.jobId ?? null;
+            }
             this.state.jobMessage = store.error;
             this.render();
         });
         view.bind({
             onOpen: () => this.open(), onClose,
             onSource: (index) => this.selectSource(index),
-            onArea: (choice) => this.selectArea(choice),
-            onEditArea,
+            onEditArea: () => this.editArea(),
+            onNew: () => this.open(null, this.getContext().area ?? null),
+            onShowJob: id => this.showJob(id),
             onCreate: () => void this.submit(),
             onRetrySubmission: () => void this.submit(),
-            onRefresh: () => void this.refresh(),
             onCancel: (id) => void this.jobAction(id, "cancel"),
             onDelete: (id) => void this.jobAction(id, "delete"),
         });
@@ -68,24 +70,30 @@ export class RasterClipsController {
     }
 
     /**
-     * Capture current intent when explicitly opening Raster clips.
+     * Review explicit entry-point inputs, or resume the current owned download.
+     * Returning from area controls updates only unsubmitted intent. A pending
+     * submission always retains its original inputs and request key.
      * @param {Object|null} [source=null] Requested Catalog raster.
-     * @param {Object|undefined} area Explicit entry-point selection; undefined uses presented selection.
+     * @param {Object|null|undefined} [area] Explicit entry-point selection; undefined uses presented selection.
      * @return {void}
+     * @throws {TypeError} If an explicit sampling descriptor violates the neutral area contract.
      */
     open(source = null, area) {
         if (!this.state.pending && !this.state.submitting) {
             const context = this.getContext();
             this.state.message = "";
             this.state.sources = context.sources.map(snapshotSource);
-            if (source && !this.state.sources.some(item => item.collectionId === source.collectionId && item.itemId === source.itemId)) {
-                this.state.sources.unshift(snapshotSource(source));
+            this.state.review = source !== null || area !== undefined || !!this.editingArea || !this.state.currentJobId;
+            if (this.state.review) {
+                const chosen = source ?? (this.editingArea ? this.state.source : null) ?? this.state.sources[0] ?? null;
+                if (chosen && !this.state.sources.some(item => item.collectionId === chosen.collectionId && item.itemId === chosen.itemId)) {
+                    this.state.sources.unshift(snapshotSource(chosen));
+                }
+                this.state.source = chosen ? snapshotSource(chosen) : null;
+                this.state.area = explicitArea(area === undefined ? context.area : area);
             }
-            this.state.source = source ? snapshotSource(source) : this.state.sources[0] ?? null;
-            this.state.selectedArea = explicitArea(area === undefined ? context.area : area);
-            this.state.area = this.state.selectedArea;
-            this.state.areaChoice = "selection";
         }
+        this.editingArea = false;
         this.active = true;
         this.onOpen();
         this.render();
@@ -99,14 +107,24 @@ export class RasterClipsController {
         this.render();
     }
 
-    /** Select the captured box or catalog-vector selection. @param {string} choice Area option. @return {void} */
-    selectArea(choice) {
+    /** Open composed sampling controls for unsubmitted intent only. @return {void} */
+    editArea() {
         if (this.state.pending || this.state.submitting) return;
+        this.editingArea = true;
+        this.onEditArea();
+    }
+
+    /** Inspect one owned download without changing submitted inputs or dispatching work.
+     * @param {string} id Owned clip job selected from the current listing.
+     * @return {void}
+     */
+    showJob(id) {
+        if (this.state.pending || this.state.submitting || !this.state.jobs.some(job => job.jobId === id && job.status !== "deleted")) return;
+        this.state.currentJobId = id;
+        this.state.review = false;
         this.state.message = "";
-        this.state.areaChoice = choice;
-        this.state.area = choice === "selection" ? this.state.selectedArea
-            : null;
         this.render();
+        this.view.focusCurrent?.();
     }
 
     /** Submit once; persist and reuse the same key on uncertain responses or reload. @return {Promise<void>} Acceptance or recoverable error. */
@@ -128,17 +146,19 @@ export class RasterClipsController {
         this.render();
         try {
             const job = await this.api.submitClip(this.state.pending);
+            this.state.currentJobId = job.jobId;
+            this.state.review = false;
             this.jobs.accept(job);
             this.storage.clear();
             this.state.pending = null;
-            this.state.message = "Clip accepted. Its raster and area are fixed; you can keep exploring the map.";
+            this.state.message = "";
         } catch (error) {
             // A definitive rejection creates no job. Server/transport failures can
             // occur after commit and must keep their original idempotency identity.
             if (error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500 && error.status !== 408 && !error.isCapacityRejection) {
                 this.storage.clear();
                 this.state.pending = null;
-                this.state.message = `${error.message} Create the clip again when the problem is resolved.`;
+                this.state.message = `${error.message} Prepare the download again when the problem is resolved.`;
             } else {
                 this.state.message = `Submission not confirmed: ${error.message} Retry the same request to recover it safely.`;
             }

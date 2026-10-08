@@ -226,10 +226,10 @@ test("task headers retain their own source and scope while clicks and peer conte
     h.controller.setToolContext("raster-clips", { source: "GEA Chile", scope: "Captured box" });
     h.controller.showRasterClips();
     h.controller.beginMapClick({ lat: 40, lng: 20 });
-    assert.equal(h.dockTitle.textContent, "Export · Raster clips");
+    assert.equal(h.dockTitle.textContent, "Export · Download raster clip");
     assert.equal(context.textContent, "GEA Chile · Captured box");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Export · Raster clips");
+    assert.equal(h.dockTitle.textContent, "Export · Download raster clip");
     assert.equal(context.textContent, "GEA Chile · Captured box");
     h.controller.showHistogram();
     assert.equal(h.dockTitle.textContent, "Raster analysis · Distributions");
