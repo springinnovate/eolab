@@ -779,14 +779,14 @@
                 <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including polygon holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
                 <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
               </details>
-            <p id="summary-recovery-status" role="status" aria-live="polite" hidden></p>
-            <button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button>
-            <details class="map-analysis-advanced-section">
-              <summary>Previous calculation results</summary>
-              <button id="calculations-refresh" class="secondary-button" type="button">Refresh calculation history</button>
-              <div id="calculations-history"></div>
-            </details>
-            <details id="summary-saved-result" hidden><summary>Saved calculation</summary><button id="summary-close-saved" class="summary-text-button" type="button">Close saved calculation</button><section id="calculations-result" aria-label="Saved calculation result"></section></details>
+            <section id="summary-current-work" aria-label="Unfinished calculation" hidden>
+              <p id="summary-current-work-context"></p>
+              <div class="summary-status-row">
+                <span id="summary-current-work-status" role="status" aria-live="polite"></span>
+                <button id="summary-cancel-work" class="secondary-button" type="button">Cancel calculation</button>
+                <button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button>
+              </div>
+            </section>
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
             <header class="map-histogram-toolbar">

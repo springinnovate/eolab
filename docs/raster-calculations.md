@@ -65,9 +65,14 @@ coverage, method, CSV and provenance. Missing data can produce a completed job
 with no numeric result; the states below explain why.
 
 Changing the active calculation cancels obsolete work. Closing or switching away
-from the panel cancels automatic work; manually submitted work can continue in
-**Statistics → Previous calculation results**. Keep the same browser session to recover jobs after
-reload. A shared map link does not grant access to another person's jobs.
+from the panel cancels automatic work; manually submitted work can continue.
+Reopen **Statistics** to see its current cards. If the map inputs changed while a
+manual calculation continued, a compact **Unfinished calculation** status identifies
+the submitted raster, area and any pixel point, with **Cancel calculation** available.
+It disappears when that work finishes; the completed value stays on its card as a
+**Previous result** if the inputs changed. Statistics does not include a history browser.
+Keep the same browser session to recover unfinished work into its cards after reload.
+A shared map link does not grant access to another person's jobs.
 If submission is uncertain, use **Recover / retry** instead of creating a second
 request. Exported names and formulas describe the submitted calculation even if
 you later edit its card.
