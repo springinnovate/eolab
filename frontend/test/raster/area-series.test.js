@@ -212,6 +212,87 @@ test("hiding raster series drops the pending stack and waits for acknowledged ca
     assert.equal(h.area.results.size,0);h.close();
 });
 
+test("retained raster visibility refreshes stack defaults and subsequent map-click calculations", async () => {
+    const h = fixture();
+    const rasters = Array.from({ length: 6 }, (_, index) => source(String(index + 1)));
+    h.controller.updateAvailableRasters(rasters.map(raster => ({ ...raster, visible: false })));
+    assert.equal(h.area.sources.length, 0, "hide-all clears untouched default choices");
+    h.controller.updateAvailableRasters(rasters.map((raster, index) => ({ ...raster, visible: index < 3 })));
+    h.controller.addFormula("pixel");
+    h.controller.setPosition({ longitude: 1, latitude: 2 });
+    await h.open();
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["1", "2", "3"]);
+    for (const raster of rasters.slice(0, 3)) await h.finish("ready", false, raster.key);
+
+    h.controller.updateAvailableRasters(rasters);
+    await h.advance(0);
+    assert.deepEqual(h.view.state.sources.filter(raster => raster.selected).map(raster => raster.key),
+        rasters.map(raster => raster.key));
+    assert.deepEqual(h.area.sources.map(raster => raster.key), rasters.map(raster => raster.key));
+    for (const raster of rasters) await h.finish("ready", false, raster.key);
+    assert.equal(h.area.results.size, 6);
+
+    h.controller.setPosition({ longitude: 3, latitude: 4 });
+    h.controller.setArea(box(10), "Second clicked area");
+    await h.advance(0);
+    const replacements = h.requests.filter(([kind]) => kind === "submit").slice(-6);
+    assert.deepEqual(replacements.map(([, request]) => request.source.itemId), rasters.map(raster => raster.key));
+    assert.ok(replacements.every(([, request]) => request.pixelPoint.longitude === 3 &&
+        request.pixelPoint.latitude === 4 && request.area.selectedBounds.west === 10));
+    for (const raster of rasters) await h.finish("ready", false, raster.key);
+    assert.equal(h.view.state.rows.length, 12, "both formulas have values for all six rasters");
+    h.close();
+});
+
+test("explicit raster choices survive visibility, rename, reorder, clicks and panel switches", async () => {
+    const h = fixture();
+    h.controller.updateAvailableRasters([source("1"), source("2"), { ...source("hidden"), visible: false }]);
+    h.view.actions.onSelect("1", false);
+    h.view.actions.onSelect("hidden", true);
+    h.controller.updateAvailableRasters([
+        { ...source("hidden"), label: "Renamed hidden raster", visible: false },
+        { ...source("2"), visible: false }, source("1"), source("new"),
+    ]);
+    assert.deepEqual(h.controller.orderedSources().map(raster => raster.key), ["hidden", "new"]);
+    h.controller.setPosition({ longitude: 5, latitude: 6 });
+    await h.open();
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["hidden", "new"]);
+    await h.finish("ready", false, "hidden"); await h.finish("ready", false, "new");
+    h.controller.updateSamplingForPanelVisibility(false);
+    h.controller.updateAvailableRasters([source("1"), source("2"), source("hidden"), source("new")]);
+    h.controller.setPosition({ longitude: 7, latitude: 8 });
+    await h.open();
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["2", "hidden", "new"]);
+    assert.equal(h.view.state.sources.find(raster => raster.key === "1").selected, false);
+    h.close();
+});
+
+test("removing a source clears its checklist override and re-adding uses current visibility", () => {
+    const h = fixture();
+    h.view.actions.onSelect("1", false);
+    h.view.actions.onSelect("2", true);
+    h.controller.updateAvailableRasters([]);
+    h.controller.updateAvailableRasters([source("1"), { ...source("2"), visible: false }]);
+    assert.deepEqual(h.controller.orderedSources().map(raster => raster.key), ["1"]);
+    assert.equal(h.requests.length, 0, "source changes in an inactive panel submit no work");
+    h.close();
+});
+
+test("visibility replacement cancels old jobs and ignores their late values", async () => {
+    const h = fixture(); await h.open();
+    h.controller.updateAvailableRasters([
+        { ...source("1"), visible: false }, { ...source("2"), visible: false }, source("3"),
+    ]);
+    await h.advance(0);
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["3"]);
+    await h.finish("ready", false, "1"); await h.finish("ready", false, "2");
+    assert.equal(h.area.results.size, 0, "late hidden-source values cannot become current results");
+    await h.finish("ready", false, "3");
+    assert.deepEqual(h.view.state.rows.map(row => row.key), ["3"]);
+    h.close();
+});
+
 test("source removal cancels older work and hidden rasters may be explicitly selected",async()=>{
     const h=fixture();await h.open();
     h.controller.updateAvailableRasters([{...source("hidden"),visible:false}]);await h.advance(0);

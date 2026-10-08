@@ -75,6 +75,10 @@ the raster checklist, ordering, direction and chart type, with the active settin
 shown while collapsed. Use the **Plots**, **Statistics** and **Data and order**
 shortcuts to move between sections in a short panel. There is one formula workflow,
 with no fixed raster-count limit.
+By default, checked rasters follow map-layer visibility, including layers you
+turn back on after running a stack. Checking or unchecking a raster in this
+checklist keeps that choice through visibility changes and map clicks; hidden
+rasters can still be calculated. Removing a layer clears its checklist override.
 The same formulas run independently on each raster's native grid, over the
 current sampling area or each raster's whole extent. This does not align rasters
 or perform pixel-by-pixel arithmetic between different rasters.
