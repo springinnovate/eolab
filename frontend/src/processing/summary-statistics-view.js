@@ -42,7 +42,7 @@ export class SummaryStatisticsView {
         this.latestState = null;
         this.focusAfterRender = null;
         this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
-        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "current-work", "current-work-context", "current-work-status", "cancel-work"]
+        this.extra = Object.fromEntries(["source-mode", "auto", "undo", "undo-button", "current-work", "current-work-context", "current-work-status", "cancel-work"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
     /** Make a text-only card node. @param {string} tag HTML tag. @param {string} [text=""] Text. @return {HTMLElement} Node. */
@@ -57,6 +57,7 @@ export class SummaryStatisticsView {
             [e.close, "click", handlers.onClose], [e["edit-area"], "click", handlers.onEditArea],
             [e.area, "change", () => handlers.onArea(e.area.value)],
             [x.auto, "change", () => handlers.onAutomatic(x.auto.checked)],
+            [x["source-mode"], "change", () => handlers.onSourceMode(x["source-mode"].value)],
             [e.template, "change", () => { handlers.onAdd(e.template.value); e.template.value = ""; }],
             [x["undo-button"], "click", handlers.onUndo], [e.retry, "click", handlers.onRetry],
             [x["cancel-work"], "click", handlers.onCancelWork],
@@ -142,8 +143,9 @@ export class SummaryStatisticsView {
         const formulaField = this.element("label", "Formula"); formulaField.append(equation);
         editorFields.append(nameField, binding, formulaField);
         editor.append(editorTitle, editorFields);
-        root.append(heading, sourceCaption, valueGroup, editor, details, remove);
-        return { root, title, sourceCaption, editor, editorTitle, previousContext, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, remove };
+        const queryResults = this.element("div"); queryResults.className = "summary-query-results";
+        root.append(heading, sourceCaption, valueGroup, queryResults, editor, details, remove);
+        return { root, title, sourceCaption, editor, editorTitle, previousContext, label, binding, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, remove, queryResults, queryRows: new Map() };
     }
     /** Retain current state and schedule one draw while the panel is open.
      * Closed panels update only their visible opener, when its text changes.
@@ -157,7 +159,7 @@ export class SummaryStatisticsView {
         this.latestState = state;
         const sources = [...new Map(state.statistics.filter(card => card.source).map(card =>
             [JSON.stringify([card.source.collectionId, card.source.itemId]), card.source.label])).values()];
-        this.onContextChange({ source: sources.length === 1 ? sources[0]
+        this.onContextChange({ source: state.sourceMode === "query" ? `${state.querySources.length} enabled rasters in this area` : sources.length === 1 ? sources[0]
             : sources.length ? `${sources.length} rasters in statistic cards` : "No raster selected",
             scope: this.areaDescription(state) });
         const working = state.statistics.some(card => card.pending);
@@ -202,11 +204,15 @@ export class SummaryStatisticsView {
         }
         for (const card of state.statistics) {
             const row = this.cards.get(card.id);
+            const query = state.sourceMode === "query";
+            row.binding.hidden = query;
+            row.queryResults.hidden = !query;
+            if (query) this.drawQueryResults(row, card.queryResults, card.id);
             const queued = !!(card.requested && card.source && state.area);
             const title = card.label.trim() || `Summary statistic ${card.id}`;
             if (row.title.textContent !== title) row.title.textContent = title;
             row.editorTitle.setAttribute("aria-label", `Edit ${title}`);
-            const sourceCaption = card.source?.label ?? "No raster selected";
+            const sourceCaption = query ? `${state.querySources.length} enabled rasters in this area` : card.source?.label ?? "No raster selected";
             if (row.sourceCaption.textContent !== sourceCaption) row.sourceCaption.textContent = sourceCaption;
             if (row.label.value !== card.label) row.label.value = card.label;
             if (row.expression.value !== card.expression) row.expression.value = card.expression;
@@ -235,7 +241,7 @@ export class SummaryStatisticsView {
             row.status.classList.toggle("is-awaiting-map", !!card.awaitingMap);
             row.status.classList.toggle("is-working", !!(card.pending || queued || selecting || (card.checking && card.source && state.area)));
             row.run.hidden = !state.area || card.current || card.pending || queued || selecting;
-            row.run.disabled = !card.expression.trim() || !card.source || !state.area || state.recoverable;
+            row.run.disabled = !card.expression.trim() || (query ? !state.querySources.length || card.checking || !card.valid : !card.source) || !state.area || state.recoverable;
             row.stop.hidden = !card.pending && !queued && !selecting;
             row.statusRow.hidden = row.status.hidden && row.run.hidden && row.stop.hidden;
             const progress = card.progress;
@@ -282,6 +288,7 @@ export class SummaryStatisticsView {
         e["edit-area"].hidden = state.areaChoice === "vector" || state.areaChoice === "whole";
         e["area-description"].textContent = this.areaDescription(state);
         x.auto.checked = state.automatic;
+        x["source-mode"].value = state.sourceMode ?? "single";
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;
         x["undo-button"].disabled = state.statistics.length >= 5;
@@ -306,10 +313,18 @@ export class SummaryStatisticsView {
      */
     async copyCurrentValue(id) {
         const row = this.cards.get(id);
+        await this.copyOwnedValue(row, () => this.cards.get(id) === row);
+    }
+    /** Copy a retained result's exact scalar and suppress obsolete asynchronous feedback.
+     * @param {Object|undefined} row Owned result controls with a revision and copy value.
+     * @param {()=>boolean} retained Whether the controls still belong to the live view.
+     * @return {Promise<void>} Clipboard feedback, if the result remains current.
+     */
+    async copyOwnedValue(row, retained) {
         if (!row || row.copyValue == null || row.copying) return;
         const revision = row.copyRevision;
         row.copying = true; row.copy.disabled = true;
-        const stillCurrent = () => this.cards.get(id) === row && row.copyRevision === revision;
+        const stillCurrent = () => retained() && row.copyRevision === revision;
         try {
             if (typeof this.clipboard?.writeText !== "function") throw new Error("Clipboard unavailable");
             await this.clipboard.writeText(String(row.copyValue));
@@ -321,6 +336,65 @@ export class SummaryStatisticsView {
             }
         } finally {
             if (stillCurrent()) { row.copying = false; row.copy.disabled = false; row.copyStatus.hidden = false; }
+        }
+    }
+    /** Draw independent raster rows without replacing focused controls or open details.
+     * Previous values carry their captured inputs and cannot be copied as current values.
+     * @param {Object} card Retained statistic controls and keyed raster rows.
+     * @param {Object[]} results Current raster candidates and per-raster execution snapshots.
+     * @param {number} id Owning statistic identity.
+     * @return {void}
+     * @throws {TypeError} If a result contains an invalid owned download address.
+     */
+    drawQueryResults(card, results, id) {
+        const signature = JSON.stringify(results.map(result => result.key));
+        for (const entry of results) {
+            let row = card.queryRows.get(entry.key);
+            if (!row) {
+                const root = this.element("section"); root.className = "summary-query-result";
+                const name = this.element("strong"); name.className = "summary-query-name";
+                const valueActions = this.element("div"); valueActions.className = "summary-value-actions";
+                const value = this.element("strong"); value.className = "summary-value";
+                const copy = this.element("button", "Copy"); copy.type = "button"; copy.className = "summary-text-button";
+                const status = this.element("small"); status.setAttribute("role", "status");
+                const copyStatus = this.element("small"); copyStatus.setAttribute("role", "status"); copyStatus.hidden = true;
+                const details = this.element("details"); details.className = "summary-result-details";
+                const detailsBody = this.element("div"); details.append(this.element("summary", "Value details & downloads"), detailsBody);
+                valueActions.append(value, copy); root.append(name, valueActions, status, copyStatus, details);
+                row = { root, name, value, copy, status, copyStatus, details, detailsBody, copyRevision: 0 };
+                card.queryRows.set(entry.key, row);
+                copy.addEventListener("click", () => void this.copyOwnedValue(row,
+                    () => this.cards.get(id) === card && card.queryRows.get(entry.key) === row));
+            }
+            const result = entry.result;
+            row.name.textContent = entry.source.label;
+            row.copy.setAttribute("aria-label", `Copy current ${card.title.textContent} value for ${entry.source.label}`);
+            row.root.classList.toggle("is-previous", !!result && !entry.current);
+            row.root.setAttribute("aria-busy", String(entry.pending));
+            row.value.textContent = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "—";
+            row.value.title = result?.row.value ?? "";
+            row.status.textContent = [entry.message, entry.current ? RESULT_STATES[result?.row.state] : "",
+                result && !entry.current ? `Previous result · ${describeClipArea(result.area)} · ${result.row.expression}` : ""].filter(Boolean).join(" · ");
+            row.status.hidden = !row.status.textContent;
+            row.status.classList.toggle("is-error", !!entry.error);
+            const resultSignature = JSON.stringify(result);
+            const copyValue = entry.current && result?.row.state === "ok" ? result.row.value : null;
+            const copySignature = JSON.stringify([resultSignature, copyValue]);
+            if (row.copySignature !== copySignature) {
+                row.copySignature = copySignature; row.copyRevision++; row.copyValue = copyValue;
+                row.copying = false; row.copyStatus.hidden = true; row.copyStatus.textContent = "";
+            }
+            row.copy.hidden = !result;
+            row.copy.disabled = row.copyValue == null || row.copying;
+            row.details.hidden = !result;
+            if (result && resultSignature !== row.resultSignature) {
+                this.renderValueDetails(row.detailsBody, result); row.resultSignature = resultSignature;
+            }
+        }
+        if (signature !== card.querySignature) {
+            for (const key of card.queryRows.keys()) if (!results.some(result => result.key === key)) card.queryRows.delete(key);
+            card.queryResults.replaceChildren(...results.map(result => card.queryRows.get(result.key).root));
+            card.querySignature = signature;
         }
     }
     /** Cancel queued drawing and focus when closing or destroying the panel. @return {void} */

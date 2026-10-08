@@ -1,4 +1,4 @@
-/** Calculate the same area statistics for each raster selected in Raster series. */
+/** Calculate area formulas independently for each raster in a composed query or stack. */
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { describeJobProgress } from "./presentation.js";
@@ -7,19 +7,22 @@ import { describeJobProgress } from "./presentation.js";
  * Calculate up to five formulas over one shared area for each selected raster.
  * Requests run independently through Processing's server queue. This
  * controller keeps per-raster results, pauses for recovery, and
- * cancels obsolete work when the inputs change or Raster series is hidden.
+ * cancels obsolete work when the inputs change or its owning query is deactivated.
  */
 export class RasterSeriesCalculations {
-    /** Initialize raster-series inputs, results and progress tracking.
+    /** Initialize independent multi-raster inputs, results and progress tracking.
      * Creating the controller does not create executors, validate formulas or submit calculations.
-     * Composition supplies the area; the Raster series controller supplies selected
-     * rasters, formulas and visibility before work can begin.
+     * The owning Processing controller supplies sources, formulas and query activation;
+     * composition supplies the area. No browser sibling state is read here.
      * @param {Object} options Providers.
      * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
+     * @param {"raster-series"|"summary-query"} [options.clientName="raster-series"] Isolated recovery namespace.
+     * @throws {TypeError} If the recovery namespace is unsupported.
      */
-    constructor({ requests, clock = globalThis }) {
-        Object.assign(this, { requests, clock });
+    constructor({ requests, clock = globalThis, clientName = "raster-series" }) {
+        if (!["raster-series", "summary-query"].includes(clientName)) throw new TypeError("Unsupported multi-raster calculation caller.");
+        Object.assign(this, { requests, clock, clientName });
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -44,15 +47,15 @@ export class RasterSeriesCalculations {
      */
     setProgressListener(onChange) { this.onChange = onChange; }
 
-    /** Recover every series calculation saved before reload and request cancellation.
+    /** Recover this namespace's calculations saved before reload and request cancellation.
      * Call once during browser startup. The remaining raster list is not saved, so
-     * that old series must not resume automatically. If its submission response was
+     * that old query must not resume automatically. If its submission response was
      * lost, the executor recovers the job with the original request key before cancelling.
      * @return {Promise<void>} Initial recovery attempt; cancellation may finish later
      * through the shared job observer.
      */
     async recoverAndCancelPreviousSeriesCalculations() {
-        const clients = this.requests.savedClientNames().filter(name => name.startsWith("raster-series:"))
+        const clients = this.requests.savedClientNames().filter(name => name.startsWith(this.clientName + ":"))
             .map(name => this.getOrCreateRasterExecutor(Number(name.split(":")[1])));
         for (const client of clients) client.stop();
         await Promise.all(clients.map(client => client.start()));
@@ -67,7 +70,7 @@ export class RasterSeriesCalculations {
      */
     getOrCreateRasterExecutor(index) {
         if (!this.clients.has(index)) {
-            const client = this.requests.createClient("raster-series:" + index,
+            const client = this.requests.createClient(this.clientName + ":" + index,
                 state => this.handleCalculationProgress(index, state));
             this.clients.set(index, client);
         }
@@ -76,14 +79,14 @@ export class RasterSeriesCalculations {
 
     /** Replace the selected rasters, area and formulas after a user edit.
      * Changed calculation inputs cancel old work and clear current results; new
-     * calculations are scheduled only while Raster series is visible. Formula
+     * calculations are scheduled only while the owning query is active. Formula
      * changes wait for editing to pause; committed areas and sources start next turn. Changes to
      * names, raster order or the area label refresh the display without recalculating.
      * @param {{key:string,label:string,item:{collection:string,id:string}}[]} sources Selected catalog rasters.
      * @param {Object|null} area Map box, filtered catalog selection, uploaded polygon reference,
      * whole-raster descriptor, or null when no area has been chosen.
      * @param {string} label Area description displayed beside the plot.
-     * @param {{id:number,label:string,expression:string}[]} formulas Selected formulas and display names.
+     * @param {{id:number,label:string,expression:string,calculationLabel?:string}[]} formulas Formulas and optional immutable export labels.
      * @param {{longitude:number,latitude:number}|null} [pixelPoint=null] Exact committed map click for pixelValue formulas.
      * @return {void}
      * @throws {TypeError|Error} If the area is not a supported Processing descriptor.
@@ -190,7 +193,7 @@ export class RasterSeriesCalculations {
         }
         this.busy = this.dispatching = true;
         try {
-            const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
+            const formulas = this.formulas.map(formula => ({ label: formula.calculationLabel ?? "stat-" + formula.id, expression: formula.expression.trim() }));
             const firstCalculationInputs = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area,
                 calculations: formulas, pixelPoint: this.pixelPoint });
             // Record all identities before submission can synchronously notify listeners.
@@ -208,7 +211,7 @@ export class RasterSeriesCalculations {
             }
             for (const [client, request] of additions) {
                 if (version !== this.version || !this.active) return;
-                client.submit(request.calculationInputs, {automatic: true, client: "raster-series"});
+                client.submit(request.calculationInputs, {automatic: true, client: this.clientName});
             }
             this.dispatching = false;
             this.updateSeriesProgress();

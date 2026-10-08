@@ -33,6 +33,20 @@ test("independent records preserve each request key and clearing one cannot clea
     assert.throws(()=>root.forClient("another-user"),/Unsupported/);
 });
 
+test("map-query recovery positions are isolated from fixed summary and raster stack records", () => {
+    const root = new CalculationSessionStorage(storage());
+    for (const client of ["summary", "raster-series:0", "summary-query:0", "summary-query:64"]) {
+        root.forClient(client).write({ ...record(), context: { automatic: true, client: client.split(":")[0] } });
+    }
+    assert.deepEqual(new Set(root.savedClientNames()), new Set(["summary", "raster-series:0", "summary-query:0", "summary-query:64"]));
+    root.forClient("summary-query:0").clear();
+    assert.ok(root.read()); assert.ok(root.forClient("raster-series:0").read());
+    assert.equal(root.forClient("summary-query:64").read().pending.requestId, "request-original-1234");
+    for (const client of ["summary-query:-1", "summary-query:01", "summary-query:9007199254740992", "summary-query:other"]) {
+        assert.throws(() => root.forClient(client), /Unsupported/);
+    }
+});
+
 test("legacy summary and series records migrate only to their owner without changing the submission",()=>{
     for(const client of [undefined,"summary","raster-series"]) {
         const data=new Map(), saved=record(), {context,...execution}=saved;

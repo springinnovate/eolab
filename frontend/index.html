@@ -730,8 +730,9 @@
           </section>
           <section id="calculations-panel" role="region" aria-labelledby="open-calculations-dock" hidden>
             <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster statistics">&times;</button></div>
-            <p class="map-analysis-purpose">Calculate values such as mean, totals and area for the raster chosen in each statistic.</p>
+            <p class="map-analysis-purpose">Calculate values such as mean, totals and area across rasters. Each formula uses <code>a</code> for the raster in that result.</p>
             <section class="summary-scope" aria-label="Sampling area">
+              <div class="summary-area-row"><label for="summary-source-mode">Rasters</label><select id="summary-source-mode"><option value="query">Enabled rasters in this area</option><option value="single">Choose raster for each statistic</option></select></div>
               <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
               <p id="calculations-area-description" class="summary-area-details"></p>
               <div class="summary-scope-actions">

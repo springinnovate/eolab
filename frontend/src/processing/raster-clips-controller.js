@@ -25,15 +25,16 @@ export class RasterClipsController {
      * @param {import("./raster-clips-view.js").RasterClipsView} dependencies.view Raster clip DOM adapter.
      * @param {import("./pending-submission.js").PendingSubmissionStorage} dependencies.storage Pending-submission storage.
      * @param {()=>{sources:Object[],area:Object|null}} dependencies.getContext Catalog sources and the presented area.
+     * @param {((area:Object|null)=>Object[])|null} [dependencies.getQuerySources=null] Composed default candidates; explicit raster choices remain available.
      * @param {()=>void} dependencies.onOpen Opens the dock's raster clip tool.
      * @param {()=>void} dependencies.onClose Closes that tool.
      * @param {()=>void} dependencies.onEditArea Opens existing sampling controls.
      * @param {Object} [dependencies.clock=globalThis] Timer provider.
      * @param {()=>string} [dependencies.requestId] Generates a unique idempotency key.
      */
-    constructor({ api, jobs, view, storage, getContext, onOpen, onClose, onEditArea,
+    constructor({ api, jobs, view, storage, getContext, getQuerySources = null, onOpen, onClose, onEditArea,
         clock = globalThis, requestId = () => globalThis.crypto.randomUUID() }) {
-        Object.assign(this, { api, view, storage, getContext, onOpen, onEditArea, clock, requestId });
+        Object.assign(this, { api, view, storage, getContext, getQuerySources, onOpen, onEditArea, clock, requestId });
         this.state = { sources: [], source: null, area: null, jobs: [], currentJobId: null, review: false,
             message: "", jobMessage: "", pending: storage.read(),
             submitting: false, jobActions: new Set() };
@@ -85,12 +86,14 @@ export class RasterClipsController {
             this.state.sources = context.sources.map(snapshotSource);
             this.state.review = source !== null || area !== undefined || !!this.editingArea || !this.state.currentJobId;
             if (this.state.review) {
-                const chosen = source ?? (this.editingArea ? this.state.source : null) ?? this.state.sources[0] ?? null;
+                this.state.area = explicitArea(area === undefined ? context.area : area);
+                const fixed = source ?? (this.editingArea && this.sourceWasChosen ? this.state.source : null);
+                const chosen = fixed ?? (this.getQuerySources ? this.getQuerySources(this.state.area)[0] : this.state.sources[0]) ?? null;
+                this.sourceWasChosen = !!fixed;
                 if (chosen && !this.state.sources.some(item => item.collectionId === chosen.collectionId && item.itemId === chosen.itemId)) {
                     this.state.sources.unshift(snapshotSource(chosen));
                 }
                 this.state.source = chosen ? snapshotSource(chosen) : null;
-                this.state.area = explicitArea(area === undefined ? context.area : area);
             }
         }
         this.editingArea = false;
@@ -104,6 +107,7 @@ export class RasterClipsController {
         if (this.state.pending || this.state.submitting) return;
         this.state.message = "";
         this.state.source = this.state.sources[index] ?? null;
+        this.sourceWasChosen = this.state.source !== null;
         this.render();
     }
 

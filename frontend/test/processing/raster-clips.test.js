@@ -47,9 +47,10 @@ class ClipControlDocument extends FakeRasterControlDocument {
  * @param {Object} [overrides={}] Processing transport overrides.
  * @param {Map<string,string>} [data=new Map()] Session data shared across reload tests.
  * @param {boolean} [realView=false] Bind the actual clip view and HTML controls.
+ * @param {Function|null} [getQuerySources=null] Composed default candidate policy.
  * @return {Object} Observable controller, storage, DOM and transport harness.
  */
-function fixture(overrides = {}, data = new Map(), realView = false) {
+function fixture(overrides = {}, data = new Map(), realView = false, getQuerySources = null) {
     const storage = new PendingSubmissionStorage({ getItem: key => data.get(key), setItem: (key,value) => data.set(key,value), removeItem: key => data.delete(key) });
     const requests = [];
     const api = { listJobs: async () => [],
@@ -68,7 +69,7 @@ function fixture(overrides = {}, data = new Map(), realView = false) {
         : { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
     const timers = [];
     let controller;
-    const options = { api, view, storage, getContext: () => context, onOpen() {}, onClose: () => controller.setActive(false), onEditArea() {},
+    const options = { api, view, storage, getQuerySources, getContext: () => context, onOpen() {}, onClose: () => controller.setActive(false), onEditArea() {},
         clock: { setTimeout(callback, delay) { timers.push([callback,delay]); return timers.length; }, clearTimeout() {} }, requestId: () => "request-1234567890" };
     controller = new RasterClipsController(options);
     return { controller, api, view, storage, requests, timers, options, data, doc, contexts, get context() { return context; }, setContext(value) { context = value; } };
@@ -85,6 +86,33 @@ test("submission freezes the selected source and box independently of later map 
     await h.controller.submit();
     h.controller.open(source, { ...box, selectedBounds: { west: 1, south: 2, east: 3, north: 4 } });
     assert.deepEqual(h.view.state.jobs[0].area.bounds, [77,22,78,23]);
+});
+
+test("generic clip review uses query candidates while explicit hidden raster choices remain available", async () => {
+    const hidden = { ...source, itemId: "hidden" }, enabled = { ...source, itemId: "enabled" };
+    let candidates = [enabled];
+    const h = fixture({}, new Map(), true, area => area ? candidates : []);
+    h.setContext({ sources: [hidden, enabled], area: box });
+    h.controller.open(); assert.equal(h.controller.state.source.itemId, "enabled");
+    assert.equal(h.requests.length, 0);
+    h.controller.open(hidden, box); assert.equal(h.controller.state.source.itemId, "hidden");
+    h.controller.editArea(); h.controller.open(); assert.equal(h.controller.state.source.itemId, "hidden");
+    h.controller.open(null, box); assert.equal(h.controller.state.source.itemId, "enabled");
+    candidates = []; h.controller.editArea(); h.controller.open();
+    assert.equal(h.controller.state.source, null); await h.controller.submit(); assert.equal(h.requests.length, 0);
+    h.controller.selectSource(0); await h.controller.submit();
+    assert.equal(h.requests[0].source.itemId, "hidden", "explicit selection is not gated by visibility or overlap");
+    h.controller.destroy();
+});
+
+test("query defaults never rewrite an uncertain clip submission", async () => {
+    const enabled = { ...source, itemId: "enabled" }; let candidates = [enabled];
+    const h = fixture({ submitClip: async intent => { h.requests.push(intent); throw Error("Response lost"); } }, new Map(), false, () => candidates);
+    h.controller.open(); await h.controller.submit(); const original = structuredClone(h.controller.state.pending);
+    candidates = []; h.setContext({ sources: [], area: null }); h.controller.open();
+    await h.controller.submit();
+    assert.deepEqual(h.requests, [original, original]); assert.deepEqual(h.controller.state.pending, original);
+    h.controller.destroy();
 });
 
 test("whole-raster context never becomes an implicit clip export", async () => {

@@ -1,7 +1,8 @@
-/** Editable statistic cards over the existing durable calculation workflow. */
+/** Editable fixed-raster cards and composed multi-raster queries over Processing. */
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { catalogSelectionsEqual } from "../selected-area.js";
+import { RasterSeriesCalculations } from "./raster-series-calculations.js";
 
 /** Execution status received from CalculationExecutor's onChange callback.
  * The JSDoc import refers to the field definitions in calculation-executor.js
@@ -22,7 +23,7 @@ export const STATISTIC_PRESETS = Object.freeze({
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sourceKey = source => source ? `${source.collectionId}\n${source.itemId}` : "";
 
-/** Own card identities and local validation; serialize native work through one executor. */
+/** Own statistic templates, validation and fixed or composed-query execution intent. */
 export class SummaryStatisticsController {
     /** Wire statistic cards to the existing Processing executor and composed actions.
      * @param {Object} dependencies Processing providers and composed UI actions.
@@ -30,6 +31,8 @@ export class SummaryStatisticsController {
      * @param {import("./jobs.js").ProcessingJobs} dependencies.jobs Shared owned-job observer.
      * @param {import("./summary-statistics-view.js").SummaryStatisticsView} dependencies.view Statistic controls.
      * @param {()=>Object} dependencies.getContext Available rasters and selected area.
+     * @param {"single"|"query"} [dependencies.sourceMode="single"] Initial fixed-card or composed map-query policy.
+     * @param {(area:Object|null)=>Object[]} [dependencies.getQuerySources] Composed catalog candidates; never an analysis authorization gate.
      * @param {()=>void} dependencies.onOpen Show this panel.
      * @param {()=>void} dependencies.onClose Close this panel.
      * @param {()=>void} dependencies.onEditArea Show sampling controls.
@@ -37,21 +40,26 @@ export class SummaryStatisticsController {
      * @param {Object} [dependencies.clock=globalThis] Debounce timers.
      * @param {import("./calculation-requests.js").CalculationRequests} dependencies.calculationRequests Independent recoverable calculation requests.
      * @param {Function} [dependencies.onCancelSelection] Cancel an in-progress area selection.
+     * @throws {TypeError} If the initial source policy is unsupported.
      */
     constructor(dependencies) {
-        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, onAreaChange = () => {}, clock = globalThis } = dependencies;
-        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, onAreaChange, clock });
+        const { api, jobs, view, getContext, getQuerySources = () => [], sourceMode = "single", onOpen, onClose, onEditArea, onCancelSelection = () => {}, onAreaChange = () => {}, clock = globalThis } = dependencies;
+        if (!["single", "query"].includes(sourceMode)) throw new TypeError("Unknown statistics source policy.");
+        Object.assign(this, { api, jobs, view, getContext, getQuerySources, onOpen, onClose, onCancelSelection, onAreaChange, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, pixelPoint: null, areaChoice: "selection",
-            active: false, automatic: true, currentWork: null, undo: false };
+            active: false, automatic: true, currentWork: null, undo: false, sourceMode, querySources: [] };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         this.executor = dependencies.calculationRequests.createClient("summary", snapshot => this.receive(snapshot));
+        this.queryCalculations = new RasterSeriesCalculations({ requests: dependencies.calculationRequests, clock, clientName: "summary-query" });
+        this.queryCalculations.setProgressListener(() => this.render());
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
+            onSourceMode: mode => this.chooseSourceMode(mode),
             onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
             onEdit: (id, change) => this.editStatistic(id, change), onAdd: preset => this.addStatistic(preset),
             onRemove: id => this.removeStatistic(id), onUndo: () => this.undoRemove(),
             onRun: id => this.request(id, "manual"), onStop: id => this.stopStatistic(id),
-            onRetry: () => void this.executor.retry(), onCancelWork: () => this.stopCurrentCalculation(),
+            onRetry: () => void this.retry(), onCancelWork: () => this.stopCurrentCalculation(),
         });
         this.render();
     }
@@ -81,6 +89,7 @@ export class SummaryStatisticsController {
     async start() {
         const unfinished = this.executor.snapshot.unfinishedCalculation;
         if (unfinished) {
+            this.state.sourceMode = "single";
             this.state.pixelPoint = unfinished.calculation.pixelPoint ?? null;
             this.state.area = this.state.selectedArea = unfinished.calculation.area;
             this.state.areaChoice = unfinished.calculation.area.kind === "wholeRaster" ? "whole" : ["catalogSelection", "polygonArea"].includes(unfinished.calculation.area.kind) ? "vector" : "selection";
@@ -93,6 +102,7 @@ export class SummaryStatisticsController {
         }
         if (unfinished?.context?.automatic) this.executor.stop();
         await this.executor.start();
+        await this.queryCalculations.recoverAndCancelPreviousSeriesCalculations();
         this.receive(this.executor.snapshot);
     }
 
@@ -102,6 +112,7 @@ export class SummaryStatisticsController {
      * @return {void}
      */
     open(source = null, area) {
+        if (source) this.chooseSourceMode("single");
         const context = this.getContext();
         if (!this.state.pixelPoint && context.pixelPoint) this.setPixelPoint(context.pixelPoint, false);
         const sources = [...(context.sources ?? [])];
@@ -116,16 +127,22 @@ export class SummaryStatisticsController {
             this.changeArea(this.state.selectedArea, false);
         }
         for (const card of this.state.statistics) {
+            if (this.state.sourceMode === "query") {
+                if (!card.valid && !card.checking) this.validateLater(card, false);
+                continue;
+            }
             const next = (source && card === this.state.statistics[0]) ? source : card.source ?? sources[0] ?? null;
             if (sourceKey(next) !== sourceKey(card.source)) this.editStatistic(card.id, { source: next }, false);
             else if (!card.valid && !card.checking) this.validateLater(card, false);
         }
         this.onOpen();
+        this.refreshQuerySources();
         this.render();
     }
 
     /**
-     * Refresh displayed raster names from composition without invalidating formulas or completed results.
+     * Refresh composed names and query candidates. Name-only edits preserve calculations;
+     * changed query candidates supersede the old query through its execution provider.
      * Submitted job metadata keeps the name recorded when the job was created.
      * @return {void}
      */
@@ -140,25 +157,39 @@ export class SummaryStatisticsController {
         };
         this.state.sources = this.state.sources.map(rename);
         for (const card of this.state.statistics) card.source = rename(card.source);
+        this.refreshQuerySources();
         if (changed) this.render();
     }
 
+    /** Apply panel visibility, cancelling transient queries and automatic fixed work.
+     * Explicit fixed-raster work retains its independent lifecycle when hidden.
+     * @param {boolean} active Whether composition presents Statistics.
+     * @return {void}
+     */
     setActive(active) {
         if (this.state.active === active) return;
         this.state.active = active;
         if (!active) {
             for (const card of this.state.statistics) if (card.requested === "automatic") card.requested = null;
             if (this.batch?.automatic) this.invalidateBatch();
+            this.queryRequested = this.queryManual = false;
         }
+        this.refreshQuerySources();
         this.render();
     }
     close() { this.setActive(false); this.onClose(); }
+    /** Apply the user's update policy; enabling waits for a new edit or query.
+     * @param {boolean} value Whether future input changes calculate automatically.
+     * @return {void}
+     */
     setAutomatic(value) {
         this.state.automatic = !!value;
         if (!value) {
             for (const card of this.state.statistics) if (card.requested === "automatic") card.requested = null;
             if (this.batch?.automatic) this.invalidateBatch();
+            this.queryRequested = this.queryManual = false;
         }
+        this.refreshQuerySources();
         // Enabling affects the next edit/click, not every existing card immediately.
         this.render();
     }
@@ -300,6 +331,12 @@ export class SummaryStatisticsController {
     calculateSelection(explicit = false) {
         if (!this.isActive) return;
         if (!explicit && (!this.state.automatic || this.state.areaChoice !== "selection" || this.state.area?.kind !== "selectedArea")) return;
+        if (this.state.sourceMode === "query") {
+            this.queryRequested = true;
+            if (explicit) { this.queryManual = true; this.manualInputKey = this.queryKey(); }
+            this.refreshQuerySources(explicit);
+            return;
+        }
         if (explicit) {
             if (this.batch?.cards.some(entry => {
                 const card = this.state.statistics.find(item => item.id === entry.id);
@@ -311,7 +348,15 @@ export class SummaryStatisticsController {
         this.render();
     }
 
+    /** Edit a template; a deliberate raster binding selects fixed-raster mode.
+     * Names do not change immutable calculation identity or submitted exports.
+     * @param {number} id Statistic identity.
+     * @param {{label?:string,expression?:string,source?:Object|null}} change Edited fields.
+     * @param {boolean} [automatic=true] Whether normal automatic-update policy applies.
+     * @return {void}
+     */
     editStatistic(id, change, automatic = true) {
+        if (Object.hasOwn(change, "source")) this.chooseSourceMode("single");
         const card = this.state.statistics.find(item => item.id === id);
         if (!card) return;
         const oldKey = this.key(card);
@@ -324,6 +369,7 @@ export class SummaryStatisticsController {
         }
         // Names are presentation only; the immutable original export keeps its run label.
         this.render();
+        this.refreshQuerySources();
     }
     addStatistic(preset) {
         if (this.state.statistics.length >= 5 || !STATISTIC_PRESETS[preset]) return;
@@ -342,6 +388,7 @@ export class SummaryStatisticsController {
         this.invalidateBatch(id);
         this.render();
         this.view.focusUndo?.();
+        this.refreshQuerySources();
     }
     undoRemove() {
         if (!this.removed || this.state.statistics.length >= 5) return;
@@ -396,7 +443,7 @@ export class SummaryStatisticsController {
         }
         this.render(); this.scheduleNextBatch();
     }
-    /** Queue one card; explicit actions submit without waiting for editor validation.
+    /** Queue fixed work immediately or a query when its templates pass editor validation.
      * Automatic typing still waits for debounced feedback. A manual submission
      * supersedes any pending feedback so a late response cannot change its state.
      * @param {number} id Stable card identity.
@@ -405,6 +452,16 @@ export class SummaryStatisticsController {
      * @return {void}
      */
     request(id, kind, debounce = false) {
+        if (this.state.sourceMode === "query") {
+            const card = this.state.statistics.find(item => item.id === id);
+            if (!card?.expression.trim() || !this.state.area) return;
+            this.queryRequested = true;
+            this.queryManual = kind === "manual";
+            if (this.queryManual) this.manualInputKey = this.queryKey();
+            if (!card.valid) this.validateLater(card, false);
+            this.refreshQuerySources(kind === "manual");
+            return;
+        }
         const card = this.state.statistics.find(item => item.id === id);
         if (!card || !card.source || !this.state.area) return;
         if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
@@ -421,6 +478,13 @@ export class SummaryStatisticsController {
      * @return {void}
      */
     stopStatistic(id) {
+        if (this.state.sourceMode === "query") {
+            this.queryRequested = this.queryManual = false;
+            for (const card of this.state.statistics) card.requested = null;
+            this.queryCalculations.updateCalculationForPanelVisibility(false);
+            this.render();
+            return;
+        }
         if (this.state.vectorSelecting) this.onCancelSelection();
         const card = this.state.statistics.find(item => item.id === id);
         if (card) { card.requested = null; card.cancelled = true; card.message = "Calculation cancelled"; }
@@ -471,9 +535,16 @@ export class SummaryStatisticsController {
     /** Submit compatible statistics, isolating manually requested unchecked formulas.
      * Previously checked formulas may share a scan. An unchecked manual formula
      * is submitted alone so its server rejection cannot block valid peers.
+     * Query mode passes validated templates to the independent multi-raster provider.
      * @return {void}
      */
     startNextBatch() {
+        if (this.state.sourceMode === "query") {
+            if (this.state.statistics.some(card => card.requested === "automatic") && this.isActive && this.state.automatic) this.queryRequested = true;
+            for (const card of this.state.statistics) card.requested = null;
+            this.refreshQuerySources();
+            return;
+        }
         const execution = this.executor.snapshot;
         if (this.destroyed || this.batch || !execution.isIdle) return;
         const eligible = this.state.statistics.filter(card => card.requested && (card.valid || (card.requested === "manual" && card.expression.trim())) && !card.checking && card.source && this.state.area &&
@@ -556,6 +627,7 @@ export class SummaryStatisticsController {
     /** Schedule feedback for the chosen area workflow, preserving card-level failures.
      * Idle vector snapshots do not replace map-click guidance. Formula and source
      * feedback remain local to each card while selection controls show their lifecycle.
+     * Query rows project immutable per-raster results; late obsolete work cannot be current.
      * @return {void}
      */
     render() {
@@ -590,11 +662,104 @@ export class SummaryStatisticsController {
             if (this.state.vectorSelecting) card.message = "Calculating · selecting filtered features…";
             else if (!this.state.area && this.state.selectionMessage) card.message = this.state.selectionMessage;
         }
-        this.view.render(this.state);
+        if (this.state.sourceMode === "query") {
+            const work = this.queryCalculations;
+            this.state.recoverable = work.needsRecovery || execution.recoverable;
+            this.state.queryMessage = work.message;
+            const statistics = this.state.statistics.map(card => {
+                const index = work.formulas.findIndex(formula => formula.id === card.id);
+                const queryResults = this.state.querySources.map(source => {
+                    const key = sourceKey(source);
+                    const current = work.results.get(key);
+                    const saved = current?.job ? current : work.previousResults?.get(key);
+                    const progress = work.progress.get(key);
+                    const job = this.jobs.jobs.find(job => job.jobId === saved?.job?.jobId) ?? saved?.job;
+                    const row = job?.status === "deleted" ? null : job?.result?.rows.find(result => result.label.endsWith(` [${card.id}]`));
+                    const result = row ? { key, row, job, source: saved.calculationInputs.source, area: saved.calculationInputs.area } : null;
+                    return { key, source, result, current: !!current && !!result && !progress && index >= 0 && !card.checking && !card.error && !card.cancelled,
+                        pending: !!progress, error: current?.error ?? "", message: progress?.message ?? current?.error ?? (result ? "" : "Ready to calculate") };
+                });
+                return { ...card, queryResults, source: null, result: null, current: work.complete && index >= 0 && !work.hasErrors,
+                    pending: work.busy, requested: null, progress: null, awaitingMap: !this.state.area,
+                    message: card.error ? card.message : card.checking ? "Checking formula…" : !this.state.area ? "Click the map to select an area."
+                        : !this.state.querySources.length ? "No enabled rasters intersect this area."
+                        : index < 0 ? "Enter a valid formula" : work.message === "Raster series complete." ? "Up to date" : work.message || "Ready to calculate" };
+            });
+            this.view.render({ ...this.state, statistics });
+        } else this.view.render(this.state);
     }
+    /** Switch between a composed all-raster query and deliberately fixed card bindings.
+     * Switching policy cancels query jobs, without authorizing or hiding Catalog sources.
+     * Fixed choices refresh from current composition, retaining deliberately bound sources.
+     * @param {"single"|"query"} mode Requested source policy.
+     * @return {void}
+     * @throws {TypeError} If the source policy is unknown.
+     */
+    chooseSourceMode(mode) {
+        if (!["single", "query"].includes(mode)) throw new TypeError("Unknown statistics source policy.");
+        if (this.state.sourceMode === mode) return;
+        if (this.batch?.automatic) this.invalidateBatch();
+        this.queryRequested = this.queryManual = false;
+        this.state.sourceMode = mode;
+        if (mode === "single") {
+            this.state.sources = [...(this.getContext().sources ?? [])];
+            for (const card of this.state.statistics) {
+                if (card.source && !this.state.sources.some(source => sourceKey(source) === sourceKey(card.source))) this.state.sources.push(card.source);
+            }
+        }
+        for (const card of this.state.statistics) {
+            card.requested = null;
+            if (mode === "single" && !card.source) card.source = this.state.sources[0] ?? null;
+        }
+        this.refreshQuerySources();
+        this.render();
+    }
+    /** Refresh candidate identities and formulas through composition, retaining per-raster execution isolation.
+     * Opening alone does not submit. Automatic queries supersede old inputs; explicitly
+     * requested query work stops on navigation/input changes, like a raster-stack query.
+     * Fixed manual calculations retain their existing independent lifecycle.
+     * @param {boolean} [explicit=false] Run/retry the current validated query now.
+     * @return {void}
+     */
+    refreshQuerySources(explicit = false) {
+        const work = this.queryCalculations;
+        if (this.state.sourceMode !== "query") { work.updateCalculationForPanelVisibility(false); return; }
+        this.state.querySources = this.getQuerySources(this.state.area).map(source => ({ ...source }));
+        const formulas = this.state.statistics.filter(card => card.valid && !card.checking).map(card => ({
+            id: card.id, label: card.label, expression: card.expression,
+            calculationLabel: this.label(card).slice(0, 65) + ` [${card.id}]`,
+        }));
+        if (this.queryManual && this.manualInputKey !== this.queryKey()) this.queryManual = false;
+        work.updateCalculationInputs(this.state.querySources.map(source => ({ key: sourceKey(source), label: source.label,
+            item: { collection: source.collectionId, id: source.itemId } })),
+        this.state.area, "Current statistics area", formulas, this.state.pixelPoint);
+        const active = this.isActive && !!this.state.area && !!formulas.length && !!this.state.querySources.length
+            && ((this.state.automatic && this.queryRequested) || this.queryManual || explicit);
+        work.updateCalculationForPanelVisibility(active);
+        if (explicit && active) work.calculateRemainingRasters();
+        this.render();
+    }
+    /** Recover each owning execution namespace with its original submission keys.
+     * @return {Promise<void>} Recovery attempts; server jobs may still be running.
+     */
+    async retry() { await Promise.all([this.executor.snapshot.recoverable ? this.executor.retry() : Promise.resolve(), this.queryCalculations.retryInterruptedCalculations()]); }
+    /** Identify manual query inputs independently of asynchronous formula feedback.
+     * Presentation names and validation completion do not supersede a user request.
+     * @return {string} Source, area, formula and applicable pixel identity.
+     */
+    queryKey() {
+        return JSON.stringify([this.getQuerySources(this.state.area).map(sourceKey).sort(), this.state.area,
+            this.state.statistics.map(card => [card.id, card.expression.trim()]),
+            calculationPixelPoint(this.state.statistics, this.state.pixelPoint)]);
+    }
+    /** Release validation, execution observers and retained presentation state.
+     * Unfinished requests keep their owned recovery records for the next startup.
+     * @return {void}
+     */
     destroy() {
         this.destroyed = true;
         for (const card of this.state.statistics) { this.clock.clearTimeout(card.timer); card.abort?.abort(); }
         this.executor.destroy(); this.view.unbind();
+        this.queryCalculations.destroy();
     }
 }
