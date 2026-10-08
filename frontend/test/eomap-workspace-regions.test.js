@@ -216,8 +216,8 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Analysis · Map results/);
-    assert.match(inspection.source, /class="map-inspection-analysis" aria-label="Analysis"/);
+    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
+    assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Raster analysis"/);
     assert.match(inspection.source, /id="open-calculations-dock"[\s\S]*?aria-controls="calculations-panel"/);
     assert.match(inspection.source, /id="map-inspection-more-summary"[\s\S]*?popovertarget="workspace-tool-actions"/);
     assert.match(
@@ -228,9 +228,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         ["feature", "vector-feature-inspector"],
         ["time-series", "vector-time-series"],
         ["feature-profile", "vector-feature-profile"],
-        ["histogram", "map-histogram-panel"],
         ["raster-clips", "raster-clips-panel"],
-        ["calculations", "calculations-panel"],
         ["annotations", "annotations-panel"],
         ["style", "layer-style-editor"],
     ]) {
@@ -349,8 +347,8 @@ test("raster histogram owns its sampling controls and results", () => {
     const disclosure = requireElementRange("raster-sampling-disclosure");
     const sampling = requireElementRange("raster-sampling-area-controls");
     assert.ok(exploration.start > panel.end);
-    assert.match(exploration.source, /role="tabpanel"/);
-    assert.match(exploration.source, /aria-labelledby="map-inspection-tab-histogram"/);
+    assert.match(exploration.source, /role="region"/);
+    assert.match(exploration.source, /aria-labelledby="map-click-histogram"/);
     for (const id of [
         "raster-sampling-disclosure",
         "raster-sampling-area-controls",
@@ -388,11 +386,39 @@ test("raster histogram owns its sampling controls and results", () => {
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
 });
 
-test("inspection header contains result navigation in consistent raster then feature order", () => {
+test("inspection header groups three raster destinations separately from clicked-point features", () => {
     const headerEnd = MARKUP.indexOf("</header>", requireMarkupPosition("map-inspection-dock-title"));
     assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
     assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
-    assert.ok(requireMarkupPosition("map-inspection-tab-histogram") < requireMarkupPosition("map-inspection-tab-feature"));
+    const raster = requireElementRange("map-inspection-raster-analysis");
+    const point = requireElementRange("map-click-navigation");
+    assert.ok(raster.end < point.start);
+    assert.match(point.source, /^<nav[^>]*aria-labelledby="map-click-navigation-label"/);
+    assert.match(requireElementRange("map-click-navigation-label").source,
+        /^<strong[^>]*>Features at clicked point<\/strong>$/);
+    assert.doesNotMatch(point.source, /<details\b|<summary\b/);
+    assert.equal(countMarkupId("map-click-disclosure"), 0);
+    assert.equal(countMarkupId("map-click-navigation"), 1);
+    assert.equal(countMarkupId("map-click-navigation-label"), 1);
+    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\],\s*#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px\)/s);
+    assert.match(point.source, /Features at clicked point/);
+    for (const [id, panel, caption] of [
+        ["map-click-histogram", "map-histogram-panel", "Distributions"],
+        ["open-calculations-dock", "calculations-panel", "Statistics"],
+        ["open-raster-series-dock", "raster-series", "Raster stack"],
+    ]) {
+        const control = requireElementRange(id);
+        assert.ok(control.start > raster.start && control.end < raster.end);
+        assert.match(control.source, new RegExp(`aria-controls="${panel}"`));
+        assert.match(control.source, /aria-pressed="false"/);
+        assert.doesNotMatch(control.source, /role="tab"/);
+        assert.match(control.source, new RegExp(`>${caption}</button>`));
+        assert.match(requireElementRange(panel).source, new RegExp(`role="region"[\\s\\S]*?aria-labelledby="${id}"`));
+    }
+    assert.equal(countMarkupId("map-inspection-tab-histogram"), 0);
+    assert.equal(countMarkupId("map-inspection-tab-calculations"), 0);
+    assert.equal(countMarkupId("map-inspection-tab-raster-series"), 0);
+    assert.doesNotMatch(point.source, /map-click-histogram-status|map-click-histogram"/);
     assert.equal(countMarkupId("map-click-position"), 0);
 });
 
@@ -401,8 +427,8 @@ test("Raster histogram leads with sampling before results and mode", () => {
         />Raster distributions</);
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histogram">×/);
-    assert.match(requireElementRange("map-inspection-tab-histogram").source,
-        />Raster distributions</);
+    assert.match(requireElementRange("map-click-histogram").source,
+        />Distributions</);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
@@ -571,7 +597,7 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
     );
     assert.match(
         MARKUP,
-        /id="map-histogram-panel"[^>]*role="tabpanel"/s
+        /id="map-histogram-panel"[^>]*role="region"/s
     );
 });
 
@@ -589,7 +615,7 @@ test("workspace overflow shares one native action list and keeps statistics sett
     }
     assert.match(summary.source, /id="summary-auto"/);
     assert.doesNotMatch(actions.source, /id="summary-auto"/);
-    assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-series-dock|open-raster-clips-dock)"/);
+    assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
 test("semantic regions preserve one DOM instance of every owned control", () => {
@@ -638,7 +664,10 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection-tab-feature",
         "map-inspection-tab-time-series",
         "map-inspection-tab-feature-profile",
-        "map-inspection-tab-histogram",
+        "map-inspection-raster-analysis",
+        "map-click-histogram",
+        "open-calculations-dock",
+        "open-raster-series-dock",
         "map-inspection-tab-style",
         "toggle-map-inspection-dock",
         "map-histogram-panel",

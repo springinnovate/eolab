@@ -126,7 +126,8 @@ export class SummaryStatisticsView {
      * Closed panels update only their visible opener, when its text changes.
      * Result callbacks never wait for drawing; newer state replaces a pending draw.
      * @param {Object} state Latest summary controller state.
-     * @param {boolean} state.active Whether composition has opened Summarize.
+     * @param {boolean} state.active Whether composition has opened raster statistics.
+     * @param {{pending:boolean,source:{collectionId:string,itemId:string,label:string}|null}[]} state.statistics Owned statistic cards; full state is retained for drawing.
      * @return {void}
      */
     render(state) {
@@ -136,8 +137,12 @@ export class SummaryStatisticsView {
         this.onContextChange({ source: sources.length === 1 ? sources[0]
             : sources.length ? `${sources.length} rasters in statistic cards` : "No raster selected",
             scope: this.areaDescription(state) });
-        const label = state.statistics.some(card => card.pending) ? "Summarize · working" : "Summarize";
-        for (const opener of this.openers) if (opener.textContent !== label) opener.textContent = label;
+        const working = state.statistics.some(card => card.pending);
+        for (const opener of this.openers) {
+            const name = opener === this.openers[0] ? "Raster statistics" : "Statistics";
+            const label = name + (working ? " · working" : "");
+            if (opener.textContent !== label) opener.textContent = label;
+        }
         if (!state.active) {
             this.cancelScheduledRender();
             return;
