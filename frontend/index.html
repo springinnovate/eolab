@@ -561,7 +561,7 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
-        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Summarize</button>
+        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Raster statistics</button>
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
@@ -588,7 +588,7 @@
       <aside id="map-inspection" popover="manual" aria-labelledby="map-inspection-dock-title" aria-describedby="map-inspection-context">
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
-          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Analysis · Map results</strong>
+          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
           <button id="toggle-map-inspection-dock" class="secondary-button"
             type="button" aria-controls="map-click-summary map-inspection-tabs map-inspection-panels"
             aria-expanded="true">Minimize</button>
@@ -596,14 +596,23 @@
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             aria-label="Map and analysis tools">Tools</button>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
+          <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Raster analysis">
+            <strong>Raster analysis</strong>
+            <div class="map-inspection-raster-actions">
+              <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
+                aria-describedby="map-click-histogram-status" aria-pressed="false">Distributions</button>
+              <button id="open-calculations-dock" class="map-inspection-tab" type="button"
+                aria-controls="calculations-panel" aria-pressed="false">Statistics</button>
+              <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
+                aria-controls="raster-series" aria-pressed="false">Raster stack</button>
+            </div>
+            <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
+          </nav>
           <details id="map-click-disclosure" class="map-click-disclosure" hidden>
-          <summary id="map-click-disclosure-label">Map click results</summary>
+          <summary id="map-click-disclosure-label">Features at clicked point</summary>
           <section id="map-click-summary" class="map-click-summary" aria-labelledby="map-click-context" hidden>
             <p id="map-click-context" class="map-inspection-context"></p>
             <div class="map-click-results">
-              <button id="map-click-histogram" type="button" aria-controls="map-histogram-panel" aria-pressed="false" hidden>
-                <strong>Raster distributions over this area</strong><span id="map-click-histogram-status" role="status"></span>
-              </button>
               <button id="map-click-feature" type="button" aria-controls="vector-feature-inspector" aria-pressed="false" hidden>
                 <strong>Vector features at this point</strong><span id="map-click-feature-status" role="status"></span>
               </button>
@@ -611,23 +620,12 @@
           </section>
           </details>
           <div class="map-inspection-navigation">
-          <nav class="map-inspection-analysis" aria-label="Analysis">
-            <span>Analysis</span>
-            <button id="open-calculations-dock" class="secondary-button" type="button"
-              aria-controls="calculations-panel">Summarize</button>
-          </nav>
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
-            <button id="map-inspection-tab-raster-series" class="map-inspection-tab" type="button" role="tab"
-              aria-controls="raster-series" aria-selected="false" tabindex="-1" hidden>Raster series</button>
             <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Shared layer</button>
-            <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Summarize</button>
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
               aria-selected="false" tabindex="-1" hidden>Raster clips</button>
-            <button id="map-inspection-tab-histogram" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="map-histogram-panel"
-              aria-selected="false" tabindex="-1" hidden>Raster distributions</button>
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
               aria-selected="false" tabindex="-1" hidden>Features</button>
@@ -647,9 +645,9 @@
           </div>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
-          <section id="raster-series" role="tabpanel" aria-labelledby="map-inspection-tab-raster-series" hidden>
+          <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster series</h2>
+              <h2>Raster stack</h2>
               <button id="close-raster-series" class="secondary-button" type="button" aria-label="Close raster series">&times;</button>
             </header>
             <div id="raster-series-area-controls">
@@ -720,8 +718,9 @@
               <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
           </section>
-          <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
-            <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>
+          <section id="calculations-panel" role="region" aria-labelledby="open-calculations-dock" hidden>
+            <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster statistics">&times;</button></div>
+            <p class="map-analysis-purpose">Calculate values such as mean, totals and area for the raster chosen in each statistic.</p>
             <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
             <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
             <p id="calculations-area-description" class="summary-area-details"></p>
@@ -1003,13 +1002,14 @@
               </div>
             </details>
           </section>
-          <section id="map-histogram-panel" role="tabpanel"
-            aria-labelledby="map-inspection-tab-histogram" hidden>
+          <section id="map-histogram-panel" role="region"
+            aria-labelledby="map-click-histogram" hidden>
             <header class="map-histogram-toolbar">
               <h2 id="map-histogram-heading">Raster distributions</h2>
               <button id="close-map-histogram" class="secondary-button" type="button"
                 aria-label="Close raster histogram">×</button>
             </header>
+            <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span>Sampling area</span>

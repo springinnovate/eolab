@@ -92,21 +92,21 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
-            { name: "raster-series", label: "Raster series", panel: this.rasterSeries,
-                tab: documentContext.querySelector("#map-inspection-tab-raster-series") },
+            { name: "raster-series", label: "Raster stack", panel: this.rasterSeries, raster: true,
+                tab: documentContext.querySelector("#open-raster-series-dock") },
             { name: "annotations", label: "Shared layer", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
-            { name: "calculations", label: "Summarize", panel: this.calculations,
-                tab: documentContext.querySelector("#map-inspection-tab-calculations") },
+            { name: "calculations", label: "Statistics", panel: this.calculations, raster: true,
+                tab: this.dockCalculationOpener },
             {
                 name: "raster-clips", label: "Raster clips", panel: this.rasterClips,
                 tab: documentContext.querySelector("#map-inspection-tab-raster-clips"),
             },
             {
                 name: "histogram",
-                label: "Raster distributions",
+                label: "Distributions", raster: true,
                 panel: this.histogram,
-                tab: documentContext.querySelector("#map-inspection-tab-histogram"),
+                tab: documentContext.querySelector("#map-click-histogram"),
             },
             {
                 name: "feature",
@@ -141,7 +141,8 @@ export class MapInspectionController {
         ];
         const tasks = {
             style: "Appearance", filter: "Data selection", annotations: "Shared layers",
-            "raster-clips": "Export",
+            "raster-clips": "Export", histogram: "Raster analysis", calculations: "Raster analysis",
+            "raster-series": "Raster analysis", feature: "Point inspection",
         };
         for (const tool of this.tools) {
             tool.task = tasks[tool.name] ?? "Analysis";
@@ -174,7 +175,7 @@ export class MapInspectionController {
         };
         this.closeButton.addEventListener("click", this.onClose);
         this.minimizeButton.addEventListener("click", this.onMinimize);
-        for (const { tab } of this.tools) {
+        for (const { tab } of this.tools.filter(tool => !tool.raster)) {
             tab.addEventListener("click", this.onTabClick);
             tab.addEventListener("keydown", this.onTabKeydown);
         }
@@ -241,7 +242,7 @@ export class MapInspectionController {
         }
         this.#setToolLabel(
             "histogram",
-            "Raster distributions",
+            "Distributions",
             resultCount === null ? "" : String(resultCount) + " raster results"
         );
         this.#showTool("histogram", options);
@@ -416,34 +417,36 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Render both streams without moving focus or interpreting analysis data.
-     * Task switches prioritize foreground click streams; subsequent result updates
-     * preserve the user's disclosure choice and expose unread/failure feedback.
+    /** Render raster feedback beside raster navigation and point feedback in its own disclosure.
+     * Task switches prioritize point details only while inspecting features; subsequent
+     * result updates preserve disclosure choice and independent unread/failure feedback.
      * @return {void}
      */
     #renderClickSummary() {
-        this.clickSummary.hidden = !this.hasClick || this.minimized;
+        const feature = this.clickResults.find(entry => entry.name === "feature");
+        this.clickSummary.hidden = !this.hasClick || feature.snapshot === null || this.minimized;
         this.clickDisclosure.hidden = this.clickSummary.hidden;
         if (this.activeTool !== this.clickDisclosureTool) {
-            this.clickDisclosure.open = [null, "histogram", "feature"].includes(this.activeTool);
+            this.clickDisclosure.open = [null, "feature"].includes(this.activeTool);
             this.clickDisclosureTool = this.activeTool;
         }
-        const updating = this.clickResults.some(entry => entry.snapshot?.state === "loading");
-        const unavailable = this.clickResults.some(entry => entry.snapshot?.state === "error");
-        const unread = this.clickResults.some(entry => entry.unread);
-        this.clickDisclosureLabel.textContent = "Map click results" +
+        const updating = feature.snapshot?.state === "loading";
+        const unavailable = feature.snapshot?.state === "error";
+        const unread = feature.unread;
+        this.clickDisclosureLabel.textContent = "Features at clicked point" +
             (updating ? " · Updating…" : "") + (unavailable ? " · Some unavailable" : "") +
             (unread ? " · New results" : "");
         this.clickContext.textContent = this.clickLabel;
         for (const entry of this.clickResults) {
             const {name, button, status, snapshot} = entry;
             const loading = snapshot?.state === "loading";
-            button.hidden = snapshot === null;
-            button.disabled = snapshot === null || ["empty", "invalidated"].includes(snapshot.state);
+            button.hidden = name === "feature" && snapshot === null;
+            button.disabled = name === "feature" && (snapshot === null || ["empty", "invalidated"].includes(snapshot.state));
             button.setAttribute("data-unread", String(entry.unread));
             button.setAttribute("data-loading", String(loading));
             button.setAttribute("aria-pressed", String(this.activeTool === name && !this.minimized));
             status.textContent = snapshot === null ? "" : snapshot.message + (entry.unread ? " · New results" : "");
+            if (name === "histogram") status.hidden = snapshot === null || this.minimized;
             const tool = this.#tool(name);
             tool.tab.setAttribute("data-unread", String(entry.unread));
             tool.panel.setAttribute("data-inspection-loading", String(loading));
@@ -633,7 +636,7 @@ export class MapInspectionController {
      * Resolve one controller-owned presentation descriptor.
      *
      * @param {string} name Stable presentation name.
-     * @return {{name:string,label:string,task:string,context:MapInspectionToolContext|null,panel:HTMLElement,tab:HTMLButtonElement}}
+     * @return {{name:string,label:string,task:string,context:MapInspectionToolContext|null,panel:HTMLElement,tab:HTMLButtonElement,raster?:boolean}}
      * Tool descriptor.
      * @throws {RangeError} When the controller receives an unknown tool name.
      */
@@ -664,13 +667,13 @@ export class MapInspectionController {
      * Set the visible and accessible label for one dock tool.
      *
      * @param {string} name Stable presentation name.
-     * @param {string} label Visible tab label.
+     * @param {string} label Visible retained-tab label; raster navigation keeps its stable caption.
      * @param {string} [title=""] Optional full hover label.
      * @return {void}
      */
     #setToolLabel(name, label, title = "") {
-        const { tab } = this.#tool(name);
-        tab.textContent = label;
+        const { tab, raster } = this.#tool(name);
+        if (!raster) tab.textContent = label;
         tab.title = title;
     }
 
@@ -746,7 +749,7 @@ export class MapInspectionController {
      * @return {void}
      */
     #moveTabFocus(event) {
-        const openTools = this.#openTools().filter(({tab}) => !tab.hidden);
+        const openTools = this.#openTools().filter(({tab, raster}) => !raster && !tab.hidden);
         const currentIndex = openTools.findIndex(
             ({ tab }) => tab === event.currentTarget
         );
@@ -810,9 +813,9 @@ export class MapInspectionController {
 
     /**
      * Render foreground task/source/scope, retained navigation and active-panel visibility.
-     * Result cards replace their tabs; other open tools retain keyboard navigation.
-     * Show the Summarize opener only when its retained tab is unavailable, moving
-     * focus to that tab if opening the panel hides the focused opener.
+     * Raster destinations use stable native buttons; their owners handle opening.
+     * Point results replace their retained tab; other open tools keep tab navigation.
+     * Opening or updating a tool never replaces its focused raster destination.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
      *
@@ -823,7 +826,7 @@ export class MapInspectionController {
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
-        this.dockTitle.textContent = tool === null ? "Analysis · Map results" : `${tool.task} · ${tool.label}`;
+        this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
         this.dockTitle.title = this.dockTitle.textContent;
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
@@ -840,29 +843,27 @@ export class MapInspectionController {
         this.minimizeButton.setAttribute(
             "aria-label", this.minimized ? "Expand map tools" : "Minimize map tools"
         );
-        for (const { name, panel, tab } of this.tools) {
+        for (const { name, panel, tab, raster } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
             const result = this.clickResults.find(entry => entry.name === name);
             const hasCard = this.hasClick && result?.snapshot != null;
-            tab.hidden = !open || hasCard;
-            tab.setAttribute("aria-selected", String(active));
-            tab.tabIndex = active ? 0 : -1;
+            tab.hidden = raster ? false : !open || hasCard;
+            if (raster) tab.setAttribute("aria-pressed", String(active && !this.minimized));
+            else {
+                tab.setAttribute("aria-selected", String(active));
+                tab.tabIndex = active ? 0 : -1;
+            }
             panel.setAttribute("data-map-inspection-active", String(active));
             panel.setAttribute(
                 "aria-hidden", String(!active || this.minimized)
             );
             panel.setAttribute("aria-labelledby", hasCard ? result.button.id : tab.id);
         }
-        const visibleTabs = this.tools.filter(({tab}) => !tab.hidden);
+        const visibleTabs = this.tools.filter(({tab, raster}) => !raster && !tab.hidden);
         this.tabList.hidden = visibleTabs.length === 0 || this.minimized;
         if (!visibleTabs.some(({tab}) => tab.tabIndex === 0) && visibleTabs.length > 0) {
             visibleTabs[0].tab.tabIndex = 0;
-        }
-        const openerFocused = this.document.activeElement === this.dockCalculationOpener;
-        this.dockCalculationOpener.hidden = !this.calculations.hidden && !this.minimized;
-        if (this.dockCalculationOpener.hidden && openerFocused) {
-            this.#tool("calculations").tab.focus();
         }
         const active = this.minimized ? null : this.activeTool;
         this.#renderClickSummary();
@@ -908,7 +909,7 @@ export class MapInspectionController {
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
         this.minimizeButton.removeEventListener("click", this.onMinimize);
-        for (const { tab } of this.tools) {
+        for (const { tab } of this.tools.filter(tool => !tool.raster)) {
             tab.removeEventListener("click", this.onTabClick);
             tab.removeEventListener("keydown", this.onTabKeydown);
         }

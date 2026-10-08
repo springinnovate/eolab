@@ -31,6 +31,19 @@ test("both summary openers share the workflow and publish owned source/area cont
         assert.equal(h.submits(), 0, "opening a destination never submits a calculation");
         h.controller.close();
     }
+    assert.equal(h.view.openers[0].textContent, "Raster statistics");
+    assert.equal(h.view.openers[1].textContent, "Statistics");
+    h.view.openers[1].focus();
+    const original = h.view.openers[1];
+    h.controller.state.statistics[0].pending = true;
+    h.controller.render();
+    assert.equal(h.view.openers[0].textContent, "Raster statistics · working");
+    assert.equal(h.view.openers[1].textContent, "Statistics · working");
+    assert.equal(h.document.activeElement, original);
+    h.controller.state.statistics[0].pending = false;
+    h.controller.render();
+    assert.equal(h.view.openers[1].textContent, "Statistics");
+    assert.equal(h.document.activeElement, original);
     await h.open(); h.controller.setAutomatic(false);
     h.view.elements.area.value = "whole";
     h.view.elements.area.dispatchEvent(new Event("change"));

@@ -367,7 +367,7 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     firstRow.children[1].children[0].dispatchEvent(new Event("click"));
     const actions = firstRow.children[1].children;
     assert.deepEqual(actions.map(button => button.getAttribute("aria-label")), [
-        "Style first-raster.tif", "Summarize first-raster.tif over this area", "Download clip of first-raster.tif",
+        "Style first-raster.tif", "Calculate statistics for first-raster.tif over this area", "Download clip of first-raster.tif",
     ]);
     assert.equal(actions[2].title, "Download clip");
     actions[1].dispatchEvent(new Event("click"));

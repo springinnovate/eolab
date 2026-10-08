@@ -3,14 +3,16 @@
 This guide is for people using EOLab to write raster formulas, interpret their
 results, and understand the calculation limits.
 
-Use **Summarize** to calculate statistics over a sampling box, a filtered
+Use **Raster statistics** to calculate statistics over a sampling box, a filtered
 [vector layer](vector-sampling.md), or an explicitly selected whole raster.
-Open it from **Analysis → Summarize** in the right dock, the right-side map
+Open it from **Raster analysis → Statistics** in the right dock, the right-side map
 opener when the dock is closed, or a layer/histogram shortcut. The dock heading
 identifies the active task; its context line shows the summary's raster bindings
 and selected area. Switching tools preserves each tool's own context.
-Incoming point/area inspection remains under **Map click results**, with updating,
-unavailable and new-result feedback visible even when that disclosure is collapsed.
+**Distributions** and **Raster stack** are adjacent raster-analysis destinations.
+Point inspection remains under **Features at clicked point**, with its own updating,
+unavailable and new-result feedback when collapsed. Raster distribution feedback
+stays in the raster-analysis group.
 **Tools** opens one shared list of analysis, export and map-display actions. Its
 button appears in the dock while open and on the map when the dock is closed;
 press Escape or click outside the list to dismiss it.
@@ -31,14 +33,14 @@ invalid card cannot reject a valid neighbor. Checked formulas on the same raster
 can share a scan. Changing only the raster or area reuses the editor feedback.
 Opening the panel or renaming a card does not run it.
 
-From a histogram, **Summarize this area** opens the cards and runs all configured
+From a histogram, **Calculate statistics for this area** opens the cards and runs all configured
 valid statistics over that area. The first card
 uses that histogram's raster; other cards keep their raster bindings. If no area
 has been selected, the result position says **Click the map to calculate**. Click
 the map to select a sampling box; the automatic-update policy below then applies.
 
 **Update statistics automatically**, beside the summary's area controls, is on by default.
-With Summarize active, a new map box can update statistics automatically.
+With Statistics active, a new map box can update statistics automatically.
 Each calculation is submitted as one job. The worker prepares the raster grid
 and work estimates, then immediately calculates the result. Progress changes
 from queued to preparing to calculating; prepared estimates remain available
@@ -56,7 +58,7 @@ with no numeric result; the states below explain why.
 
 Changing the active calculation cancels obsolete work. Closing or switching away
 from the panel cancels automatic work; manually submitted work can continue in
-**Summarize → Previous calculation results**. Keep the same browser session to recover jobs after
+**Statistics → Previous calculation results**. Keep the same browser session to recover jobs after
 reload. A shared map link does not grant access to another person's jobs.
 If submission is uncertain, use **Recover / retry** instead of creating a second
 request. Exported names and formulas describe the submitted calculation even if

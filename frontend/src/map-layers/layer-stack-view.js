@@ -526,7 +526,7 @@ export class MapLayerStackView {
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
             ...(layer.datasetKind === "raster" ? [this.#button(
-                "Summarize", "Summarize " + accessibleName, layer.key,
+                "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
         );

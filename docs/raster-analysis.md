@@ -5,9 +5,18 @@ distribution over the selected area. Both use Catalog source data, independently
 of map colors or whether GeoServer can draw the raster. Transparent valid pixels
 still count as data.
 
-One map click can return both vector features and raster information. The click
-summary reports these separately and lets you switch between them. Automatic
-1D histograms use up to the top 16 visible rasters; 2D comparisons use only the
+The right dock groups **Distributions**, **Statistics**, and **Raster stack** under
+**Raster analysis**. Distributions show the spread of values over an area;
+result details identify exact or sampled reads. Statistics calculate native-pixel
+formulas for the raster chosen in each card. Raster stack applies the same formulas
+across selected rasters. Switching views retains their independent source and
+area context; opening a destination alone does not calculate statistics.
+
+One map click can return both vector features and raster information.
+**Features at clicked point** is a separate disclosure, collapsed while using
+raster analysis. Its updating, unavailable, and new-result feedback refers only
+to point features. Raster distribution feedback stays with raster analysis.
+Automatic 1D histograms use up to the top 16 visible rasters; 2D comparisons use only the
 top two. Histogram results describe the sampling
 area, not just the clicked pixel or the features returned by feature inspection.
 
@@ -60,8 +69,9 @@ its ordinary numeric presentation.
 
 ## Plot values across raster layers
 
-Choose **Plot raster stack** beneath a histogram or in **Tools** on the map or dock.
-**Raster series** runs the same formulas across your selected rasters using
+Choose **Raster analysis → Raster stack**, **Plot raster stack** beneath a histogram,
+or the stack action in **Tools** on the map or dock.
+**Raster stack** runs the same formulas across your selected rasters using
 [raster calculations](raster-calculations.md#plotting-statistics-across-rasters).
 Visible raster layers start selected; expand **Rasters** to choose a different
 set, including layers hidden on the map. Use **Pixel value** (`pixelValue(a)`)

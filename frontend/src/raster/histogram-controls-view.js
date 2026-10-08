@@ -580,8 +580,8 @@ export class RasterHistogramControlsView {
         const calculate = this.documentContext.createElement("button");
         calculate.type = "button";
         calculate.className = "secondary-button";
-        calculate.textContent = "Summarize this area";
-        calculate.setAttribute("aria-label", "Summarize " + summary.label + " over this area");
+        calculate.textContent = "Calculate statistics for this area";
+        calculate.setAttribute("aria-label", "Calculate statistics for " + summary.label + " over this area");
         calculate.addEventListener("click", () => this.handlers?.onCalculateHistogram?.(summary.key));
         actions.append(calculate, download);
         if (summary.automatic) {
