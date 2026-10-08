@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { RasterSeriesCalculations } from "../../src/processing/raster-series-calculations.js";
 import { RasterSeriesController } from "../../src/raster/series.js";
 import { CalculationRequests } from "../../src/processing/calculation-requests.js";
@@ -72,6 +73,78 @@ function fixture(overrides = {}, data = new Map()) {
     const close=()=>{area.destroy();calculationRequests.destroy();jobs.destroy();};
     return {api,calculationRequests,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,advance,finish,open,close};
 }
+
+/** Bind production stack entry points to the real controller/execution boundary.
+ * @param {Object} h Raster stack harness.
+ * @param {Object|null} [area=null] Area already published through composition.
+ * @return {Map<string,Function>} Click callbacks for the existing HTML controls.
+ */
+function stackOpeners(h, area = null) {
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const start = main.indexOf('for (const id of ["open-raster-series",');
+    const end = main.indexOf("    const vectorTimeSeries", start);
+    assert.ok(start >= 0 && end > start, "Production stack entry points are present");
+    const callbacks = new Map();
+    new Function("document", "mapInspection", "rasterSeries", "rasterSeriesArea", main.slice(start, end))({
+        querySelector: id => ({ addEventListener: (_, callback) => callbacks.set(id, callback) }),
+    }, { showRasterSeries: () => h.controller.updateSamplingForPanelVisibility(true) }, h.controller, area);
+    return callbacks;
+}
+
+test("Plot this area replaces the retained whole-raster scope with the selected custom polygons", async () => {
+    const h = fixture(); h.controller.chooseArea("whole");
+    const polygons = { kind: "polygonArea", polygonArea: { id: "a".repeat(32), sha256: "b".repeat(64) } };
+    h.controller.setArea(polygons, "Custom polygons · 2 of 2 features");
+    stackOpeners(h, polygons).get("#open-raster-series-summary")(); await h.tick();
+    assert.equal(h.view.state.area.areaChoice, "selection");
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent.area), [polygons, polygons]);
+    assert.equal(h.view.state.area.areaLabel, "Custom polygons · 2 of 2 features");
+    h.close();
+});
+
+test("explicit Statistics areas override retained scope for catalog selections, map boxes and whole rasters", async () => {
+    for (const area of [{ kind: "catalogSelection", catalogSelection: CATALOG_SELECTION }, box(10), { kind: "wholeRaster" }]) {
+        const h = fixture(); h.controller.chooseArea(area.kind === "wholeRaster" ? "selection" : "whole");
+        h.controller.setArea(area, "Accepted area");
+        stackOpeners(h, area).get("#open-raster-series-summary")(); await h.tick();
+        assert.equal(h.view.state.area.areaChoice, area.kind === "wholeRaster" ? "whole" : "selection");
+        assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent.area), [area, area]);
+        h.close();
+    }
+});
+
+test("normal stack openers preserve a deliberate whole-raster choice through background area changes", async () => {
+    for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
+        const h = fixture(); h.controller.chooseArea("whole"); h.controller.setArea(box(10), "Background map selection");
+        stackOpeners(h, box(10)).get(`#${id}`)(); await h.tick();
+        assert.equal(h.view.state.area.areaChoice, "whole");
+        assert.ok(h.requests.filter(([kind]) => kind === "submit").every(([, intent]) => intent.area.kind === "wholeRaster"));
+        h.close();
+    }
+});
+
+test("Plot this area with a cleared selection cannot silently calculate whole rasters", async () => {
+    const h = fixture(); h.controller.chooseArea("whole"); h.controller.setArea(null, "");
+    stackOpeners(h).get("#open-raster-series-summary")(); await h.tick();
+    assert.equal(h.view.state.area.areaChoice, "selection");
+    assert.equal(h.view.state.area.area, null);
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 0);
+    assert.match(h.view.state.message, /Choose an area|click the map/); h.close();
+});
+
+test("Plot this area cancels whole-raster work and cannot mix its late results with polygon statistics", async () => {
+    const h = fixture(); h.controller.chooseArea("whole"); await h.open();
+    const polygons = { kind: "polygonArea", polygonArea: { id: "a".repeat(32), sha256: "b".repeat(64) } };
+    h.controller.setArea(polygons, "Custom polygons"); stackOpeners(h, polygons).get("#open-raster-series-summary")();
+    await h.tick();
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+    await h.finish("ready", false, "1"); await h.finish("ready", false, "2");
+    assert.ok(h.view.state.rows.every(row => row.state === "waiting"));
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").slice(2).map(([, intent]) => intent.area), [polygons, polygons]);
+    await h.finish(); await h.finish();
+    assert.equal(h.area.complete, true); assert.ok(h.view.state.rows.every(row => row.state === "value"));
+    assert.match(h.controller.exportCsv(), /polygonArea/); assert.doesNotMatch(h.controller.exportCsv(), /wholeRaster/); h.close();
+});
 
 test("standard deviation submits the population formula per raster and retains results in series CSV", async () => {
     const h = fixture(); h.controller.addFormula("stdev"); await h.open();

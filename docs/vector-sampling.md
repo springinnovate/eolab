@@ -1,13 +1,13 @@
 # Sampling with a filtered vector layer
 
-In **Summarize → Area → Vector layer**, choose a mounted Shapefile or GeoPackage
-polygon layer. Use **Edit filter → Use filtered features & calculate** to select
+In **Raster analysis → Statistics → Area → Vector layer**, choose a mounted
+Shapefile or GeoPackage polygon layer. Use **Edit filter → Use filtered features & calculate** to select
 the matching features and run configured valid statistics. For example, select
 a countries layer and filter `iso3` to equal `PER` to summarize Peru.
 
 Closing or cancelling a filter draft does not submit it. **Cancel** remains
 available during selection and calculation. **Use these features** is another
-way to accept a selection: in Summarize it runs configured statistics; in the
+way to accept a selection: in Statistics it runs configured statistics; in the
 histogram area controls it changes only the sampling area.
 
 The analysis filter is independent of the map display filter. All matching source
@@ -17,7 +17,7 @@ error, not an unfiltered fallback. See [filter rules](vector-filters.md).
 ## Annotation layers
 
 Local annotation layers, imported GeoJSON annotations and shared contributions
-also appear in **Summarize → Area → Vector layer**. Filter by `name` or `note`,
+also appear in **Statistics → Area → Vector layer**. Filter by `name` or `note`,
 then choose **Use filtered features & calculate**. The same field comparisons
 are available from the layer's **Filter** control. Shared contributions remain
 read-only; your filter changes only your own map and calculation.
@@ -25,12 +25,19 @@ read-only; your filter changes only your own map and calculation.
 Without a filter, all committed polygons are included. An empty layer or filter
 with no matches produces a message and does not calculate the whole raster.
 Overlaps count once, and the numeric and ground-area rules below still apply.
-Annotation areas currently support summary statistics; histogram and clip
-area controls continue to use catalog vectors or uploaded AOIs.
+Choose **Plot this area across rasters** to use the accepted polygons in
+**Raster stack**. This applies the area to every checked raster, including when
+the stack previously used **Whole raster**. The selected layer and feature count
+appear above the plots. Reopening the stack through **Tools** preserves its
+chosen scope. Histogram and clip area controls continue to use catalog vectors
+or uploaded AOIs.
 
 Saving a polygon edit, changing the applied filter, or receiving an updated
-shared contribution invalidates an active summary. With automatic updates on,
-the open summary runs again, subject to the existing large-area review policy.
+shared contribution invalidates statistics and stack results using that area.
+With automatic updates on, the open summary runs again, subject to the existing
+large-area review policy.
+If Raster stack is open, use **Change area** to accept the updated polygons,
+then **Plot this area across rasters** to calculate the replacement results.
 Unfinished drawing edits, visibility, labels and styles do not change the area.
 Names and notes affect a result only when they change which polygons match.
 Removing a layer or losing its shared session cancels its pending summary.
@@ -75,7 +82,7 @@ area may be positive even when a numeric calculation has no selected cells.
 Direct **Use these features** asks for review on an unfiltered multi-feature
 selection or an envelope over 5 million km², and again above 100 million km².
 Those checks concern the bounding envelope, not measured polygon area.
-Summarize's explicit filter-and-calculate action skips those confirmations;
+Statistics' explicit filter-and-calculate action skips those confirmations;
 server work limits still apply.
 
 Selection validation has a 15-second deadline, a one-million-candidate-feature
