@@ -15,6 +15,7 @@ function fixture(configureDocument = () => {}) {
     doc.removeEventListener = events.removeEventListener.bind(events);
     doc.dispatchEvent = events.dispatchEvent.bind(events);
     const root = doc.querySelector("#map-inspection");
+    doc.querySelector("#map-click-disclosure").open = true;
     const histogram = doc.querySelector("#map-histogram-panel");
     const style = doc.querySelector("#layer-style-editor");
     const feature = doc.querySelector("#vector-feature-inspector");
@@ -312,9 +313,8 @@ test("point disclosure preserves choices and its feedback excludes area distribu
     assert.equal(disclosure.hidden, true, "area results do not create a point-feature disclosure");
     h.controller.setClickResult("feature", { state: "loading", message: "Inspecting this point" });
     assert.equal(disclosure.hidden, false);
-    assert.equal(disclosure.open, false, "secondary results do not displace the styling task");
+    assert.equal(disclosure.open, true, "point and raster navigation are both expanded by default");
     assert.match(label.textContent, /Updating/);
-    disclosure.open = true;
     h.controller.setClickResult("histogram", { state: "error", message: "No overlap" });
     assert.doesNotMatch(label.textContent, /unavailable/);
     assert.match(h.doc.querySelector("#map-click-histogram-status").textContent, /No overlap.*New results/);
@@ -325,9 +325,40 @@ test("point disclosure preserves choices and its feedback excludes area distribu
     assert.equal(disclosure.open, true);
     assert.doesNotMatch(label.textContent, /New results/);
     h.controller.showCalculations();
-    assert.equal(disclosure.open, false, "switching tasks restores secondary-result priority");
+    assert.equal(disclosure.open, true, "switching tasks preserves expanded point navigation");
     h.controller.closeHistogram();
     assert.equal(disclosure.hidden, false, "closing an area tool retains independent point recovery");
+    h.controller.destroy();
+});
+
+test("manual point collapse survives tool switches, new clicks and minimization", () => {
+    const h = fixture();
+    const disclosure = h.doc.querySelector("#map-click-disclosure");
+    h.controller.showHistogram();
+    h.controller.beginMapClick({ lat: 22, lng: 78 });
+    h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
+    assert.equal(disclosure.open, true);
+    disclosure.open = false;
+    h.map.focus();
+    h.controller.showCalculations();
+    h.controller.showRasterSeries();
+    h.controller.showFeatureInspector();
+    assert.equal(disclosure.open, false);
+    h.controller.setClickResult("feature", { state: "error", message: "Point unavailable" });
+    assert.equal(disclosure.open, false);
+    h.controller.beginMapClick({ lat: 23, lng: 79 });
+    h.controller.setClickResult("feature", { state: "loading", message: "Inspecting point" });
+    assert.equal(disclosure.hidden, false);
+    assert.equal(disclosure.open, false);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(disclosure.hidden, true);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(disclosure.hidden, false);
+    assert.equal(disclosure.open, false);
+    assert.equal(h.doc.activeElement, h.map, "updates never steal focus");
+    disclosure.open = true;
+    h.controller.showStyle("Countries");
+    assert.equal(disclosure.open, true, "manual expansion also survives a tool switch");
     h.controller.destroy();
 });
 

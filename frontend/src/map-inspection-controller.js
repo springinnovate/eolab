@@ -50,7 +50,6 @@ export class MapInspectionController {
         this.clickContext = documentContext.querySelector("#map-click-context");
         this.clickDisclosure = documentContext.querySelector("#map-click-disclosure");
         this.clickDisclosureLabel = documentContext.querySelector("#map-click-disclosure-label");
-        this.clickDisclosureTool = undefined;
         this.clickLabel = "";
         this.clickResults = ["histogram", "feature"].map(name => ({
             name, button: documentContext.querySelector(`#map-click-${name}`),
@@ -418,18 +417,15 @@ export class MapInspectionController {
     }
 
     /** Render raster feedback beside raster navigation and point feedback in its own disclosure.
-     * Task switches prioritize point details only while inspecting features; subsequent
-     * result updates preserve disclosure choice and independent unread/failure feedback.
+     * Point navigation starts expanded in markup, alongside raster navigation.
+     * Tool switches and result updates preserve the user's native disclosure choice
+     * and independent unread/failure feedback.
      * @return {void}
      */
     #renderClickSummary() {
         const feature = this.clickResults.find(entry => entry.name === "feature");
         this.clickSummary.hidden = !this.hasClick || feature.snapshot === null || this.minimized;
         this.clickDisclosure.hidden = this.clickSummary.hidden;
-        if (this.activeTool !== this.clickDisclosureTool) {
-            this.clickDisclosure.open = [null, "feature"].includes(this.activeTool);
-            this.clickDisclosureTool = this.activeTool;
-        }
         const updating = feature.snapshot?.state === "loading";
         const unavailable = feature.snapshot?.state === "error";
         const unread = feature.unread;

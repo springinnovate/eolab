@@ -13,9 +13,11 @@ across selected rasters. Switching views retains their independent source and
 area context; opening a destination alone does not calculate statistics.
 
 One map click can return both vector features and raster information.
-**Features at clicked point** is a separate disclosure, collapsed while using
-raster analysis. Its updating, unavailable, and new-result feedback refers only
-to point features. Raster distribution feedback stays with raster analysis.
+**Features at clicked point** is a separate disclosure, open by default alongside
+raster analysis when point inspection participates. You can collapse it; switching
+tools or receiving new results preserves that choice. Its updating, unavailable,
+and new-result feedback refers only to point features. Raster distribution feedback
+stays with raster analysis.
 Automatic 1D histograms use up to the top 16 visible rasters; 2D comparisons use only the
 top two. Histogram results describe the sampling
 area, not just the clicked pixel or the features returned by feature inspection.
