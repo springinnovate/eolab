@@ -141,7 +141,8 @@ export class SummaryStatisticsController {
     }
 
     /**
-     * Refresh displayed raster names from composition without invalidating formulas or completed results.
+     * Refresh composed names and query candidates. Name-only edits preserve calculations;
+     * changed query candidates supersede the old query through its execution provider.
      * Submitted job metadata keeps the name recorded when the job was created.
      * @return {void}
      */
@@ -442,7 +443,7 @@ export class SummaryStatisticsController {
         }
         this.render(); this.scheduleNextBatch();
     }
-    /** Queue one card; explicit actions submit without waiting for editor validation.
+    /** Queue fixed work immediately or a query when its templates pass editor validation.
      * Automatic typing still waits for debounced feedback. A manual submission
      * supersedes any pending feedback so a late response cannot change its state.
      * @param {number} id Stable card identity.
@@ -689,6 +690,7 @@ export class SummaryStatisticsController {
     }
     /** Switch between a composed all-raster query and deliberately fixed card bindings.
      * Switching policy cancels query jobs, without authorizing or hiding Catalog sources.
+     * Fixed choices refresh from current composition, retaining deliberately bound sources.
      * @param {"single"|"query"} mode Requested source policy.
      * @return {void}
      * @throws {TypeError} If the source policy is unknown.
@@ -699,6 +701,12 @@ export class SummaryStatisticsController {
         if (this.batch?.automatic) this.invalidateBatch();
         this.queryRequested = this.queryManual = false;
         this.state.sourceMode = mode;
+        if (mode === "single") {
+            this.state.sources = [...(this.getContext().sources ?? [])];
+            for (const card of this.state.statistics) {
+                if (card.source && !this.state.sources.some(source => sourceKey(source) === sourceKey(card.source))) this.state.sources.push(card.source);
+            }
+        }
         for (const card of this.state.statistics) {
             card.requested = null;
             if (mode === "single" && !card.source) card.source = this.state.sources[0] ?? null;

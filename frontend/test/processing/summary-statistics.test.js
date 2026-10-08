@@ -609,6 +609,16 @@ test("explicit hidden-raster shortcuts use fixed bindings and query policy remai
     h.controller.destroy();
 });
 
+test("switching to fixed bindings offers Catalog sources added after the query panel opened", async () => {
+    const context = queryContext(), h = fixture({}, new Map(), {}, context); await h.open();
+    const added = { ...source, itemId: "added", label: "Newly added raster" };
+    context.sources = [...context.sources, added]; context.candidates = context.sources;
+    h.controller.refreshSourceNames(); h.controller.chooseSourceMode("single");
+    assert.ok(h.controller.state.sources.some(source => source.itemId === "added"));
+    assert.match(visibleText(h.view.cards.get(1).source), /Newly added raster/);
+    assert.equal(h.submits(), 0); h.controller.destroy();
+});
+
 test("reload cancels query submissions with original keys without touching a stack record", async () => {
     const h = fixture({}, new Map(), {}, queryContext()); await h.open();
     h.controller.calculateSelection(); await h.tick(0);
