@@ -394,6 +394,7 @@ test("inspection header groups three raster destinations separately from clicked
     const point = requireElementRange("map-click-disclosure");
     assert.ok(raster.end < point.start);
     assert.match(point.source, /^<details[^>]*\bopen\b/);
+    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\],\s*#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px\)/s);
     assert.match(point.source, /Features at clicked point/);
     for (const [id, panel, caption] of [
         ["map-click-histogram", "map-histogram-panel", "Distributions"],
