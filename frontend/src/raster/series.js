@@ -47,6 +47,8 @@ export class RasterSeriesController {
         this.selectedAreaLabel = "";
         this.sources = [];
         this.selectedKeys = new Set();
+        /** @type {Map<string, boolean>} Explicit checklist choices for retained catalog rasters. */
+        this.selectionOverrides = new Map();
         this.position = null;
         this.active = false;
         this.order = "map";
@@ -76,18 +78,17 @@ export class RasterSeriesController {
     }
 
     /**
-     * Update available catalog rasters, preserving user choices for retained sources.
-     * Visible newly added rasters are selected by default. Hidden rasters remain selectable.
+     * Update available catalog rasters and reconcile their default selections.
+     * Untouched sources follow map visibility; explicit checklist choices override
+     * that default until the source is removed. Hidden rasters remain selectable.
      * @param {{key:string,label:string,item:Object,visible:boolean}[]} sources Ordered catalog sources.
      * @return {void}
      */
     updateAvailableRasters(sources) {
-        const oldKeys = new Set(this.sources.map(source => source.key));
         const newKeys = new Set(sources.map(source => source.key));
-        this.selectedKeys = new Set([...this.selectedKeys].filter(key => newKeys.has(key)));
-        for (const source of sources) {
-            if (!oldKeys.has(source.key) && source.visible) this.selectedKeys.add(source.key);
-        }
+        this.selectionOverrides = new Map([...this.selectionOverrides].filter(([key]) => newKeys.has(key)));
+        this.selectedKeys = new Set(sources.filter(source => this.selectionOverrides.get(source.key) ?? source.visible)
+            .map(source => source.key));
         this.sources = sources.map(source => ({ ...source }));
         this.updateAreaInputs();
     }
@@ -118,13 +119,15 @@ export class RasterSeriesController {
     }
 
     /**
-     * Include or exclude one raster and refresh calculations.
+     * Include or exclude one raster explicitly and refresh calculations.
+     * The choice overrides the map-visibility default while this source is retained.
      * @param {string} key Available raster identity.
      * @param {boolean} selected Whether to include this raster.
      * @return {void}
      */
     selectRaster(key, selected) {
         if (!this.sources.some(source => source.key === key)) return;
+        this.selectionOverrides.set(key, selected);
         if (selected) this.selectedKeys.add(key);
         else this.selectedKeys.delete(key);
         this.updateAreaInputs();

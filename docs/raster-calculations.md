@@ -67,6 +67,10 @@ you later edit its card.
 Open **Raster series** from **Tools** or a raster histogram. Use the raster
 checklist to choose the rasters to calculate. There is one formula workflow,
 with no fixed raster-count limit.
+By default, checked rasters follow map-layer visibility, including layers you
+turn back on after running a stack. Checking or unchecking a raster in this
+checklist keeps that choice through visibility changes and map clicks; hidden
+rasters can still be calculated. Removing a layer clears its checklist override.
 The same formulas run independently on each raster's native grid, over the
 current sampling area or each raster's whole extent. This does not align rasters
 or perform pixel-by-pixel arithmetic between different rasters.
