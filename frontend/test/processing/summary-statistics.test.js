@@ -120,14 +120,17 @@ test("a new click cancels obsolete automatic pixel work and rejects its late val
     h.controller.destroy();
 });
 
-test("hidden manual pixel work continues in history when another map click changes context",async()=>{
+test("hidden manual pixel work remains tracked when another map click changes context",async()=>{
     const h=fixture();await h.open();h.controller.setAutomatic(false);
     h.controller.setPixelPoint({longitude:77,latitude:22});
     const card=h.controller.state.statistics[0];h.controller.editStatistic(card.id,{expression:"pixelValue(a)"});
     h.controller.request(card.id,"manual");await flush();
     h.controller.setActive(false);h.controller.setPixelPoint({longitude:79,latitude:23});await flush();
     assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
-    await h.finish();assert.equal(h.controller.state.jobs[0].status,"ready");assert.equal(card.current,false);
+    assert.deepEqual(h.controller.state.currentWork.calculation.pixelPoint,{longitude:77,latitude:22});
+    await h.finish();assert.equal(h.jobs.jobs[0].status,"ready");assert.equal(card.current,false);
+    assert.equal(card.result.row.value,"12.5");
+    assert.equal(h.controller.state.currentWork,null);
     assert.equal(h.submits(),1);h.controller.destroy();
 });
 
@@ -174,18 +177,16 @@ test("closed summary retains completed manual results without drawing and shows 
     await h.open(); h.drawFrame();
     const card = h.controller.state.statistics[0], row = h.view.cards.get(card.id);
     h.controller.request(card.id, "manual"); await flush(); h.drawFrame();
-    const history = h.view.elements.history.children;
     h.controller.close();
     await h.finish("ready", ["42"]);
     assert.equal(h.frames.size, 0);
     assert.equal(card.result.row.value, "42");
     assert.equal(row.value.textContent, "");
-    assert.equal(h.view.elements.history.children, history);
     await h.open();
     assert.equal(h.frames.size, 1);
     h.drawFrame();
     assert.equal(row.value.textContent, "42");
-    assert.match(visibleText(h.view.elements.history), /Ready/);
+    assert.equal(h.view.extra["current-work"].hidden, true);
     h.controller.destroy();
 });
 
@@ -289,24 +290,36 @@ test("previous values identify their captured raster and area outside the editor
     h.controller.destroy();
 });
 
-test("summary history ignores diagnostics but updates displayed progress and action ownership", async () => {
+test("unfinished manual work retains its controls and original inputs during progress and cancellation", async () => {
     const h = fixture({}, new Map(), {}, undefined, true);
     await h.open();
     const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); h.drawFrame();
-    const before = h.view.elements.history.children;
+    assert.equal(h.view.extra["current-work"].hidden, true, "matching cards already present progress and Cancel");
+    h.controller.close(); h.controller.setSelection(box(80)); await h.open(); h.drawFrame();
+    const context = h.view.extra["current-work-context"], status = h.view.extra["current-work-status"], cancel = h.view.extra["cancel-work"];
+    const original = context.textContent;
+    assert.equal(h.view.extra["current-work"].hidden, false);
+    assert.match(original, /Human footprint.*77.0000/);
+    assert.equal(h.controller.state.area.selectedBounds.west, 80);
+    cancel.focus();
     const job = h.server.values().next().value;
     h.server.set(job.jobId, { ...job, diagnostics: { changed: true } });
     await h.jobs.refresh(); h.drawFrame();
-    assert.equal(h.view.elements.history.children, before);
+    assert.equal(context.textContent, original);
+    assert.equal(h.document.activeElement, cancel);
     h.server.set(job.jobId, { ...job, progress: { ...job.progress, completedBlocks: 2 } });
     await h.jobs.refresh(); h.drawFrame();
-    assert.notEqual(h.view.elements.history.children, before);
-    assert.match(visibleText(h.view.elements.history), /2 of 4/);
-    h.view.elements.history.children[1].children.at(-1).dispatchEvent(new Event("click"));
+    assert.match(status.textContent, /2 of 4/);
+    assert.equal(h.view.extra["cancel-work"], cancel);
+    cancel.dispatchEvent(new Event("click"));
     await flush(); h.drawFrame();
     assert.deepEqual(h.requests.find(([action]) => action === "cancel"), ["cancel", job.jobId]);
-    assert.equal(h.view.elements.history.children[1].children.at(-1).disabled, true);
+    assert.equal(cancel.disabled, true);
+    assert.match(status.textContent, /Cancelling/);
+    await h.finish("cancelled"); h.drawFrame();
+    assert.equal(h.view.extra["current-work"].hidden, true);
+    assert.equal(h.submits(), 1);
     h.controller.destroy();
 });
 
@@ -680,84 +693,82 @@ test("area presets remain editable and the current menu enforces five statistics
     assert.equal(h.submits(), 0);
 });
 
-test("saved inspection preserves exact integers, coverage, exports and live formula focus", async () => {
+test("current result details preserve exact integers, coverage, exports and live formula focus", async () => {
     const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); await h.finish("ready", ["9007199254740993"]);
     const job = card.result.job;
     job.result.rows[0].valueType = "integer";
-    h.controller.inspect(job.jobId);
-    const root = h.view.elements.result, row = h.view.cards.get(card.id);
-    assert.equal(root.children[0].textContent, "Previous / saved result");
+    h.controller.render();
+    const row = h.view.cards.get(card.id), root = row.detailsBody;
     assert.match(visibleText(root), /Human footprint/);
     assert.match(visibleText(root), /Exact value: 9007199254740993/);
-    assert.equal(root.children[2].children[1].textContent, BigInt("9007199254740993").toLocaleString());
+    assert.equal(row.value.textContent, BigInt("9007199254740993").toLocaleString());
     assert.match(visibleText(root), /8 matched \/ 8 valid cells/);
     const links = root.children.at(-1).children;
     assert.equal(links[0].href, `/api/processing/jobs/${job.jobId}/result`);
     assert.equal(links[1].href, `/api/processing/jobs/${job.jobId}/provenance`);
     assert.equal(links[0].getAttribute("download"), "");
-    const savedRow = root.children[2]; savedRow.children.at(-1).open = true;
+    const details = root.children; row.details.open = true;
     row.expression.focus(); h.controller.render();
     assert.equal(h.document.activeElement, row.expression);
-    assert.equal(root.children[2], savedRow);
-    assert.equal(savedRow.children.at(-1).open, true);
-    h.view.extra["close-saved"].dispatchEvent(new Event("click"));
-    assert.equal(h.view.extra["saved-result"].hidden, true);
+    assert.equal(root.children, details);
+    assert.equal(row.details.open, true);
     assert.equal(h.view.cards.get(card.id), row);
     assert.equal(h.submits(), 1);
 });
 
-test("saved results retain typed empty and arithmetic explanations", async () => {
+test("current results retain typed empty and arithmetic explanations", async () => {
     const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); await h.finish();
     for (const [state, message] of [["no_matches", /No cells matched/], ["no_valid_data", /No valid cells/],
         ["invalid_arithmetic", /Undefined arithmetic/], ["overflow", /Numeric overflow/]]) {
         const job = structuredClone(card.result.job);
         job.result.rows[0] = { ...job.result.rows[0], state, value: null };
-        h.controller.state.saved = job; h.controller.render();
-        assert.match(visibleText(h.view.elements.result), message);
-        assert.match(visibleText(h.view.elements.result), /Exact value: undefined/);
-        assert.equal(h.view.elements.result.children[2].children[1].textContent, "—");
+        card.result = { ...card.result, job, row: job.result.rows[0] }; h.controller.render();
+        const row = h.view.cards.get(card.id);
+        assert.match(visibleText(row.detailsBody), message);
+        assert.match(visibleText(row.detailsBody), /Exact value: undefined/);
+        assert.equal(row.value.textContent, "—");
     }
 });
 
-test("saved jobs show progress and failure safely when their Catalog label is unavailable", async () => {
+test("current cards show progress and failure as text when their Catalog label is unavailable", async () => {
     const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush();
     const job = h.server.get(h.controller.executor.snapshot.currentJob.jobId);
     h.controller.state.sources = [];
-    h.controller.inspect(job.jobId);
-    assert.match(visibleText(h.view.elements.result), /hfp/);
-    assert.match(visibleText(h.view.elements.result), /Calculating|Processing/);
-    const message = '<img src=x onerror="alert(1)"> failed';
-    h.controller.state.saved = { ...job, status: "failed", error: { detail: message } };
     h.controller.render();
-    const error = h.view.elements.result.children.at(-1);
-    assert.equal(error.textContent, message);
-    assert.equal(error.children.length, 0);
+    const row = h.view.cards.get(card.id);
+    assert.match(row.sourceCaption.textContent, /Human footprint/);
+    assert.match(row.status.textContent, /Calculating|Processing/);
+    const message = '<img src=x onerror="alert(1)"> failed';
+    h.server.set(job.jobId, { ...job, status: "failed", error: { detail: message } });
+    await h.jobs.refresh(); await flush();
+    assert.equal(row.status.textContent, message);
+    assert.equal(row.status.children.length, 0);
 });
 
-test("live and saved area results preserve units and fractional-coverage context", async () => {
+test("current area results preserve units and fractional-coverage context", async () => {
     const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); await h.finish();
     const job = structuredClone(card.result.job);
     job.grid.groundArea = { ellipsoid: "WGS84", edgeToleranceMetres: 0.1, maximumSegmentMetres: 10000, estimatedGeometryCells: 0, strategy: "rectilinear" };
     job.result.rows[0] = { ...job.result.rows[0], label: "Area", expression: "areaha(a == 4)", unit: "ha" };
     card.result = { ...card.result, job, row: job.result.rows[0] };
-    h.controller.state.saved = job; h.controller.render();
+    h.controller.render();
     assert.equal(h.view.cards.get(card.id).value.textContent, "12.5 ha");
     assert.match(visibleText(h.view.cards.get(card.id).detailsBody), /WGS84 ellipsoid, hectares, including partial pixels/);
-    assert.match(visibleText(h.view.elements.result), /Area measurement.*0.1 m chord-deviation target/);
-    assert.match(visibleText(h.view.elements.result), /Result unit: ha/);
-    assert.match(visibleText(h.view.elements.result), /numeric functions use pixel centers/);
+    assert.match(visibleText(h.view.cards.get(card.id).detailsBody), /0.1 m chord-deviation target/);
+    assert.match(visibleText(h.view.cards.get(card.id).detailsBody), /Result unit: ha/);
+    assert.match(visibleText(h.view.cards.get(card.id).detailsBody), /Numeric functions select cell centers/);
 });
 
-test("saved result exports still reject arbitrary and mismatched job URLs", async () => {
+test("current result exports still reject arbitrary and mismatched job URLs", async () => {
     const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
     h.controller.request(card.id, "manual"); await flush(); await h.finish();
     for (const url of ["https://example.com/result", `/api/processing/jobs/${"x".repeat(32)}/result`]) {
-        h.controller.state.saved = structuredClone(card.result.job);
-        h.controller.state.saved.result.url = url;
+        const job = structuredClone(card.result.job); job.result.url = url;
+        card.result = { ...card.result, job, row: { ...card.result.row, value: `${card.result.row.value}1` } };
         assert.throws(() => h.controller.render(), /Invalid processing download address/);
     }
 });
@@ -1148,6 +1159,42 @@ test("uncertain submissions retain the same request identity during recovery",as
     h.view.handlers.onRetry();await flush();assert.equal(h.requests.find(r=>r[0]==="submit")[1].requestId,request);
     await h.finish();assert.equal(card.current,true);
 });
+test("uncertain accepted work can be cancelled and recovered through visible controls using the same request", async () => {
+    const h = fixture(); await h.open();
+    const submit = h.api.submitCalculation;
+    h.api.submitCalculation = async request => { await submit(request); throw Error("Acceptance response lost"); };
+    const card = h.controller.state.statistics[0]; h.controller.request(card.id, "manual"); await flush();
+    const saved = h.storage.read(), job = [...h.server.values()][0];
+    assert.equal(h.view.extra["current-work"].hidden, false);
+    assert.match(h.view.extra["current-work-status"].textContent, /Acceptance response lost/);
+    assert.equal(h.view.elements.retry.hidden, false);
+    h.view.extra["cancel-work"].dispatchEvent(new Event("click")); await flush();
+    assert.equal(h.storage.read().cancelRequested, true);
+    assert.equal(h.view.extra["cancel-work"].disabled, true);
+    h.api.submitCalculation = async request => { h.requests.push(["recover", request]); return job; };
+    h.view.elements.retry.dispatchEvent(new Event("click")); await flush();
+    assert.equal(h.requests.find(([kind]) => kind === "recover")[1].requestId, saved.pending.requestId);
+    assert.deepEqual(h.requests.find(([kind]) => kind === "cancel"), ["cancel", job.jobId]);
+    await h.finish("cancelled");
+    assert.equal(card.result, null); assert.equal(h.submits(), 1);
+    assert.equal(h.view.extra["current-work"].hidden, true);
+    assert.equal(h.view.elements.retry.hidden, true);
+    assert.equal(h.storage.read(), null);
+    h.controller.destroy();
+});
+
+test("cancelling unfinished shared work does not requeue the other cards in that scan", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    h.controller.addStatistic("sum"); await h.tick();
+    for (const card of h.controller.state.statistics) h.controller.request(card.id, "manual");
+    await flush(); assert.equal(h.submits(), 1);
+    assert.equal(h.controller.executor.snapshot.unfinishedCalculation.calculation.calculations.length, 2);
+    h.controller.close(); h.controller.setSelection(box(80)); await h.open();
+    h.view.extra["cancel-work"].dispatchEvent(new Event("click")); await flush();
+    await h.finish("cancelled"); await h.tick();
+    assert.equal(h.submits(), 1); assert.equal(h.controller.state.statistics.every(card => card.cancelled && !card.pending && !card.requested), true);
+    h.controller.destroy();
+});
 test("exports retain exact integers, null explanations, source, and immutable formula context",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];h.controller.request(card.id,"manual");await flush();await h.finish();
     card.result.row={...card.result.row,value:"9007199254740993",valueType:"integer"};h.controller.render();
@@ -1157,12 +1204,19 @@ test("exports retain exact integers, null explanations, source, and immutable fo
     card.result.row={...card.result.row,value:null,state:"no_valid_data"};h.controller.render();assert.equal(row.value.textContent,"—");assert.match(text(row.detailsBody),/No valid cells/);
 });
 
-test("an accepted manual scan continues in history when Explore changes the shared area",async()=>{
+test("an accepted manual scan remains owned when Explore changes the shared area",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     h.controller.request(card.id,"manual");await flush();h.controller.setActive(false);h.controller.setSelection(box(80));
     assert.equal(h.requests.filter(r=>r[0]==="cancel").length,0);await h.finish();
-    assert.equal(card.current,false);assert.equal(h.controller.state.jobs[0].status,"ready");
+    assert.equal(card.current,false);assert.equal(h.jobs.jobs[0].status,"ready");
     h.controller.setActive(true);await h.tick();assert.equal(h.submits(),1);
+    const row=h.view.cards.get(card.id);
+    assert.equal(row.value.textContent,"12.5");assert.equal(row.previousContext.hidden,false);
+    assert.match(row.previousContext.textContent,/Previous result.*77.0000/);
+    assert.match(visibleText(row.detailsBody),/Human footprint.*77.0000/);
+    assert.equal(row.copy.disabled,true);assert.equal(h.controller.state.currentWork,null);
+    assert.equal(card.result.area.selectedBounds.west,77);
+    assert.equal(h.controller.state.area.selectedBounds.west,80);
 });
 test("clearing a queued automatic request prevents a later validation from running on return",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
@@ -1170,12 +1224,17 @@ test("clearing a queued automatic request prevents a later validation from runni
     h.controller.setActive(true);await h.tick();assert.equal(h.submits(),0);assert.equal(card.valid,true);
 });
 
-test("inspected history refreshes a running job without rewriting the editable cards",async()=>{
+test("completing current work retains its owned result without a history browser or deletion",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     h.controller.request(card.id,"manual");await flush();const jobId=h.controller.executor.snapshot.currentJob.jobId;
-    h.controller.inspect(jobId);assert.equal(h.controller.state.saved.status,"running");
-    await h.finish();assert.equal(h.controller.state.saved.status,"ready");assert.equal(h.controller.state.statistics[0],card);
-    await h.controller.executor.jobAction(jobId,"delete");await flush();assert.equal(h.controller.state.saved,null);
+    h.api.deleteJob = async () => { assert.fail("removing the history UI must not delete jobs"); };
+    await h.finish();assert.equal(h.jobs.jobs[0].status,"ready");assert.equal(h.controller.state.statistics[0],card);
+    h.controller.close(); await h.open();
+    assert.equal(card.result.job.jobId,jobId);assert.equal(h.server.get(jobId).status,"ready");
+    assert.equal(h.view.extra["current-work"].hidden,true);
+    assert.doesNotMatch(SUMMARY_MARKUP,/Previous calculation results|calculations-history|summary-saved-result|calculations-refresh|summary-close-saved/);
+    assert.equal([...h.document.queries].some(query=>/history|saved-result|close-saved|calculations-result|calculations-refresh/.test(query)),false);
+    h.controller.destroy();assert.equal(h.server.get(jobId).status,"ready");
 });
 test("reload recovers a manual job into its card without admitting another calculation",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
@@ -1184,6 +1243,40 @@ test("reload recovers a manual job into its card without admitting another calcu
     await restored.controller.start();assert.equal(restored.submits(),0);assert.equal(restored.controller.executor.snapshot.currentJob.jobId,id);
     const old=h.server.get(id);h.server.set(id,{...old,status:"ready",result:{url:"/api/processing/jobs/"+id+"/result",provenanceUrl:"/api/processing/jobs/"+id+"/provenance",rows:[{...old.calculations[0],value:"9",valueType:"float",state:"ok",aggregates:[]}]}});
     await restored.jobs.refresh();await flush();assert.equal(restored.controller.state.statistics[0].result.row.value,"9");assert.equal(restored.submits(),0);
+});
+
+test("reload keeps current-card cancellation usable without opening an editor or browsing history", async () => {
+    const h = fixture(); await h.open();
+    h.controller.request(h.controller.state.statistics[0].id, "manual"); await flush();
+    const id = h.controller.executor.snapshot.currentJob.jobId; h.controller.destroy();
+    const restored = fixture({
+        listJobs: async () => [...h.server.values()], getJob: async key => h.server.get(key),
+        cancelJob: async key => {
+            restored.requests.push(["cancel", key]); const job = { ...h.server.get(key), status: "cancelled" };
+            h.server.set(key, job); return job;
+        },
+    }, h.data);
+    await restored.controller.start(); await restored.open();
+    const card = restored.controller.state.statistics[0], row = restored.view.cards.get(card.id);
+    assert.equal(Boolean(row.editor.open), false); assert.equal(row.stop.hidden, false);
+    row.stop.dispatchEvent(new Event("click")); await flush();
+    await restored.jobs.refresh(); await flush();
+    assert.deepEqual(restored.requests.find(([kind]) => kind === "cancel"), ["cancel", id]);
+    assert.equal(restored.submits(), 0); assert.equal(card.result, null);
+    assert.equal(restored.view.extra["current-work"].hidden, true);
+    restored.controller.destroy();
+});
+
+test("owned jobs from other calculations do not create summary history or current-work controls", async () => {
+    const h = fixture(); await h.open(); h.api.deleteJob = async () => assert.fail("history removal must not delete server jobs");
+    const other = { jobId: "x".repeat(32), operation: "raster.aggregate.v1", status: "running", calculations: [{ label: "Other scan" }],
+        sources: { a: resistance }, area: { kind: "bounds", bounds: [1, 2, 3, 4] }, progress: { phase: "calculating", totalBlocks: 4, completedBlocks: 0 } };
+    h.server.set(other.jobId, other); await h.jobs.refresh(); await flush();
+    assert.equal(h.view.extra["current-work"].hidden, true);
+    assert.equal(h.controller.state.currentWork, null);
+    h.controller.close(); await h.open(); h.controller.destroy();
+    assert.deepEqual(h.server.get(other.jobId), other);
+    assert.equal(h.requests.some(([kind]) => ["cancel", "submit"].includes(kind)), false);
 });
 
 test("manual pixel recovery retains its submitted point when the reloaded map has no click",async()=>{

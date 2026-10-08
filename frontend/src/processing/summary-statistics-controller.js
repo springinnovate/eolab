@@ -27,7 +27,7 @@ export class SummaryStatisticsController {
     /** Wire statistic cards to the existing Processing executor and composed actions.
      * @param {Object} dependencies Processing providers and composed UI actions.
      * @param {import("./api.js").ProcessingApiClient} dependencies.api Formula validation.
-     * @param {import("./jobs.js").ProcessingJobs} dependencies.jobs Shared history observer.
+     * @param {import("./jobs.js").ProcessingJobs} dependencies.jobs Shared owned-job observer.
      * @param {import("./summary-statistics-view.js").SummaryStatisticsView} dependencies.view Statistic controls.
      * @param {()=>Object} dependencies.getContext Available rasters and selected area.
      * @param {()=>void} dependencies.onOpen Show this panel.
@@ -43,7 +43,7 @@ export class SummaryStatisticsController {
         Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, onAreaChange, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, pixelPoint: null, areaChoice: "selection",
-            active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false };
+            active: false, automatic: true, currentWork: null, undo: false };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         this.executor = dependencies.calculationRequests.createClient("summary", snapshot => this.receive(snapshot));
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
@@ -51,10 +51,7 @@ export class SummaryStatisticsController {
             onEdit: (id, change) => this.editStatistic(id, change), onAdd: preset => this.addStatistic(preset),
             onRemove: id => this.removeStatistic(id), onUndo: () => this.undoRemove(),
             onRun: id => this.request(id, "manual"), onStop: id => this.stopStatistic(id),
-            onRetry: () => void this.executor.retry(), onRefresh: () => void jobs.refresh(),
-            onInspect: id => this.inspect(id), onCancel: id => void this.executor.jobAction(id, "cancel"),
-            onDelete: id => void this.executor.jobAction(id, "delete"),
-            onCloseSaved: () => { this.state.saved = null; this.render(); },
+            onRetry: () => void this.executor.retry(), onCancelWork: () => this.stopCurrentCalculation(),
         });
         this.render();
     }
@@ -77,6 +74,7 @@ export class SummaryStatisticsController {
     get isActive() { return this.state.active && !this.destroyed; }
 
     /** Restore cards for a submission saved before reload, then resume tracking that job.
+     * Restored cards remain pending so progress and Cancel are accessible immediately.
      * Automatic jobs are cancelled on reload; this does not start a new calculation.
      * @return {Promise<void>} Recovery progress.
      */
@@ -88,7 +86,7 @@ export class SummaryStatisticsController {
             this.state.areaChoice = unfinished.calculation.area.kind === "wholeRaster" ? "whole" : ["catalogSelection", "polygonArea"].includes(unfinished.calculation.area.kind) ? "vector" : "selection";
             this.state.sources = [unfinished.calculation.source];
             this.state.statistics = unfinished.calculation.calculations.map(value => {
-                const card = this.makeStatistic(value, unfinished.calculation.source); card.valid = true; return card;
+                const card = this.makeStatistic(value, unfinished.calculation.source); card.valid = true; card.pending = true; return card;
             });
             this.batch = { automatic: unfinished.context?.automatic ?? false, obsolete: unfinished.cancelRequested || !!unfinished.context?.automatic,
                 intent: unfinished.calculation, cards: this.state.statistics.map(card => ({ id: card.id, key: this.key(card) })) };
@@ -303,7 +301,6 @@ export class SummaryStatisticsController {
         if (!this.isActive) return;
         if (!explicit && (!this.state.automatic || this.state.areaChoice !== "selection" || this.state.area?.kind !== "selectedArea")) return;
         if (explicit) {
-            this.state.saved = null;
             if (this.batch?.cards.some(entry => {
                 const card = this.state.statistics.find(item => item.id === entry.id);
                 return !card || entry.key !== this.key(card);
@@ -431,6 +428,23 @@ export class SummaryStatisticsController {
         this.render();
     }
 
+    /** Cancel the unfinished scan when recovery or changed inputs need a separate control.
+     * Record cancellation through the existing executor even before acceptance is confirmed.
+     * Retain prior values and do not requeue other cards from the cancelled scan.
+     * @return {void}
+     */
+    stopCurrentCalculation() {
+        if (this.batch) {
+            this.batch.obsolete = true;
+            for (const entry of this.batch.cards) {
+                const card = this.state.statistics.find(item => item.id === entry.id);
+                if (card) { card.requested = null; card.cancelled = true; }
+            }
+        }
+        this.executor.stop();
+        this.render();
+    }
+
     /** Cancel a superseded batch, retaining unchanged sibling requests for the next shared scan. */
     invalidateBatch(id) {
         const batch = this.batch;
@@ -495,19 +509,14 @@ export class SummaryStatisticsController {
     }
 
     /** Apply the queued job’s preparation, calculation progress and results to its cards.
+     * A continuing manual scan retains its completed value with submitted inputs even
+     * when the hidden panel's map context changed. It remains a previous result.
      * @param {CalculationExecutionSnapshot} execution Progress, remaining work and last completed job from one executor update.
      * @return {void}
      */
     receive(execution) {
         if (!this.executor || this.destroyed) return;
-        this.state.jobs = execution.jobs;
-        this.state.historyError = execution.historyError;
-        if (this.state.saved) {
-            const saved = execution.jobs.find(job => job.jobId === this.state.saved.jobId) ?? this.state.saved;
-            this.state.saved = saved.status === "deleted" ? null : saved;
-        }
         this.state.recoverable = execution.recoverable;
-        this.state.recoveryMessage = execution.recoverable ? execution.message : "";
         for (const card of this.state.statistics) {
             if (card.result) {
                 const job = execution.jobs.find(item => item.jobId === card.result.job.jobId);
@@ -522,6 +531,9 @@ export class SummaryStatisticsController {
             batch.cards.forEach((entry, index) => {
                 const card = this.state.statistics.find(item => item.id === entry.id);
                 if (!card) return;
+                if (isIdle && matching && job.result?.rows[index]) {
+                    card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area };
+                }
                 if (!batch.obsolete && this.key(card) === entry.key) {
                     if (execution.currentJob || matching) {
                         card.valid = true; card.validatedExpression = card.expression.trim();
@@ -530,7 +542,6 @@ export class SummaryStatisticsController {
                     card.progress = execution.currentJob?.progress ?? null;
                     card.error = execution.phase === "error";
                     if (isIdle && matching && job.result?.rows[index]) {
-                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area };
                         card.message = "Up to date";
                     } else if (isIdle && !matching) {
                         card.error = execution.phase === "error" || !batch.obsolete;
@@ -542,13 +553,6 @@ export class SummaryStatisticsController {
         }
         this.render();
     }
-    inspect(id) {
-        const job = this.jobs.jobs.find(item => item.jobId === id && item.operation === "raster.aggregate.v1");
-        if (!job) return;
-        this.state.saved = job;
-        this.onOpen(); this.render();
-        this.view.focusSaved?.();
-    }
     /** Schedule feedback for the chosen area workflow, preserving card-level failures.
      * Idle vector snapshots do not replace map-click guidance. Formula and source
      * feedback remain local to each card while selection controls show their lifecycle.
@@ -556,6 +560,16 @@ export class SummaryStatisticsController {
      */
     render() {
         if (this.destroyed) return;
+        const execution = this.executor.snapshot;
+        const unfinished = execution.unfinishedCalculation;
+        const inputsChanged = !this.batch || this.batch.cards.some(entry => {
+            const card = this.state.statistics.find(item => item.id === entry.id);
+            return !card || this.key(card) !== entry.key;
+        });
+        this.state.currentWork = unfinished && (execution.recoverable || inputsChanged) ? {
+            calculation: unfinished.calculation, message: execution.message,
+            cancelling: unfinished.cancelRequested || execution.currentJob?.status === "cancelling",
+        } : null;
         const vectorWorkflow = this.state.areaChoice === "vector" || ["catalogSelection", "polygonArea"].includes(this.state.area?.kind);
         for (const card of this.state.statistics) {
             card.current = !!card.result && card.result.key === this.key(card) && !card.pending && !card.requested && !card.checking && !card.error && !card.cancelled;

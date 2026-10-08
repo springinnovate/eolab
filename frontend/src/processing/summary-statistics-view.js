@@ -1,11 +1,17 @@
 /** Compact, accessible statistic cards. No expression evaluation happens in the view. */
-import { calculationValue, renderSavedCalculation } from "./calculation-result-view.js";
-import { ACTIVE_JOB_STATES } from "./jobs.js";
+import { calculationValue } from "./calculation-result-view.js";
 import { processingDownloadUrl } from "./api.js";
-import { describeClipArea, describeJobProgress } from "./presentation.js";
+import { describeClipArea } from "./presentation.js";
 
 const RESULT_STATES = { no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
     invalid_arithmetic: "Undefined arithmetic; no numeric result.", overflow: "Numeric overflow; no finite result." };
+
+/**
+ * @typedef {Object} SummaryCurrentWork
+ * @property {ReturnType<typeof import("./calculation-session.js").calculationIntent>} calculation Immutable submitted inputs.
+ * @property {string} message Current progress or recovery feedback.
+ * @property {boolean} cancelling Cancellation was recorded or acknowledged by Processing.
+ */
 
 /** Keep DOM identities stable during edits, progress, removal, and undo. */
 export class SummaryStatisticsView {
@@ -24,8 +30,8 @@ export class SummaryStatisticsView {
     } = {}) {
         this.document = documentContext;
         this.onContextChange = onContextChange;
-        this.elements = Object.fromEntries(["area", "area-description", "rows", "result", "history",
-            "refresh", "retry", "close", "edit-area", "template"]
+        this.elements = Object.fromEntries(["area", "area-description", "rows",
+            "retry", "close", "edit-area", "template"]
             .map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
         this.openers = ["open-calculations", "open-calculations-dock"].map(id => documentContext.querySelector(`#${id}`));
         this.listeners = [];
@@ -36,7 +42,7 @@ export class SummaryStatisticsView {
         this.latestState = null;
         this.focusAfterRender = null;
         this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
-        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
+        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "current-work", "current-work-context", "current-work-status", "cancel-work"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
     /** Make a text-only card node. @param {string} tag HTML tag. @param {string} [text=""] Text. @return {HTMLElement} Node. */
@@ -53,7 +59,7 @@ export class SummaryStatisticsView {
             [x.auto, "change", () => handlers.onAutomatic(x.auto.checked)],
             [e.template, "change", () => { handlers.onAdd(e.template.value); e.template.value = ""; }],
             [x["undo-button"], "click", handlers.onUndo], [e.retry, "click", handlers.onRetry],
-            [e.refresh, "click", handlers.onRefresh], [x["close-saved"], "click", handlers.onCloseSaved],
+            [x["cancel-work"], "click", handlers.onCancelWork],
         ];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
     }
@@ -173,7 +179,7 @@ export class SummaryStatisticsView {
             focus?.();
         });
     }
-    /** Update cards and history, distinguishing input-waiting intent from queued work.
+    /** Update cards and unfinished-work feedback, distinguishing input-waiting intent from queued work.
      * Calculation indicators require a raster and area; vector progress belongs
      * to the vector workflow. Missing inputs retain their guidance and no Cancel action.
      * Retained editors preserve their nodes and disclosure state during updates.
@@ -280,14 +286,7 @@ export class SummaryStatisticsView {
         x.undo.hidden = !state.undo;
         x["undo-button"].disabled = state.statistics.length >= 5;
         e.retry.hidden = !state.recoverable;
-        x["recovery-status"].hidden = !state.recoverable;
-        x["recovery-status"].textContent = state.recoveryMessage ?? "";
-        x["saved-result"].hidden = !state.saved;
-        if (state.saved && this.signatures.saved !== JSON.stringify(state.saved)) {
-            renderSavedCalculation(e.result, state.saved, state.sources);
-            x["saved-result"].open = true; this.signatures.saved = JSON.stringify(state.saved);
-        }
-        this.renderHistory(state);
+        this.renderCurrentWork(state.currentWork);
     }
     /** Describe the summary's own area choice, including its missing-input guidance.
      * @param {{areaChoice:string,area:Object|null,vectorArea:Object|null}} state Current summary presentation.
@@ -356,33 +355,22 @@ export class SummaryStatisticsView {
         }
         root.append(this.element("small", "Downloads preserve the formulas and names at the time of calculation."), links);
     }
-    /** Rebuild history only when its displayed text, order or actions change.
-     * Undisplayed job fields do not invalidate these rows.
-     * @param {Object} state Summary state containing jobs and historyError. @return {void}
+    /** Present only unfinished work which cannot rely on the current cards for context.
+     * Keep controls stable during progress updates; original inputs distinguish a hidden
+     * manual scan from the map area or pixel currently being inspected.
+     * @param {SummaryCurrentWork|null} work Unfinished summary scan or null.
+     * @return {void}
      */
-    renderHistory(state) {
-        const rows = state.jobs.filter(job => job.status !== "deleted").map(job => ({
-            id: job.jobId,
-            label: `${job.calculations?.map(row => row.label).join(", ") ?? "Summary statistics"} · ${describeJobProgress(job)}`,
-            description: `${new Date(job.createdAt).toLocaleString()} · ${describeClipArea(job.area)}`,
-            active: ACTIVE_JOB_STATES.has(job.status),
-            disabled: job.status === "cancelling",
-        }));
-        const signature = JSON.stringify([rows, state.historyError]);
-        if (signature === this.signatures.history) return;
-        const children = rows.map(row => {
-            const root = this.element("div"); root.className = "calculation-history-row";
-            const inspect = this.element("button", row.label);
-            inspect.type = "button"; inspect.className = "secondary-button";
-            inspect.addEventListener("click", () => this.handlers.onInspect(row.id));
-            const action = this.element("button", row.active ? "Cancel" : "Delete"); action.type = "button"; action.className = "secondary-button";
-            action.disabled = row.disabled;
-            action.addEventListener("click", () => row.active ? this.handlers.onCancel(row.id) : this.handlers.onDelete(row.id));
-            root.append(inspect, this.element("small", row.description), action);
-            return root;
-        });
-        this.elements.history.replaceChildren(this.element("p", state.historyError || "Results remain available for 24 hours in this browser session."), ...children);
-        this.signatures.history = signature;
+    renderCurrentWork(work) {
+        const x = this.extra;
+        x["current-work"].hidden = !work;
+        if (!work) return;
+        const { calculation, message, cancelling } = work;
+        const point = calculation.pixelPoint;
+        const context = `Unfinished calculation · ${calculation.calculations.map(row => row.label).join(", ")} · ${calculation.source.label} · ${describeClipArea(calculation.area)}${point ? ` · Point: ${point.longitude}, ${point.latitude}` : ""}`;
+        if (x["current-work-context"].textContent !== context) x["current-work-context"].textContent = context;
+        if (x["current-work-status"].textContent !== message) x["current-work-status"].textContent = message;
+        x["cancel-work"].disabled = cancelling;
     }
     /** Apply a user-requested focus action after pending drawing creates its controls.
      * @param {()=>void} focus Focus or reveal an existing control. @return {void}
@@ -409,6 +397,4 @@ export class SummaryStatisticsView {
     focusAddStatistic() { this.focusWhenRendered(() => this.elements.template.focus()); }
     /** Focus removal recovery. @return {void} */
     focusUndo() { this.focusWhenRendered(() => this.extra["undo-button"].focus()); }
-    /** Reveal the immutable saved-job presentation. @return {void} */
-    focusSaved() { this.focusWhenRendered(() => { this.extra["saved-result"].open = true; this.extra["saved-result"].scrollIntoView({ block: "nearest" }); }); }
 }

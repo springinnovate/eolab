@@ -64,7 +64,10 @@
 .summary-auto-option input { width: auto; margin: 0; }
 #calculations-help { margin-top: 10px; font-size: 0.8rem; }
 #summary-undo { font-size: 0.8rem; }
-.summary-statistic [hidden], #summary-undo[hidden], #summary-saved-result[hidden], #summary-recovery-status[hidden] { display: none; }
+#summary-current-work { margin-top: 10px; font-size: 0.78rem; }
+#summary-current-work-context { margin: 0 0 5px; color: var(--text-2); overflow-wrap: anywhere; }
+#summary-current-work .summary-status-row > span { flex-basis: 100%; }
+.summary-statistic [hidden], #summary-undo[hidden], #summary-current-work[hidden] { display: none; }
 @media (pointer: coarse) {
     .summary-auto-option { min-height: 44px; }
     .summary-statistic-heading { min-height: 32px; padding-right: 52px; }

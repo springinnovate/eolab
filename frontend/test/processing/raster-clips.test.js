@@ -139,11 +139,12 @@ test("closed clip controls retain updates and reopen with the latest clip withou
     assert.equal(drawings, 2);
 });
 
-test("calculation results stay under Summarize and clip labels target the retained controls", () => {
+test("current calculation controls stay under Statistics and clip labels target the retained controls", () => {
     const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
     const summary = markup.slice(markup.indexOf('<section id="calculations-panel"'), markup.indexOf('<section id="raster-clips-panel"'));
-    assert.match(summary, /id="calculations-history"/);
-    assert.match(summary, /id="summary-saved-result"/);
+    assert.match(summary, /id="calculations-rows"/);
+    assert.match(summary, /id="summary-current-work"/);
+    assert.doesNotMatch(summary, /calculations-history|summary-saved-result/);
     assert.doesNotMatch(markup, /History &amp; exports|id="downloads-|id="open-downloads/);
     for (const name of ["source", "area"]) {
         assert.ok(markup.includes(`for="raster-clips-${name}"`));
