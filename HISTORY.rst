@@ -4,6 +4,25 @@ History
 Unreleased
 ----------
 
+0.9.0 (2026-10-08)
+------------------
+
+* Style categorical rasters with exact integer codes, labels, colors and per-category opacity. Preview and import CSV category tables, edit them in place, and retain appearances through saved maps, style copy/paste and legends.
+* Show categorical labels and codes in pixel picking and copied values, keeping Unmapped values distinct from source NoData. Display categorical distributions as colored bars with estimated percentages and ground area in hectares, excluding averaged overviews from category reads.
+* Import CSV category tables for vector attributes with typed values, editable legend labels, colors and opacity. Keep unmatched and missing-value features visible and clickable when feature labels are enabled.
+* Group identical categorical on-map legends into shared sections while retaining each layer's inclusion control and respecting appearance and opacity differences.
+* Show distributions for up to the top 16 visible rasters, retain the top-two limit for 2D comparisons, and use all participating raster bounds when choosing the map sample.
+* Add population standard deviation with ``stdev(a)`` and optional ``where`` conditions to raster calculations and stack plots, including exports and formula guidance.
+* Unify Raster stack around one formula workflow. Combine exact clicked-cell ``pixelValue(a)`` with area statistics in the same per-raster job, preserving independent native grids and point-versus-area semantics.
+* Prepare and execute raster calculations and clips in one queued job with one cancellation handle. Share identical queued or running work while keeping subscriber ownership and cancellation independent, and allow configurable concurrent native jobs within memory and disk budgets.
+* Batch raster-stack submissions and owned job-status reads, reuse validated inputs and source preparation, and reduce repeated admission, database and native-worker startup work. Accept finished results while other jobs are still being submitted.
+* Reorganize the right dock into Raster analysis with Distributions, Statistics and Raster stack, alongside Features at clicked point. Keep their context, progress and unavailable/new-result feedback separate, and make tool navigation consistent across expanded and minimized views.
+* Put raster-stack plots first, harmonize the statistics editors, expose newly added plots, and retain editing focus during result updates. Keep detailed values, downloads, formulas and data-order settings available through consistent controls.
+* Lead raster statistics with results and inline editing, calculate the default statistics across enabled rasters intersecting the sampling area, and preserve explicitly chosen raster bindings. Remove the separate calculation-history panel while retaining current-work status and previous-value context on cards.
+* Use accepted custom polygons and filtered vector selections across all checked stack rasters even after choosing Whole raster. Follow newly enabled layers by default while preserving explicit stack checklist choices; invalidate obsolete area results and isolate late cancelled-job replies.
+* Present raster clips on demand with a named source and captured area, direct layer/histogram download actions, progress, cancellation and temporary result downloads. Use enabled intersecting rasters for default Statistics and clip entry points.
+* Compact map-layer rows and actions, make legends replace their disclosure controls, remember workspace-panel choices, and reveal newly added layers. Keep controls above the inspection dock on narrow screens, clarify empty-area guidance, preserve the scope of previous style distributions, and make vector feature labels opt-in for new layers.
+
 0.8.0 (2026-09-24)
 ------------------
 
