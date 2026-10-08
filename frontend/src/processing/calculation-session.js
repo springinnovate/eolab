@@ -2,7 +2,7 @@
 import { normalizeCalculationArea } from "./calculation-area.js";
 const LEGACY_KEY = "eolab.processing.calculation.v1";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
-const CLIENT = /^(summary|raster-series:(0|[1-9][0-9]{0,15}))$/;
+const CLIENT = /^(summary|(?:raster-series|summary-query):(0|[1-9][0-9]{0,15}))$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
 /** Validate the optional total-pixel execution budget. @param {number|null} value Setting. @return {number|null} Budget. */
@@ -56,7 +56,7 @@ export function calculationIntent(value) {
 
 /** Keep idempotency and cancellation intent across reloads, without persisting cookies. */
 export class CalculationSessionStorage {
-    /** Bind one recovery record for summary or a nonnegative raster-series position.
+    /** Bind one recovery record for a fixed summary or independent multi-raster position.
      * Each record retains its size limit; browser storage bounds total saved data.
      * @param {Storage|null} storage Browser sessionStorage.
      * @param {string} [client="summary"] Caller identity.
@@ -116,7 +116,7 @@ export class CalculationSessionStorage {
                 !(value.jobId === null || ID.test(value.jobId)) ||
                 !(value.pending === null || (value.pending?.planId === undefined && /^[A-Za-z0-9_-]{16,80}$/.test(value.pending?.requestId))) ||
                 (!value.jobId && !value.pending)) return null;
-            if (value.client !== undefined && !["summary", "raster-series"].includes(value.client)) return null;
+            if (value.client !== undefined && !["summary", "raster-series", "summary-query"].includes(value.client)) return null;
             return { intent: calculationIntent(value.intent), jobId: value.jobId, pending: value.pending,
                 context: Object.freeze({ automatic: value.automatic, ...(value.client ? { client: value.client } : {}) }), cancelRequested: value.cancelRequested };
         } catch { return null; }

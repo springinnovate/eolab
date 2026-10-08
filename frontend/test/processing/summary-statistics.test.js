@@ -379,7 +379,7 @@ test("clearing raster coverage cancels automatic work without relabeling the pre
  * @return {Object} Observable workflow harness.
  */
 function fixture(overrides = {}, data = new Map(), browserContext = {}, context = {sources:[source,resistance],area:box(77)}, manualFrames = false) {
-    let serial = 0, jobSerial = 0;
+    let serial = 0, jobSerial = 0, requestSerial = 0;
     const timers = new Map(), requests = [], server = new Map();
     const clock = { setTimeout(fn, delay) { timers.set(++serial, { fn, delay }); return serial; }, clearTimeout(id) { timers.delete(id); } };
     const api = {
@@ -404,7 +404,8 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
         ...overrides,
     };
     const jobs = new ProcessingJobs(api,clock);
-    const storage = new CalculationSessionStorage({getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
+    const storage = new CalculationSessionStorage({get length() { return data.size; }, key: index => [...data.keys()][index] ?? null,
+        getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const document = new SummaryControlDocument();
     const frames = new Map(); let frameSerial = 0;
     document.defaultView.requestAnimationFrame = callback => { frames.set(++frameSerial, callback); return frameSerial; };
@@ -418,8 +419,9 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
         view.render = state => { schedule(state); drawFrame(); };
     }
     let controller;
-    const calculationRequests = new CalculationRequests({ api, jobs, storage, requestId:()=>`request-${String(jobSerial).padStart(16,"0")}` });
+    const calculationRequests = new CalculationRequests({ api, jobs, storage, requestId:()=>`request-${String(++requestSerial).padStart(16,"0")}` });
     controller = new SummaryStatisticsController({api,jobs,calculationRequests,view,clock,getContext:()=>context,
+        sourceMode: context.sourceMode ?? "single", getQuerySources: area => context.querySources?.(area) ?? [],
         onOpen:()=>controller.setActive(true),onClose(){},onEditArea(){},requestId:()=>`request-${String(jobSerial).padStart(16,"0")}`});
     const tick = async (delay = 700) => { const due=[...timers.entries()].filter(([,t])=>t.delay===delay);for(const[id,t]of due){timers.delete(id);t.fn();}await flush(); };
     const finish = async (status="ready", values=["12.5"]) => {
@@ -432,6 +434,216 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
     const submits=()=>requests.filter(r=>r[0]==="submit").length;
     return {controller,api,jobs,storage,view,document,requests,server,tick,finish,open,submits,data,frames,drawFrame};
 }
+
+test("map-query statistics calculate every offered intersecting raster instead of the hidden first binding", async () => {
+    const hidden = { ...source, itemId: "pacha", label: "PACHA resistance" };
+    const context = { sources: [hidden, source, resistance], area: box(77), sourceMode: "query",
+        querySources: () => [source, resistance] };
+    const h = fixture({}, new Map(), {}, context);
+    await h.open();
+    h.controller.setSelection(box(80)); h.controller.calculateSelection(); await h.tick(); await h.tick(0);
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent.source.itemId),
+        [source.itemId, resistance.itemId]);
+    h.controller.destroy();
+});
+
+/** Complete a particular owned query job out of order.
+ * @param {Object} h Summary harness.
+ * @param {string} id Server job identity.
+ * @param {string} [value="12.5"] Exact scalar text.
+ * @param {string} [state="ok"] Numeric result state.
+ * @return {Promise<void>} Observer and presentation update.
+ */
+async function finishQuery(h, id, value = "12.5", state = "ok") {
+    const old = h.server.get(id);
+    h.server.set(id, { ...old, status: "ready", result: {
+        url: `/api/processing/jobs/${id}/result`, provenanceUrl: `/api/processing/jobs/${id}/provenance`,
+        rows: old.calculations.map(row => ({ ...row, value, valueType: "float", state, aggregates: [] })),
+    } });
+    await h.jobs.refresh(); await flush();
+}
+
+/** Make the composed query policy explicit at the real summary boundary.
+ * @param {Object[]} [sources=[source,resistance]] Offered Catalog candidates.
+ * @return {Object} Mutable composition context.
+ */
+function queryContext(sources = [source, resistance]) {
+    return { sources, area: box(77), sourceMode: "query", candidates: sources,
+        querySources() { return this.candidates; } };
+}
+
+test("query results arrive independently, keep exact values and preserve focused details on renaming", async () => {
+    const copied = [], context = queryContext();
+    const h = fixture({}, new Map(), { clipboard: { writeText: async value => copied.push(value) } }, context);
+    await h.open(); assert.equal(h.submits(), 0);
+    h.controller.calculateSelection(); await h.tick(0);
+    const [first, second] = [...h.server.keys()];
+    await finishQuery(h, second, "123456789.123456789");
+    const card = h.view.cards.get(1), row = card.queryRows.get("rasters\nresistance");
+    row.details.open = true; row.copy.focus(); row.copy.dispatchEvent(new Event("click")); await flush();
+    assert.deepEqual(copied, ["123456789.123456789"]);
+    assert.equal(card.queryRows.get("rasters\nhfp").value.textContent, "—");
+    assert.equal(row.copy.disabled, false); assert.equal(h.controller.queryCalculations.busy, true);
+    context.candidates = [{ ...source, label: "Renamed" }, { ...resistance, label: "Renamed" }];
+    h.controller.refreshSourceNames();
+    assert.equal(card.queryRows.get("rasters\nresistance"), row);
+    assert.equal(h.document.activeElement, row.copy); assert.equal(row.details.open, true);
+    assert.equal(h.submits(), 2, "names do not resubmit");
+    assert.match(visibleText(row.detailsBody), /Resistance/);
+    await finishQuery(h, first, null, "no_valid_data");
+    assert.match(card.queryRows.get("rasters\nhfp").status.textContent, /No valid cells/);
+    assert.equal(h.controller.queryCalculations.complete, true);
+    h.controller.calculateSelection(); await h.tick(0); assert.equal(h.submits(), 2);
+    h.controller.destroy();
+});
+
+test("all 24 query candidates receive the same configured statistics without the distribution cap", async () => {
+    const sources = Array.from({ length: 24 }, (_, i) => ({ ...source, itemId: `raster-${i}` }));
+    const h = fixture({}, new Map(), {}, queryContext(sources));
+    await h.open(); h.controller.setAutomatic(false);
+    for (const preset of ["sum", "stdev", "range", "percent", "count"]) h.controller.addStatistic(preset);
+    await h.tick(); h.controller.request(1, "manual"); await h.tick(0);
+    assert.equal(h.submits(), 24); assert.equal(h.controller.state.statistics.length, 5);
+    const submitted = h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent);
+    assert.ok(submitted.every(intent => intent.calculations.length === 5));
+    assert.equal(new Set(submitted.map(intent => intent.requestId)).size, 24);
+    h.controller.destroy();
+});
+
+test("visibility and area changes replace query jobs and cannot paint a late obsolete value", async () => {
+    const context = queryContext(), h = fixture({}, new Map(), {}, context);
+    await h.open(); h.controller.calculateSelection(); await h.tick(0);
+    const [oldFirst, oldSecond] = [...h.server.keys()];
+    await finishQuery(h, oldSecond, "20");
+    context.candidates = [resistance];
+    h.controller.setSelection(box(80)); h.controller.refreshSourceNames(); await h.tick(0);
+    assert.ok(h.requests.some(([kind, id]) => kind === "cancel" && id === oldFirst));
+    await finishQuery(h, oldFirst, "999"); await h.tick(0);
+    const card = h.view.cards.get(1);
+    assert.equal(card.queryRows.has("rasters\nhfp"), false);
+    const row = card.queryRows.get("rasters\nresistance");
+    assert.match(row.status.textContent, /Previous result/); assert.equal(row.copy.disabled, true);
+    const next = [...h.server.keys()].find(id => id !== oldFirst && id !== oldSecond);
+    await finishQuery(h, next, "30");
+    assert.equal(row.value.textContent, "30"); assert.equal(row.copy.disabled, false);
+    context.candidates = []; h.controller.refreshSourceNames(); await h.tick(0);
+    assert.match(card.status.textContent, /No enabled rasters/); assert.equal(card.queryRows.size, 0);
+    h.controller.destroy();
+});
+
+test("a failed raster does not block peers and Calculate retries only that raster", async () => {
+    const context = queryContext(), h = fixture({}, new Map(), {}, context);
+    const submit = h.api.submitCalculation; let rejected = true;
+    h.api.submitCalculation = value => value.source.itemId === resistance.itemId && rejected
+        ? Promise.reject(new ProcessingRequestError("Source unavailable", 404)) : submit(value);
+    await h.open(); h.controller.calculateSelection(); await h.tick(0);
+    await finishQuery(h, [...h.server.keys()][0]);
+    assert.match(h.view.cards.get(1).queryRows.get("rasters\nresistance").status.textContent, /Source unavailable/);
+    rejected = false; h.controller.request(1, "manual"); await flush();
+    assert.equal(h.submits(), 2); assert.equal(h.requests.filter(([kind, intent]) => kind === "submit" && intent.source.itemId === source.itemId).length, 1);
+    await finishQuery(h, [...h.server.keys()][1]);
+    assert.equal(h.controller.queryCalculations.hasErrors, false); h.controller.destroy();
+});
+
+test("query cancellation and navigation do not restart work until another user action", async () => {
+    const h = fixture({}, new Map(), {}, queryContext());
+    await h.open(); h.controller.calculateSelection(); await h.tick(0);
+    h.controller.stopStatistic(1); await flush(); await h.tick(0);
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+    h.controller.refreshSourceNames(); await h.tick(0); assert.equal(h.submits(), 2);
+    h.controller.setActive(false); h.controller.open(); await h.tick(); await h.tick(0);
+    assert.equal(h.submits(), 2, "reopening presents results without authorizing a new query");
+    h.controller.destroy();
+});
+
+test("manual queries wait for formula feedback without losing explicit intent when automatic updates are off", async () => {
+    const h = fixture({}, new Map(), {}, queryContext()); await h.open(); h.controller.setAutomatic(false);
+    h.controller.editStatistic(1, { expression: "sum(a)" }); h.controller.calculateSelection(true);
+    await h.tick(0); assert.equal(h.submits(), 0);
+    await h.tick(); await h.tick(0); assert.equal(h.submits(), 2);
+    assert.ok(h.requests.filter(([kind]) => kind === "submit").every(([, intent]) => intent.calculations[0].expression === "sum(a)"));
+    h.controller.destroy();
+});
+
+test("a changed pixel query rejects obsolete work and keeps captured previous formula provenance", async () => {
+    const h = fixture({}, new Map(), {}, queryContext()); await h.open();
+    h.controller.setPixelPoint({ longitude: 77, latitude: 22 });
+    h.controller.editStatistic(1, { expression: "pixelValue(a)" }); await h.tick(); await h.tick(0);
+    const original = [...h.server.keys()]; await finishQuery(h, original[0], "11"); await finishQuery(h, original[1], "22");
+    h.controller.setPixelPoint({ longitude: 78, latitude: 23 }); await flush(); await h.tick(0);
+    const submitted = h.requests.filter(([kind]) => kind === "submit");
+    assert.equal(submitted.length, 4); assert.deepEqual(submitted[2][1].pixelPoint, { longitude: 78, latitude: 23 });
+    const row = h.view.cards.get(1).queryRows.get("rasters\nhfp");
+    assert.match(row.status.textContent, /Previous result/); assert.equal(row.copy.disabled, true);
+    h.controller.editStatistic(1, { expression: "mean(a)" }); await h.tick(); await h.tick(0);
+    assert.match(visibleText(row.detailsBody), /pixelValue\(a\)/);
+    assert.equal(row.copy.disabled, true); h.controller.destroy();
+});
+
+test("uncertain query reload retries original submissions only to cancel, preserving stack ownership", async () => {
+    const h = fixture({}, new Map(), {}, queryContext()), submit = h.api.submitCalculation;
+    h.api.submitCalculation = async intent => { await submit(intent); throw Error("Response lost"); };
+    await h.open(); h.controller.calculateSelection(); await h.tick(0);
+    const original = h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent);
+    assert.equal(h.controller.state.recoverable, true); h.controller.destroy();
+    const restored = fixture({ listJobs: async () => [...h.server.values()],
+        submitCalculation: async intent => { restored.requests.push(["recovered", intent]); return [...h.server.values()].find(job => job.sources.a.itemId === intent.source.itemId); },
+        cancelJob: async id => { const job = { ...h.server.get(id), status: "cancelled" }; h.server.set(id, job); return job; } }, h.data, {}, queryContext());
+    await restored.controller.start(); await flush();
+    assert.deepEqual(restored.requests.filter(([kind]) => kind === "recovered").map(([, intent]) => intent), original);
+    assert.ok([...h.server.values()].every(job => job.status === "cancelled"));
+    assert.equal(restored.submits(), 0); restored.controller.destroy();
+});
+
+test("explicit hidden-raster shortcuts use fixed bindings and query policy remains available", async () => {
+    const hidden = { ...source, itemId: "hidden", label: "Hidden raster" }, context = queryContext();
+    context.sources = [hidden, source, resistance];
+    const h = fixture({}, new Map(), {}, context); await h.open();
+    h.controller.open(hidden, box(81)); h.controller.calculateSelection(true); await flush();
+    assert.equal(h.controller.state.sourceMode, "single");
+    assert.equal(h.requests.find(([kind]) => kind === "submit")[1].source.itemId, "hidden");
+    await h.finish();
+    h.view.extra["source-mode"].value = "query"; h.view.extra["source-mode"].dispatchEvent(new Event("change"));
+    assert.equal(h.submits(), 1); h.controller.calculateSelection(); await h.tick(0);
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").slice(1).map(([, intent]) => intent.source.itemId), ["hfp", "resistance"]);
+    h.controller.destroy();
+});
+
+test("reload cancels query submissions with original keys without touching a stack record", async () => {
+    const h = fixture({}, new Map(), {}, queryContext()); await h.open();
+    h.controller.calculateSelection(); await h.tick(0);
+    const queryJobs = [...h.server.keys()];
+    const stack = h.storage.forClient("raster-series:0");
+    stack.write({ intent: { source, area: box(90), calculations: [{ label: "Stack", expression: "sum(a)" }] },
+        jobId: null, pending: { requestId: "request-stack-unchanged" }, cancelRequested: false,
+        context: { automatic: true, client: "raster-series" } });
+    h.controller.destroy();
+    const restored = fixture({ listJobs: async () => [...h.server.values()],
+        cancelJob: async id => { const job = { ...h.server.get(id), status: "cancelled" }; h.server.set(id, job); return job; } }, h.data, {}, queryContext());
+    await restored.controller.start(); await flush();
+    assert.ok(queryJobs.every(id => h.server.get(id).status === "cancelled"));
+    assert.equal(stack.read().pending.requestId, "request-stack-unchanged");
+    assert.equal(restored.submits(), 0); restored.controller.destroy();
+});
+
+test("composition screens hidden and non-overlapping defaults using Catalog extents only", () => {
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const start = main.indexOf("function enabledRasterSources(area)");
+    const end = main.indexOf("/** Read committed raster inputs", start);
+    const raster = (id, bbox, visible = true) => ({ datasetKind: "raster", visible, label: id, item: { collection: "catalog", id, bbox } });
+    const layers = [raster("hidden-top", [77, 22, 78, 23], false), raster("outside", [0, 0, 1, 1]),
+        raster("inside", [77, 22, 78, 23]), raster("3d", [77, 22, -5, 78, 23, 8]),
+        raster("unknown"), raster("invalid", [1, 5, 2, 4]), raster("wrapped", [170, 20, -170, 25]),
+        { ...raster("vector", [77, 22, 78, 23]), datasetKind: "vector" }];
+    const policy = new Function("mapLayerController", "clipSource", `${main.slice(start, end)}; return enabledRasterSources;`)(
+        { snapshots: () => layers }, (item, label) => ({ collectionId: item.collection, itemId: item.id, label }));
+    assert.deepEqual(policy(box(77)).map(source => source.itemId), ["inside", "3d", "unknown", "invalid"]);
+    assert.ok(policy(box(175)).some(source => source.itemId === "wrapped"));
+    assert.ok(policy(box(-179)).some(source => source.itemId === "wrapped"));
+    assert.equal(policy({ kind: "wholeRaster" }).length, 6);
+    layers[0].visible = true;
+    assert.equal(policy(box(77))[0].itemId, "hidden-top");
+});
 
 /** Read text throughout a fake DOM tree. @param {Object} node Test node. @return {string} Descendant text. */
 function visibleText(node) { return [node.textContent, ...node.children.map(visibleText)].join(" "); }

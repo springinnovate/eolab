@@ -838,6 +838,31 @@ async function initializeCatalog(
     });
     const processingApi = new ProcessingApiClient();
     const processingJobs = new ProcessingJobs(processingApi);
+    /** Choose enabled Catalog raster candidates for one query without consulting renderers.
+     * Catalog extents are a conservative screen; missing/unknown extents remain candidates.
+     * Non-box areas keep all enabled candidates for the authoritative source reader.
+     * @param {Object|null} area Neutral Processing area.
+     * @return {{collectionId:string,itemId:string,label:string}[]} Top-first candidate identities.
+     */
+    function enabledRasterSources(area) {
+        const bounds = area?.kind === "selectedArea" ? area.selectedBounds : null;
+        return mapLayerController.snapshots().filter(
+            /** @param {Object} layer Catalog-backed map choice. @return {boolean} Enabled candidate. */
+            layer => {
+                if (layer.datasetKind !== "raster" || !layer.visible) return false;
+                if (!bounds) return true;
+                const bbox = layer.item.bbox;
+                const extent = Array.isArray(bbox) && bbox.length === 6 ? [bbox[0], bbox[1], bbox[3], bbox[4]] : bbox;
+                if (!Array.isArray(extent) || extent.length !== 4 || !extent.every(Number.isFinite)) return true;
+                const [west, south, east, north] = extent;
+                if (Math.abs(west) > 180 || Math.abs(east) > 180 || south < -90 || north > 90 || south > north) return true;
+                if (north < bounds.south || south > bounds.north) return false;
+                return west <= east ? west <= bounds.east && east >= bounds.west
+                    : west <= bounds.east || east >= bounds.west;
+            }
+        ).map(/** @param {Object} layer Catalog-backed candidate. @return {Object} Source identity. */
+            layer => clipSource(layer.item, layer.label));
+    }
     /** Read committed raster inputs independently of rendering eligibility.
      * @return {{sources:Object[],area:Object|null,pixelPoint:{longitude:number,latitude:number}|null}} Current Processing context.
      */
@@ -863,6 +888,7 @@ async function initializeCatalog(
             onContextChange: context => mapInspection.setToolContext("calculations", context),
         }),
         calculationRequests,
+        sourceMode: "query", getQuerySources: enabledRasterSources,
         onAreaChange: updateRasterSeriesArea, getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
@@ -875,6 +901,7 @@ async function initializeCatalog(
         }),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
+        getQuerySources: enabledRasterSources,
         onOpen: () => mapInspection.showRasterClips(),
         onClose: () => mapInspection.hideRasterClips(),
         onEditArea: editProcessingArea,

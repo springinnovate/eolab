@@ -12,12 +12,20 @@ Use **Download clip** on a raster in Map layers or an individual 1D histogram.
 The 2D histogram has separate **Download X clip** and **Download Y clip** actions.
 Use **Tools → Download raster clip** to return to the current download while other
 tools are open. Opening this tool alone does not submit or cancel work.
+For a new generic review or **Prepare another download**, the default is the first
+enabled raster whose Catalog extent overlaps the captured box, rather than a
+hidden top layer. Unknown extents remain candidates; the source reader checks the
+actual overlap. Other area types conservatively retain enabled candidates. If
+none qualify, choose a raster explicitly or enable one. This remains a one-raster
+download, not a batch export.
 
 **Download raster clip** leads with the chosen raster and captured area. The 1D and
 2D selections remain distinct; whole-raster and whole-overlap sampling do not
 become export areas. **Change** reveals the raster selector and **Change sampling
 area**, which opens the existing box/vector controls. Returning to the download
-review captures the new area and keeps the chosen raster. Reopen from a histogram
+review captures the new area and keeps an explicitly chosen raster; an implicit
+default is refreshed for that area. Explicit layer/histogram choices and the raster
+selector can still analyze hidden rasters. Reopen from a histogram
 to review that histogram's source and selection. Histogram results need not be
 ready or successful before reviewing a clip.
 

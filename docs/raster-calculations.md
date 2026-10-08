@@ -18,9 +18,21 @@ Raster distribution feedback stays in the raster-analysis group.
 **Tools** opens one shared list of analysis, export and map-display actions. Its
 button appears in the dock while open and on the map when the dock is closed;
 press Escape or click outside the list to dismiss it.
-Each of the five available cards has a name, formula, raster binding (`a`),
-and result. Different cards can use different rasters, but each formula uses
-only one raster. **Formula reference** in the panel lists the supported functions.
+By default, **Rasters → Enabled rasters in this area** runs each configured formula
+independently over every enabled raster whose Catalog extent overlaps the query.
+Unknown extents remain candidates; the source reader determines whether valid
+cells exist. Vector and whole-raster areas conservatively include all enabled
+rasters. There is no raster-count limit or Distributions' top-16 sampling cap.
+Each of the five available cards is a statistic template with one result row per
+raster. The formula's `a` represents that row's raster. This does not align grids
+or combine values between rasters. Results, errors, exact-value copying and
+**Value details & downloads** appear independently as each raster finishes.
+
+**Rasters → Choose raster for each statistic** retains explicit fixed bindings.
+Layer and histogram shortcuts select this mode and their captured source, including
+hidden rasters. Different cards can use different rasters, but each formula uses
+only one raster. Visibility is a browser default choice, never permission to analyze
+a Catalog source. **Formula reference** lists the supported functions.
 Cards lead with the statistic name, raster identity and result. **Edit** opens
 the name, raster binding and formula in place; a new **Custom** statistic opens
 its formula editor immediately. Progress, errors and cancellation stay visible
@@ -35,11 +47,13 @@ Raster styling, opacity and a simplified map outline do not change the result.
 
 Edit a formula or choose an **Add statistic** preset. Formula checks wait for a
 700 ms pause in typing. Invalid formulas show an explanation. **Calculate** can
-submit immediately without waiting for this editor feedback; submission validates
+submit immediately in fixed-raster mode without waiting for this editor feedback; submission validates
 the complete request on the server. Unchecked formulas submit individually so an
 invalid card cannot reject a valid neighbor. Checked formulas on the same raster
 can share a scan. Changing only the raster or area reuses the editor feedback.
-Opening the panel or renaming a card does not run it.
+Query mode waits for valid formulas before submitting the shared formula set for
+each raster. Invalid formulas stay local to their card while valid templates can
+run. Opening the panel, changing source policy or renaming a card does not run it.
 
 From a histogram, **Calculate statistics for this area** opens the cards and runs all configured
 valid statistics over that area. The first card
@@ -48,7 +62,9 @@ has been selected, the result position says **Click the map to calculate**. Clic
 the map to select a sampling box; the automatic-update policy below then applies.
 
 **Update statistics automatically**, beside the summary's area controls, is on by default.
-With Statistics active, a new map box can update statistics automatically.
+With Statistics active, a new map box can update statistics automatically. In query
+mode, enabling, hiding or removing layers refreshes the candidate set for an active
+query; obsolete work is cancelled and late values cannot replace current results.
 Each calculation is submitted as one job. The worker prepares the raster grid
 and work estimates, then immediately calculates the result. Progress changes
 from queued to preparing to calculating; prepared estimates remain available
@@ -65,7 +81,11 @@ coverage, method, CSV and provenance. Missing data can produce a completed job
 with no numeric result; the states below explain why.
 
 Changing the active calculation cancels obsolete work. Closing or switching away
-from the panel cancels automatic work; manually submitted work can continue.
+from the panel cancels transient multi-raster query work, including an explicitly
+started query. Reopening alone does not run it. Reload recovers and cancels unfinished
+query jobs with their original request keys, independently of Raster stack jobs.
+In fixed-raster mode, automatic work is cancelled on navigation and manually
+submitted work can continue.
 Reopen **Statistics** to see its current cards. If the map inputs changed while a
 manual calculation continued, a compact **Unfinished calculation** status identifies
 the submitted raster, area and any pixel point, with **Cancel calculation** available.
