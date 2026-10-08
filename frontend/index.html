@@ -578,7 +578,7 @@
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Export</strong>
           <button id="open-raster-clips" class="workspace-tool-action" type="button"
-            aria-controls="raster-clips-panel">Raster clips</button>
+            aria-controls="raster-clips-panel">Download raster clip</button>
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Map display</strong>
@@ -625,7 +625,7 @@
             <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Shared layer</button>
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
-              aria-selected="false" tabindex="-1" hidden>Raster clips</button>
+              aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
               aria-selected="false" tabindex="-1" hidden>Features</button>
@@ -790,31 +790,31 @@
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster clips</h2>
-              <button id="raster-clips-close" class="secondary-button" type="button" aria-label="Close raster clips">&times;</button>
+              <h2>Download raster clip</h2>
+              <button id="raster-clips-close" class="secondary-button" type="button" aria-label="Close raster download">&times;</button>
             </header>
-            <p>Create and download raster clips. Completed clips remain available for 24 hours in this browser session.</p>
             <form id="raster-clips-form">
-              <label for="raster-clips-source">Raster</label>
-              <select id="raster-clips-source"></select>
-              <label for="raster-clips-area">Clip area</label>
-              <select id="raster-clips-area"></select>
+              <h3 id="raster-clips-source-name"></h3>
               <p id="raster-clips-area-description"></p>
-              <p>The selected area is captured when Raster clips opens. Reopen from a histogram to use a newer selection.</p>
-              <div class="downloads-actions">
-                <button id="raster-clips-edit-area" class="secondary-button" type="button">Choose box or catalog vector</button>
-                <button id="raster-clips-create" class="primary-button" type="submit" disabled>Create clip</button>
-              </div>
+              <details id="raster-clips-inputs">
+                <summary>Change</summary>
+                <label for="raster-clips-source">Raster</label>
+                <select id="raster-clips-source"></select>
+                <button id="raster-clips-edit-area" class="secondary-button" type="button">Change sampling area</button>
+              </details>
+              <p class="raster-clip-availability">Temporary download; expiry is shown when it is ready.</p>
+              <button id="raster-clips-create" class="primary-button" type="submit" disabled>Prepare download</button>
             </form>
             <p id="raster-clips-message" role="status" aria-live="polite"></p>
             <p id="raster-clips-pending" hidden></p>
             <button id="raster-clips-retry-submission" class="secondary-button" type="button" hidden>Recover submission</button>
-            <header class="map-histogram-toolbar">
-              <h3>Your clips</h3>
-              <button id="raster-clips-refresh" class="secondary-button" type="button">Refresh</button>
-            </header>
             <p id="raster-clips-job-message" role="status" aria-live="polite"></p>
-            <div id="raster-clips-jobs"></div>
+            <section id="raster-clips-current" aria-label="Current download" tabindex="-1" hidden></section>
+            <button id="raster-clips-new" class="secondary-button" type="button" hidden>Prepare another download</button>
+            <details id="raster-clips-recent" hidden>
+              <summary id="raster-clips-recent-label">Recent downloads</summary>
+              <div id="raster-clips-jobs"></div>
+            </details>
           </section>
           <section id="vector-feature-inspector" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature" hidden>

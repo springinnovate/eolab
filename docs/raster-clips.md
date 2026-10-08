@@ -10,23 +10,38 @@ whole-raster exports are not offered.
 
 Use **Download clip** on a raster in Map layers or an individual 1D histogram.
 The 2D histogram has separate **Download X clip** and **Download Y clip** actions.
-Use **Tools → Raster clips** to return to your clips while other tools are open.
+Use **Tools → Download raster clip** to return to the current download while other
+tools are open. Opening this tool alone does not submit or cancel work.
 
-Raster clips captures the explicit selected histogram area when opened. The 1D and
+**Download raster clip** leads with the chosen raster and captured area. The 1D and
 2D selections remain distinct; whole-raster and whole-overlap sampling do not
-become export areas. Choose a box or a filtered Catalog vector in Sampling area.
-**Choose box or catalog vector** opens the existing area controls. Reopen Raster clips to capture a changed histogram selection. Histogram
-results need not be ready or successful before reviewing a clip.
+become export areas. **Change** reveals the raster selector and **Change sampling
+area**, which opens the existing box/vector controls. Returning to the download
+review captures the new area and keeps the chosen raster. Reopen from a histogram
+to review that histogram's source and selection. Histogram results need not be
+ready or successful before reviewing a clip.
 
-**Create clip** submits the chosen raster and area. The worker prepares the clip
-and reports its grid and progress. Later map/filter changes do not change accepted work.
+**Prepare download** submits the chosen raster and area. The current download
+replaces the review with measured progress, cancellation, errors or the ready
+**Download GeoTIFF** action and an actual expiry deadline in local time. Later
+map/filter changes do not change accepted work. **Prepare another download** opens
+a new review; it does not cancel the existing download. Other active or available
+downloads are listed under a collapsed **Recent downloads** disclosure only when
+relevant. Selecting one inspects its original source/area without submitting work;
+active entries retain Cancel even while another submission is unconfirmed.
 The original Catalog sources must remain available and unchanged until execution
-and publication finish. Job cards show measured block progress and named file
-preparation phases, plus cancel, download, provenance, delete, size, and expiry.
-Downloads go directly through the browser, without a JavaScript Blob buffer.
+and publication finish. **Download details** holds native grid/CRS, size estimates,
+provenance and the explicit Delete result action. Closing or switching tools leaves
+accepted work running. Downloads go directly through the browser, support resuming,
+and avoid a JavaScript Blob buffer.
 
-Owned jobs recover through the session cookie after reload. The per-tab session
-storage contains the unconfirmed source and area, idempotency key, and display label;
+Owned jobs recover through the session cookie after reload, including when their
+map layers have been removed. The current/recent surfaces use their saved catalog
+identities and job metadata. Expired jobs cannot offer download links; expiration
+and active-transfer cleanup remain server-owned. The default availability is still
+24 hours after completion, and the ready download shows its actual server deadline.
+The per-tab session storage contains the unconfirmed source and area, idempotency
+key, and display label;
 it is saved before dispatch. Reload or **Recover submission** retries that same
 request. No cookie, geometry, result file, or processing job is placed in a shared
 map link. Disabled session storage prevents submission with a clear explanation.

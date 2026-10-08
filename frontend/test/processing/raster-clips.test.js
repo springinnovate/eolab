@@ -14,10 +14,42 @@ const id = "a".repeat(32);
 const plan = { planId: id, expiresAt: "2099-01-01T00:00:00Z", area: { kind: "bounds", bounds: [77,22,78,23] },
     grid: { transform: [1000, 0, 0, 0, -1000, 0], width: 100, height: 120, crs: "EPSG:3857", dtype: "float32", estimatedRawBytes: 60000 } };
 const job = { jobId: id, operation: "raster.clip.v1", status: "queued", source, area: plan.area, grid: plan.grid, progress: {}, result: null };
+const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+const ready = { ...job, status: "ready", expiresAt: plan.expiresAt,
+    result: { url: `/api/processing/jobs/${id}/result`, provenanceUrl: `/api/processing/jobs/${id}/provenance`, bytes: 100, filename: "clip.tif" } };
+/** Complete queued transport and job observer microtasks. @return {Promise<void>} Settled fixture updates. */
+const flush = async () => { for (let n = 0; n < 60; n++) await Promise.resolve(); };
 
-/** Create isolated controller adapters with real pending storage. @param {Object} overrides API overrides. @return {Object} Fixture. */
-function fixture(overrides = {}) {
-    const data = new Map();
+/** Read safe text across a fake clip DOM tree. @param {Object} node DOM fixture node. @return {string} Descendant text. */
+function textOf(node) { return [node.textContent, ...node.children.map(textOf)].join(" "); }
+
+/** Clip DOM fixture which rejects controls absent from the actual application markup. */
+class ClipControlDocument extends FakeRasterControlDocument {
+    /** Record the current HTML controls. */
+    constructor() { super(); this.controlIds = new Set([...markup.matchAll(/\sid="([^"]+)"/g)].map(match => match[1])); }
+    /** Preserve native tag selectors for clip details, links and focus recovery.
+     * @param {string} tag HTML tag.
+     * @return {Object} Detached fake element.
+     */
+    createElement(tag) { const node = super.createElement(); node.tagName = tag; return node; }
+    /** Resolve only declared clip controls.
+     * @param {string} selector Exact ID selector.
+     * @return {Object} Retained fake control.
+     * @throws {Error} If presentation queries a removed HTML control.
+     */
+    querySelector(selector) {
+        if (!selector.startsWith("#") || !this.controlIds.has(selector.slice(1))) throw Error(`Missing clip control: ${selector}`);
+        return super.querySelector(selector);
+    }
+}
+
+/** Create isolated clip lifecycles with real recovery storage and optional production DOM.
+ * @param {Object} [overrides={}] Processing transport overrides.
+ * @param {Map<string,string>} [data=new Map()] Session data shared across reload tests.
+ * @param {boolean} [realView=false] Bind the actual clip view and HTML controls.
+ * @return {Object} Observable controller, storage, DOM and transport harness.
+ */
+function fixture(overrides = {}, data = new Map(), realView = false) {
     const storage = new PendingSubmissionStorage({ getItem: key => data.get(key), setItem: (key,value) => data.set(key,value), removeItem: key => data.delete(key) });
     const requests = [];
     const api = { listJobs: async () => [],
@@ -30,12 +62,16 @@ function fixture(overrides = {}) {
         submitClip: async value => { requests.push(value); return structuredClone(job); },
         cancelJob: async value => requests.push(["cancel",value]), deleteJob: async value => requests.push(["delete",value]), ...overrides };
     let context = { sources: [structuredClone(source)], area: structuredClone(box) };
-    const view = { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
+    const doc = realView ? new ClipControlDocument() : null;
+    const contexts = [];
+    const view = realView ? new RasterClipsView(doc, { onContextChange: context => contexts.push(context) })
+        : { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
     const timers = [];
-    const options = { api, view, storage, getContext: () => context, onOpen() {}, onClose() {}, onEditArea() {},
+    let controller;
+    const options = { api, view, storage, getContext: () => context, onOpen() {}, onClose: () => controller.setActive(false), onEditArea() {},
         clock: { setTimeout(callback, delay) { timers.push([callback,delay]); return timers.length; }, clearTimeout() {} }, requestId: () => "request-1234567890" };
-    const controller = new RasterClipsController(options);
-    return { controller, api, view, storage, requests, timers, options, data, get context() { return context; }, setContext(value) { context = value; } };
+    controller = new RasterClipsController(options);
+    return { controller, api, view, storage, requests, timers, options, data, doc, contexts, get context() { return context; }, setContext(value) { context = value; } };
 }
 
 test("submission freezes the selected source and box independently of later map changes", async () => {
@@ -146,10 +182,11 @@ test("current calculation controls stay under Statistics and clip labels target 
     assert.match(summary, /id="summary-current-work"/);
     assert.doesNotMatch(summary, /calculations-history|summary-saved-result/);
     assert.doesNotMatch(markup, /History &amp; exports|id="downloads-|id="open-downloads/);
-    for (const name of ["source", "area"]) {
+    for (const name of ["source"]) {
         assert.ok(markup.includes(`for="raster-clips-${name}"`));
         assert.ok(markup.includes(`id="raster-clips-${name}"`));
     }
+    assert.doesNotMatch(markup, /id="raster-clips-area"|Your clips|id="raster-clips-refresh"/);
 });
 
 test("an older job listing cannot erase a newly accepted clip", async () => {
@@ -193,8 +230,8 @@ test("download navigation is limited to direct owned artifact endpoints", () => 
 test("clip form and job cards show grid, real progress, direct links and independent actions", async () => {
     const h = fixture();
     const contexts = [];
-    const doc = new FakeRasterControlDocument(); const view = new RasterClipsView(doc, { onContextChange: context => contexts.push(context) });
-    const actions=[]; view.bind({ onOpen() {}, onClose() {}, onSource() {}, onArea() {}, onCreate() {}, onRetrySubmission() {}, onRefresh() {}, onEditArea() {}, onCancel: id => actions.push(id), onDelete: id => actions.push(id) });
+    const doc = new ClipControlDocument(); const view = new RasterClipsView(doc, { onContextChange: context => contexts.push(context) });
+    const actions=[]; view.bind({ onOpen() {}, onClose() {}, onSource() {}, onNew() {}, onShowJob() {}, onCreate() {}, onRetrySubmission() {}, onEditArea() {}, onCancel: id => actions.push(id), onDelete: id => actions.push(id) });
     h.controller.open();
     view.render(h.view.state);
     assert.equal(contexts.at(-1).source, source.label);
@@ -204,21 +241,163 @@ test("clip form and job cards show grid, real progress, direct links and indepen
     assert.equal(doc.querySelector("#raster-clips-create").disabled, false);
     h.view.state.jobs = [{ ...job, status:"ready", expiresAt: plan.expiresAt,
         result: { url:`/api/processing/jobs/${id}/result`, provenanceUrl:`/api/processing/jobs/${id}/provenance`, bytes:100, filename:"clip.tif" } }];
+    h.view.state.currentJobId = id; h.view.state.review = false;
     view.render(h.view.state);
-    const card = doc.querySelector("#raster-clips-jobs").children[0];
+    const card = doc.querySelector("#raster-clips-current").children[0];
     assert.match(text(card), /100 × 120 pixels/);
     assert.match(text(card), /EPSG:3857/);
-    const link = card.children.find(child => child.textContent === "Download COG");
+    const link = card.children.find(child => child.className === "downloads-actions").children[0];
     assert.equal(link.href, `/api/processing/jobs/${id}/result`);
-    card.children.at(-1).dispatchEvent(new Event("click")); assert.deepEqual(actions,[id]);
-    doc.querySelector("#map-tools-more-summary").textContent = "Tools";
+    card.children.at(-1).children.at(-1).dispatchEvent(new Event("click")); assert.deepEqual(actions,[id]);
     view.render({ ...h.view.state, jobs: [{ ...job, status: "running" }] });
-    assert.equal(doc.querySelector("#map-tools-more-summary").textContent, "Tools");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"clipping",completedBlocks:3,totalBlocks:10} }),"Clipping · 3 of 10 source blocks");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"preparing"} }), "Preparing clip…");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"calculating"} }), "Starting clip…");
     assert.match(describeJobProgress({ ...job, status:"running", progress:{phase:"creating_cog"} }),/Preparing download/);
     view.unbind();
+});
+
+test("layer, 1D and X/Y review intents retain their distinct captured source and area", async () => {
+    const h = fixture({}, new Map(), true);
+    const other = { ...source, itemId: "other-raster", label: "Other raster" };
+    const pairedArea = { kind: "selectedArea", selectedBounds: { west: 1, south: 2, east: 3, north: 4 } };
+    h.controller.open(source); assert.deepEqual(h.controller.state.area, box);
+    h.controller.open(other, pairedArea);
+    assert.equal(h.view.elements["source-name"].textContent, other.label);
+    assert.match(h.view.elements["area-description"].textContent, /W 1.0000/);
+    assert.deepEqual(h.controller.state.area, pairedArea);
+    h.context.area.selectedBounds.west = 60;
+    assert.equal(h.controller.state.area.selectedBounds.west, 1);
+    h.controller.open(source, box); await h.controller.submit();
+    const accepted = structuredClone(h.controller.state.jobs[0]);
+    h.controller.open(other, pairedArea);
+    assert.equal(h.view.elements.form.hidden, false);
+    assert.equal(h.view.elements.current.hidden, true);
+    assert.equal(h.view.elements.recent.hidden, false);
+    assert.equal(Boolean(h.view.elements.recent.open), false);
+    assert.deepEqual(h.controller.state.jobs[0], accepted);
+    h.view.elements.jobs.children[0].children[0].dispatchEvent(new Event("click"));
+    assert.equal(h.view.elements.current.hidden, false);
+    assert.equal(h.view.elements.form.hidden, true);
+    assert.match(h.contexts.at(-1).scope, /W 77.0000/);
+    assert.equal(h.doc.activeElement, h.view.elements.current);
+    assert.equal(h.requests.length, 1);
+    h.view.elements.close.dispatchEvent(new Event("click")); h.controller.destroy();
+    assert.equal(h.requests.length, 1, "closing and teardown neither cancel nor delete accepted work");
+});
+
+test("changing unsubmitted sampling intent keeps the chosen raster and accepted work intact", async () => {
+    const h = fixture({}, new Map(), true); h.controller.open(); await h.controller.submit();
+    const accepted = structuredClone(h.controller.state.jobs[0]);
+    const other = { ...source, itemId: "other", label: "Other" };
+    h.context.sources.push(other);
+    h.view.elements.new.dispatchEvent(new Event("click"));
+    h.view.elements.source.value = "1"; h.view.elements.source.dispatchEvent(new Event("change"));
+    h.view.elements["edit-area"].dispatchEvent(new Event("click"));
+    h.controller.setActive(false); h.context.area.selectedBounds.west = 76;
+    h.controller.open();
+    assert.equal(h.controller.state.review, true);
+    assert.equal(h.controller.state.source.itemId, "other");
+    assert.equal(h.controller.state.area.selectedBounds.west, 76);
+    assert.deepEqual(h.controller.state.jobs[0], accepted);
+    assert.equal(h.requests.length, 1);
+    h.controller.destroy();
+});
+
+test("ready downloads show the server deadline and preserve direct owned exports", async () => {
+    const h = fixture({ listJobs: async () => [ready] }, new Map(), true);
+    h.setContext({ sources: [], area: null }); await h.controller.start(); h.controller.open();
+    assert.equal(h.view.elements.form.hidden, true);
+    assert.equal(h.view.elements.current.hidden, false);
+    assert.equal(h.view.elements.recent.hidden, true);
+    const card = h.view.elements.current.children[0];
+    assert.match(textOf(card), /Expires/);
+    assert.equal(card.querySelector("time").getAttribute("datetime"), plan.expiresAt);
+    const links = card.querySelectorAll("a");
+    assert.deepEqual(links.map(link => link.href), [ready.result.url, ready.result.provenanceUrl]);
+    assert.equal(links.every(link => link.getAttribute("download") === ""), true);
+    assert.match(h.contexts.at(-1).scope, /W 77.0000/);
+    h.controller.jobs.accept({ ...ready, status: "expired" });
+    assert.equal(h.view.elements.current.children[0].querySelectorAll("a").length, 0);
+    assert.match(textOf(h.view.elements.current), /Expired/);
+    assert.equal(h.requests.length, 0, "observing expiry never deletes server data");
+    h.controller.destroy();
+});
+
+test("uncertain download recovery stays visible with original inputs after map context changes", async () => {
+    const h = fixture({ submitClip: async value => { h.requests.push(value); throw Error("Response lost"); } }, new Map(), true);
+    h.controller.open(); await h.controller.submit();
+    const saved = h.storage.read();
+    h.setContext({ sources: [], area: null }); h.controller.open(source, null);
+    assert.equal(h.view.elements["source-name"].textContent, source.label);
+    assert.equal(h.view.elements["retry-submission"].hidden, false);
+    assert.equal(h.view.elements.source.disabled, true);
+    assert.equal(h.view.elements["edit-area"].disabled, true);
+    assert.equal(h.view.elements.create.disabled, true);
+    assert.match(h.contexts.at(-1).scope, /W 77.0000/);
+    h.controller.destroy();
+    const restored = fixture({ listJobs: async () => [ready], submitClip: async value => { restored.requests.push(value); return ready; } }, h.data, true);
+    restored.setContext({ sources: [], area: null }); await restored.controller.start(); restored.controller.open();
+    assert.deepEqual(restored.requests[0], saved);
+    assert.equal(restored.storage.read(), null);
+    assert.equal(restored.view.elements.current.hidden, false);
+    assert.equal(restored.view.elements.form.hidden, true);
+    assert.equal(restored.contexts.at(-1).source, source.itemId);
+    assert.match(restored.contexts.at(-1).scope, /W 77.0000/);
+    assert.equal(restored.view.elements["retry-submission"].hidden, true);
+    restored.controller.destroy();
+});
+
+test("reloaded active downloads remain cancellable without map layers and suppress duplicate actions", async () => {
+    let resolveCancel;
+    const h = fixture({ listJobs: async () => [job], cancelJob: value => { h.requests.push(["cancel", value]); return new Promise(resolve => { resolveCancel = resolve; }); } }, new Map(), true);
+    h.setContext({ sources: [], area: null }); await h.controller.start(); h.controller.open();
+    const cancel = h.view.elements.current.children[0].querySelector("button");
+    cancel.dispatchEvent(new Event("click")); cancel.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.requests, [["cancel", id]]);
+    assert.equal(h.controller.state.jobActions.has(id), true);
+    const cancelling = { ...job, status: "cancelling" }; h.api.listJobs = async () => [cancelling]; resolveCancel(cancelling); await flush();
+    assert.equal(h.view.elements.current.children[0].querySelector("button").disabled, true);
+    h.controller.destroy();
+});
+
+test("recent downloads contain only other active or downloadable clips and selecting one does not submit", async () => {
+    const other = { ...job, jobId: "b".repeat(32), source: { ...source, itemId: "other" } };
+    const discarded = ["expired", "failed", "cancelled", "deleted"].map((status, index) => ({ ...job, jobId: String(index), status }));
+    const h = fixture({ listJobs: async () => [ready, other, ...discarded, { ...job, jobId: "c".repeat(32), operation: "raster.aggregate.v1" }] }, new Map(), true);
+    await h.controller.start(); h.controller.open();
+    assert.equal(h.view.elements["recent-label"].textContent, "Recent downloads (1)");
+    assert.equal(h.view.elements.jobs.children.length, 1);
+    h.view.elements.jobs.children[0].children[0].dispatchEvent(new Event("click"));
+    assert.equal(h.controller.state.currentJobId, other.jobId);
+    assert.equal(h.view.elements["recent-label"].textContent, "Recent downloads (1)");
+    assert.match(textOf(h.view.elements.current), /Queued/);
+    assert.equal(h.requests.length, 0);
+    h.controller.destroy();
+});
+
+test("current download preserves safe resource errors and rejects arbitrary result and provenance URLs", async () => {
+    const h = fixture({}, new Map(), true); h.controller.open(); await h.controller.submit();
+    const detail = '<img src=x onerror="alert(1)"> exceeds the native-work limit';
+    h.controller.jobs.accept({ ...job, status: "failed", error: { code: "source_work_too_large", detail } });
+    assert.match(textOf(h.view.elements.current), /exceeds the native-work limit/);
+    const error = h.view.elements.current.children[0].children.find(node => node.textContent.includes(detail));
+    assert.equal(error.children.length, 0);
+    for (const [kind, address] of [["url", "https://example.com/result"], ["provenanceUrl", `/api/processing/jobs/${"x".repeat(32)}/provenance`]]) {
+        assert.throws(() => h.controller.jobs.accept({ ...ready, result: { ...ready.result, [kind]: address } }), /Invalid processing download address/);
+    }
+    h.controller.destroy();
+});
+
+test("other accepted downloads remain cancellable while the current submission is uncertain", async () => {
+    const h = fixture({ listJobs: async () => [job], submitClip: async () => { throw Error("Response lost"); } }, new Map(), true);
+    await h.controller.start(); h.controller.open(source, box); await h.controller.submit();
+    const saved = h.storage.read(), row = h.view.elements.jobs.children[0];
+    assert.equal(row.children[0].disabled, true, "uncertain intent cannot be replaced by a different review");
+    row.children[1].dispatchEvent(new Event("click")); await flush();
+    assert.deepEqual(h.requests, [["cancel", id]]);
+    assert.deepEqual(h.storage.read(), saved);
+    h.controller.destroy();
 });
 
 test("pending recovery ignores corrupt and oversized browser data", () => {

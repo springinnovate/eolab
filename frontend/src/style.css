@@ -5001,11 +5001,30 @@ summary:hover > .raster-disclosure-chevron {
 #raster-clips-form { display: grid; gap: 0.55rem; }
 #raster-clips-form select { width: 100%; min-width: 0; }
 #raster-clips-panel p { font-size: 0.85rem; line-height: 1.45; }
+#raster-clips-form h3, #raster-clips-form p { margin: 0; }
+#raster-clips-form .raster-clip-availability { color: var(--text-2); font-size: 0.78rem; }
+#raster-clips-form > button { justify-self: start; }
+#raster-clips-panel .primary-button { display: inline-flex; align-items: center; justify-content: center; padding: 7px 10px; border: 1px solid var(--brand); border-radius: var(--radius); background: var(--brand); color: var(--surface-2); font: inherit; text-decoration: none; cursor: pointer; }
+#raster-clips-panel .primary-button:hover:not(:disabled) { background: var(--brand-hover); }
+#raster-clips-panel .primary-button:active:not(:disabled) { background: var(--brand-press); }
+#raster-clips-inputs > summary, #raster-clips-recent > summary { cursor: pointer; color: var(--brand); padding: 5px 0; }
+#raster-clips-inputs select, #raster-clips-inputs > button { margin-top: 6px; }
+#raster-clips-recent { margin-top: 12px; }
+#raster-clips-jobs { display: grid; gap: 6px; margin-top: 6px; }
+.raster-clip-recent-entry { display: flex; align-items: start; gap: 6px; }
+.raster-clip-recent-entry > .secondary-button { flex: none; }
+.raster-clip-recent { display: grid; gap: 3px; width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.raster-clip-recent span { font-size: 0.78rem; color: var(--text-2); }
+.raster-clip-recent:disabled { opacity: 0.6; cursor: default; }
+#raster-clips-panel [hidden] { display: none; }
+@media (pointer: coarse) {
+    #raster-clips-panel button, #raster-clips-panel a, #raster-clips-panel summary, #raster-clips-panel select { min-height: 44px; }
+}
 .downloads-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
 .download-plan, .download-job {
-    border: 1px solid #c7d7d3;
-    border-radius: 0.6rem;
-    background: #f6faf8;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    background: var(--surface-2);
     padding: 0.8rem;
     margin: 0.8rem 0;
 }

@@ -98,7 +98,7 @@ export class MapInspectionController {
             { name: "calculations", label: "Statistics", panel: this.calculations, raster: true,
                 tab: this.dockCalculationOpener },
             {
-                name: "raster-clips", label: "Raster clips", panel: this.rasterClips,
+                name: "raster-clips", label: "Download raster clip", panel: this.rasterClips,
                 tab: documentContext.querySelector("#map-inspection-tab-raster-clips"),
             },
             {
