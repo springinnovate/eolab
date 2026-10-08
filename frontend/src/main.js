@@ -1148,7 +1148,14 @@ async function initializeCatalog(
     rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram", "open-raster-series-summary"]) {
-        document.querySelector(`#${id}`).addEventListener("click", () => mapInspection.showRasterSeries());
+        document.querySelector(`#${id}`).addEventListener("click",
+            /** Plot an explicitly accepted Statistics area, or reopen the existing stack scope.
+             * @return {void}
+             */
+            () => {
+                if (id === "open-raster-series-summary") rasterSeries.chooseArea(rasterSeriesArea?.kind === "wholeRaster" ? "whole" : "selection");
+                mapInspection.showRasterSeries();
+            });
     }
     const vectorTimeSeries = new VectorTimeSeriesController({
         onVisibilityChange: (visible, moveFocus) => {

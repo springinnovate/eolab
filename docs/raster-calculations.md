@@ -114,9 +114,13 @@ The same formulas run independently on each raster's native grid, over the
 current sampling area or each raster's whole extent. This does not align rasters
 or perform pixel-by-pixel arithmetic between different rasters.
 
-Choose **Change area** to use the existing Summary statistics controls for a
+Choose **Change area** to use the existing Raster statistics controls for a
 map box, filtered vector layer, or annotation polygons (including imported
-GeoJSON). **Plot this area across rasters** returns to the series panel.
+GeoJSON and shared contributions). **Plot this area across rasters** returns to
+the stack and applies that accepted area, even if the stack previously used
+**Whole raster**. The area label above the plots identifies the selection.
+Reopening through **Tools**, the dock or a histogram preserves the stack's
+chosen scope instead.
 Drawing a new map box while Raster series is active replaces its calculations.
 
 Add up to five formulas. Within each formula, `a` means the current raster in
