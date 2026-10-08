@@ -205,7 +205,7 @@ test("summary coalesces updates, retains unchanged opener text, and focuses afte
     const added = h.controller.state.statistics.at(-1);
     assert.equal(h.view.cards.has(added.id), false);
     h.drawFrame();
-    assert.equal(h.document.activeElement, h.view.cards.get(added.id).expression);
+    assert.equal(h.document.activeElement, h.view.cards.get(added.id).editorTitle);
     card.pending = true; h.controller.render(); h.controller.render();
     assert.equal(writes, 1);
     assert.match(label, /working/);
@@ -222,6 +222,70 @@ test("closing summary cancels drawing and focus without restoring obsolete prese
     await h.open(); h.drawFrame();
     assert.equal(h.view.cards.size, 2);
     assert.notEqual(h.document.activeElement, h.view.cards.get(2).expression);
+    h.controller.destroy();
+});
+
+test("preset cards stay compact and new custom statistics open their formula editor", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    const first = h.controller.state.statistics[0], preset = h.view.cards.get(first.id);
+    assert.equal(preset.editor.open, false);
+    assert.equal(preset.title.textContent, "Mean");
+    assert.equal(preset.sourceCaption.textContent, source.label);
+    h.controller.addStatistic("sum");
+    const sum = h.view.cards.get(h.controller.state.statistics.at(-1).id);
+    assert.equal(sum.editor.open, false);
+    assert.equal(h.document.activeElement === sum.editorTitle, true);
+    h.controller.addStatistic("custom");
+    const custom = h.view.cards.get(h.controller.state.statistics.at(-1).id);
+    assert.equal(custom.editor.open, true);
+    assert.equal(h.document.activeElement === custom.expression, true);
+    assert.equal(h.submits(), 0, "revealing an editor does not submit a calculation");
+    h.controller.destroy();
+});
+
+test("inline editor state and focused nodes survive names, results and background progress", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    const card = h.controller.state.statistics[0], row = h.view.cards.get(card.id);
+    row.editor.open = true; row.expression.focus();
+    h.controller.editStatistic(card.id, { label: "A long custom statistic name" });
+    h.controller.request(card.id, "manual"); await flush();
+    assert.equal(h.view.cards.get(card.id) === row, true);
+    assert.equal(row.editor.open, true);
+    assert.equal(h.document.activeElement === row.expression, true);
+    assert.equal(row.title.textContent, "A long custom statistic name");
+    assert.equal(row.editorTitle.getAttribute("aria-label"), "Edit A long custom statistic name");
+    assert.equal(row.editor.contains(row.status), false);
+    assert.equal(row.editor.contains(row.stop), false);
+    assert.equal(row.stop.hidden, false);
+    row.editor.open = false;
+    await h.finish();
+    assert.equal(row.editor.open, false, "completion does not reopen configuration");
+    assert.equal(row.valueActions.hidden, false);
+    assert.equal(row.details.hidden, false);
+    h.controller.destroy();
+});
+
+test("previous values identify their captured raster and area outside the editor", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    const card = h.controller.state.statistics[0], row = h.view.cards.get(card.id);
+    h.controller.request(card.id, "manual"); await flush(); await h.finish();
+    const result = card.result;
+    assert.equal(row.previousContext.hidden, true);
+    h.controller.editStatistic(card.id, { source: resistance });
+    h.controller.setSelection(box(110));
+    assert.equal(row.sourceCaption.textContent, resistance.label);
+    assert.equal(row.previousContext.hidden, false);
+    assert.match(row.previousContext.textContent, /Previous result.*Human footprint.*W 77\.0000/);
+    assert.equal(row.editor.contains(row.previousContext), false);
+    assert.equal(row.copy.disabled, true);
+    assert.equal(card.result, result, "previous provenance remains immutable");
+    h.controller.request(card.id, "manual"); await flush();
+    assert.equal(row.previousContext.hidden, false);
+    assert.equal(row.stop.hidden, false);
+    await h.finish("ready", ["9"]);
+    assert.equal(row.previousContext.hidden, true);
+    assert.equal(row.value.textContent, "9");
+    assert.equal(row.copy.disabled, false);
     h.controller.destroy();
 });
 
@@ -958,9 +1022,10 @@ test("copy uses exact current values without rounding or units and never submits
 });
 test("one status region beside the value retains manual controls and non-numeric result explanations", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0],row=h.view.cards.get(card.id);
-    const heading=row.root.children[0];
-    assert.equal(heading.contains(row.status),true);
-    assert.equal(heading.contains(row.run),true);
+    const valueGroup=row.valueActions.parentNode;
+    assert.equal(valueGroup.contains(row.status),true);
+    assert.equal(valueGroup.contains(row.run),true);
+    assert.equal(row.editor.contains(row.status),false);
     assert.equal(row.expression.getAttribute("aria-describedby"),row.status.id);
     assert.equal(row.status.textContent,"Ready to calculate");
     row.run.dispatchEvent(new Event("click"));await flush();

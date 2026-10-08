@@ -21,6 +21,12 @@ press Escape or click outside the list to dismiss it.
 Each of the five available cards has a name, formula, raster binding (`a`),
 and result. Different cards can use different rasters, but each formula uses
 only one raster. **Formula reference** in the panel lists the supported functions.
+Cards lead with the statistic name, raster identity and result. **Edit** opens
+the name, raster binding and formula in place; a new **Custom** statistic opens
+its formula editor immediately. Progress, errors and cancellation stay visible
+when editing is collapsed. Retained values show **Previous result** with their
+original raster and area while inputs change or replacement work is pending.
+**Value details & downloads** holds exact values, coverage and provenance exports.
 
 Calculations read **native pixels**, not histogram samples or COG overviews.
 Raster styling, opacity and a simplified map outline do not change the result.

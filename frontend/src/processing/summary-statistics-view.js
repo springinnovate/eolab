@@ -57,11 +57,18 @@ export class SummaryStatisticsView {
         ];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
     }
-    /** Create a stable editable statistic surface. @param {Object} card Controller card with a stable numeric id. @return {Object} Card nodes and clipboard state. */
+    /** Create a stable result-first statistic surface with an inline editor.
+     * Presets start compact; a blank custom formula starts open. Calculation
+     * feedback and previous-result provenance remain outside the editor.
+     * @param {{id:number,expression:string}} card Controller card with a stable identity.
+     * @return {Object} Retained result, editor, action and clipboard nodes/state.
+     */
     createCard(card) {
         const root = this.element("article"); root.className = "summary-statistic";
         root.setAttribute("aria-label", `Summary statistic ${card.id}`);
         const heading = this.element("div"); heading.className = "summary-statistic-heading";
+        const title = this.element("strong"); title.className = "summary-statistic-title";
+        const sourceCaption = this.element("p"); sourceCaption.className = "summary-source-caption";
         const label = this.element("input"); label.type = "text"; label.maxLength = 80;
         label.placeholder = "Name this statistic"; label.className = "summary-statistic-name";
         label.setAttribute("aria-label", `Summary statistic ${card.id} name`);
@@ -73,7 +80,7 @@ export class SummaryStatisticsView {
         removeTooltip.setAttribute("role", "tooltip");
         remove.setAttribute("aria-describedby", removeTooltip.id); remove.append(removeTooltip);
         remove.addEventListener("click", () => this.handlers.onRemove(card.id));
-        heading.append(label);
+        heading.append(title);
         const binding = this.element("label"); binding.className = "summary-raster-binding";
         const variable = this.element("code", "a"); variable.className = "summary-raster-variable";
         variable.title = "Raster represented by a in the formula";
@@ -105,7 +112,9 @@ export class SummaryStatisticsView {
         const copyStatus = this.element("small"); copyStatus.setAttribute("role", "status"); copyStatus.hidden = true;
         valueActions.append(value, copy);
         valueGroup.append(valueActions);
-        heading.append(valueGroup); equation.append(expression);
+        const previousContext = this.element("small"); previousContext.className = "summary-previous-context"; previousContext.hidden = true;
+        valueGroup.append(previousContext);
+        equation.append(expression);
         const statusRow = this.element("div"); statusRow.className = "summary-status-row";
         const status = this.element("span"); status.id = `summary-statistic-status-${card.id}`;
         status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
@@ -119,8 +128,16 @@ export class SummaryStatisticsView {
         const details = this.element("details"); details.className = "summary-result-details";
         const detailsTitle = this.element("summary", "Value details & downloads");
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
-        root.append(heading, equation, binding, details, remove);
-        return { root, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, remove };
+        const editor = this.element("details"); editor.className = "summary-statistic-editor";
+        editor.open = !card.expression.trim();
+        const editorTitle = this.element("summary", "Edit");
+        const editorFields = this.element("div"); editorFields.className = "summary-editor-fields";
+        const nameField = this.element("label", "Name"); nameField.append(label);
+        const formulaField = this.element("label", "Formula"); formulaField.append(equation);
+        editorFields.append(nameField, binding, formulaField);
+        editor.append(editorTitle, editorFields);
+        root.append(heading, sourceCaption, valueGroup, editor, details, remove);
+        return { root, title, sourceCaption, editor, editorTitle, previousContext, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, remove };
     }
     /** Retain current state and schedule one draw while the panel is open.
      * Closed panels update only their visible opener, when its text changes.
@@ -159,6 +176,9 @@ export class SummaryStatisticsView {
     /** Update cards and history, distinguishing input-waiting intent from queued work.
      * Calculation indicators require a raster and area; vector progress belongs
      * to the vector workflow. Missing inputs retain their guidance and no Cancel action.
+     * Retained editors preserve their nodes and disclosure state during updates.
+     * Previous values identify their captured source/area independently of current
+     * editor intent; progress, errors and actions stay visible when editing is closed.
      * @param {Object} state Summary controller state. @return {void}
      * @throws {TypeError} If a result contains an invalid owned download address.
      */
@@ -177,6 +197,11 @@ export class SummaryStatisticsView {
         for (const card of state.statistics) {
             const row = this.cards.get(card.id);
             const queued = !!(card.requested && card.source && state.area);
+            const title = card.label.trim() || `Summary statistic ${card.id}`;
+            if (row.title.textContent !== title) row.title.textContent = title;
+            row.editorTitle.setAttribute("aria-label", `Edit ${title}`);
+            const sourceCaption = card.source?.label ?? "No raster selected";
+            if (row.sourceCaption.textContent !== sourceCaption) row.sourceCaption.textContent = sourceCaption;
             if (row.label.value !== card.label) row.label.value = card.label;
             if (row.expression.value !== card.expression) row.expression.value = card.expression;
             // A hidden, identically styled mirror sizes wrapped and multiline formulas without layout reads.
@@ -216,6 +241,10 @@ export class SummaryStatisticsView {
                 row.progress.removeAttribute("value");
             }
             const result = card.result;
+            row.previousContext.hidden = !result || card.current;
+            const previousContext = result && !card.current
+                ? `Previous result · ${result.source.label} · ${describeClipArea(result.area)}` : "";
+            if (row.previousContext.textContent !== previousContext) row.previousContext.textContent = previousContext;
             row.valueActions.hidden = !result;
             const text = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "";
             if (row.value.textContent !== text) row.value.textContent = text;
@@ -363,8 +392,19 @@ export class SummaryStatisticsView {
         if (this.scheduledRenderFrame !== null) this.focusAfterRender = focus;
         else focus();
     }
-    /** Focus a surviving formula after add/undo and drawing. @param {number} id Stable card identity. @return {void} */
-    focusStatistic(id) { this.focusWhenRendered(() => this.cards.get(id)?.expression.focus()); }
+    /** Focus a surviving card's editing entry point after add/undo and drawing.
+     * Blank custom formulas open their editor and receive direct formula focus.
+     * Presets retain the user's disclosure state and focus the Edit control.
+     * @param {number} id Stable card identity. @return {void}
+     */
+    focusStatistic(id) {
+        this.focusWhenRendered(() => {
+            const row = this.cards.get(id);
+            if (!row) return;
+            if (!row.expression.value.trim()) { row.editor.open = true; row.expression.focus(); }
+            else row.editorTitle.focus();
+        });
+    }
     /** Focus the editor entry point without inventing a statistic. @return {void} */
     focusAddStatistic() { this.focusWhenRendered(() => this.elements.template.focus()); }
     /** Focus removal recovery. @return {void} */

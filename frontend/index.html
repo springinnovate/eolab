@@ -731,10 +731,14 @@
           <section id="calculations-panel" role="region" aria-labelledby="open-calculations-dock" hidden>
             <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster statistics">&times;</button></div>
             <p class="map-analysis-purpose">Calculate values such as mean, totals and area for the raster chosen in each statistic.</p>
-            <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
-            <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
-            <p id="calculations-area-description" class="summary-area-details"></p>
-            <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
+            <section class="summary-scope" aria-label="Sampling area">
+              <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
+              <p id="calculations-area-description" class="summary-area-details"></p>
+              <div class="summary-scope-actions">
+                <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
+                <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
+              </div>
+            </section>
             <section id="calculations-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
               <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
               <small data-vector-sampling="predicate"></small>
