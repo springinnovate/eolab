@@ -38,10 +38,10 @@ export function modelAreaInput(area) {
  */
 export function modelViewportArea(bounds) {
     if (!bounds || ![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite)) {
-        throw new Error("The visible map extent is unavailable. Move the map or enter a bounding box.");
+        throw new Error("The visible map extent is unavailable. Move the map or choose a vector layer.");
     }
     if (bounds.west === bounds.east || bounds.south === bounds.north) {
-        throw new Error("The map has no visible area. Make room for the map, then update the area, or enter a bounding box.");
+        throw new Error("The map has no visible area. Make room for the map, then update the area, or choose a vector layer.");
     }
     const selectedBounds = {west: Math.max(-180, bounds.west), south: Math.max(-90, bounds.south),
         east: Math.min(180, bounds.east), north: Math.min(90, bounds.north)};
@@ -69,8 +69,7 @@ export function createModelDraft(model, context, id) {
         sourceReason: selected ? "Suggested from the item selected in the catalog." : suggestion ?
             enabled.length === 1 ? "Suggested because it is the only enabled raster on this map." : "Suggested because it is the only raster on this map." :
             "Choose a raster; there is no single clear match. Hidden layers and catalog search are available.",
-        area, capturedArea: structuredClone(area), areaMode: area.kind === "wholeRaster" ? "whole" : "captured", areaDescription: context.areaDescription ?? "Current map selection, copied into this draft.",
-        bounds: area.kind === "selectedArea" ? {...area.selectedBounds} : {west: "", south: "", east: "", north: ""},
+        area, capturedArea: structuredClone(area), areaMode: area.kind === "wholeRaster" ? "whole" : "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
         sourceQuery: "", vectorQuery: "", sourceNext: null, vectorNext: null, searchError: "", searching: false};

@@ -129,25 +129,16 @@ export class ModelsView {
         fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => input.type === "catalog_raster")?.label ?? "Raster", source), reason);
         const rasterSearch = this.searchFields("raster"); fields.append(rasterSearch.root);
         const areaMode = this.element("select");
-        this.options(areaMode, [{value: "whole", label: "Whole raster"}, {value: "captured", label: "Retained area"},
-            {value: "viewport", label: "Use visible map extent"}, {value: "map", label: "Copy selected analysis area"}, {value: "bounds", label: "Enter a bounding box"}, {value: "vector", label: "Use catalog vector features"}], draft.areaMode);
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
         fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => input.type === "summary_area")?.label ?? "Analysis area", areaMode));
-        const boundsGroup = this.element("div", "", "models-bounds"); const bounds = {};
-        for (const name of ["west", "south", "east", "north"]) {
-            const input = this.element("input"); input.type = "number"; input.step = "any";
-            input.min = ["west", "east"].includes(name) ? "-180" : "-90"; input.max = ["west", "east"].includes(name) ? "180" : "90";
-            input.addEventListener("input", () => this.handlers.onEdit({bounds: Object.fromEntries(Object.entries(bounds).map(([key, node]) => [key, node.value === "" ? "" : Number(node.value)]))}));
-            bounds[name] = input; boundsGroup.append(this.field(`models-bound-${name}`, name[0].toUpperCase() + name.slice(1), input));
-        }
         const vectorGroup = this.element("div", "", "models-vector");
         const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
-        vectorGroup.append(this.field("models-vector", "Vector layer and its current filter", vector));
+        vectorGroup.append(this.field("models-vector", "Vector layer", vector));
         const vectorSearch = this.searchFields("vector"); vectorGroup.append(vectorSearch.root);
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const updateArea = this.button("Update from map", this.handlers.onUpdateArea);
-        const mapHelp = this.element("p", "Visible map extent copies the area shown on screen. Selected analysis area copies a sampling box or selected polygons. After changing the map, choose Update from map to replace this draft’s area.", "models-help");
-        fields.append(boundsGroup, vectorGroup, areaDescription, updateArea, mapHelp);
+        const mapHelp = this.element("p", "", "models-help");
+        fields.append(vectorGroup, areaDescription, updateArea, mapHelp);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
             const input = this.element(parameter.type === "summary_expression" ? "textarea" : "input");
@@ -165,7 +156,7 @@ export class ModelsView {
         form.addEventListener("submit", event => { event.preventDefault(); this.handlers.onSubmit(); });
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
-        this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, boundsGroup, bounds, vectorGroup, vector, areaDescription,
+        this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
             rasterSearch, vectorSearch, parameters, run, details, updateArea, mapHelp};
     }
 
@@ -210,14 +201,24 @@ export class ModelsView {
         if (this.document.activeElement !== s.label) s.label.value = draft.label;
         this.options(s.source, [{value: "", label: "Choose a raster…"}, ...draft.sources.map(source => ({value: modelSourceKey(source),
             label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
-        s.reason.textContent = draft.sourceReason; s.areaMode.value = draft.areaMode;
-        s.boundsGroup.hidden = draft.areaMode !== "bounds"; s.vectorGroup.hidden = draft.areaMode !== "vector";
-        for (const [name, input] of Object.entries(s.bounds)) { input.required = draft.areaMode === "bounds"; if (this.document.activeElement !== input) input.value = draft.bounds[name]; }
+        s.reason.textContent = draft.sourceReason;
+        const areaChoices = [{value: "whole", label: "Entire raster"}, {value: "viewport", label: "Visible map area"}, {value: "vector", label: "Vector layer"}];
+        if (["selectedArea", "polygonArea"].includes(draft.capturedArea?.kind) || draft.areaMode === "captured") {
+            areaChoices.push({value: "captured", label: draft.areaOrigin === "run" ? "Area from original run" :
+                draft.capturedArea.kind === "selectedArea" ? "Map sampling box" : "Polygons selected on map"});
+        }
+        this.options(s.areaMode, areaChoices, draft.areaMode);
+        s.vectorGroup.hidden = draft.areaMode !== "vector";
         this.options(s.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
-        s.updateArea.hidden = s.mapHelp.hidden = !["map", "viewport"].includes(draft.areaMode);
+        s.updateArea.hidden = !(draft.areaMode === "viewport" || draft.areaMode === "captured" && draft.areaOrigin === "map");
+        s.updateArea.textContent = draft.areaMode === "viewport" ? "Update from map" : draft.capturedArea.kind === "selectedArea" ? "Update sampling box" : "Update polygons";
+        s.mapHelp.hidden = !["viewport", "captured"].includes(draft.areaMode);
+        s.mapHelp.textContent = draft.areaMode === "viewport" ? "Uses the visible map window. After panning or zooming, choose Update from map to use the new window." :
+            draft.areaOrigin === "run" ? "Uses the exact area from the original run. Choose another area above to change it." :
+                draft.capturedArea.kind === "selectedArea" ? "Uses the box around a map click. Click the map to choose a new box, then choose Update sampling box." : "Uses the polygons already selected on the map. Choose Update polygons to use a new selection.";
         const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
-            `${describeModelArea(draft.area)}${count}${["captured", "map", "viewport"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;
+            `${describeModelArea(draft.area)}${count}${["captured", "viewport"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         for (const [prefix, search] of [["source", s.rasterSearch], ["vector", s.vectorSearch]]) {
             if (this.document.activeElement !== search.input) search.input.value = draft[`${prefix}Query`];

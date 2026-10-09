@@ -14,7 +14,6 @@
 .models-help { color: var(--text-2); font-size: 0.78rem; margin: 4px 0; overflow-wrap: anywhere; }
 .models-search { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; }
 .models-search .models-field { flex: 1 1 160px; }
-.models-bounds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .models-vector { display: grid; gap: 8px; }
 .models-library-card, .models-result { padding: 12px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
 .models-library-card p { font-size: 0.8rem; }

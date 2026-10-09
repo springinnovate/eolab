@@ -149,16 +149,16 @@ test("visible map extent runs without a clicked selection and changes only when 
     assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -20);
 });
 
-test("a missing analysis selection explains alternatives and can be copied after a map click", async () => {
-    const h = fixture(); h.context.area = null; h.controller.chooseModel(model);
-    h.controller.chooseArea("map"); await h.controller.submit();
-    assert.equal(h.submitted.length, 0);
-    assert.match(h.controller.state.error, /No selected analysis area.*Use visible map extent/);
-    h.context.area = structuredClone(area);
-    assert.equal(h.controller.state.draft.area, null);
-    h.handlers.onUpdateArea();
-    assert.deepEqual(h.controller.state.draft.area, area); assert.equal(h.controller.state.error, "");
-    await h.controller.submit(); assert.equal(h.submitted.length, 1);
+test("a copied map box is named by its source and changes only on an explicit update", async () => {
+    const h = fixture(); h.controller.chooseModel(model);
+    assert.equal(h.controller.state.draft.areaOrigin, "map");
+    h.context.area.selectedBounds.west = -10;
+    assert.equal(h.controller.state.draft.area.selectedBounds.west, 0);
+    h.handlers.onUpdateArea(); assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
+    h.context.area = null; h.handlers.onUpdateArea();
+    assert.match(h.controller.state.error, /unchanged/);
+    assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
+    await h.controller.submit(); assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -10);
 });
 
 test("viewport capture excludes blank world margins and rejects unavailable or empty bounds", () => {

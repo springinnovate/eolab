@@ -58,19 +58,18 @@ test("stage feedback covers terminal states and an unknown total stays indetermi
 });
 
 
-test("area controls distinguish visible extent from a selection and prevent running without an area", () => {
+test("area choices name the actual area and omit coordinates and unexplained retained state", () => {
     const h = fixture();
-    const labels = h.view.setup.areaMode.children.map(option => option.textContent);
-    assert.ok(labels.includes("Use visible map extent")); assert.ok(labels.includes("Copy selected analysis area"));
-    h.state.draft.areaMode = "map"; h.state.draft.area = null;
-    h.state.draft.selectionError = "No selected analysis area. Choose Use visible map extent.";
-    h.view.render(h.state);
-    assert.equal(h.view.setup.run.disabled, true); assert.equal(h.view.setup.updateArea.hidden, false);
-    assert.match(h.view.setup.areaDescription.textContent, /No selected analysis area/);
+    const labels = () => h.view.setup.areaMode.children.map(option => option.textContent);
+    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Vector layer", "Map sampling box"]);
+    assert.equal(h.view.setup.bounds, undefined);
+    assert.equal(h.view.setup.updateArea.textContent, "Update sampling box");
+    h.state.draft.areaOrigin = "run"; h.view.render(h.state);
+    assert.equal(labels().at(-1), "Area from original run"); assert.equal(h.view.setup.updateArea.hidden, true);
+    h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);
+    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Vector layer"]);
+    h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.view.render(h.state);
+    assert.equal(h.view.setup.run.disabled, false); assert.equal(h.view.setup.updateArea.hidden, false);
     h.view.setup.updateArea.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "UpdateArea");
-    h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.state.draft.selectionError = "";
-    h.view.render(h.state);
-    assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.areaDescription.textContent, /Box/);
-    assert.match(h.view.setup.mapHelp.textContent, /Panning|After changing the map/);
-    h.state.draft.areaMode = "whole"; h.view.render(h.state); assert.equal(h.view.setup.updateArea.hidden, true);
+    h.state.draft.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
 });

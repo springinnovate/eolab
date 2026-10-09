@@ -32,7 +32,7 @@ export class ModelsController {
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
-            onUpdateArea: () => this.chooseArea(this.state.draft.areaMode),
+            onUpdateArea: () => this.updateAreaFromMap(),
             onVector: key => void this.chooseVector(key), onSearch: (kind, more) => void this.search(kind, more),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
@@ -104,20 +104,17 @@ export class ModelsController {
     }
 
     /** Update draft fields without changing a pending or accepted submission.
-     * @param {Object} change Edited label, raster, parameters, search text or bounds.
+     * @param {Object} change Edited label, raster, parameters or search text.
      * @return {void}
      */
     editDraft(change) {
         if (!this.state.draft || this.state.submitting) return;
         Object.assign(this.state.draft, change);
-        if (change.bounds) {
-            this.state.draft.area = {kind: "selectedArea", selectedBounds: {...change.bounds}};
-        }
         this.state.error = "";
     }
 
     /** Choose an explicit area; later map changes never update it automatically.
-     * @param {string} mode Whole raster, retained area, viewport, selected analysis area, custom bounds or vector.
+     * @param {string} mode Whole raster, copied map/run area, visible viewport or vector features.
      * @return {void}
      */
     chooseArea(mode) {
@@ -126,19 +123,30 @@ export class ModelsController {
         draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
         if (mode === "whole") draft.area = {kind: "wholeRaster"};
         else if (mode === "captured") draft.area = structuredClone(draft.capturedArea);
-        else if (mode === "map") {
-            const context = this.getContext();
-            draft.area = context.area ? modelAreaInput(context.area) : null;
-            draft.areaDescription = context.areaDescription ?? "Current map selection copied into this draft.";
-            if (!draft.area) draft.selectionError = "No selected analysis area. Click the map to create a sampling box, select vector features, or choose Use visible map extent.";
-        } else if (mode === "viewport") {
+        else if (mode === "viewport") {
             draft.area = null;
             try { draft.area = modelViewportArea(this.getContext().viewportBounds); }
             catch (error) { draft.selectionError = error.message; }
             draft.areaDescription = "Visible map extent copied into this draft.";
-        } else if (mode === "bounds") draft.area = {kind: "selectedArea", selectedBounds: {...draft.bounds}};
-        else draft.area = null;
+        } else draft.area = null;
         this.render();
+    }
+
+    /** Replace the draft area only after an explicit request to use the latest map area.
+     * A missing sampling box leaves the previous draft area available for review.
+     * @return {void}
+     */
+    updateAreaFromMap() {
+        const draft = this.state.draft; if (!draft) return;
+        if (draft.areaMode === "viewport") { this.chooseArea("viewport"); return; }
+        const context = this.getContext();
+        if (!["selectedArea", "polygonArea"].includes(context.area?.kind)) {
+            this.state.error = "Select a sampling box on the map first. The area already shown in this draft is unchanged.";
+            this.render(); return;
+        }
+        draft.capturedArea = modelAreaInput(context.area);
+        draft.areaOrigin = "map"; draft.areaDescription = context.areaDescription ?? "Area selected on the map.";
+        this.chooseArea("captured");
     }
 
     /** Read matching features for the chosen catalog vector and captured filter.
@@ -305,7 +313,7 @@ export class ModelsController {
                 if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.sources.push(draft.raster);
                 draft.sourceReason = "Copied from the original run; choose another raster to change it.";
             } else if (input.type === "summary_area") {
-                draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = "captured";
+                draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
                 draft.areaDescription = "Exact area and filter copied from the original run.";
             }
         }
