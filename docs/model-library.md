@@ -7,9 +7,12 @@ library by name or purpose, then choose **Set up model**. The installed
 ## Choose inputs
 
 Setup explains any suggested raster. If several inputs could fit, choose one.
-Hidden map layers remain available, and **Search catalog** finds sources that
-have not been added to the map. Use **More matches** to retrieve later search
-pages. A source does not need a rendered map layer to be analyzed.
+Choose one raster from the list; hidden map layers remain available. To find a
+raster that is not listed, open **Choose a different raster from the catalog**
+and search by name. Results become choices in the same raster list. Vector
+layers have the equivalent optional catalog search. Neither search adds an
+extra required input. Use **More matches** to retrieve later search pages.
+A source does not need a rendered map layer to be analyzed.
 
 Choose **Entire raster**, **Visible map area**, or **Vector layer**. Visible
 map area uses the geographic window currently shown on screen; no map click is

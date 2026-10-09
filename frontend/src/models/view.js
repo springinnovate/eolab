@@ -169,13 +169,18 @@ export class ModelsView {
      * @return {Object} Search controls and their wrapper.
      */
     searchFields(kind) {
-        const root = this.element("div", "", "models-search"); const input = this.element("input"); input.type = "search";
-        input.placeholder = `Search catalog ${kind}s`;
+        const root = this.element("details", "", "models-details");
+        root.append(this.element("summary", `Choose a different ${kind === "raster" ? "raster" : "vector layer"} from the catalog`),
+            this.element("p", `Optional. Find a ${kind === "raster" ? "raster" : "vector layer"} that is not listed above. Search results become choices in the list above.`, "models-help"));
+        const controls = this.element("div", "", "models-search");
+        const input = this.element("input"); input.type = "search";
+        input.placeholder = `Search ${kind}s by name`;
         input.addEventListener("input", () => this.handlers.onEdit({[kind === "raster" ? "sourceQuery" : "vectorQuery"]: input.value}));
         input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); this.handlers.onSearch(kind, false); } });
         const search = this.button("Search catalog", () => this.handlers.onSearch(kind, false));
         const more = this.button("More matches", () => this.handlers.onSearch(kind, true));
-        root.append(this.field(`models-search-${kind}`, `Find ${kind} inputs`, input), search, more);
+        controls.append(this.field(`models-search-${kind}`, `Search ${kind}s by name`, input), search, more);
+        root.append(controls);
         return {root, input, search, more};
     }
 
