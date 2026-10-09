@@ -23,11 +23,13 @@ map** to use the new visible window, or **Update sampling box** to use
 the box around a new map click. Blank margins outside the map's single world are
 excluded. The chosen area is shown before Run.
 
-Vector choices copy the layer's applied
-filter when the draft is created; catalog-only vectors initially select all
-features. Setup shows the predicate and matching feature count before Run.
-To use a different map filter, apply it to the layer and create a fresh setup.
-Later map edits do not change an existing draft's selected inputs.
+Choose a **Vector layer**, then **Edit filter** to set field/comparison/value
+conditions using the existing filter editor. **Use filter** checks the matching
+features and returns to model setup. Review the predicate and matching feature
+count, then choose **Run model**. Clearing the conditions includes all features.
+An initial suggestion can copy a layer's map filter; edits here belong only to
+this model draft and do not change the layer's display filter. Closing the
+filter editor without applying leaves the model's selection unchanged.
 
 In the summary formula, `a` is the selected raster. Examples include `sum(a)`,
 `mean(a)`, `stdev(a)`, `count(a)`, `areaha(a > 10)` and

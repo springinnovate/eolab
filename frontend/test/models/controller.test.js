@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { ModelsController } from "../../src/models/controller.js";
+import { VectorFilterControls } from "../../src/vector/filter-controls.js";
+import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
 import { captureModelSubmission, createModelDraft, modelViewportArea } from "../../src/models/inputs.js";
@@ -12,7 +14,7 @@ import { model, raster, area, invocation, selection, job } from "../../test-supp
  * @return {Object} Component and recorded user-visible effects.
  */
 function fixture(overrides = {}) {
-    const values = new Map(); const submitted = []; const cancelled = [];
+    const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = [];
     const api = {discoverModels: async () => [model], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getJob: async () => job(), readModelInvocation: async () => structuredClone(invocation),
         submitModelRun: async value => { submitted.push(value); return job(); },
@@ -25,9 +27,9 @@ function fixture(overrides = {}) {
     const view = {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, getContext: () => context, searchSources: async () => ({sources: [], next: null}),
-        prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), onOpen: () => controller.setActive(true),
+        prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); }, onOpen: () => controller.setActive(true),
         onClose: () => controller.setActive(false), newId: () => String(++sequence).padStart(32, "0")});
-    return {controller, api, jobs, context, storage, values, submitted, cancelled, handlers};
+    return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, handlers};
 }
 
 test("ambiguous rasters require a choice; hidden and selected catalog inputs remain available", () => {
@@ -170,4 +172,116 @@ test("viewport capture excludes blank world margins and rejects unavailable or e
     assert.throws(() => modelViewportArea({west: 190, south: 0, east: 200, north: 10}), /inside the world/);
     const h = fixture(); h.controller.chooseModel(model); h.controller.chooseArea("viewport");
     assert.equal(h.controller.state.draft.area, null); assert.match(h.controller.state.draft.selectionError, /unavailable/);
+});
+
+
+test("model filtering uses the existing editor without modifying the map filter or submitting a run", async () => {
+    const h = fixture();
+    h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: structuredClone(selection.filter)}];
+    h.controller.prepareVector = async source => ({selection: {...selection, filter: structuredClone(source.filter)}, matched: source.filter.rules[0]?.value === "South" ? 1 : 3, total: 8});
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    const doc = new FakeRasterControlDocument(); let request;
+    const controls = new VectorFilterControls({documentContext: doc,
+        getTarget: () => ({label: "Basins", fields: [{name: "BASIN", type: "str"}], filter: selection.filter,
+            apply: () => assert.fail("Model filter must not change the map"), cancelPending: () => assert.fail("Model filter must not cancel map work")}),
+        inspection: {showFilter() {}, hideFilter() {}, updateLayerEditorName() {}},
+        setTimer: () => assert.fail("Model filter must require explicit application"), clearTimer() {},
+    });
+    h.controller.editVectorFilter = value => { request = value; controls.open(value.key, {...value, applyLabel: "Use filter", filterLabel: "Model filter", onClose: value.cancel, help: "Choose features for this model."}); };
+    await h.controller.openVectorFilter();
+    assert.match(request.key, /^model:/); assert.equal(controls.applyButton.textContent, "Use filter");
+    assert.match(controls.applied.textContent, /^Model filter:/); assert.equal(controls.help.textContent, "Choose features for this model.");
+    const input = controls.rules.children[0].children[2]; input.value = "South"; input.dispatchEvent(new Event("input"));
+    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "North");
+    controls.applyButton.dispatchEvent(new Event("click")); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.controller.state.draft.vectorInfo.matched, 1); assert.equal(controls.key, null);
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "North"); assert.equal(h.submitted.length, 0);
+    await h.controller.openVectorFilter();
+    controls.rules.children[0].children[2].value = "West"; controls.rules.children[0].children[2].dispatchEvent(new Event("input"));
+    controls.close(); assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
+    await h.controller.openVectorFilter();
+    h.controller.prepareVector = (_source, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Closed", "AbortError"))));
+    controls.applyButton.dispatchEvent(new Event("click")); controls.close(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.controller.state.draft.selecting, false);
+    await h.controller.submit(); assert.equal(h.submitted[0].inputs.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "North"); controls.destroy();
+});
+
+test("failed and cancelled filter reads preserve the prior reviewed vector selection", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    const previous = structuredClone(h.controller.state.draft.area);
+    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    h.controller.prepareVector = async () => { throw Error("No polygons match"); };
+    await assert.rejects(action.apply(selection.filter), /No polygons match/);
+    assert.deepEqual(h.controller.state.draft.area, previous); assert.match(h.controller.state.draft.selectionError, /unchanged/);
+    h.controller.prepareVector = (_source, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError"))));
+    const pending = action.apply(selection.filter); action.cancel(); assert.equal(await pending, null);
+    assert.deepEqual(h.controller.state.draft.area, previous); assert.equal(h.controller.state.draft.selecting, false);
+    assert.equal(h.submitted.length, 0); assert.deepEqual(h.cancelled, []);
+});
+
+test("old filter actions and late selection replies cannot change a newer model area", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector(key);
+    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    let finish; h.controller.prepareVector = () => new Promise(resolve => { finish = resolve; });
+    const pending = action.apply(selection.filter); h.controller.chooseArea("whole");
+    finish({selection, matched: 3, total: 8}); assert.equal(await pending, null);
+    assert.deepEqual(h.controller.state.draft.area, {kind: "wholeRaster"});
+    assert.throws(() => action.apply(selection.filter), /setup changed/);
+    h.controller.chooseArea("vector"); await h.controller.chooseVector("");
+    assert.equal(h.controller.state.draft.vectorKey, ""); assert.equal(h.controller.state.draft.area, null);
+});
+
+test("duplicated vector runs expose their original filter directly in the vector controls", async () => {
+    const saved = structuredClone(invocation); saved.inputs.area = {kind: "catalogSelection", selection: structuredClone(selection)};
+    const h = fixture({readModelInvocation: async () => saved});
+    await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
+    assert.equal(h.controller.state.draft.areaMode, "vector");
+    await h.controller.openVectorFilter(); assert.deepEqual(h.filterRequests[0].filter, selection.filter);
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "another-request-id").inputs, saved.inputs);
+    assert.equal(h.submitted.length, 0);
+});
+
+
+test("late catalog metadata cannot open a filter after the Models panel closes", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    h.controller.setActive(true); let release; let opened = false;
+    h.controller.editVectorFilter = async request => { await new Promise(resolve => { release = resolve; }); opened = request.isCurrent(); };
+    const opening = h.controller.openVectorFilter(); h.controller.setActive(false); release(); await opening;
+    assert.equal(opened, false); assert.equal(h.controller.state.draft.filterOpening, false);
+});
+
+
+test("cancelling a replacement filter read preserves the last reviewed selection", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    const previous = structuredClone(h.controller.state.draft.area); await h.controller.openVectorFilter();
+    const replies = []; h.controller.prepareVector = () => new Promise(resolve => replies.push(resolve));
+    const action = h.filterRequests[0]; const first = action.apply(selection.filter); const second = action.apply(selection.filter);
+    action.cancel(); replies[1]({selection, matched: 3, total: 8}); assert.equal(await second, null);
+    replies[0]({selection, matched: 3, total: 8}); assert.equal(await first, null);
+    assert.deepEqual(h.controller.state.draft.area, previous); assert.equal(h.controller.state.draft.selecting, false);
+});
+
+test("catalog search cannot replace a filter edited for this model draft", async () => {
+    const h = fixture(); const source = {collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter};
+    h.context.vectors = [source]; h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector(key);
+    const edited = structuredClone(selection.filter); edited.rules[0].value = "South";
+    h.controller.prepareVector = async value => ({selection: {...selection, filter: value.filter}, matched: 1, total: 8});
+    await h.controller.openVectorFilter(); await h.filterRequests[0].apply(edited);
+    h.controller.searchSources = async () => ({sources: [source], next: null}); await h.controller.search("vector");
+    h.controller.chooseArea("whole"); h.controller.chooseArea("vector"); await h.controller.chooseVector(key);
+    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "North");
 });

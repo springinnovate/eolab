@@ -15,14 +15,15 @@ export class ModelsController {
      * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
      * @param {(kind:string,query:string,next:Object|null)=>Promise<Object>} dependencies.searchSources Catalog search with pagination.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
+     * @param {(request:{key:string,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor for this draft only.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, searchSources, prepareVector, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, searchSources, prepareVector, editVectorFilter, storage = null, onOpen, onClose,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
-        Object.assign(this, {api, jobs, view, getContext, searchSources, prepareVector, storage, onOpen, onClose, newId});
+        Object.assign(this, {api, jobs, view, getContext, searchSources, prepareVector, editVectorFilter, storage, onOpen, onClose, newId});
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false};
@@ -33,7 +34,7 @@ export class ModelsController {
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
             onUpdateArea: () => this.updateAreaFromMap(),
-            onVector: key => void this.chooseVector(key), onSearch: (kind, more) => void this.search(kind, more),
+            onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(), onSearch: (kind, more) => void this.search(kind, more),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml()});
@@ -149,24 +150,75 @@ export class ModelsController {
         this.chooseArea("captured");
     }
 
-    /** Read matching features for the chosen catalog vector and captured filter.
-     * @param {string} key Choice-list identity.
+    /** Select a vector's draft filter and show any feature-selection failure in setup.
+     * @param {string} key Choice-list identity, or empty to clear the choice.
      * @return {Promise<void>}
      */
     async chooseVector(key) {
+        try { await this.selectVectorFeatures(key); }
+        catch { /* The selection owner has already put the failure in setup. */ }
+    }
+
+    /** Read matching features and commit their predicate only after a successful selection.
+     * Failed filter edits preserve the previous selection for the same vector.
+     * @param {string} key Catalog choice-list identity.
+     * @param {Object|null} [filter=null] Explicit edited filter, otherwise this draft's saved filter.
+     * @return {Promise<Object|null>} Reviewed selection, or null for a cleared or superseded request.
+     * @throws {Error} If reading or validating the selected features fails.
+     */
+    async selectVectorFeatures(key, filter = null) {
         const draft = this.state.draft;
         const source = draft?.vectors.find(value => modelSourceKey(value) === key);
         this.selectionAbort?.abort(); const revision = ++this.selectionRevision;
-        if (!draft || !source) return;
-        this.selectionAbort = new AbortController(); draft.vectorKey = key; draft.area = null; draft.vectorInfo = null;
-        draft.selecting = true; draft.selectionError = ""; this.render();
+        if (!draft) return null;
+        const previous = draft.vectorKey === key ? {area: draft.area, info: draft.vectorInfo} : {area: null, info: null};
+        draft.vectorKey = source ? key : ""; draft.area = source ? previous.area : null; draft.vectorInfo = source ? previous.info : null; draft.selectionError = "";
+        if (!source) { draft.selecting = false; this.render(); return null; }
+        const abort = new AbortController(); this.selectionAbort = abort;
+        draft.selecting = true; this.render();
         try {
-            const area = await this.prepareVector(structuredClone(source), this.selectionAbort.signal);
-            if (revision !== this.selectionRevision || this.state.draft !== draft) return;
+            const area = await this.prepareVector({...structuredClone(source), filter: structuredClone(filter ?? source.filter)}, abort.signal);
+            if (revision !== this.selectionRevision || this.state.draft !== draft) return null;
+            if (abort.signal.aborted) {
+                draft.area = previous.area; draft.vectorInfo = previous.info; return null;
+            }
             draft.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
             draft.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
-        } catch (error) { if (revision === this.selectionRevision) draft.selectionError = error.message; }
-        finally { if (revision === this.selectionRevision) { draft.selecting = false; this.render(); } }
+            draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
+            return area;
+        } catch (error) {
+            if (revision !== this.selectionRevision || this.state.draft !== draft) return null;
+            draft.area = previous.area; draft.vectorInfo = previous.info;
+            if (abort.signal.aborted) return null;
+            draft.selectionError = `${error.message}${previous.area ? " The previous selection is unchanged." : ""}`;
+            throw error;
+        } finally { if (revision === this.selectionRevision) { draft.selecting = false; this.render(); } }
+    }
+
+    /** Open the existing field/condition editor for this model's vector input.
+     * Applying a filter updates only this draft; it never changes a map layer or submits a run.
+     * @return {Promise<void>}
+     */
+    async openVectorFilter() {
+        const draft = this.state.draft;
+        const source = draft?.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
+        if (!source || draft.filterOpening || draft.selecting || this.state.submitting) return;
+        const key = draft.vectorKey;
+        const isCurrent = () => !this.destroyed && this.state.draft === draft && this.state.page === "setup" &&
+            draft.areaMode === "vector" && draft.vectorKey === key && !this.state.submitting;
+        draft.filterOpening = true; this.state.error = ""; this.render();
+        try {
+            await this.editVectorFilter({key: `model:${draft.id}:${key}`, source: structuredClone(source),
+                filter: structuredClone(draft.area?.selection?.filter ?? source.filter), isCurrent: () => isCurrent() && this.state.active,
+                apply: candidate => {
+                    if (!isCurrent()) throw new Error("This model setup changed. Return to Models and open its filter again.");
+                    return this.selectVectorFeatures(key, candidate);
+                },
+                complete: () => { if (isCurrent()) this.onOpen(); },
+                cancel: () => { if (isCurrent()) this.selectionAbort?.abort(); },
+            });
+        } catch (error) { if (isCurrent()) this.state.error = `Could not open the vector filter: ${error.message}`; }
+        finally { draft.filterOpening = false; this.render(); }
     }
 
     /** Search catalog sources independently of map rendering or visibility.
@@ -182,7 +234,12 @@ export class ModelsController {
             const result = await this.searchSources(kind, draft[`${prefix}Query`], more ? draft[`${prefix}Next`] : null);
             if (!result || revision !== this.searchRevision || this.state.draft !== draft) return;
             const field = kind === "raster" ? "sources" : "vectors";
-            draft[field] = [...new Map([...draft[field], ...result.sources].map(source => [modelSourceKey(source), source])).values()];
+            const choices = new Map(draft[field].map(source => [modelSourceKey(source), source]));
+            for (const source of result.sources) {
+                const key = modelSourceKey(source); const previous = choices.get(key);
+                choices.set(key, kind === "vector" && previous ? {...source, filter: previous.filter} : source);
+            }
+            draft[field] = [...choices.values()];
             draft[`${prefix}Next`] = result.next; draft.searchError = result.sources.length ? "" : "No matching catalog sources.";
         } catch (error) { if (revision === this.searchRevision) draft.searchError = error.message; }
         finally { if (revision === this.searchRevision) { draft.searching = false; this.render(); } }
@@ -315,6 +372,14 @@ export class ModelsController {
             } else if (input.type === "summary_area") {
                 draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
                 draft.areaDescription = "Exact area and filter copied from the original run.";
+                if (draft.area.kind === "catalogSelection") {
+                    const selection = draft.area.selection;
+                    const key = modelSourceKey(selection);
+                    const source = {...draft.vectors.find(value => modelSourceKey(value) === key),
+                        collectionId: selection.collectionId, itemId: selection.itemId, label: selection.layerName, filter: structuredClone(selection.filter)};
+                    draft.vectors = [source, ...draft.vectors.filter(value => modelSourceKey(value) !== key)];
+                    draft.vectorKey = key; draft.areaMode = "vector";
+                }
             }
         }
         this.render(); this.view.focusHeading();

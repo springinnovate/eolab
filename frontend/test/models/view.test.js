@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job } from "../../test-support/models/
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "UpdateArea", "Vector", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "UpdateArea", "Vector", "EditFilter", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -72,4 +72,17 @@ test("area choices name the actual area and omit coordinates and unexplained ret
     assert.equal(h.view.setup.run.disabled, false); assert.equal(h.view.setup.updateArea.hidden, false);
     h.view.setup.updateArea.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "UpdateArea");
     h.state.draft.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
+});
+
+
+test("vector setup offers Edit filter and describes the predicate belonging to this run", () => {
+    const h = fixture(); h.state.draft.areaMode = "vector"; h.view.render(h.state);
+    assert.equal(h.view.setup.editFilter.disabled, true);
+    const source = {collectionId: "eolab-mounted-vectors", itemId: "basins", label: "Basins", filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
+    h.state.draft.vectors = [source]; h.state.draft.vectorKey = JSON.stringify([source.collectionId, source.itemId]);
+    h.state.draft.area = null; h.view.render(h.state);
+    assert.equal(h.view.setup.editFilter.disabled, false); assert.match(h.view.setup.filterDescription.textContent, /BASIN equals "North"/);
+    h.view.setup.editFilter.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "EditFilter");
+    h.state.draft.filterOpening = true; h.view.render(h.state);
+    assert.equal(h.view.setup.editFilter.disabled, true); assert.equal(h.view.setup.editFilter.textContent, "Opening filter…");
 });

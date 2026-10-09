@@ -75,18 +75,23 @@ export class VectorFilterControls {
 
     /**
      * Open the chosen vector's retained filter draft.
-     * @param {string} key Retained layer identity.
+     * @param {string} key Layer or composed analysis-target identity.
      * @param {Object|null} [action=null] Explicit analysis action supplied by composition.
      * @param {Function} action.apply Apply a complete predicate and return success or null.
      * @param {Function} action.complete Present the successfully selected area.
      * @param {Function} action.cancel Cancel the explicitly applied selection.
      * @param {Object|null} action.filter Current analysis predicate, if selected.
+     * @param {string} [action.applyLabel] Action label; defaults to selecting features and calculating statistics.
+     * @param {string} [action.help] Description of the action's effect.
+     * @param {string} [action.filterLabel] Name for the action's applied predicate.
+     * @param {()=>void} [action.onClose] Release action-owned preparation when the panel closes or changes targets.
      * @return {void}
      */
     open(key, action = null) {
         const target = this.getTarget(key);
         if (!target) return;
         if (this.key !== null) {
+            this.action?.onClose?.();
             this.#saveDraft();
             if (this.timer !== null) void this.#apply();
         }
@@ -95,10 +100,10 @@ export class VectorFilterControls {
         this.action = action;
         this.cancelButton.hidden = true;
         this.generation++;
-        this.applyButton.textContent = action ? "Use filtered features & calculate" : "Apply filter";
-        this.help.textContent = action
+        this.applyButton.textContent = action?.applyLabel ?? (action ? "Use filtered features & calculate" : "Apply filter");
+        this.help.textContent = action?.help ?? (action
             ? "Use every matching polygon as the sampling area and calculate configured statistics. The sampling filter is independent of map styling and visibility."
-            : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.";
+            : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.");
         this.opener = this.document.activeElement;
         this.draft = structuredClone(this.drafts.get(key) ?? action?.filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
         this.title.textContent = target.label;
@@ -117,17 +122,18 @@ export class VectorFilterControls {
         this.title.textContent = target.label;
         this.inspection.updateLayerEditorName("filter", target.label);
         this.applied.textContent = this.action
-            ? `Sampling filter: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
+            ? `${this.action.filterLabel ?? "Sampling filter"}: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
             : `Applied: ${vectorFilterSummary(target.filter)}`;
         this.count.textContent = this.action ? "The complete selection is checked when you apply." : target.status || "All features are included.";
         this.add.disabled = target.fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
     }
 
-    /** Save the draft, finish valid pending edits, and restore focus. @return {void} */
+    /** Save edits, release optional action preparation, hide the panel and restore focus. @return {void} */
     close() {
         if (this.key === null) return;
         this.#saveDraft();
         if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
+        this.action?.onClose?.();
         this.key = null;
         this.inspection.hideFilter();
         if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();

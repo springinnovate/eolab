@@ -135,6 +135,10 @@ export class ModelsView {
         const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
         vectorGroup.append(this.field("models-vector", "Vector layer", vector));
         const vectorSearch = this.searchFields("vector"); vectorGroup.append(vectorSearch.root);
+        const editFilter = this.button("Edit filter", this.handlers.onEditFilter);
+        const filterDescription = this.element("p", "", "models-help");
+        vectorGroup.append(editFilter, filterDescription,
+            this.element("p", "Choose features for this run. Editing this filter leaves the map layer unchanged.", "models-help"));
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const updateArea = this.button("Update from map", this.handlers.onUpdateArea);
         const mapHelp = this.element("p", "", "models-help");
@@ -157,7 +161,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            rasterSearch, vectorSearch, parameters, run, details, updateArea, mapHelp};
+            rasterSearch, vectorSearch, parameters, run, details, updateArea, mapHelp, editFilter, filterDescription};
     }
 
     /** Build a catalog search input, submit button and pagination action.
@@ -216,6 +220,10 @@ export class ModelsView {
         s.mapHelp.textContent = draft.areaMode === "viewport" ? "Uses the visible map window. After panning or zooming, choose Update from map to use the new window." :
             draft.areaOrigin === "run" ? "Uses the exact area from the original run. Choose another area above to change it." :
                 draft.capturedArea.kind === "selectedArea" ? "Uses the box around a map click. Click the map to choose a new box, then choose Update sampling box." : "Uses the polygons already selected on the map. Choose Update polygons to use a new selection.";
+        s.editFilter.disabled = !draft.vectorKey || draft.selecting || Boolean(draft.filterOpening);
+        s.editFilter.textContent = draft.filterOpening ? "Opening filter…" : "Edit filter";
+        const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
+        s.filterDescription.textContent = vectorSource ? `Filter: ${describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter)}` : "Choose a vector layer, then edit its filter.";
         const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
             `${describeModelArea(draft.area)}${count}${["captured", "viewport"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;

@@ -959,9 +959,11 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    let modelFilterTarget = null;
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
         getTarget: (key) => {
+            if (modelFilterTarget?.key === key) return modelFilterTarget;
             const annotation = annotations?.filterTarget(key);
             if (annotation) return annotation;
             const record = mapLayerController.getRecord(key);
@@ -1022,6 +1024,20 @@ async function initializeCatalog(
          */
         prepareVector: (source, signal) => createVectorSamplingArea(
             {collection: source.collectionId, id: source.itemId}, source.filter ?? EMPTY_VECTOR_FILTER, signal),
+        /** Open the existing filter editor using catalog fields and model-owned actions.
+         * @param {Object} request Draft identity, vector source, predicate and lifecycle callbacks.
+         * @return {Promise<void>}
+         * @throws {Error} If the catalog item or its field metadata cannot be read.
+         */
+        editVectorFilter: async request => {
+            const item = await catalogItemClient.get({collection: request.source.collectionId, id: request.source.itemId});
+            if (!request.isCurrent()) return;
+            modelFilterTarget = {key: request.key, label: request.source.label, fields: vectorLabelFields(item), filter: request.filter};
+            vectorFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
+                applyLabel: "Use filter", filterLabel: "Model filter", onClose: request.cancel,
+                help: "Choose the features for this model. Use filter checks the matching features and returns to setup. It does not change the map layer or start the model.",
+            });
+        },
         onOpen: () => mapInspection.showModels(),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
     });
