@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { ModelsView } from "../../src/models/view.js";
+import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { ModelsController } from "../../src/models/controller.js";
 import { VectorFilterControls } from "../../src/vector/filter-controls.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
@@ -11,9 +13,10 @@ import { model, raster, area, invocation, selection, job } from "../../test-supp
 
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
+ * @param {Object|null} [viewOverride=null] Optional real view for boundary tests.
  * @return {Object} Component and recorded user-visible effects.
  */
-function fixture(overrides = {}) {
+function fixture(overrides = {}, viewOverride = null) {
     const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = []; const mapFilters = [];
     const api = {discoverModels: async () => [model], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getJob: async () => job(), readModelInvocation: async () => structuredClone(invocation),
@@ -24,7 +27,7 @@ function fixture(overrides = {}) {
     const jobs = new ProcessingJobs(api, clock);
     const context = {rasters: [structuredClone(raster)], area: structuredClone(area)};
     let sequence = 0; let handlers;
-    const view = {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
+    const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, getContext: () => context,
         prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); },
@@ -399,4 +402,16 @@ test("late map filter feedback cannot overwrite a newer setup", async () => {
     await h.controller.openVectorFilter(); await h.filterRequests[0].apply(selection.filter);
     h.controller.chooseModel(model); finish(selection.filter); await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.controller.state.draft.mapFilterMessage, undefined);
+});
+
+
+test("choosing or clearing a raster immediately refreshes Run availability", () => {
+    const view = new ModelsView(new SummaryControlDocument()); const h = fixture({}, view);
+    h.context.rasters.push({...raster, itemId: "second"}); h.controller.chooseModel(model);
+    assert.equal(view.setup.run.disabled, true);
+    view.setup.source.value = JSON.stringify([raster.collectionId, raster.itemId]);
+    view.setup.source.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, false);
+    view.setup.source.value = ""; view.setup.source.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, true);
 });

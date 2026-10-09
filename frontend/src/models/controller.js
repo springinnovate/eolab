@@ -114,7 +114,7 @@ export class ModelsController {
     editDraft(change) {
         if (!this.state.draft || this.state.submitting) return;
         Object.assign(this.state.draft, change);
-        this.state.error = "";
+        this.state.error = ""; this.render();
     }
 
     /** Choose whether setup uses the live map area, vector features or a fixed area.
