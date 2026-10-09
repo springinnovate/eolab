@@ -1,12 +1,8 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { formatDownloadBytes } from "../processing/presentation.js";
-import { calculationValue } from "../processing/calculation-result-view.js";
+import { renderModelResult } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea } from "./inputs.js";
-
-const RESULT_STATES = {no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
-    invalid_arithmetic: "The expression has no defined numeric result.", overflow: "The result exceeded the supported numeric range."};
 
 /** Describe the explicit area shown in setup and saved run details.
  * @param {Object|null} area Model area descriptor.
@@ -286,25 +282,7 @@ export class ModelsView {
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
             if (available && job.result) {
-                if (job.result.kind === "raster") {
-                    const card = this.element("article", "", "models-result");
-                    card.append(this.element("strong", "Clipped raster"), this.element("span", job.result.filename),
-                        this.element("span", `${job.result.grid.width.toLocaleString()} × ${job.result.grid.height.toLocaleString()} pixels · ${job.result.validPixels.toLocaleString()} valid pixels`),
-                        this.element("span", `${formatDownloadBytes(job.result.bytes)} · GeoTIFF`));
-                    r.result.append(card);
-                }
-                for (const row of job.result.rows ?? []) {
-                    const card = this.element("article", "", "models-result");
-                    card.append(this.element("strong", row.label), this.element("code", row.expression),
-                        this.element("strong", calculationValue(row), "models-result-value"));
-                    if (row.state !== "ok") card.append(this.element("p", RESULT_STATES[row.state] ?? row.state));
-                    r.result.append(card);
-                }
-                const links = this.element("div", "", "models-actions");
-                for (const [kind, label] of [["result", job.result.kind === "raster" ? "Download GeoTIFF" : "Download CSV"], ["provenance", "Download provenance"]]) {
-                    const link = this.element("a", label); link.href = processingDownloadUrl(kind === "result" ? job.result.url : job.result.provenanceUrl, id, kind); link.download = ""; links.append(link);
-                }
-                r.result.append(links);
+                renderModelResult(r.result, job.result, id, this.element.bind(this));
             }
         }
         r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +

@@ -655,10 +655,13 @@ def test_model_navigation_progress_and_running_cancel(
         )
     if model_id == "raster-clip":
         (worker.artifacts.root / "pause-after-output").touch()
-        monkeypatch.setattr(worker_module, "clip_process_target", _paused_clip)
+        monkeypatch.setattr(
+            "eolab_app.processing.raster_operations.clip_process_target", _paused_clip
+        )
     else:
         monkeypatch.setattr(
-            worker_module, "aggregate_process_target", paused_calculation
+            "eolab_app.processing.raster_operations.aggregate_process_target",
+            paused_calculation,
         )
 
     async def exercise() -> None:
@@ -827,3 +830,44 @@ def test_clip_model_download_matches_existing_clip_and_keeps_ownership(
         == "raster"
     )
     assert client.get(result["url"]).status_code == 200
+
+
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
+def test_new_yaml_recipe_runs_through_http_storage_and_downloads(
+    model_boundary: Any, model_id: str
+) -> None:
+    """New recipe names and bindings require no API, worker or serializer changes.
+
+    Args:
+        model_boundary: Real catalog, HTTP, PostgreSQL and native worker composition.
+        model_id: Registered operation to reuse in an unfamiliar recipe.
+    """
+    from model_recipe_support import custom_recipe
+
+    client, worker, service = model_boundary
+    definition = custom_recipe(model_id)
+    service.model_registry = ModelRegistry((definition,))
+    body = model_request(
+        client,
+        definition.id,
+        inputs={
+            "habitat": SOURCE,
+            "region": {"kind": "selectedArea", "selectedBounds": AREA},
+        },
+    )
+    job = submit(client, body)
+    service.model_registry = ModelRegistry(())
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    result = ready["result"]
+    assert result["name"] == "habitat_result" and result["label"] == "Habitat output"
+    downloaded = client.get(result["url"])
+    assert downloaded.status_code == 200
+    assert hashlib.sha256(downloaded.content).hexdigest() == result["sha256"]
+    exported = client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml")
+    document = RunDocument.model_validate(parse_yaml(exported.content, run=True))
+    assert document.invocation.model.definition == definition
+    assert document.invocation.inputs == body["inputs"]
+    if model_id == "raster-summary":
+        assert result["rows"][0]["expression"] == "mean(a)"

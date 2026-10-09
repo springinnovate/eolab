@@ -408,3 +408,49 @@ def test_clip_recipe_rejects_extra_parameters_and_mismatched_output_contract() -
     document["outputs"]["raster"]["presentation"] = "table"
     with pytest.raises(ProcessingError, match="operation contract"):
         ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+@pytest.mark.parametrize(
+    "model_id,wrong_type", [("raster-summary", "raster"), ("raster-clip", "statistics")]
+)
+def test_recipe_cannot_mislabel_its_operation_output(
+    model_id: str, wrong_type: str
+) -> None:
+    """YAML labels may change, but its declared scientific type must match execution.
+
+    Args:
+        model_id: Installed recipe to change.
+        wrong_type: Type inconsistent with the registered operation.
+    """
+    document = ModelRegistry.load_installed().get(model_id, "1.0.0").to_document()
+    next(iter(document["outputs"].values()))["type"] = wrong_type
+    with pytest.raises(ProcessingError, match="operation contract"):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+@pytest.mark.parametrize("policy", [{}, {"version": "raster.clip.v1"}])
+def test_saved_policy_must_include_the_registered_numerical_facts(
+    policy: dict[str, Any],
+) -> None:
+    """Incomplete or different operation policies cannot masquerade as summary execution.
+
+    Args:
+        policy: Incomplete or incompatible persisted numerical policy.
+    """
+    from eolab_app.processing.model_run_contracts import ModelExecution
+
+    with pytest.raises(ValidationError):
+        ModelExecution.model_validate(
+            {
+                "state": "pending",
+                "applicationBuild": "test",
+                "operations": {
+                    "calculate": {
+                        "id": "raster.aggregate.v1",
+                        "implementationRevision": "a" * 64,
+                    }
+                },
+                "sources": {"raster": {"sourceSignature": "b" * 64, "band": 1}},
+                "numericalPolicy": policy,
+            }
+        )

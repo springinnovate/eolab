@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { model, invocation, job, clipModel, clipResult } from "../../test-support/models/fixtures.js";
+import { model, invocation, job, clipModel, clipResult, statisticsResult } from "../../test-support/models/fixtures.js";
 
 /** Compose the transport over recorded same-origin HTTP replies.
  * @param {Function} reply Return the requested response body.
@@ -34,7 +34,7 @@ test("submission uses the immutable request key and normal Processing mutation h
 });
 
 test("model results use the existing numeric-row and download safety validation", async () => {
-    const result = {url: `/api/processing/jobs/${job().jobId}/result`, provenanceUrl: `/api/processing/jobs/${job().jobId}/provenance`, rows: [{label: "Sum", expression: "sum(a)", state: "ok", value: "not-a-number", valueType: "float", aggregates: []}]};
+    const result = {...statisticsResult, url: `/api/processing/jobs/${job().jobId}/result`, provenanceUrl: `/api/processing/jobs/${job().jobId}/provenance`, rows: [{label: "Sum", expression: "sum(a)", state: "ok", value: "not-a-number", valueType: "float", aggregates: []}]};
     const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
     await assert.rejects(h.api.getJob(job().jobId), /invalid calculation result/);
     result.url = "https://untrusted.invalid/result";
@@ -58,5 +58,13 @@ test("raster model results validate native grids, file metadata and owned downlo
         Object.assign(result, structuredClone(clipResult), change);
         await assert.rejects(h.api.getJob(job().jobId));
         delete result.rows;
+    }
+});
+
+test("unknown recipe identities and output names use shared result validation", async () => {
+    for (const output of [clipResult, statisticsResult]) {
+        const result = {...output, name: "habitat_result", label: "Habitat output"};
+        const h = fixture(() => job({model: {...model, id: "custom-habitat-recipe"}, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).result, result);
     }
 });

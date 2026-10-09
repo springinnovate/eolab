@@ -21,6 +21,8 @@ steps:
     parameters: {}
 outputs:
   raster:
+    type: raster
+    label: Clipped raster
     source: clip.raster
     role: result
     presentation: map

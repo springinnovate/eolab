@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import PurePath
 from typing import Any
 
@@ -15,15 +16,13 @@ from eolab_app.processing.shared_calculations import (
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
     ArtifactDownload,
-    PreparedJobPlan,
     JobSubmission,
     ProcessingError,
 )
-from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest, UnpreparedClip
+from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     AggregateJobRequest,
-    UnpreparedCalculation,
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 from eolab_app.processing.ports import (
@@ -32,9 +31,9 @@ from eolab_app.processing.ports import (
     JobChanges,
     JobSubscription,
 )
-from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunRequest
 from eolab_app.processing.model_runs import (
     build_model_job_submission,
@@ -233,30 +232,13 @@ class ProcessingService:
             raise ProcessingError(
                 "models_unavailable", "Model source authorization is unavailable.", 503
             )
-        source = (
-            CatalogRasterRequest(
-                collectionId=calculation.collection_id, itemId=calculation.item_id
-            )
-            if isinstance(calculation, ClipJobRequest)
-            else calculation.sources["a"]
+        operation = get_model_operation(invocation.model.definition.steps[0].operation)
+        authorized = await self.model_authorizer.authorize(
+            operation.source(calculation)
         )
-        authorized = await self.model_authorizer.authorize(source)
-        if isinstance(calculation, ClipJobRequest):
-            inputs = ClipInputs.model_validate(
-                calculation.model_dump(exclude={"requestId"}, by_alias=True)
-            )
-            queued = UnpreparedClip(request=inputs)
-            operation_plan = PreparedJobPlan(
-                operation=queued.operation,
-                specification=queued.model_dump(mode="json", by_alias=True),
-                summary={},
-                reserved_bytes=0,
-            )
-        else:
-            submission = await self.build_calculation_submission(owner, calculation, {})
-            if isinstance(submission.prepared, ProcessingError):
-                raise submission.prepared
-            operation_plan = submission.prepared
+        reference = operation.polygon(calculation)
+        polygons = await self.read_polygon_area(owner, reference) if reference else None
+        operation_plan = operation.queue(calculation, polygons)
         prepared = build_model_job_submission(
             operation_plan,
             invocation,
@@ -461,35 +443,19 @@ class ProcessingService:
         inputs = ClipInputs.model_validate(
             request.model_dump(exclude={"requestId"}, by_alias=True)
         )
-        queued = UnpreparedClip(request=inputs)
         request_hash = hashlib.sha256(
             json.dumps(
                 inputs.model_dump(mode="json", by_alias=True), sort_keys=True
             ).encode()
         ).hexdigest()
-        source = CatalogRasterRequest(
-            collectionId=inputs.collection_id, itemId=inputs.item_id
-        )
-        bounds = inputs.selectedBounds
-        summary = {
-            "source": source.model_dump(by_alias=True),
-            "grid": None,
-            "area": {
-                "kind": "bounds" if bounds else "catalogSelection",
-                "bounds": bounds.canonical_tuple() if bounds else None,
-            },
-        }
+        operation = get_model_operation("raster.clip.v1")
+        prepared = operation.queue(request, None)
+        queued = operation.parse_specification(prepared.specification)
         row = await asyncio.to_thread(
             self.jobs.submit,
             owner,
             request.requestId,
-            PreparedJobPlan(
-                specification=queued.model_dump(mode="json", by_alias=True),
-                summary=summary,
-                reserved_bytes=0,
-                operation=queued.operation,
-                work_key=identify_shared_calculation(queued),
-            ),
+            replace(prepared, work_key=identify_shared_calculation(queued)),
             request_hash,
         )
         require_operation(row, queued.operation)
@@ -598,36 +564,10 @@ class ProcessingService:
                 return JobSubmission(
                     request.requestId, request_hash, "raster.aggregate.v1", polygons
                 )
-        queued = UnpreparedCalculation(request=request, polygonArea=polygons)
-        bounds = request.selectedBounds
-        if bounds:
-            area_summary = {
-                "kind": "bounds",
-                "bounds": (bounds.west, bounds.south, bounds.east, bounds.north),
-            }
-        elif polygons:
-            area_summary = {"kind": "polygons", "bounds": polygons.bounds}
-        elif request.catalogSelection:
-            area_summary = {"kind": "catalogSelection", "bounds": None}
-        else:
-            area_summary = {"kind": "wholeRaster", "bounds": None}
-        summary = {
-            "sources": {
-                alias: source.model_dump(by_alias=True)
-                for alias, source in request.sources.items()
-            },
-            "calculations": [item.model_dump() for item in request.calculations],
-            "grid": None,
-            "area": area_summary,
-        }
-        prepared = PreparedJobPlan(
-            specification=queued.model_dump(mode="json", by_alias=True),
-            summary=summary,
-            reserved_bytes=0,
-            operation=queued.operation,
-            work_key=identify_shared_calculation(queued),
-            presentation={"calculations": summary["calculations"]},
-        )
+        operation = get_model_operation("raster.aggregate.v1")
+        prepared = operation.queue(request, polygons)
+        queued = operation.parse_specification(prepared.specification)
+        prepared = replace(prepared, work_key=identify_shared_calculation(queued))
         return JobSubmission(
             request.requestId, request_hash, queued.operation, prepared
         )

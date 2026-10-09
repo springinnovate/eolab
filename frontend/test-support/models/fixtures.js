@@ -24,8 +24,14 @@ export const clipModel = {...model, id: "raster-clip", title: "Raster clip", des
     outputs: {raster: {source: "clip.raster", role: "result", presentation: "map", saveEligible: true}}};
 
 /** A completed private GeoTIFF with native grid and download metadata. */
-export const clipResult = {kind: "raster", mediaType: "image/tiff", filename: "population-clip.tif", bytes: 4096,
+export const clipResult = {name: "raster", label: "Clipped raster", role: "result", presentation: "map", kind: "raster", mediaType: "image/tiff", filename: "population-clip.tif", bytes: 4096,
     sha256: "c".repeat(64), validPixels: 90, url: `/api/processing/jobs/${"1".repeat(32)}/result`,
     provenanceUrl: `/api/processing/jobs/${"1".repeat(32)}/provenance`,
     grid: {width: 10, height: 10, window: [0, 0, 10, 10], crs: "EPSG:4326", dtype: "int16", transform: [0.1, 0, 0, 0, -0.1, 1],
         nodata: null, nativeBlocks: 1, decodedBytes: 200, estimatedRawBytes: 300, reservedBytes: 1024}};
+
+/** A completed summary output using the shared typed-file contract. */
+export const statisticsResult = {name: "statistics", label: "Statistics", role: "result", presentation: "table", kind: "statistics",
+    mediaType: "text/csv", filename: "statistics.csv", bytes: 128, sha256: "d".repeat(64), cacheHit: false,
+    url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
+    rows: [{label: "Total", expression: "sum(a)", state: "ok", value: "42", valueType: "integer", aggregates: []}]};

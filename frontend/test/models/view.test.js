@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelsView, describeModelProgress } from "../../src/models/view.js";
 import { createModelDraft } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { model, raster, area, invocation, job, clipModel, clipResult } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
  * @return {Object} View, document, mutable state and action log.
@@ -33,9 +33,9 @@ test("ready results show exact integer values and safe CSV/provenance/YAML links
     const h = fixture(); const id = job().jobId;
     const row = {label: "Total", expression: "sum(a)", state: "ok", value: "9007199254740993", valueType: "integer", aggregates: []};
     h.state.page = "run"; h.state.selectedRun = id; h.state.invocation = invocation;
-    h.state.runs = [job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: {rows: [row], url: `/api/processing/jobs/${id}/result`, provenanceUrl: `/api/processing/jobs/${id}/provenance`}})];
+    h.state.runs = [job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: {...statisticsResult, rows: [row], url: `/api/processing/jobs/${id}/result`, provenanceUrl: `/api/processing/jobs/${id}/provenance`}})];
     h.view.render(h.state);
-    assert.equal(h.view.run.result.children[0].children[2].textContent.replaceAll(",", ""), row.value);
+    assert.equal(h.view.run.result.children[1].children[2].textContent.replaceAll(",", ""), row.value);
     assert.equal(h.view.run.cancel.hidden, true); assert.equal(h.view.run.duplicate.disabled, false);
     assert.match(h.view.run.details.run.href, /run-yaml$/);
     h.state.runs[0].status = "expired"; h.state.runs[0].result = null; h.view.render(h.state);
@@ -156,4 +156,15 @@ test("clip results offer a GeoTIFF with dimensions, expire correctly and retain 
     h.state.runs[0].status = "expired"; h.view.render(h.state); assert.equal(h.view.run.result.children.length, 0);
     for (const phase of ["clipping", "creating_cog", "validating", "checksumming"])
         assert.doesNotMatch(describeModelProgress(job({status: "running", progress: {phase}})), /Preparing calculation/);
+});
+
+test("result cards use captured YAML labels for unfamiliar models", () => {
+    for (const output of [clipResult, statisticsResult]) {
+        const h = fixture(); h.state.page = "run"; h.state.selectedRun = job().jobId;
+        h.state.runs = [job({model: {...model, id: "habitat-model"}, status: "ready", expiresAt: "2099-01-01T00:00:00Z",
+            result: {...output, name: "habitat", label: "Habitat output <script>"}})];
+        h.view.render(h.state);
+        const first = h.view.run.result.children[0];
+        assert.equal(output.kind === "raster" ? first.children[0].textContent : first.textContent, "Habitat output <script>");
+    }
 });

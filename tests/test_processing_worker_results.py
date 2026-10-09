@@ -117,15 +117,17 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
     store.save_prepared_job.side_effect = save
 
 
+@pytest.mark.parametrize("custom", [False, True])
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_worker_executes_native_results_and_exports_yaml(
-    tmp_path: Path, model_id: str
+    tmp_path: Path, model_id: str, custom: bool
 ) -> None:
     """Model dispatch reuses native operations and preserves typed result/YAML contracts.
 
     Args:
         tmp_path: Private source and output fixtures.
         model_id: Installed summary or clip operation under the model lifecycle.
+        custom: Exercise new recipe identities, argument names and output labels.
     """
     from eolab_app.processing.model_definitions import ModelRegistry
     from eolab_app.processing.model_run_contracts import (
@@ -139,8 +141,8 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         export_model_job_yaml,
     )
     from eolab_app.processing.model_yaml import parse_yaml
-    from eolab_app.processing.clip_models import ClipInputs, UnpreparedClip
-    from eolab_app.processing.models import PreparedJobPlan
+    from eolab_app.processing.model_operations import get_model_operation
+    from model_recipe_support import custom_recipe
 
     values = np.arange(1024, dtype="int16").reshape(32, 32)
     path = write_source(tmp_path / "source.tif", values)
@@ -152,17 +154,20 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     )
     registry = ModelRegistry.load_installed()
     definition = registry.get(model_id, "1.0.0")
+    if custom:
+        definition = custom_recipe(model_id)
+        registry = ModelRegistry((definition,))
     request = ModelRunRequest(
         model={
-            "id": model_id,
+            "id": definition.id,
             "version": "1.0.0",
             "definitionSha256": definition.digest,
         },
         requestId="a" * 32,
         label="Native model fixture",
         inputs={
-            "raster": SOURCE,
-            "area": {
+            "habitat" if custom else "raster": SOURCE,
+            "region" if custom else "area": {
                 "kind": "selectedArea",
                 "selectedBounds": {
                     "west": 0.05,
@@ -174,20 +179,9 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         },
     )
     calculation, invocation = build_model_calculation_request(request, registry)
-    if model_id == "raster-clip":
-        queued = UnpreparedClip(
-            request=ClipInputs.model_validate(
-                calculation.model_dump(exclude={"requestId"}, by_alias=True)
-            )
-        )
-    else:
-        queued = UnpreparedCalculation(
-            request=AggregatePlanRequest.model_validate(
-                calculation.model_dump(exclude={"requestId"}, by_alias=True)
-            )
-        )
+    operation = get_model_operation(definition.steps[0].operation)
     prepared = build_model_job_submission(
-        PreparedJobPlan(queued.model_dump(mode="json", by_alias=True), {}, 0),
+        operation.queue(calculation, None),
         invocation,
         tuple(signature.to_catalog()),
     )
@@ -232,6 +226,13 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     document = RunDocument.model_validate(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
+    store.get_cached_calculation_results.assert_not_called()
+    if custom:
+        assert response.result.name == "habitat_result"
+        assert response.result.label == "Habitat output"
+        assert document.invocation.inputs == request.inputs
+        if model_id == "raster-summary":
+            assert response.result.rows[0].expression == "mean(a)"
     assert document.execution.numericalPolicy.version == definition.steps[0].operation
     if model_id == "raster-clip":
         assert response.result.kind == "raster" and response.result.validPixels > 0
@@ -239,7 +240,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
             assert output.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
             assert output.scales == (2,) and output.offsets == (-1,)
             assert output.dtypes == ("int16",) and output.crs.to_epsg() == 4326
-            x, y, width, height = response.result.grid.window
+            x, y, width, height = row["spec"]["calculation"]["grid"]["window"]
             mask = output.read_masks(1) > 0
             np.testing.assert_array_equal(
                 output.read(1)[mask], values[y : y + height, x : x + width][mask]
@@ -251,3 +252,17 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         )
     else:
         assert response.result.rows and document.execution.outcome.statistics
+    # Result names and labels outlive captured YAML metadata.
+    ready["retained_metadata"] = None
+    assert ModelJobResponse.model_validate(public_job(ready)).result == response.result
+    if not custom:
+        legacy = dict(row["summary"])
+        legacy.pop("output")
+        legacy.pop("operationId")
+        if model_id == "raster-summary":
+            legacy.pop("grid")
+        historical = {**ready, "summary": legacy, "spec": legacy}
+        assert (
+            ModelJobResponse.model_validate(public_job(historical)).result.kind
+            == response.result.kind
+        )

@@ -14,34 +14,12 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import Artifact, ProcessingError
-from eolab_app.processing.clip_models import (
-    ClipArea,
-    ClipSpec,
-    UnpreparedClip,
-    RasterClipLimits,
-)
-from eolab_app.processing.aggregate_models import (
-    AggregateArea,
-    AggregateSpec,
-    UnpreparedCalculation,
-    RasterAggregateLimits,
-)
-from eolab_app.processing.raster_aggregate import (
-    aggregate_process_target,
-    write_statistics_result,
-)
-from eolab_app.processing.calculation_cache import (
-    calculation_result_cache_keys,
-    restore_cached_calculation_rows,
-    prepare_calculation_values_for_cache,
-    restore_cached_calculation_plan,
-)
-from eolab_app.processing.job_preparation import prepare_aggregate_job, prepare_clip_job
-from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
-from eolab_app.bounded_vector import summary_process, READ_SECONDS
-from eolab_app.processing.raster_mask import estimate_calculation_disk_bytes
+from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.aggregate_models import RasterAggregateLimits
+from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing.raster_operations import RasterOperationContext
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
-from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
@@ -89,156 +67,47 @@ class ProcessingWorker:
         # from discovery or accepting work the worker cannot dispatch.
         ModelRegistry.load_installed()
 
-    async def _prepare_calculation(self, row: dict[str, Any]) -> AuthorizedRaster:
-        """Prepare queued summary inputs and publish their estimates on the same job.
+    def _operation_context(self, reuse_results: bool) -> RasterOperationContext:
+        """Supply existing execution capabilities to a registered raster operation.
 
         Args:
-            row: Claimed job, updated in place with its prepared inputs and reservation.
+            reuse_results: Whether this attempt may reuse scalar results.
 
         Returns:
-            Source resolved for this attempt, reusable by immediate execution.
-            It is not persisted; a job returned to the queue resolves it again
-            when a later attempt executes the stored plan.
-
-        Raises:
-            ProcessingError: For unavailable sources, rejected resource estimates,
-                cancellation or insufficient storage.
-            TimeoutError: If preparation exceeds its separate time limit.
+            Operation context without browser, recipe or rendering state.
         """
-        model = (
-            ModelRunSpec.model_validate(row["spec"])
-            if row["spec"]["operation"] == MODEL_OPERATION
-            else None
+        return RasterOperationContext(
+            self.jobs,
+            self.areas,
+            self.limits,
+            self.aggregate_limits,
+            self.native,
+            run_process,
+            reuse_results,
         )
-        queued = UnpreparedCalculation.model_validate(
-            model.calculation if model else row["spec"]
-        )
-        request = queued.request
-        async with asyncio.timeout(self.limits.plan_timeout_seconds):
-            alive = await asyncio.to_thread(
-                self.jobs.heartbeat,
-                row["id"],
-                row["attempt_id"],
-                {"phase": "preparing"},
-            )
-            if not alive:
-                raise ProcessingError(
-                    "job_cancelled", "Calculation stopped before preparation.", 409
-                )
-            alias, source = next(iter(request.sources.items()))
-            authorized = await self.authorizer.authorize(source)
-            signature = tuple(authorized.source_signature.to_catalog())
-            if model is not None and signature != model.sourceSignature:
-                raise ProcessingError(
-                    "source_changed",
-                    "The raster changed after this model run was accepted.",
-                    409,
-                )
-            resolved = None
-            if request.catalogSelection:
-                if self.areas is None:
-                    raise ProcessingError(
-                        "selection_unavailable",
-                        "Vector selection reader is unavailable.",
-                        409,
-                    )
-                resolved = await self.areas.resolve_for_sampling(
-                    request.catalogSelection
-                )
-            spec = None
-            if model is None:
-                cached_results = await asyncio.to_thread(
-                    self.jobs.get_cached_calculation_results,
-                    calculation_result_cache_keys(request, signature),
-                )
-                spec = restore_cached_calculation_plan(
-                    request, signature, cached_results, queued.polygonArea
-                )
-            # Model runs prepare and execute a fresh calculation so their Run YAML
-            # describes that execution. The scalar-results cache does not record
-            # the model definition or implementation checksum needed for model reuse.
-            if spec is None:
-                if queued.polygonArea:
-                    area = queued.polygonArea
-                elif request.wholeRaster:
-                    area = AggregateArea(kind="wholeRaster")
-                elif request.selectedBounds:
-                    bounds = request.selectedBounds
-                    area = AggregateArea(
-                        kind="bounds",
-                        bounds=(bounds.west, bounds.south, bounds.east, bounds.north),
-                    )
-                else:
-                    success, summary = await run_process(
-                        summary_process, (resolved,), READ_SECONDS, self.native
-                    )
-                    if not success:
-                        raise ProcessingError("selection_unavailable", summary, 409)
-                    area = AggregateArea(
-                        kind="catalogSelection",
-                        bounds=summary["bbox"],
-                        catalogSelection=request.catalogSelection,
-                        resolved=resolved,
-                    )
-                status, grid = await run_process(
-                    aggregate_process_target,
-                    (
-                        "plan",
-                        (
-                            authorized.source_path,
-                            area,
-                            request.calculations,
-                            alias,
-                            self.aggregate_limits,
-                            request.targetChunkPixels,
-                            request.pixelPoint,
-                        ),
-                    ),
-                    self.limits.plan_timeout_seconds,
-                    self.native,
-                )
-                if status != "ok":
-                    raise ProcessingError(*grid)
-                if resolved is not None:
-                    await self.areas.resolve_for_sampling(request.catalogSelection)
-                spec = AggregateSpec(
-                    sources=request.sources,
-                    sourceSignature=signature,
-                    calculations=request.calculations,
-                    pixelPoint=request.pixelPoint,
-                    area=area,
-                    grid=grid,
-                )
-            prepared = prepare_aggregate_job(spec, self.aggregate_limits)
-            if model is not None:
-                prepared = record_model_preparation(row, prepared, self.limits)
-            updated = await asyncio.to_thread(
-                self.jobs.save_prepared_job,
-                row["id"],
-                row["attempt_id"],
-                prepared,
-            )
-            row.update(updated)
-            return authorized
 
-    async def _prepare_clip(self, row: dict[str, Any]) -> None:
-        """Measure a queued clip and reserve its output storage on the same job.
+    async def _prepare_operation(self, row: dict[str, Any]) -> AuthorizedRaster:
+        """Prepare registered operation inputs within the current fenced attempt.
 
         Args:
-            row: Claimed job, updated with the grid and selected area after preparation.
+            row: Claimed job updated with its prepared specification and reservation.
+
+        Returns:
+            Authorized source reusable by immediate execution in this attempt.
 
         Raises:
-            ProcessingError: If the source, area, storage or attempt is unavailable.
-            TimeoutError: If source inspection exceeds its time limit.
+            ProcessingError: If authorization, cancellation, planning or reservation fails.
+            TimeoutError: If preparation exceeds its time limit.
         """
         model = (
             ModelRunSpec.model_validate(row["spec"])
             if row["spec"]["operation"] == MODEL_OPERATION
             else None
         )
-        request = UnpreparedClip.model_validate(
-            model.calculation if model else row["spec"]
-        ).request
+        data = model.calculation if model else row["spec"]
+        identifier = data.operation if model else data["operation"]
+        operation = get_model_operation(identifier)
+        queued = operation.parse_specification(data)
         async with asyncio.timeout(self.limits.plan_timeout_seconds):
             if not await asyncio.to_thread(
                 self.jobs.heartbeat,
@@ -247,70 +116,30 @@ class ProcessingWorker:
                 {"phase": "preparing"},
             ):
                 raise ProcessingError(
-                    "job_cancelled", "Clip stopped before preparation.", 409
+                    "job_cancelled", "Calculation stopped before preparation.", 409
                 )
-            source = CatalogRasterRequest(
-                collectionId=request.collection_id, itemId=request.item_id
-            )
-            authorized = await self.authorizer.authorize(source)
-            signature = tuple(authorized.source_signature.to_catalog())
-            if model is not None and signature != model.sourceSignature:
+            authorized = await self.authorizer.authorize(operation.source(queued))
+            if (
+                model is not None
+                and tuple(authorized.source_signature.to_catalog())
+                != model.sourceSignature
+            ):
                 raise ProcessingError(
                     "source_changed",
                     "The raster changed after this model run was accepted.",
                     409,
                 )
-            if request.selectedBounds:
-                area = ClipArea(
-                    kind="bounds", bounds=request.selectedBounds.canonical_tuple()
-                )
-            else:
-                if self.areas is None:
-                    raise ProcessingError(
-                        "selection_unavailable",
-                        "Vector selection reader is unavailable.",
-                        409,
-                    )
-                resolved = await self.areas.resolve_for_sampling(
-                    request.catalogSelection
-                )
-                success, summary = await run_process(
-                    summary_process, (resolved,), READ_SECONDS, self.native
-                )
-                if not success:
-                    raise ProcessingError("selection_unavailable", summary, 409)
-                area = ClipArea(
-                    kind="catalogSelection",
-                    bounds=summary["bbox"],
-                    catalogSelection=request.catalogSelection,
-                    resolved=resolved,
-                )
-            status, grid = await run_process(
-                clip_process_target,
-                ("plan", (authorized.source_path, area, self.limits)),
-                self.limits.plan_timeout_seconds,
-                self.native,
+            prepared = await operation.prepare(
+                self._operation_context(model is None), queued, authorized
             )
-            if status != "ok":
-                raise ProcessingError(*grid)
-            if request.catalogSelection:
-                await self.areas.resolve_for_sampling(request.catalogSelection)
-            spec = ClipSpec(
-                source=source,
-                sourceSignature=signature,
-                area=area,
-                grid=grid,
-            )
-            prepared = prepare_clip_job(spec)
             if model is not None:
                 prepared = record_model_preparation(row, prepared, self.limits)
-            updated = await asyncio.to_thread(
-                self.jobs.save_prepared_job,
-                row["id"],
-                row["attempt_id"],
-                prepared,
+            row.update(
+                await asyncio.to_thread(
+                    self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
+                )
             )
-            row.update(updated)
+            return authorized
 
     async def _execute(self, row: dict[str, Any]) -> Artifact | None:
         """Authorize the inputs, reuse or calculate values, and publish result files.
@@ -341,15 +170,15 @@ class ProcessingWorker:
                 409,
             )
         calculation_operation = model.calculation.operation if model else operation
+        handler = get_model_operation(calculation_operation)
+        calculation = handler.parse_specification(
+            model.calculation if model else row["spec"]
+        )
         authorized = None
-        if (
-            model is not None and isinstance(model.calculation, UnpreparedCalculation)
-        ) or (operation == "raster.aggregate.v1" and "request" in row["spec"]):
-            authorized = await self._prepare_calculation(row)
-        elif (model is not None and isinstance(model.calculation, UnpreparedClip)) or (
-            operation == "raster.clip.v1" and "request" in row["spec"]
-        ):
-            await self._prepare_clip(row)
+        if isinstance(calculation, handler.queued_type):
+            authorized = await self._prepare_operation(row)
+            if not handler.reuse_prepared_source:
+                authorized = None
         if row["status"] == "queued":
             return None
         calculation_spec = (
@@ -357,35 +186,10 @@ class ProcessingWorker:
             if model
             else row["spec"]
         )
-        if calculation_operation == "raster.clip.v1":
-            spec = ClipSpec.model_validate(calculation_spec)
-            source = spec.source
-            target, action, limits = clip_process_target, "clip", self.limits
-        elif calculation_operation == "raster.aggregate.v1":
-            spec = AggregateSpec.model_validate(calculation_spec)
-            required_disk_bytes = estimate_calculation_disk_bytes(
-                spec, self.aggregate_limits
-            )
-            # Keep execution within the reservation established during preparation.
-            if row["reserved_bytes"] < required_disk_bytes:
-                raise ProcessingError(
-                    "insufficient_disk_reservation",
-                    "This job reserved less disk space than its calculation now requires. "
-                    "Run the calculation again to reserve enough space.",
-                    409,
-                )
-            source = next(iter(spec.sources.values()))
-            target, action, limits = (
-                aggregate_process_target,
-                "calculate",
-                self.aggregate_limits,
-            )
-        else:
-            raise ProcessingError(
-                "unsupported_operation",
-                "This worker does not support the requested operation.",
-                422,
-            )
+        spec = handler.prepared_type.model_validate(calculation_spec)
+        source = handler.source(spec)
+        context = self._operation_context(model is None)
+        target, action, limits = handler.execution(spec, context, row["reserved_bytes"])
         resolved_area = None
         if spec.area.kind == "catalogSelection":
             if self.areas is None:
@@ -419,21 +223,9 @@ class ProcessingWorker:
             row["reserved_bytes"],
             self.limits,
         )
-        if operation == "raster.aggregate.v1":
-            if spec.cachedRows is not None:
-                cached_rows = [row.model_dump(mode="json") for row in spec.cachedRows]
-            else:
-                cached = await asyncio.to_thread(
-                    self.jobs.get_cached_calculation_results,
-                    calculation_result_cache_keys(spec),
-                )
-                cached_rows = restore_cached_calculation_rows(spec, cached)
-            if cached_rows is not None:
-                # These tiny writes stay synchronous so cancellation cannot race
-                # a background writer against attempt-directory cleanup.
-                value = write_statistics_result(
-                    spec, cached_rows, directory, cache_hit=True
-                )
+        if model is None:
+            value = await handler.cached(context, spec, directory)
+            if value is not None:
                 if resolved_area is not None:
                     await self.areas.resolve_for_sampling(resolved_area.selection)
                 self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
@@ -499,12 +291,10 @@ class ProcessingWorker:
                     finished = True
                     return True
                 reusable_results = None
-                if (
-                    row["spec"]["operation"] == "raster.aggregate.v1"
-                    and not artifact.cache_hit
-                ):
-                    reusable_results = prepare_calculation_values_for_cache(
-                        AggregateSpec.model_validate(row["spec"]), artifact.rows
+                if row["spec"]["operation"] != MODEL_OPERATION:
+                    handler = get_model_operation(row["spec"]["operation"])
+                    reusable_results = handler.reusable(
+                        handler.prepared_type.model_validate(row["spec"]), artifact
                     )
                 finished = await asyncio.to_thread(
                     self.jobs.finish,

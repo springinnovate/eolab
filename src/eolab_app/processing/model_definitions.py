@@ -1,6 +1,5 @@
 """Define model recipes and check that their calculation steps can run in EOlab."""
 
-from dataclasses import dataclass
 from importlib.resources import files
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Mapping, Self
@@ -21,6 +20,7 @@ from eolab_app.processing.model_yaml import (
     parse_yaml,
 )
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.model_operations import OPERATIONS
 from eolab_app.processing.raster_expression import compile_expression, walk
 
 Name = Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
@@ -209,7 +209,9 @@ class ModelOutput(ModelSchema):
     ``source`` names the step and output, such as ``calculate.statistics``.
     ``presentation`` says whether it is a map layer or table; ``role`` distinguishes
     final results from intermediate outputs. This describes an output, while a
-    particular run creates its files and download links.
+    particular run creates its files and download links. Optional ``type`` must
+    match the registered operation; ``label`` names the result in the UI. Omitting
+    them uses the operation contract's defaults, preserving earlier recipes.
     """
 
     source: Annotated[
@@ -219,6 +221,8 @@ class ModelOutput(ModelSchema):
     role: Literal["result", "intermediate"]
     presentation: Literal["map", "table"]
     saveEligible: bool = Field(strict=True)
+    type: Literal["statistics", "raster"] | None = None
+    label: Label | None = None
 
 
 class ModelDefinition(ModelSchema):
@@ -306,39 +310,6 @@ class ModelDefinition(ModelSchema):
         return compute_document_checksum(self.to_document())
 
 
-@dataclass(frozen=True)
-class OperationDefinition:
-    """The input, parameter and output types accepted by a backend calculation.
-
-    Each tuple pairs an argument or output name with its type. The execution
-    profile identifies the server resource policy for this calculation. Recipes
-    must match this description before EOlab offers them to users.
-    """
-
-    inputs: tuple[tuple[str, str], ...]
-    parameters: tuple[tuple[str, str], ...]
-    outputs: tuple[tuple[str, str], ...]
-    execution_profile: str
-
-
-OPERATIONS = MappingProxyType(
-    {
-        "raster.aggregate.v1": OperationDefinition(
-            (("raster", "catalog_raster"), ("area", "summary_area")),
-            (("expression", "summary_expression"),),
-            (("statistics", "table"),),
-            "raster-summary",
-        ),
-        "raster.clip.v1": OperationDefinition(
-            (("raster", "catalog_raster"), ("area", "clip_area")),
-            (),
-            (("raster", "map"),),
-            "raster-clip",
-        ),
-    }
-)
-
-
 def validate_operation(definition: ModelDefinition) -> None:
     """Check that EOlab can execute the operation described by a model recipe.
 
@@ -368,13 +339,16 @@ def validate_operation(definition: ModelDefinition) -> None:
                 output.source.split(".")[1]: output.presentation
                 for output in definition.outputs.values()
             }
-            == dict(contract.outputs)
-            and len(definition.outputs) == len(contract.outputs)
+            == {contract.output.name: contract.output.presentation}
+            and len(definition.outputs) == 1
             and definition.executionProfile == contract.execution_profile
             and {item.input for item in step.inputs.values()} == set(definition.inputs)
             and {item.parameter for item in step.parameters.values()}
             == set(definition.parameters)
-            and all(output.role == "result" for output in definition.outputs.values())
+            and all(
+                output.role == "result" and output.type in (None, contract.output.kind)
+                for output in definition.outputs.values()
+            )
         )
     if not valid:
         raise ProcessingError(

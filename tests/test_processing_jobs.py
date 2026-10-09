@@ -622,7 +622,9 @@ def test_worker_cancellation_and_shutdown_join_child_before_cleanup(
     job = submitted(client, clip_inputs(client))
     if phase == "finalizing":
         (artifacts.root / "pause-after-output").touch()
-    monkeypatch.setattr(worker_module, "clip_process_target", _paused_clip)
+    monkeypatch.setattr(
+        "eolab_app.processing.raster_operations.clip_process_target", _paused_clip
+    )
 
     async def exercise() -> None:
         """Cancel only after the real native child reaches the test checkpoint."""

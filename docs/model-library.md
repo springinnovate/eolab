@@ -93,3 +93,5 @@ execution details. YAML import and permanent Save controls are not available.
 The JSON API at `GET /api/processing/jobs/{jobId}/invocation` exposes the same
 saved setup used by **Duplicate with changes**. It requires the owning browser
 session and follows the same deletion and metadata-expiry rules as YAML export.
+
+To define another model using an existing operation, see [Add a model recipe](model-authoring.md).

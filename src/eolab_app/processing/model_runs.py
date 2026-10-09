@@ -15,24 +15,19 @@ import fiona
 import pyproj
 import rasterio
 import shapely
-from pydantic import AwareDatetime, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ValidationError
 
-from eolab_app.processing.aggregate_models import AggregateJobRequest, AggregateSpec
-from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec
 from eolab_app.processing.model_definitions import (
     ModelSchema,
     ModelRegistry,
-    SummaryExpressionParameter,
     validate_operation,
 )
 from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
-    ClipModelArea,
     ModelInvocation,
     ModelRunRequest,
     ModelRunSpec,
     RunDocument,
-    SummaryArea,
 )
 from eolab_app.processing.model_yaml import (
     encode_canonical_json,
@@ -45,7 +40,7 @@ from eolab_app.processing.models import (
     ProcessingError,
     ProcessingLimits,
 )
-from eolab_app.raster.models import CatalogRasterRequest
+from eolab_app.processing.model_operations import get_model_operation
 
 
 @lru_cache(maxsize=1)
@@ -116,8 +111,8 @@ def get_application_build_id() -> str:
 def build_model_calculation_request(
     request: ModelRunRequest,
     registry: ModelRegistry,
-) -> tuple[AggregateJobRequest | ClipJobRequest, ModelInvocation]:
-    """Translate a model setup into the existing summary or clip request.
+) -> tuple[BaseModel, ModelInvocation]:
+    """Bind a YAML recipe to its registered operation request.
 
     Checks the selected recipe version and checksum, applies parameter defaults,
     and saves the effective inputs alongside the calculation request.
@@ -148,66 +143,34 @@ def build_model_calculation_request(
             "Supply exactly the model's inputs and declared parameters.",
         )
     step = definition.steps[0]
-    raster_name, area_name = step.inputs["raster"].input, step.inputs["area"].input
+    operation = get_model_operation(step.operation)
     try:
-        source = CatalogRasterRequest.model_validate(request.inputs[raster_name])
-        area_contract = (
-            ClipModelArea if step.operation == "raster.clip.v1" else SummaryArea
-        )
-        area = TypeAdapter(area_contract).validate_python(request.inputs[area_name])
-        area_fields = (
-            {"selectedBounds": area.selectedBounds}
-            if area.kind == "selectedArea"
-            else (
-                {"catalogSelection": area.selection}
-                if area.kind == "catalogSelection"
-                else (
-                    {"polygonArea": area.reference}
-                    if area.kind == "polygonArea"
-                    else {"wholeRaster": True}
-                )
-            )
-        )
-        parameters = {}
-        if step.operation == "raster.clip.v1":
-            calculation = ClipJobRequest(
-                requestId=request.requestId,
-                **source.model_dump(by_alias=True),
-                **area_fields,
-            )
-        else:
-            parameter_name = step.parameters["expression"].parameter
-            declaration = definition.parameters[parameter_name]
-            parameter = SummaryExpressionParameter.model_validate(
-                {
-                    **declaration.model_dump(),
-                    "default": request.parameters.get(
-                        parameter_name, declaration.default
-                    ),
-                }
-            )
-            parameters[parameter_name] = parameter.default
-            calculation = AggregateJobRequest(
-                requestId=request.requestId,
-                sources={"a": source},
-                calculations=[
-                    {"label": request.label, "expression": parameter.default}
-                ],
-                **area_fields,
-            )
+        parameters = {
+            name: request.parameters.get(name, declaration.default)
+            for name, declaration in definition.parameters.items()
+        }
         invocation = ModelInvocation.model_validate(
             {
                 "model": {
                     **request.model.model_dump(),
                     "definition": definition.to_document(),
                 },
-                "inputs": {
-                    raster_name: source.model_dump(mode="json", by_alias=True),
-                    area_name: area.model_dump(mode="json", by_alias=True),
-                },
+                "inputs": request.inputs,
                 "parameters": parameters,
                 "label": request.label,
             }
+        )
+        calculation = operation.bind(
+            {
+                name: invocation.inputs[binding.input]
+                for name, binding in step.inputs.items()
+            },
+            {
+                name: invocation.parameters[binding.parameter]
+                for name, binding in step.parameters.items()
+            },
+            request.requestId,
+            request.label,
         )
     except (ValidationError, ValueError) as error:
         raise ProcessingError(
@@ -237,6 +200,8 @@ def build_model_job_submission(
         ProcessingError: If the saved recipe and inputs exceed the YAML size limits.
     """
     definition = invocation.model.definition
+    operation = get_model_operation(definition.steps[0].operation)
+    output_name, output = next(iter(definition.outputs.items()))
     revision = compute_implementation_checksum()
     build = get_application_build_id()
     metadata = {
@@ -277,6 +242,15 @@ def build_model_job_submission(
                 "title": definition.title,
             },
             "label": invocation.label,
+            "operationId": operation.id,
+            "output": {
+                "name": output_name,
+                "label": output.label or operation.output.label,
+                "kind": operation.output.kind,
+                "mediaType": operation.output.media_type,
+                "presentation": output.presentation,
+                "role": output.role,
+            },
         },
         retained_metadata=metadata,
         work_key=None,
@@ -307,9 +281,8 @@ def record_model_preparation(
         ValueError: If the prepared operation differs from the saved recipe.
     """
     wrapper = ModelRunSpec.model_validate(row["spec"])
-    spec = (
-        ClipSpec if prepared.operation == "raster.clip.v1" else AggregateSpec
-    ).model_validate(prepared.specification)
+    operation = get_model_operation(prepared.operation)
+    spec = operation.prepared_type.model_validate(prepared.specification)
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
     invocation = ModelInvocation.model_validate(metadata["invocation"])
     validate_operation(invocation.model.definition)
@@ -326,31 +299,12 @@ def record_model_preparation(
                 "reservedBytes": prepared.reserved_bytes,
                 "resultTtlSeconds": limits.result_ttl_seconds,
             },
-            "numericalPolicy": {
-                "version": "raster.aggregate.v1",
-                "grid": "native",
-                "resampling": "none",
-                "numericInclusion": "cell_center",
-                "nodata": "exclude_source_nodata_and_nonfinite",
-                "valueDomain": "stored_native_values",
-            },
+            "numericalPolicy": operation.policy(spec).model_dump(
+                mode="json", exclude_none=True
+            ),
         }
     )
     execution["sources"][raster_name]["grid"] = spec.grid.model_dump(mode="json")
-    if isinstance(spec, ClipSpec):
-        execution["numericalPolicy"] = {
-            "version": "raster.clip.v1",
-            "grid": "native",
-            "resampling": "none",
-            "numericInclusion": "all_touched",
-            "nodata": "preserve_source_nodata_and_mask_invalid",
-            "valueDomain": "stored_native_values",
-            "overviewResampling": "nearest",
-        }
-    elif spec.grid.groundArea is not None:
-        execution["numericalPolicy"]["groundArea"] = spec.grid.groundArea.model_dump(
-            mode="json"
-        )
     export_yaml(metadata, run=True)
     return replace(
         prepared,
@@ -358,14 +312,7 @@ def record_model_preparation(
         specification=wrapper.model_copy(update={"calculation": spec}).model_dump(
             mode="json", by_alias=True
         ),
-        summary={
-            **row["summary"],
-            **(
-                {"grid": spec.grid.model_dump(mode="json")}
-                if isinstance(spec, ClipSpec)
-                else {}
-            ),
-        },
+        summary={**row["summary"], "grid": spec.grid.model_dump(mode="json")},
         retained_metadata=metadata,
     )
 
@@ -395,6 +342,32 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             unit="blocks",
         )
     identifier = row["id"]
+    result = None
+    if artifact is not None:
+        operation = get_model_operation(read_model_job_operation_id(row))
+        if artifact["media_type"] != operation.output.media_type:
+            raise ProcessingError(
+                "invalid_model_result",
+                "The result format does not match this model output.",
+                500,
+            )
+        output = summary.get("output") or {
+            "name": operation.output.name,
+            "label": operation.output.label,
+            "kind": operation.output.kind,
+            "mediaType": operation.output.media_type,
+            "presentation": operation.output.presentation,
+            "role": "result",
+        }
+        result = {
+            **output,
+            "url": f"/api/processing/jobs/{row['id']}/result",
+            "provenanceUrl": f"/api/processing/jobs/{row['id']}/provenance",
+            "filename": artifact["filename"],
+            "bytes": artifact["size"],
+            "sha256": artifact["sha256"],
+            **operation.result(summary, artifact),
+        }
     return {
         "jobId": identifier,
         "operation": MODEL_OPERATION,
@@ -407,28 +380,27 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         "metadataExpiresAt": row.get("metadata_expires_at"),
         "progress": measured,
         "error": row["error"],
-        "result": (
-            None
-            if artifact is None
-            else {
-                "url": f"/api/processing/jobs/{identifier}/result",
-                "provenanceUrl": f"/api/processing/jobs/{identifier}/provenance",
-                "filename": artifact["filename"],
-                "bytes": artifact["size"],
-                "sha256": artifact["sha256"],
-                **(
-                    {
-                        "kind": "raster",
-                        "mediaType": "image/tiff",
-                        "grid": summary["grid"],
-                        "validPixels": artifact["valid_pixels"],
-                    }
-                    if artifact["media_type"] == "image/tiff"
-                    else {"rows": artifact["rows"], "cacheHit": False}
-                ),
-            }
-        ),
+        "result": result,
     }
+
+
+def read_model_job_operation_id(row: dict[str, Any]) -> str:
+    """Read a model job's operation, including records written before adapters existed.
+
+    Earlier summary records contained neither an operation ID nor an output
+    descriptor. The original clip adapter alone stored a top-level grid. This
+    compatibility rule is limited to those two historical persisted schemas.
+
+    Args:
+        row: Owned job with its compact public summary.
+
+    Returns:
+        Operation ID captured at admission or identified from the historical schema.
+    """
+    summary = row.get("summary") or row["spec"]
+    if "operationId" in summary:
+        return summary["operationId"]
+    return "raster.clip.v1" if "grid" in summary else "raster.aggregate.v1"
 
 
 def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
@@ -493,18 +465,12 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
         execution["outcome"] = {
             "status": outcome["status"],
             "error": outcome.get("error"),
-            "statistics": artifact.get("rows") if artifact else None,
             **(
-                {
-                    "raster": {
-                        "filename": artifact["filename"],
-                        "bytes": artifact["size"],
-                        "sha256": artifact["sha256"],
-                        "validPixels": artifact["valid_pixels"],
-                    }
-                }
-                if artifact and artifact["media_type"] == "image/tiff"
-                else {}
+                get_model_operation(
+                    invocation.model.definition.steps[0].operation
+                ).outcome(artifact)
+                if artifact
+                else {"statistics": None}
             ),
         }
     document = RunDocument.model_validate(

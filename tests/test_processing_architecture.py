@@ -206,6 +206,8 @@ def test_storage_and_native_mechanisms_do_not_know_model_definitions() -> None:
     for path in (
         "src/eolab_app/processing/job_store.py",
         "src/eolab_app/processing/artifacts.py",
+        "src/eolab_app/processing/raster_clip.py",
+        "src/eolab_app/processing/raster_aggregate.py",
         "src/eolab_app/processing/models.py",
         "src/eolab_app/processing/ports.py",
         "src/eolab_app/execution/reusable_process.py",
@@ -217,3 +219,18 @@ def test_storage_and_native_mechanisms_do_not_know_model_definitions() -> None:
             for name in imports(Path(path))
             if name.startswith("eolab_app.processing.model_")
         }, path
+
+
+def test_model_submission_uses_registered_operations_not_native_implementations() -> (
+    None
+):
+    """Recipe binding and result serialization cannot select native algorithms themselves."""
+    dependencies = imports(Path("src/eolab_app/processing/model_runs.py"))
+    assert not dependencies.intersection(
+        {
+            "eolab_app.processing.clip_models",
+            "eolab_app.processing.aggregate_models",
+            "eolab_app.processing.raster_clip",
+            "eolab_app.processing.raster_aggregate",
+        }
+    )
