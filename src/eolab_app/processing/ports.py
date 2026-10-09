@@ -245,27 +245,34 @@ class JobStore(Protocol):
         """
         ...
 
-    def list_owned_page(
+    def list_session_jobs_page(
         self,
         owner: str,
         operations: tuple[str, ...],
         limit: int,
         before: tuple[datetime, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read an owner-only, operation-filtered page with stable ordering.
+        """Return one page of jobs belonging to the requesting browser session.
+
+        The owner value is the hash of the browser's Processing cookie, not a user
+        account ID. Filtering by it keeps another browser from listing these jobs.
+        The continuation cursor chooses older entries but never grants access to them.
 
         Args:
-            owner: Current session hash.
-            operations: Application-owned operation discriminators.
-            limit: One to 101 rows, including an optional next-page sentinel.
-            before: Exclusive creation timestamp and public ID boundary.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Job types to include, such as ``model.run.v1``.
+            limit: Number of rows to read, from one to 101. The caller may read one
+                extra row to determine whether another page exists.
+            before: Return jobs older than this creation-time and job-ID pair;
+                None starts at the newest job.
 
         Returns:
-            Newest matching nondeleted rows first.
+            Matching, nondeleted jobs for this session, newest first. Equal creation
+            times are ordered by job ID so page boundaries stay consistent.
 
         Raises:
-            ValueError: If query limits are invalid.
-            ProcessingError: If storage is unavailable.
+            ValueError: If the page size or operation count is invalid.
+            ProcessingError: If job storage is unavailable.
         """
         ...
 

@@ -284,25 +284,25 @@ class ProcessingService:
     async def list_model_runs(
         self, owner: str, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        """Page through this owner's models without reading unrelated jobs.
+        """Return one page of the requesting browser session's model runs.
 
         Args:
-            owner: Current browser-session hash.
-            limit: Between one and 100 visible entries.
-            cursor: Optional opaque exclusive continuation boundary.
+            owner: Hash of the browser's Processing session cookie.
+            limit: Maximum runs to return on this page, between one and 100.
+            cursor: The previous response's nextCursor, or None for the newest runs.
 
         Returns:
-            Model snapshots and a next cursor only when more matching rows exist.
+            Model run statuses and a nextCursor when older matching runs exist.
 
         Raises:
-            ProcessingError: For an invalid cursor or unavailable storage.
+            ProcessingError: If pagination values are invalid or job storage is unavailable.
         """
         if not 1 <= limit <= 100:
             raise ProcessingError(
                 "invalid_limit", "Choose between one and 100 model runs."
             )
         rows = await asyncio.to_thread(
-            self.jobs.list_owned_page,
+            self.jobs.list_session_jobs_page,
             owner,
             (MODEL_OPERATION,),
             limit + 1,

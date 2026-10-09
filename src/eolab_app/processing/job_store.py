@@ -657,27 +657,34 @@ class PostgresJobStore:
             )
             return cursor.fetchall()
 
-    def list_owned_page(
+    def list_session_jobs_page(
         self,
         owner: str,
         operations: tuple[str, ...],
         limit: int,
         before: tuple[datetime, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read an operation-filtered page using stable creation-time/ID ordering.
+        """Return one page of jobs belonging to the requesting browser session.
+
+        The owner value is the hash of the browser's Processing cookie, not a user
+        account ID. Filtering by it keeps another browser from listing these jobs.
+        The continuation cursor chooses older entries but never grants access to them.
 
         Args:
-            owner: Authorized browser-session hash.
-            operations: Opaque operation discriminators chosen by the application.
-            limit: One to 101 rows, allowing an application to detect a next page.
-            before: Exclusive creation timestamp/public ID continuation boundary.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Job types to include, such as ``model.run.v1``.
+            limit: Number of rows to read, from one to 101. The caller may read one
+                extra row to determine whether another page exists.
+            before: Return jobs older than this creation-time and job-ID pair;
+                None starts at the newest job.
 
         Returns:
-            Owned, nondeleted rows, newest first; other operations never crowd them out.
+            Matching, nondeleted jobs for this session, newest first. Equal creation
+            times are ordered by job ID so page boundaries stay consistent.
 
         Raises:
-            ValueError: If a caller exceeds the bounded query contract.
-            ProcessingError: If storage is unavailable.
+            ValueError: If the page size or operation count is invalid.
+            ProcessingError: If job storage is unavailable.
         """
         if not 1 <= limit <= 101 or not 1 <= len(operations) <= 16:
             raise ValueError("Invalid operation page limits")
