@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { model, invocation, job, clipModel, clipResult, statisticsResult } from "../../test-support/models/fixtures.js";
+import { model, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Compose the transport over recorded same-origin HTTP replies.
  * @param {Function} reply Return the requested response body.
@@ -66,5 +66,25 @@ test("unknown recipe identities and output names use shared result validation", 
         const result = {...output, name: "habitat_result", label: "Habitat output"};
         const h = fixture(() => job({model: {...model, id: "custom-habitat-recipe"}, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
         assert.deepEqual((await h.api.getJob(job().jobId)).result, result);
+    }
+});
+
+test("multiple run files require scoped URLs, unique IDs and valid availability", async () => {
+    let artifacts = fileManifest();
+    const h = fixture(() => job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts}));
+    assert.deepEqual((await h.api.getJob(job().jobId)).artifacts, artifacts);
+    for (const damage of [
+        value => { value.files[0].url = "https://elsewhere.invalid/file"; },
+        value => { value.files[0].url = value.files[0].url.replace(value.jobId, "f".repeat(32)); },
+        value => { value.files.push({...value.files[0]}); },
+        value => { value.files[0].bytes = -1; },
+        value => { value.files[0].sha256 = "bad"; },
+        value => { value.files[0].filename = "../other"; },
+        value => { value.availability = "pending"; },
+        value => { value.totalBytes = 1; },
+        value => { value.files = Array(65).fill(value.files[0]); },
+    ]) {
+        artifacts = fileManifest(); damage(artifacts);
+        await assert.rejects(h.api.getJob(job().jobId));
     }
 });

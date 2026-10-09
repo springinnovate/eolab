@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import datetime
 from importlib.resources import files
 import json
+from eolab_app.processing.artifact_manifest import read_artifact_manifest
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -896,11 +897,24 @@ class PostgresJobStore:
             if not row:
                 return False
             if artifact is not None:
+                retained_bytes = (
+                    artifact.size + self.limits.result_metadata_reservation_bytes
+                )
+                if artifact.manifest is not None:
+                    retained_bytes = read_artifact_manifest(
+                        artifact.manifest
+                    ).total_bytes
+                    if retained_bytes > row["reserved_bytes"]:
+                        raise ProcessingError(
+                            "output_too_large",
+                            "Completed files exceed the job's reservation.",
+                            413,
+                        )
                 cursor.execute(
                     "UPDATE processing.jobs SET status='ready',artifact=%s,reserved_bytes=%s,expires_at=now()+%s*interval '1 second',updated_at=now(),progress=%s WHERE id=%s AND status='running' AND lease_until>now() AND deadline_at>now() RETURNING id",
                     (
                         Jsonb(asdict(artifact)),
-                        artifact.size + self.limits.result_metadata_reservation_bytes,
+                        retained_bytes,
                         self.limits.result_ttl_seconds,
                         Jsonb({"phase": "ready"}),
                         identifier,

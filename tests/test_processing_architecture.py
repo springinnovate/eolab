@@ -131,12 +131,25 @@ def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
         "job_store.py",
         "job_notifications.py",
         "job_events.py",
+        "artifacts.py",
+        "artifact_manifest.py",
     ):
         dependencies = imports(Path("src/eolab_app/processing") / name)
         assert "eolab_app.processing.clip_models" not in dependencies
         assert "eolab_app.processing.aggregate_models" not in dependencies
         assert not {
             module for module in dependencies if module.startswith("eolab_app.raster")
+        }
+        assert not {
+            module
+            for module in dependencies
+            if module.startswith(
+                (
+                    "eolab_app.processing.model_",
+                    "eolab_app.catalog",
+                    "eolab_app.rendering",
+                )
+            )
         }
 
 

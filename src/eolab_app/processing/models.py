@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
+from eolab_app.processing.artifact_manifest import ArtifactManifest, ProducedFile
 
 OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
@@ -188,12 +189,23 @@ class ProcessingError(Exception):
 
 @dataclass(frozen=True)
 class Artifact:
-    """Validated immutable file metadata, extended by its operation if needed."""
+    """A primary result plus declared outputs and its published file inventory.
+
+    Attributes:
+        size: Primary file byte count.
+        sha256: Primary file checksum.
+        filename: Suggested primary download name.
+        media_type: Primary format.
+        additional_outputs: Completed operation outputs available for recipe retention.
+        manifest: Verified inventory, supplied only after atomic publication.
+    """
 
     size: int
     sha256: str
     filename: str
     media_type: str = field(default="application/octet-stream", kw_only=True)
+    additional_outputs: tuple[ProducedFile, ...] = field(default=(), kw_only=True)
+    manifest: ArtifactManifest | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)

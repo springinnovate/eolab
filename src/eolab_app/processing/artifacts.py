@@ -1,11 +1,26 @@
 """Confined private artifact storage, atomic publication, and free-space checks."""
 
 import json
+import hashlib
+import os
 from pathlib import Path
 import re
 import shutil
+import stat
+from threading import Event
 import time
 from typing import Any
+from uuid import uuid4
+from pydantic import TypeAdapter, ValidationError
+
+from eolab_app.processing.artifact_manifest import (
+    ArtifactManifest,
+    FileDeclaration,
+    PublishedFile,
+    MAX_ARTIFACT_FILES,
+    encode_manifest_files,
+    FileName,
+)
 
 from eolab_app.processing.models import ProcessingError, ProcessingLimits
 
@@ -76,7 +91,18 @@ class LocalJobArtifacts:
             raise ValueError("Invalid internal job attempt ID")
         parent = self.root / ("results" if published else "attempts")
         candidate = parent / attempt
-        if candidate.resolve().parent != parent or parent.resolve().parent != self.root:
+        linked = any(
+            path.is_symlink()
+            or (
+                path.exists() and getattr(path.lstat(), "st_file_attributes", 0) & 0x400
+            )
+            for path in (candidate, parent)
+        )
+        if (
+            candidate.resolve().parent != parent
+            or parent.resolve().parent != self.root
+            or linked
+        ):
             raise ValueError("Job path escapes its owned storage")
         return candidate
 
@@ -110,26 +136,196 @@ class LocalJobArtifacts:
         path.mkdir(exist_ok=False)
         return path
 
-    def publish(self, attempt: str, reservation: int) -> None:
-        """Atomically rename a closed, validated attempt on the same volume.
+    def publish(
+        self,
+        attempt: str,
+        reservation: int,
+        declarations: tuple[FileDeclaration, ...],
+        cancelled: Event,
+    ) -> ArtifactManifest:
+        """Verify declared files, remove scratch, and atomically publish an inventory.
+
+        Only flat regular files with one hard link are allowed in a closed attempt.
+        Links, junctions and nested directories are rejected, including in scratch.
+        Hashing checks cancellation between 1 MiB reads; callers must await this
+        method's exit before permitting cleanup. No download is authorized here.
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
             reservation: Admitted scratch/output ceiling, checked before publish.
+            declarations: Complete files approved by the owning application.
+            cancelled: Signal set when the worker loses its attempt or deadline.
+
+        Returns:
+            Immutable file inventory and exact retained bytes, including manifest.json.
 
         Raises:
-            ProcessingError: If the completed output exceeds its reservation.
+            ProcessingError: If files are missing, unsafe, changed, over budget,
+                undeclared metadata is invalid, or publication was cancelled.
             OSError: If atomic publication fails.
         """
         path = self._directory(attempt, False)
-        size = sum(child.stat().st_size for child in path.iterdir() if child.is_file())
-        if size > reservation:
+        if not 1 <= len(declarations) <= MAX_ARTIFACT_FILES:
+            raise ProcessingError("invalid_artifact", "Invalid result file count.", 500)
+        names = [item.storage_name.casefold() for item in declarations]
+        if len(set(names)) != len(names) or any(
+            name in {"manifest.json", "progress.json", "progress.tmp"} for name in names
+        ):
+            raise ProcessingError(
+                "invalid_artifact", "Result file names conflict.", 500
+            )
+        children = {}
+        total = 0
+        for child in path.iterdir():
+            if len(children) >= 128:
+                raise ProcessingError(
+                    "invalid_artifact", "Too many workspace files.", 500
+                )
+            info = self._regular_file(child)
+            if child.name.casefold() == "manifest.json" or child.name.casefold() in {
+                name.casefold() for name in children
+            }:
+                raise ProcessingError(
+                    "invalid_artifact", "Workspace file names conflict.", 500
+                )
+            children[child.name] = info
+            total += info.st_size
+        if total > reservation:
             raise ProcessingError(
                 "output_too_large",
                 "The completed result exceeds its storage reservation.",
                 413,
             )
+        files = []
+        for declaration in declarations:
+            self._check_cancelled(cancelled)
+            if declaration.storage_name not in children:
+                raise ProcessingError(
+                    "invalid_artifact", "A declared result file is missing.", 500
+                )
+            source = path / declaration.storage_name
+            before = children[source.name]
+            digest = hashlib.sha256()
+            with source.open("rb") as stream:
+                while block := stream.read(1024 * 1024):
+                    self._check_cancelled(cancelled)
+                    digest.update(block)
+            after = self._regular_file(source)
+            if (
+                (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                or (declaration.size is not None and after.st_size != declaration.size)
+                or (
+                    declaration.sha256 is not None
+                    and digest.hexdigest() != declaration.sha256
+                )
+            ):
+                raise ProcessingError(
+                    "invalid_artifact", "A completed result file changed.", 500
+                )
+            files.append(
+                PublishedFile(
+                    id=uuid4().hex,
+                    name=declaration.name,
+                    label=declaration.label,
+                    role=declaration.role,
+                    storage_name=declaration.storage_name,
+                    filename=declaration.filename,
+                    media_type=declaration.media_type,
+                    size=after.st_size,
+                    sha256=digest.hexdigest(),
+                )
+            )
+        entries = tuple(files)
+        inventory = encode_manifest_files(entries)
+        retained_bytes = sum(item.size for item in entries) + len(inventory)
+        manifest = ArtifactManifest(files=entries, total_bytes=retained_bytes)
+        if total + len(inventory) > reservation:
+            raise ProcessingError(
+                "output_too_large",
+                "The completed files exceed their storage reservation.",
+                413,
+            )
+        self._check_cancelled(cancelled)
+        (path / "manifest.json").write_bytes(inventory)
+        for name in children:
+            if name.casefold() not in names:
+                (path / name).unlink()
+        self._check_cancelled(cancelled)
         path.replace(self._directory(attempt, True))
+        return manifest
+
+    @staticmethod
+    def _check_cancelled(cancelled: Event) -> None:
+        """Stop file publication when the attempt loses its lease or deadline.
+
+        Args:
+            cancelled: Cooperative signal owned by the worker.
+
+        Raises:
+            ProcessingError: If cancellation has been requested.
+        """
+        if cancelled.is_set():
+            raise ProcessingError(
+                "job_cancelled", "Result publication was cancelled.", 409
+            )
+
+    @staticmethod
+    def _regular_file(path: Path) -> os.stat_result:
+        """Inspect a single private file without accepting links or directories.
+
+        Args:
+            path: Confined candidate file path.
+
+        Returns:
+            File stat values used to check size and detect replacement.
+
+        Raises:
+            ProcessingError: If the candidate is not a single-link regular file.
+            OSError: If the file cannot be inspected.
+        """
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or getattr(info, "st_file_attributes", 0) & 0x400
+        ):
+            raise ProcessingError(
+                "invalid_artifact",
+                "Result folders must contain only regular files.",
+                500,
+            )
+        return info
+
+    def artifact_path(self, attempt: str, storage_name: str) -> Path:
+        """Locate one manifest file after ownership and a transfer lease are checked.
+
+        Args:
+            attempt: Published attempt ID from the owned job.
+            storage_name: Private basename read from its validated manifest.
+
+        Returns:
+            Existing confined regular file.
+
+        Raises:
+            ProcessingError: If the name is unsafe or the file is unavailable.
+        """
+        try:
+            TypeAdapter(FileName).validate_python(storage_name)
+        except ValidationError as error:
+            raise ProcessingError(
+                "invalid_artifact", "Invalid result file name.", 500
+            ) from error
+        path = self._directory(attempt, True) / storage_name
+        try:
+            self._regular_file(path)
+        except OSError as error:
+            raise ProcessingError(
+                "result_missing",
+                "This result file is no longer available. Run the model again.",
+                410,
+            ) from error
+        return path
 
     def result_path(
         self, attempt: str, provenance: bool = False, result_name: str = "result.tif"
@@ -147,19 +343,13 @@ class LocalJobArtifacts:
         Raises:
             ProcessingError: If the immutable artifact is absent or not a file.
         """
-        directory = self._directory(attempt, True)
         if not re.fullmatch(r"result\.[a-z0-9]{1,8}", result_name):
             raise ProcessingError(
                 "invalid_artifact", "Invalid processing result descriptor.", 500
             )
-        path = directory / ("provenance.json" if provenance else result_name)
-        if not path.is_file() or path.resolve().parent != directory:
-            raise ProcessingError(
-                "result_missing",
-                "This clip file is no longer available. Create a new clip.",
-                410,
-            )
-        return path
+        return self.artifact_path(
+            attempt, "provenance.json" if provenance else result_name
+        )
 
     def progress(self, attempt: str) -> dict[str, Any]:
         """Read only bounded progress fields from the private child output.

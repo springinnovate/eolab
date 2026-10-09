@@ -35,3 +35,16 @@ export const statisticsResult = {name: "statistics", label: "Statistics", role: 
     mediaType: "text/csv", filename: "statistics.csv", bytes: 128, sha256: "d".repeat(64), cacheHit: false,
     url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
     rows: [{label: "Total", expression: "sum(a)", state: "ok", value: "42", valueType: "integer", aggregates: []}]};
+
+/** Build a run-owned inventory with a result, coverage intermediate and provenance.
+ * @return {Object} Independent manifest for API and presentation tests.
+ */
+export function fileManifest() {
+    const jobId = job().jobId;
+    return {jobId, availability: "available", expiresAt: "2099-01-01T00:00:00Z", totalBytes: 8192,
+        files: [
+            {artifactId: "a".repeat(32), name: "raster", label: "Clipped raster", role: "result", filename: "result.tif", mediaType: "image/tiff", bytes: 4096},
+            {artifactId: "b".repeat(32), name: "coverage", label: "Coverage", role: "intermediate", filename: "coverage.tif", mediaType: "image/tiff", bytes: 2048},
+            {artifactId: "c".repeat(32), name: "provenance", label: "Provenance", role: "provenance", filename: "provenance.json", mediaType: "application/json", bytes: 128},
+        ].map(file => ({...file, sha256: "a".repeat(64), url: `/api/processing/jobs/${jobId}/artifacts/${file.artifactId}`}))};
+}

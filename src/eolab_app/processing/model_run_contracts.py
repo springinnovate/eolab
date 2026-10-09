@@ -40,6 +40,14 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult
+from eolab_app.processing.artifact_manifest import (
+    FileId,
+    OutputName,
+    FileRole,
+    FileName,
+    MediaType,
+    MAX_ARTIFACT_FILES,
+)
 
 MODEL_OPERATION = "model.run.v1"
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
@@ -277,6 +285,43 @@ class ModelProgress(JobProgressResponse):
         return self
 
 
+class ModelArtifactRecord(ModelSchema):
+    """A retained file's identity and checksum, without private storage information.
+
+    This record can remain in Run YAML after the file expires. It does not grant
+    access: downloads additionally require the owning session and an available run.
+    """
+
+    artifactId: FileId
+    name: OutputName
+    label: str
+    role: FileRole
+    filename: FileName
+    mediaType: MediaType
+    bytes: Annotated[int, Field(ge=0)]
+    sha256: Digest
+
+
+class ModelArtifactDownload(ModelArtifactRecord):
+    """One complete file currently downloadable by the run's owner."""
+
+    url: str
+
+
+class ModelArtifactManifest(ModelSchema):
+    """Files available from one run, their shared expiry and total retained bytes.
+
+    Pending and unavailable runs contain no file links. totalBytes includes the
+    private inventory file in addition to every result and retained intermediate.
+    """
+
+    jobId: OpaqueId
+    availability: Literal["pending", "available", "unavailable"]
+    expiresAt: datetime
+    files: list[ModelArtifactDownload] = Field(max_length=MAX_ARTIFACT_FILES)
+    totalBytes: Annotated[int, Field(ge=0)]
+
+
 class ModelJobResponse(JobResponse):
     """A model run's status, progress, errors and available table or raster downloads.
 
@@ -290,6 +335,7 @@ class ModelJobResponse(JobResponse):
     metadataExpiresAt: datetime | None
     progress: ModelProgress
     result: ModelResult | None
+    artifacts: ModelArtifactManifest | None = None
 
 
 class ModelRunList(ModelSchema):
@@ -407,6 +453,9 @@ class ModelOutcome(ModelSchema):
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
     raster: ModelRasterOutcome | None = None
+    artifacts: list[ModelArtifactRecord] | None = Field(
+        default=None, max_length=MAX_ARTIFACT_FILES
+    )
 
 
 class ModelExecution(ModelSchema):

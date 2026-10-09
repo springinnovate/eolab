@@ -1,7 +1,7 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { renderModelResult } from "./result-view.js";
+import { renderModelResult, renderModelFiles } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea } from "./inputs.js";
 
 /** Describe the explicit area shown in setup and saved run details.
@@ -278,11 +278,13 @@ export class ModelsView {
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
         const available = job?.status === "ready" && Date.parse(job.expiresAt) > Date.now();
-        const signature = JSON.stringify([available, job?.result]);
+        const signature = JSON.stringify([available, job?.result, job?.artifacts]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
             if (available && job.result) {
-                renderModelResult(r.result, job.result, id, this.element.bind(this));
+                const filesAvailable = job.artifacts?.availability === "available";
+                renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
+                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this));
             }
         }
         r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +

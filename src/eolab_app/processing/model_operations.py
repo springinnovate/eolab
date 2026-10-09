@@ -37,6 +37,7 @@ class OperationOutput:
         presentation: Supported display mode for that type.
         media_type: Format written by the operation.
         label: Default display label, overridable by the recipe.
+        role: Whether this is a final result or a retained scientific intermediate.
     """
 
     name: str
@@ -44,6 +45,7 @@ class OperationOutput:
     presentation: Literal["table", "map"]
     media_type: str
     label: str
+    role: Literal["result", "intermediate"] = "result"
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         id: Versioned operation identity selected by YAML.
         inputs: Operation argument names and supported model input types.
         parameters: Parameter names and supported setting types.
-        output: The single declared result contract; multiple files are separate work.
+        output: Primary result contract, required by every recipe using this operation.
+        additional_outputs: Other complete files recipes may explicitly retain.
         execution_profile: Server resource policy required by compatible recipes.
         reuse_prepared_source: Whether immediate execution reuses preparation authorization.
         queued_type: Persisted input schema before preparation.
@@ -101,6 +104,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         [raster.RasterOperationContext, Prepared, Path], Awaitable[Artifact | None]
     ]
     reusable: Callable[[Prepared, Artifact], dict[str, dict[str, object]] | None]
+    additional_outputs: tuple[OperationOutput, ...] = ()
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]

@@ -39,6 +39,13 @@ from eolab_app.processing.models import (
     PreparedJobPlan,
     ProcessingError,
     ProcessingLimits,
+    Artifact,
+)
+from eolab_app.processing.artifact_manifest import (
+    FileDeclaration,
+    ProducedFile,
+    PublishedFile,
+    read_artifact_manifest,
 )
 from eolab_app.processing.model_operations import get_model_operation
 
@@ -201,7 +208,20 @@ def build_model_job_submission(
     """
     definition = invocation.model.definition
     operation = get_model_operation(definition.steps[0].operation)
-    output_name, output = next(iter(definition.outputs.items()))
+    contracts = {
+        item.name: item for item in (operation.output, *operation.additional_outputs)
+    }
+    outputs = {
+        output.source.split(".")[1]: {
+            "name": name,
+            "label": output.label or contracts[output.source.split(".")[1]].label,
+            "kind": contracts[output.source.split(".")[1]].kind,
+            "mediaType": contracts[output.source.split(".")[1]].media_type,
+            "presentation": output.presentation,
+            "role": output.role,
+        }
+        for name, output in definition.outputs.items()
+    }
     revision = compute_implementation_checksum()
     build = get_application_build_id()
     metadata = {
@@ -243,19 +263,90 @@ def build_model_job_submission(
             },
             "label": invocation.label,
             "operationId": operation.id,
-            "output": {
-                "name": output_name,
-                "label": output.label or operation.output.label,
-                "kind": operation.output.kind,
-                "mediaType": operation.output.media_type,
-                "presentation": output.presentation,
-                "role": output.role,
-            },
+            "output": outputs[operation.output.name],
+            "outputs": outputs,
         },
         retained_metadata=metadata,
         work_key=None,
         presentation=None,
     )
+
+
+def declare_model_files(
+    row: dict[str, Any], artifact: Artifact
+) -> tuple[FileDeclaration, ...]:
+    """Bind complete operation files to the outputs captured from a run's YAML.
+
+    Args:
+        row: Current model attempt with its validated public output declarations.
+        artifact: Primary and additional files returned by the trusted operation.
+
+    Returns:
+        Only the scientific files explicitly requested by this recipe. The worker
+        separately includes the operation's provenance record.
+
+    Raises:
+        ProcessingError: If files are missing, duplicated, unknown, or have a format
+            different from the registered operation contract.
+        ValidationError: If native file metadata is invalid.
+    """
+    operation = get_model_operation(read_model_job_operation_id(row))
+    contracts = {
+        item.name: item for item in (operation.output, *operation.additional_outputs)
+    }
+    primary = ProducedFile(
+        name=operation.output.name,
+        storage_name=getattr(artifact, "result_name", "result.tif"),
+        filename=artifact.filename,
+        media_type=artifact.media_type,
+        size=artifact.size,
+        sha256=artifact.sha256,
+    )
+    produced = (primary, *artifact.additional_outputs)
+    if (
+        len(produced) > 32
+        or len({item.name for item in produced}) != len(produced)
+        or any(
+            item.name not in contracts
+            or item.media_type != contracts[item.name].media_type
+            for item in produced
+        )
+    ):
+        raise ProcessingError(
+            "invalid_model_result",
+            "The operation returned unexpected result files.",
+            500,
+        )
+    by_name = {item.name: item for item in produced}
+    summary = row.get("summary") or row["spec"]
+    outputs = summary.get("outputs") or {operation.output.name: summary["output"]}
+    declarations = []
+    for name, output in outputs.items():
+        if (
+            name not in by_name
+            or name not in contracts
+            or output["mediaType"] != contracts[name].media_type
+            or output["role"] != contracts[name].role
+        ):
+            raise ProcessingError(
+                "invalid_model_result",
+                "A declared model output is missing or invalid.",
+                500,
+            )
+        item = by_name[name]
+        declarations.append(
+            FileDeclaration(
+                name=output["name"],
+                label=output["label"],
+                role=output["role"],
+                storage_name=item.storage_name,
+                filename=item.filename,
+                media_type=item.media_type,
+                size=item.size,
+                sha256=item.sha256,
+            )
+        )
+    return tuple(declarations)
 
 
 def record_model_preparation(
@@ -381,6 +472,73 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         "progress": measured,
         "error": row["error"],
         "result": result,
+        "artifacts": serialize_model_artifacts(row),
+    }
+
+
+def describe_artifact_file(file: PublishedFile) -> dict[str, Any]:
+    """Describe a completed file without publishing its private storage basename.
+
+    Args:
+        file: Validated immutable inventory entry.
+
+    Returns:
+        Public scientific metadata, independent of download availability.
+    """
+    return {
+        "artifactId": file.id,
+        "name": file.name,
+        "label": file.label,
+        "role": file.role,
+        "filename": file.filename,
+        "mediaType": file.media_type,
+        "bytes": file.size,
+        "sha256": file.sha256,
+    }
+
+
+def serialize_model_artifacts(row: dict[str, Any]) -> dict[str, Any]:
+    """List complete retained files only while an owned model run is available.
+
+    Args:
+        row: Job record already authorized for the requesting session.
+
+    Returns:
+        A path-free manifest with owner-checked download URLs, or an empty list
+        explaining that files are pending or unavailable. Historical runs without
+        inventories retain their original result/provenance URLs separately.
+
+    Raises:
+        ValidationError: If the stored manifest is malformed.
+    """
+    files = []
+    total = 0
+    availability = (
+        "pending"
+        if row["status"] in {"queued", "running", "cancelling"}
+        else "unavailable"
+    )
+    stored = (row.get("artifact") or {}).get("manifest")
+    if (
+        row["status"] == "ready"
+        and row["expires_at"] > datetime.now(timezone.utc)
+        and stored
+    ):
+        manifest = read_artifact_manifest(stored)
+        availability, total = "available", manifest.total_bytes
+        files = [
+            {
+                **describe_artifact_file(file),
+                "url": f"/api/processing/jobs/{row['id']}/artifacts/{file.id}",
+            }
+            for file in manifest.files
+        ]
+    return {
+        "jobId": row["id"],
+        "availability": availability,
+        "expiresAt": row["expires_at"],
+        "files": files,
+        "totalBytes": total,
     }
 
 
@@ -473,6 +631,11 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
                 else {"statistics": None}
             ),
         }
+        if artifact and artifact.get("manifest"):
+            execution["outcome"]["artifacts"] = [
+                describe_artifact_file(file)
+                for file in read_artifact_manifest(artifact["manifest"]).files
+            ]
     document = RunDocument.model_validate(
         {
             "schema": "eolab.run/v1",

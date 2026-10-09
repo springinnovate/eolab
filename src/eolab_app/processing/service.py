@@ -7,6 +7,7 @@ import math
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
+from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
 from eolab_app.processing.shared_calculations import (
     present_calculation_rows,
@@ -40,6 +41,7 @@ from eolab_app.processing.model_runs import (
     export_model_job_yaml,
     read_model_invocation,
     serialize_model_job,
+    serialize_model_artifacts,
     build_model_calculation_request,
 )
 from eolab_app.processing.model_yaml import encode_canonical_json, export_yaml
@@ -789,6 +791,73 @@ class ProcessingService:
                 sha256 = hashlib.sha256(content).hexdigest()
             return ArtifactDownload(
                 path, filename, size, sha256, lease, media_type, content
+            )
+        except BaseException:
+            await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)
+            raise
+
+    async def list_model_artifacts(self, owner: str, identifier: str) -> dict[str, Any]:
+        """List complete retained files belonging to this browser session's run.
+
+        Args:
+            owner: Current session hash.
+            identifier: Public model-run ID.
+
+        Returns:
+            File metadata and availability, without private filesystem information.
+
+        Raises:
+            ProcessingError: If the model run is unavailable to this session.
+            ValidationError: If persisted file metadata is malformed.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        require_operation(row, MODEL_OPERATION)
+        return serialize_model_artifacts(row)
+
+    async def download_model_artifact(
+        self, owner: str, identifier: str, artifact_id: str
+    ) -> ArtifactDownload:
+        """Authorize one run file and retain all its files until transfer finishes.
+
+        Args:
+            owner: Current session hash.
+            identifier: Public model-run ID.
+            artifact_id: Opaque file ID from this run's manifest.
+
+        Returns:
+            Confined file and renewable transfer lease for the existing response.
+
+        Raises:
+            ProcessingError: If ownership, expiry, file identity or integrity checks fail.
+            ValidationError: If the persisted manifest is malformed.
+        """
+        row, lease = await asyncio.to_thread(
+            self.jobs.acquire_transfer, identifier, owner
+        )
+        try:
+            require_operation(row, MODEL_OPERATION)
+            stored = row["artifact"].get("manifest")
+            manifest = read_artifact_manifest(stored) if stored else None
+            file = (
+                next((item for item in manifest.files if item.id == artifact_id), None)
+                if manifest
+                else None
+            )
+            if file is None:
+                raise ProcessingError(
+                    "artifact_not_found", "This result file is unavailable.", 404
+                )
+            path = await asyncio.to_thread(
+                self.artifacts.artifact_path, row["attempt_id"], file.storage_name
+            )
+            if path.stat().st_size != file.size:
+                raise ProcessingError(
+                    "result_changed",
+                    "This result file is no longer intact. Run the model again.",
+                    410,
+                )
+            return ArtifactDownload(
+                path, file.filename, file.size, file.sha256, lease, file.media_type
             )
         except BaseException:
             await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)

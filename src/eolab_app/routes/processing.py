@@ -48,6 +48,7 @@ from eolab_app.processing.model_run_contracts import (
     ModelLibrary,
     ModelRunList,
     ModelRunRequest,
+    ModelArtifactManifest,
 )
 from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
@@ -925,6 +926,60 @@ def create_processing_router(
                 delete=True,
             )
         )
+
+    @router.get("/jobs/{job_id}/artifacts", response_model=ModelArtifactManifest)
+    async def list_model_artifacts(
+        job_id: JobId, request: Request, response: Response
+    ) -> Any:
+        """List the current session's complete files from one model run.
+
+        Args:
+            job_id: Owned model-run ID.
+            request: Request carrying the Processing session cookie.
+            response: Response receiving private-cache and session headers.
+
+        Returns:
+            File manifest with download availability and expiry.
+
+        Raises:
+            HTTPException: If this session cannot access the run.
+        """
+        return await _await_service_result(
+            service.list_model_artifacts(
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                job_id,
+            )
+        )
+
+    @router.api_route("/jobs/{job_id}/artifacts/{artifact_id}", methods=["GET", "HEAD"])
+    async def download_model_artifact(
+        job_id: JobId, artifact_id: JobId, request: Request, response: Response
+    ) -> Response:
+        """Download one named run file with ownership and transfer-lease protection.
+
+        Args:
+            job_id: Owned model-run ID.
+            artifact_id: Opaque file ID from that run's manifest.
+            request: Request carrying session credentials and an optional byte range.
+            response: Response receiving private-cache and session headers.
+
+        Returns:
+            File response retaining the run's files through this download.
+
+        Raises:
+            HTTPException: If the range, file identity or access is invalid.
+        """
+        range_header = request.headers.get("range", "")
+        if len(range_header) > 128 or "," in range_header:
+            raise HTTPException(416, "Use one byte range per job download request.")
+        artifact = await _await_service_result(
+            service.download_model_artifact(
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                job_id,
+                artifact_id,
+            )
+        )
+        return JobDownloadResponse(artifact, service)
 
     @router.api_route("/jobs/{job_id}/result", methods=["GET", "HEAD"])
     async def download_job_result(
