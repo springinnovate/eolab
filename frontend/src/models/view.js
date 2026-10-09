@@ -124,7 +124,7 @@ export class ModelsView {
         fields.append(this.field("models-run-label", "Run name", label));
         const source = this.element("select"); source.required = true;
         source.addEventListener("change", () => this.handlers.onEdit({raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
-            sourceReason: "Selected explicitly for this draft."}));
+            sourceReason: "You selected this raster."}));
         const reason = this.element("p", "", "models-help"); reason.id = "models-source-reason"; source.setAttribute("aria-describedby", reason.id);
         fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => input.type === "catalog_raster")?.label ?? "Raster", source), reason);
         const rasterSearch = this.searchFields("raster"); fields.append(rasterSearch.root);
@@ -155,7 +155,7 @@ export class ModelsView {
             if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
         }
         const run = this.button("Run model", () => {}); run.type = "submit";
-        const hint = this.element("p", "Run captures these inputs. Map clicks and navigation do not change or cancel accepted work.", "models-help");
+        const hint = this.element("p", "Run model uses the choices shown here. You can keep using the map while it runs. To stop it, choose Cancel run.", "models-help");
         fields.append(hint, run); form.append(fields);
         form.addEventListener("submit", event => { event.preventDefault(); this.handlers.onSubmit(); });
         const details = this.recipeDetails();
