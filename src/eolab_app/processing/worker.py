@@ -145,17 +145,18 @@ class ProcessingWorker:
                 resolved = await self.areas.resolve_for_sampling(
                     request.catalogSelection
                 )
-            cached = (
-                {}
-                if model
-                else await asyncio.to_thread(
+            spec = None
+            if model is None:
+                cached_results = await asyncio.to_thread(
                     self.jobs.get_cached_calculation_results,
                     calculation_result_cache_keys(request, signature),
                 )
-            )
-            spec = restore_cached_calculation_plan(
-                request, signature, cached, queued.polygonArea
-            )
+                spec = restore_cached_calculation_plan(
+                    request, signature, cached_results, queued.polygonArea
+                )
+            # Model runs prepare and execute a fresh calculation so their Run YAML
+            # describes that execution. The scalar-results cache does not record
+            # the model definition or implementation checksum needed for model reuse.
             if spec is None:
                 if queued.polygonArea:
                     area = queued.polygonArea
