@@ -206,7 +206,7 @@ def test_transfer_retains_all_files_until_cleanup(
                 (row["job_id"],),
             )
     for file in files:
-        assert client.get(file["url"]).status_code in (404, 410)
+        assert client.get(file["url"]).status_code == 409
     assert client.get(base + "/artifacts").json()["files"] == []
     client.portal.call(worker.cleanup)
     assert len(list(directory.iterdir())) == 5 and active.path.exists()
