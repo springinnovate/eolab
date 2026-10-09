@@ -27,7 +27,9 @@ fixes the displayed area and other inputs for that run. Later map changes do
 not affect it. A duplicated run keeps its fixed **Area from original run**
 until you choose another area mode.
 
-Choose a **Vector layer**, then **Edit filter** to set field/comparison/value
+Choose a **Vector layer**. While its features are being checked, **Loading
+features…** explains why the filter is not yet available. Once ready, choose
+**Edit filter** to set field/comparison/value
 conditions using the existing filter editor. **Use filter** checks the matching
 features and returns to model setup. Review the predicate and matching feature
 count, then choose **Run model**. Clearing the conditions includes all features.

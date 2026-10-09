@@ -100,3 +100,23 @@ test("catalog searches are optional alternative choices and stay collapsed durin
         assert.equal(h.doc.activeElement, search.input);
     }
 });
+
+
+test("vector loading explains the disabled filter control and clears when ready or failed", () => {
+    const h = fixture(); const draft = h.state.draft;
+    draft.areaMode = "vector"; draft.vectorKey = '["vectors","countries"]';
+    draft.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries"}];
+    draft.area = null; draft.selecting = true; h.view.render(h.state);
+    assert.equal(h.view.setup.editFilter.textContent, "Loading features…");
+    assert.equal(h.view.setup.editFilter.disabled, true);
+    assert.equal(h.view.setup.editFilter.getAttribute("aria-busy"), "true");
+    assert.equal(h.view.setup.vectorStatus.getAttribute("role"), "status");
+    assert.match(h.view.setup.vectorStatus.textContent, /Loading features from Countries.*Edit filter will be available/);
+    assert.equal(h.view.setup.run.disabled, true);
+    draft.selecting = false; draft.selectionError = "Could not read this layer."; h.view.render(h.state);
+    assert.equal(h.view.setup.vectorStatus.textContent, "");
+    assert.equal(h.view.setup.editFilter.textContent, "Edit filter");
+    assert.equal(h.view.setup.editFilter.disabled, false);
+    assert.equal(h.view.setup.editFilter.getAttribute("aria-busy"), "false");
+    assert.match(h.view.setup.areaDescription.textContent, /Could not read this layer/);
+});

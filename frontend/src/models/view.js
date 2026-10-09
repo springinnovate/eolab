@@ -136,8 +136,9 @@ export class ModelsView {
         vectorGroup.append(this.field("models-vector", "Vector layer", vector));
         const vectorSearch = this.searchFields("vector"); vectorGroup.append(vectorSearch.root);
         const editFilter = this.button("Edit filter", this.handlers.onEditFilter);
+        const vectorStatus = this.element("p", "", "models-help"); vectorStatus.setAttribute("role", "status");
         const filterDescription = this.element("p", "", "models-help");
-        vectorGroup.append(editFilter, filterDescription,
+        vectorGroup.append(editFilter, vectorStatus, filterDescription,
             this.element("p", "Choose features for this run. Editing this filter leaves the map layer unchanged.", "models-help"));
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const mapHelp = this.element("p", "", "models-help");
@@ -160,7 +161,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            rasterSearch, vectorSearch, parameters, run, details, mapHelp, editFilter, filterDescription};
+            rasterSearch, vectorSearch, parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription};
     }
 
     /** Build a catalog search input, submit button and pagination action.
@@ -229,8 +230,11 @@ export class ModelsView {
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[draft.areaMode] ?? "";
         s.editFilter.disabled = !draft.vectorKey || draft.selecting || Boolean(draft.filterOpening);
-        s.editFilter.textContent = draft.filterOpening ? "Opening filter…" : "Edit filter";
+        s.editFilter.textContent = draft.selecting ? "Loading features…" : draft.filterOpening ? "Opening filter…" : "Edit filter";
+        s.editFilter.setAttribute("aria-busy", String(Boolean(draft.selecting || draft.filterOpening)));
         const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
+        s.vectorStatus.textContent = draft.selecting ? `Loading features from ${vectorSource?.label ?? "this layer"}… Edit filter will be available when this finishes.` :
+            draft.filterOpening ? "Loading fields for the filter…" : "";
         s.filterDescription.textContent = vectorSource ? `Filter: ${describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter)}` : "Choose a vector layer, then edit its filter.";
         const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
