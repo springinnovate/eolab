@@ -233,12 +233,32 @@ class ProcessingService:
             raise ProcessingError(
                 "models_unavailable", "Model source authorization is unavailable.", 503
             )
-        authorized = await self.model_authorizer.authorize(calculation.sources["a"])
-        submission = await self.build_calculation_submission(owner, calculation, {})
-        if isinstance(submission.prepared, ProcessingError):
-            raise submission.prepared
+        source = (
+            CatalogRasterRequest(
+                collectionId=calculation.collection_id, itemId=calculation.item_id
+            )
+            if isinstance(calculation, ClipJobRequest)
+            else calculation.sources["a"]
+        )
+        authorized = await self.model_authorizer.authorize(source)
+        if isinstance(calculation, ClipJobRequest):
+            inputs = ClipInputs.model_validate(
+                calculation.model_dump(exclude={"requestId"}, by_alias=True)
+            )
+            queued = UnpreparedClip(request=inputs)
+            operation_plan = PreparedJobPlan(
+                operation=queued.operation,
+                specification=queued.model_dump(mode="json", by_alias=True),
+                summary={},
+                reserved_bytes=0,
+            )
+        else:
+            submission = await self.build_calculation_submission(owner, calculation, {})
+            if isinstance(submission.prepared, ProcessingError):
+                raise submission.prepared
+            operation_plan = submission.prepared
         prepared = build_model_job_submission(
-            submission.prepared,
+            operation_plan,
             invocation,
             tuple(authorized.source_signature.to_catalog()),
         )

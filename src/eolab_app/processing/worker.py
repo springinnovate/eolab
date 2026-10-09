@@ -231,7 +231,14 @@ class ProcessingWorker:
             ProcessingError: If the source, area, storage or attempt is unavailable.
             TimeoutError: If source inspection exceeds its time limit.
         """
-        request = UnpreparedClip.model_validate(row["spec"]).request
+        model = (
+            ModelRunSpec.model_validate(row["spec"])
+            if row["spec"]["operation"] == MODEL_OPERATION
+            else None
+        )
+        request = UnpreparedClip.model_validate(
+            model.calculation if model else row["spec"]
+        ).request
         async with asyncio.timeout(self.limits.plan_timeout_seconds):
             if not await asyncio.to_thread(
                 self.jobs.heartbeat,
@@ -246,6 +253,13 @@ class ProcessingWorker:
                 collectionId=request.collection_id, itemId=request.item_id
             )
             authorized = await self.authorizer.authorize(source)
+            signature = tuple(authorized.source_signature.to_catalog())
+            if model is not None and signature != model.sourceSignature:
+                raise ProcessingError(
+                    "source_changed",
+                    "The raster changed after this model run was accepted.",
+                    409,
+                )
             if request.selectedBounds:
                 area = ClipArea(
                     kind="bounds", bounds=request.selectedBounds.canonical_tuple()
@@ -283,15 +297,18 @@ class ProcessingWorker:
                 await self.areas.resolve_for_sampling(request.catalogSelection)
             spec = ClipSpec(
                 source=source,
-                sourceSignature=tuple(authorized.source_signature.to_catalog()),
+                sourceSignature=signature,
                 area=area,
                 grid=grid,
             )
+            prepared = prepare_clip_job(spec)
+            if model is not None:
+                prepared = record_model_preparation(row, prepared, self.limits)
             updated = await asyncio.to_thread(
                 self.jobs.save_prepared_job,
                 row["id"],
                 row["attempt_id"],
-                prepare_clip_job(spec),
+                prepared,
             )
             row.update(updated)
 
@@ -323,25 +340,29 @@ class ProcessingWorker:
                 "The model implementation changed before execution. Submit a new run.",
                 409,
             )
+        calculation_operation = model.calculation.operation if model else operation
         authorized = None
         if (
             model is not None and isinstance(model.calculation, UnpreparedCalculation)
         ) or (operation == "raster.aggregate.v1" and "request" in row["spec"]):
             authorized = await self._prepare_calculation(row)
-        elif operation == "raster.clip.v1" and "request" in row["spec"]:
+        elif (model is not None and isinstance(model.calculation, UnpreparedClip)) or (
+            operation == "raster.clip.v1" and "request" in row["spec"]
+        ):
             await self._prepare_clip(row)
         if row["status"] == "queued":
             return None
-        if operation == "raster.clip.v1":
-            spec = ClipSpec.model_validate(row["spec"])
+        calculation_spec = (
+            ModelRunSpec.model_validate(row["spec"]).calculation
+            if model
+            else row["spec"]
+        )
+        if calculation_operation == "raster.clip.v1":
+            spec = ClipSpec.model_validate(calculation_spec)
             source = spec.source
             target, action, limits = clip_process_target, "clip", self.limits
-        elif operation in {"raster.aggregate.v1", MODEL_OPERATION}:
-            spec = AggregateSpec.model_validate(
-                ModelRunSpec.model_validate(row["spec"]).calculation
-                if model
-                else row["spec"]
-            )
+        elif calculation_operation == "raster.aggregate.v1":
+            spec = AggregateSpec.model_validate(calculation_spec)
             required_disk_bytes = estimate_calculation_disk_bytes(
                 spec, self.aggregate_limits
             )

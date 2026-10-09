@@ -1,4 +1,4 @@
-/** Contract fixtures for the installed raster-summary model. */
+/** Contract fixtures for installed summary and clip models. */
 export const model = {schema: "eolab.model/v1", id: "raster-summary", version: "1.0.0", definitionSha256: "a".repeat(64), title: "Raster summary",
     description: "Calculate a scalar expression over a raster and area.", inputs: {raster: {type: "catalog_raster", label: "Raster"}, area: {type: "summary_area", label: "Analysis area"}},
     parameters: {summary: {type: "summary_expression", label: "Summary formula", alias: "a", grammar: "eolab.scalar/v1", default: "sum(a)"}},
@@ -17,3 +17,15 @@ export function job(changes = {}) {
         label: "Population total", status: "queued", createdAt: "2026-10-08T00:00:00Z", updatedAt: "2026-10-08T00:00:00Z",
         expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null, ...changes};
 }
+
+/** Installed clip recipe shape, using the same raster input and a restricted area. */
+export const clipModel = {...model, id: "raster-clip", title: "Raster clip", description: "Download a GeoTIFF within a chosen area.",
+    inputs: {...model.inputs, area: {type: "clip_area", label: "Analysis area"}}, parameters: {},
+    outputs: {raster: {source: "clip.raster", role: "result", presentation: "map", saveEligible: true}}};
+
+/** A completed private GeoTIFF with native grid and download metadata. */
+export const clipResult = {kind: "raster", mediaType: "image/tiff", filename: "population-clip.tif", bytes: 4096,
+    sha256: "c".repeat(64), validPixels: 90, url: `/api/processing/jobs/${"1".repeat(32)}/result`,
+    provenanceUrl: `/api/processing/jobs/${"1".repeat(32)}/provenance`,
+    grid: {width: 10, height: 10, window: [0, 0, 10, 10], crs: "EPSG:4326", dtype: "int16", transform: [0.1, 0, 0, 0, -0.1, 1],
+        nodata: null, nativeBlocks: 1, decodedBytes: 200, estimatedRawBytes: 300, reservedBytes: 1024}};

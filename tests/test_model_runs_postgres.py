@@ -4,6 +4,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import asyncio
 import hashlib
+import numpy
+import rasterio
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
@@ -19,7 +21,14 @@ from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.service import ProcessingService
 from eolab_app.routes.processing import COOKIE, create_processing_router
-from test_processing_jobs import boundary, store, HEADERS, AREA, clip_inputs
+from test_processing_jobs import (
+    boundary,
+    store,
+    HEADERS,
+    AREA,
+    clip_inputs,
+    _paused_clip,
+)
 from test_raster_clips import SOURCE
 from test_processing_calculations import paused_calculation
 from test_polygon_summary_areas import rectangle
@@ -47,11 +56,14 @@ def model_boundary(boundary: Any, store: Any) -> Iterator[Any]:
         yield client, worker, service
 
 
-def model_request(client: TestClient, **changes: Any) -> dict[str, Any]:
+def model_request(
+    client: TestClient, model_id: str = "raster-summary", **changes: Any
+) -> dict[str, Any]:
     """Bind discovery metadata to the existing mounted-raster fixture.
 
     Args:
         client: Current browser-session client.
+        model_id: Installed recipe to bind; defaults to the original summary model.
         changes: Explicit request replacements for a test case.
 
     Returns:
@@ -59,7 +71,9 @@ def model_request(client: TestClient, **changes: Any) -> dict[str, Any]:
     """
     response = client.get("/api/processing/models")
     assert response.status_code == 200, response.text
-    definition = response.json()["models"][0]
+    definition = next(
+        item for item in response.json()["models"] if item["id"] == model_id
+    )
     return {
         "requestId": uuid4().hex,
         "model": {
@@ -177,17 +191,19 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     ]
 
 
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_owner_idempotency_pagination_and_cancel(
-    model_boundary: Any, store: Any
+    model_boundary: Any, store: Any, model_id: str
 ) -> None:
     """Model history remains owned and independent of more than 50 later jobs.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: HTTP and native worker fixture.
         store: Real storage for opaque unrelated-job fixtures.
     """
     client, worker, _ = model_boundary
-    first_body = model_request(client)
+    first_body = model_request(client, model_id)
     first = submit(client, first_body)
     assert submit(client, first_body)["jobId"] == first["jobId"]
     conflict = client.post(
@@ -196,7 +212,7 @@ def test_model_owner_idempotency_pagination_and_cancel(
         json={**first_body, "label": "Changed"},
     )
     assert conflict.status_code == 409
-    second = submit(client, model_request(client, label="Second"))
+    second = submit(client, model_request(client, model_id, label="Second"))
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     for index in range(55):
         unrelated = store.submit(
@@ -285,18 +301,20 @@ def test_model_history_pages_through_more_than_fifty_runs(model_boundary: Any) -
 
 
 @pytest.mark.parametrize("terminal", ["ready", "interrupted", "cancelled", "failed"])
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_capture_survives_cleanup_then_expires(
-    model_boundary: Any, store: Any, terminal: str
+    model_boundary: Any, store: Any, terminal: str, model_id: str
 ) -> None:
     """Retention starts at the first terminal transition, independent of cleanup.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: Model application and worker.
         store: Real PostgreSQL adapter.
         terminal: Completion or termination path under test.
     """
     client, worker, _ = model_boundary
-    job = submit(client, model_request(client))
+    job = submit(client, model_request(client, model_id))
     identifier = job["jobId"]
     if terminal == "ready":
         assert client.portal.call(worker.run_once)
@@ -406,17 +424,19 @@ def test_model_metadata_keeps_the_retention_chosen_at_submission(
     assert client.get(f"/api/processing/jobs/{identifier}").status_code == 404
 
 
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_delete_revokes_exports_and_retry_recovers_after_input_loss(
-    model_boundary: Any, store: Any
+    model_boundary: Any, store: Any, model_id: str
 ) -> None:
     """Deleting a terminal run revokes its exports while preserving retry tombstones.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: Composed HTTP and native worker.
         store: Real owned job storage.
     """
     client, worker, service = model_boundary
-    body = model_request(client)
+    body = model_request(client, model_id)
     job = submit(client, body)
     identifier = job["jobId"]
     service.model_authorizer = None
@@ -468,14 +488,14 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
         )
 
 
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_vector_filter_and_changed_signature(
-    model_boundary: Any,
-    boundary: Any,
-    tmp_path: Path,
+    model_boundary: Any, boundary: Any, tmp_path: Path, model_id: str
 ) -> None:
     """Capture the actual filtered catalog descriptor and revalidate it in the worker.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: Model API and worker with the neutral selection reader.
         boundary: Existing vector-selection/catalog API fixture.
         tmp_path: Mounted fixture root.
@@ -504,6 +524,7 @@ def test_model_vector_filter_and_changed_signature(
     }
     body = model_request(
         client,
+        model_id,
         inputs={
             "raster": SOURCE,
             "area": {"kind": "catalogSelection", "selection": selection},
@@ -518,7 +539,7 @@ def test_model_vector_filter_and_changed_signature(
     )
     assert capture["invocation"]["inputs"]["area"]["selection"] == selection
     selection["sourceSignature"] = "0" * 64
-    stale = submit(client, model_request(client, inputs=body["inputs"]))
+    stale = submit(client, model_request(client, model_id, inputs=body["inputs"]))
     assert client.portal.call(worker.run_once)
     failed = client.get(f"/api/processing/jobs/{stale['jobId']}").json()
     assert (
@@ -526,14 +547,18 @@ def test_model_vector_filter_and_changed_signature(
     )
 
 
-def test_model_raster_identity_rechecked_before_execution(model_boundary: Any) -> None:
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
+def test_model_raster_identity_rechecked_before_execution(
+    model_boundary: Any, model_id: str
+) -> None:
     """A changed authorized catalog signature cannot silently replace accepted input.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: HTTP/worker boundary with replaceable catalog provider.
     """
     client, worker, _ = model_boundary
-    job = submit(client, model_request(client))
+    job = submit(client, model_request(client, model_id))
     original = worker.authorizer
 
     class ChangedCatalog:
@@ -608,18 +633,19 @@ def test_model_whole_raster_and_owned_polygon_inputs(
     assert export.status_code == 200 and "coordinates:" not in export.text
 
 
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
 def test_model_navigation_progress_and_running_cancel(
-    model_boundary: Any,
-    monkeypatch: pytest.MonkeyPatch,
+    model_boundary: Any, monkeypatch: pytest.MonkeyPatch, model_id: str
 ) -> None:
     """Recover through a new client and cancel after the real native result is written.
 
     Args:
+        model_id: Summary or clip recipe under the same lifecycle contract.
         model_boundary: Model API, native worker and private result storage.
         monkeypatch: Pause the native process after actual numerical execution.
     """
     client, worker, _ = model_boundary
-    job = submit(client, model_request(client))
+    job = submit(client, model_request(client, model_id))
     identifier = job["jobId"]
     with TestClient(client.app, base_url="https://testserver") as reloaded:
         reloaded.cookies.update(client.cookies)
@@ -627,7 +653,13 @@ def test_model_navigation_progress_and_running_cancel(
             reloaded.get(f"/api/processing/jobs/{identifier}").json()["status"]
             == "queued"
         )
-    monkeypatch.setattr(worker_module, "aggregate_process_target", paused_calculation)
+    if model_id == "raster-clip":
+        (worker.artifacts.root / "pause-after-output").touch()
+        monkeypatch.setattr(worker_module, "clip_process_target", _paused_clip)
+    else:
+        monkeypatch.setattr(
+            worker_module, "aggregate_process_target", paused_calculation
+        )
 
     async def exercise() -> None:
         """Wait for the bounded child, observe its counters and explicitly cancel."""
@@ -707,3 +739,91 @@ def test_duplicate_saved_model_inputs_creates_an_independent_run(
         ]
         == "sum(a)"
     )
+
+
+def test_clip_model_download_matches_existing_clip_and_keeps_ownership(
+    model_boundary: Any, boundary: Any, store: Any
+) -> None:
+    """Download a real COG through Models with native values and owned transfer rules.
+
+    Args:
+        model_boundary: Real model HTTP, worker and storage composition.
+        boundary: Original clip API and mounted raster fixture.
+        store: PostgreSQL lifecycle storage for metadata-expiry checks.
+    """
+    client, worker, _ = model_boundary
+    body = model_request(client, "raster-clip")
+    job = submit(client, body)
+    assert submit(client, body)["jobId"] == job["jobId"]
+    ordinary = client.post(
+        "/api/processing/raster-clips",
+        json={**clip_inputs(client), "requestId": uuid4().hex},
+        headers=HEADERS,
+    )
+    assert ordinary.status_code == 202
+    assert ordinary.json()["jobId"] != job["jobId"]
+    assert client.portal.call(worker.run_once)
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    result = ready["result"]
+    assert (
+        result["kind"] == "raster"
+        and result["mediaType"] == "image/tiff"
+        and "rows" not in result
+    )
+    download = client.get(result["url"])
+    assert (
+        download.status_code == 200 and download.headers["content-type"] == "image/tiff"
+    )
+    assert hashlib.sha256(download.content).hexdigest() == result["sha256"]
+    partial = client.get(result["url"], headers={"Range": "bytes=0-15"})
+    assert partial.status_code == 206 and partial.content == download.content[:16]
+    legacy = client.get(f"/api/processing/jobs/{ordinary.json()['jobId']}").json()
+    assert legacy["status"] == "ready", legacy
+    with (
+        rasterio.MemoryFile(download.content) as file,
+        file.open() as clipped,
+        rasterio.MemoryFile(
+            client.get(legacy["result"]["url"]).content
+        ) as original_file,
+        original_file.open() as original,
+    ):
+        assert clipped.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+        assert clipped.transform == original.transform and clipped.crs == original.crs
+        assert (
+            clipped.dtypes == original.dtypes
+            and clipped.scales == (2,)
+            and clipped.offsets == (-1,)
+        )
+        numpy.testing.assert_array_equal(clipped.read(1), original.read(1))
+        numpy.testing.assert_array_equal(clipped.read_masks(1), original.read_masks(1))
+        assert int(numpy.count_nonzero(clipped.read_masks(1))) == result["validPixels"]
+    with TestClient(client.app, base_url="https://testserver") as stranger:
+        for suffix in ("", "/result", "/provenance", "/run-yaml"):
+            assert (
+                stranger.get(f"/api/processing/jobs/{job['jobId']}{suffix}").status_code
+                == 404
+            )
+    run = parse_yaml(
+        client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
+    )
+    RunDocument.model_validate(run)
+    assert run["execution"]["numericalPolicy"]["numericInclusion"] == "all_touched"
+    assert run["execution"]["outcome"]["raster"]["sha256"] == result["sha256"]
+    assert client.get(result["provenanceUrl"]).json()["operation"] == "raster.clip.v1"
+    # A shorter metadata lifetime must not break an otherwise available TIFF.
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET metadata_expires_at=now()-interval '1 second' WHERE id=%s",
+            (job["jobId"],),
+        )
+    store.cleanup_candidates()
+    assert (
+        client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").status_code == 410
+    )
+    assert (
+        client.get(f"/api/processing/jobs/{job['jobId']}").json()["result"]["kind"]
+        == "raster"
+    )
+    assert client.get(result["url"]).status_code == 200

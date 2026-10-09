@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { model, invocation, job } from "../../test-support/models/fixtures.js";
+import { model, invocation, job, clipModel, clipResult } from "../../test-support/models/fixtures.js";
 
 /** Compose the transport over recorded same-origin HTTP replies.
  * @param {Function} reply Return the requested response body.
@@ -46,4 +46,17 @@ test("malformed model definitions and inconsistent progress are rejected", async
     await assert.rejects(h.api.discoverModels(), /model identity/);
     const broken = fixture(() => job({progress: {completed: 4, total: 2}}));
     await assert.rejects(broken.api.getJob(job().jobId), /model run details/);
+});
+
+
+test("raster model results validate native grids, file metadata and owned download links", async () => {
+    const result = structuredClone(clipResult);
+    const h = fixture(() => job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
+    assert.equal((await h.api.getJob(job().jobId)).result.kind, "raster");
+    for (const change of [{kind: "unknown"}, {mediaType: "text/html"}, {bytes: -1}, {sha256: "bad"}, {validPixels: 101}, {rows: []},
+        {grid: {...clipResult.grid, width: 0}}, {url: "https://other.invalid/result"}]) {
+        Object.assign(result, structuredClone(clipResult), change);
+        await assert.rejects(h.api.getJob(job().jobId));
+        delete result.rows;
+    }
 });

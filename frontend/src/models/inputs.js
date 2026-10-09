@@ -51,6 +51,18 @@ export function modelViewportArea(bounds) {
     return modelAreaInput({kind: "selectedArea", selectedBounds});
 }
 
+/** Check whether an area is accepted by this model's declared input type.
+ * @param {Object} model Installed model definition.
+ * @param {Object|null} area Explicit area descriptor.
+ * @return {boolean} Whether the area kind can be submitted to this model.
+ */
+export function modelSupportsArea(model, area) {
+    const role = Object.values(model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type));
+    const kinds = role?.type === "clip_area" ? ["selectedArea", "catalogSelection"] :
+        role?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] : [];
+    return kinds.includes(area?.kind);
+}
+
 /** Create an editable setup with suggestions and the current map area's meaning.
  * selectedArea is the same box around a map location used by raster histograms.
  * @param {Object} model Installed recipe.
@@ -62,12 +74,19 @@ export function createModelDraft(model, context, id) {
     const sources = structuredClone(context.rasters ?? []);
     const enabled = sources.filter(source => source.visible);
     const suggestion = enabled.length === 1 ? enabled[0] : sources.length === 1 ? sources[0] : null;
-    const area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
+    let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
+    let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
+    let selectionError = "";
+    if (!modelSupportsArea(model, area)) {
+        areaMode = "viewport"; area = null;
+        try { area = modelViewportArea(context.viewportBounds); }
+        catch (error) { selectionError = error.message; }
+    }
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
         raster: suggestion ? structuredClone(suggestion) : null,
         sourceReason: sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
-        area, capturedArea: structuredClone(area), areaMode: ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
-        vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
+        area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
+        vectorKey: "", vectorInfo: null, selecting: false, selectionError,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };
 }
@@ -86,10 +105,11 @@ export function captureModelSubmission(draft, requestId) {
         throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
     if (!draft.area) throw new Error(draft.selectionError || "Choose an analysis area before running the model.");
+    if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose a sampling area, visible map area or vector layer supported by this model.");
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         if (input.type === "catalog_raster") inputs[name] = {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
-        else if (input.type === "summary_area") inputs[name] = structuredClone(draft.area);
+        else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
     const area = Object.values(inputs).find(value => value.kind);

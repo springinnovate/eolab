@@ -51,7 +51,13 @@ class ModelInput(ModelSchema):
     the actual catalog dataset or area.
     """
 
-    type: Literal["catalog_raster", "summary_area", "mask_source", "prepared_hydrology"]
+    type: Literal[
+        "catalog_raster",
+        "summary_area",
+        "clip_area",
+        "mask_source",
+        "prepared_hydrology",
+    ]
     label: Label
 
 
@@ -322,6 +328,12 @@ OPERATIONS = MappingProxyType(
             (("expression", "summary_expression"),),
             (("statistics", "table"),),
             "raster-summary",
+        ),
+        "raster.clip.v1": OperationDefinition(
+            (("raster", "catalog_raster"), ("area", "clip_area")),
+            (),
+            (("raster", "map"),),
+            "raster-clip",
         ),
     }
 )

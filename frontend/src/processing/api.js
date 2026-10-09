@@ -105,7 +105,18 @@ function validateJob(job) {
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
-        if (["raster.aggregate.v1", "model.run.v1"].includes(job.operation)) {
+        if (job.operation === "model.run.v1" && job.result.kind === "raster") {
+            const result = job.result;
+            if (result.mediaType !== "image/tiff" || typeof result.filename !== "string" || !result.filename ||
+                !Number.isSafeInteger(result.bytes) || result.bytes <= 0 || !/^[a-f0-9]{64}$/.test(result.sha256) ||
+                !Number.isSafeInteger(result.validPixels) || result.validPixels < 1 || result.rows !== undefined)
+                throw new Error("Processing returned invalid raster result details.");
+            validateGrid(result.grid, "raster.clip.v1");
+            if (result.validPixels > result.grid.width * result.grid.height)
+                throw new Error("Processing returned invalid raster validity counts.");
+        } else if (["raster.aggregate.v1", "model.run.v1"].includes(job.operation)) {
+            if (job.operation === "model.run.v1" && job.result.kind !== undefined)
+                throw new Error("Processing returned an unsupported model result type.");
             validateCalculationRows(job.result.rows);
             if (job.result.cacheHit != null && typeof job.result.cacheHit !== "boolean") {
                 throw new Error("Processing returned invalid cache metadata.");

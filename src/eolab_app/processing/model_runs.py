@@ -18,6 +18,7 @@ import shapely
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from eolab_app.processing.aggregate_models import AggregateJobRequest, AggregateSpec
+from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec
 from eolab_app.processing.model_definitions import (
     ModelSchema,
     ModelRegistry,
@@ -26,6 +27,7 @@ from eolab_app.processing.model_definitions import (
 )
 from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
+    ClipModelArea,
     ModelInvocation,
     ModelRunRequest,
     ModelRunSpec,
@@ -114,8 +116,8 @@ def get_application_build_id() -> str:
 def build_model_calculation_request(
     request: ModelRunRequest,
     registry: ModelRegistry,
-) -> tuple[AggregateJobRequest, ModelInvocation]:
-    """Translate model inputs and parameters into a raster-summary request.
+) -> tuple[AggregateJobRequest | ClipJobRequest, ModelInvocation]:
+    """Translate a model setup into the existing summary or clip request.
 
     Checks the selected recipe version and checksum, applies parameter defaults,
     and saves the effective inputs alongside the calculation request.
@@ -125,7 +127,7 @@ def build_model_calculation_request(
         registry: Installed model definitions available on this deployment.
 
     Returns:
-        The aggregate request to execute and the recipe/input record to save with it.
+        The operation request to execute and the recipe/input record to save with it.
 
     Raises:
         ProcessingError: If the model is unavailable, its definition has changed,
@@ -147,17 +149,12 @@ def build_model_calculation_request(
         )
     step = definition.steps[0]
     raster_name, area_name = step.inputs["raster"].input, step.inputs["area"].input
-    parameter_name = step.parameters["expression"].parameter
-    declaration = definition.parameters[parameter_name]
     try:
         source = CatalogRasterRequest.model_validate(request.inputs[raster_name])
-        area = TypeAdapter(SummaryArea).validate_python(request.inputs[area_name])
-        parameter = SummaryExpressionParameter.model_validate(
-            {
-                **declaration.model_dump(),
-                "default": request.parameters.get(parameter_name, declaration.default),
-            }
+        area_contract = (
+            ClipModelArea if step.operation == "raster.clip.v1" else SummaryArea
         )
+        area = TypeAdapter(area_contract).validate_python(request.inputs[area_name])
         area_fields = (
             {"selectedBounds": area.selectedBounds}
             if area.kind == "selectedArea"
@@ -171,12 +168,33 @@ def build_model_calculation_request(
                 )
             )
         )
-        calculation = AggregateJobRequest(
-            requestId=request.requestId,
-            sources={"a": source},
-            calculations=[{"label": request.label, "expression": parameter.default}],
-            **area_fields,
-        )
+        parameters = {}
+        if step.operation == "raster.clip.v1":
+            calculation = ClipJobRequest(
+                requestId=request.requestId,
+                **source.model_dump(by_alias=True),
+                **area_fields,
+            )
+        else:
+            parameter_name = step.parameters["expression"].parameter
+            declaration = definition.parameters[parameter_name]
+            parameter = SummaryExpressionParameter.model_validate(
+                {
+                    **declaration.model_dump(),
+                    "default": request.parameters.get(
+                        parameter_name, declaration.default
+                    ),
+                }
+            )
+            parameters[parameter_name] = parameter.default
+            calculation = AggregateJobRequest(
+                requestId=request.requestId,
+                sources={"a": source},
+                calculations=[
+                    {"label": request.label, "expression": parameter.default}
+                ],
+                **area_fields,
+            )
         invocation = ModelInvocation.model_validate(
             {
                 "model": {
@@ -187,14 +205,14 @@ def build_model_calculation_request(
                     raster_name: source.model_dump(mode="json", by_alias=True),
                     area_name: area.model_dump(mode="json", by_alias=True),
                 },
-                "parameters": {parameter_name: parameter.default},
+                "parameters": parameters,
                 "label": request.label,
             }
         )
     except (ValidationError, ValueError) as error:
         raise ProcessingError(
             "invalid_model_inputs",
-            "The model's raster, area or summary formula is invalid.",
+            "The model's raster, area or parameters are invalid.",
         ) from error
     return calculation, invocation
 
@@ -207,7 +225,7 @@ def build_model_job_submission(
     """Create a model job submission and save its recipe, inputs and software identity.
 
     Args:
-        prepared: The aggregate submission, including any polygons already copied for this run.
+        prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
         signature: The raster's catalog source signature at submission.
 
@@ -275,7 +293,7 @@ def record_model_preparation(
 
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
-        prepared: The prepared raster-summary plan and required disk reservation.
+        prepared: The prepared summary or clip plan and required disk reservation.
         limits: The worker's configured time, memory, disk and result-retention limits.
 
     Returns:
@@ -285,12 +303,17 @@ def record_model_preparation(
     Raises:
         ProcessingError: If the updated Run YAML exceeds its document limits.
         ValidationError: If the stored model or prepared calculation is invalid.
+        ValueError: If the prepared operation differs from the saved recipe.
     """
     wrapper = ModelRunSpec.model_validate(row["spec"])
-    spec = AggregateSpec.model_validate(prepared.specification)
+    spec = (
+        ClipSpec if prepared.operation == "raster.clip.v1" else AggregateSpec
+    ).model_validate(prepared.specification)
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
     invocation = ModelInvocation.model_validate(metadata["invocation"])
     validate_operation(invocation.model.definition)
+    if invocation.model.definition.steps[0].operation != spec.operation:
+        raise ValueError("Prepared operation does not match the saved recipe")
     raster_name = invocation.model.definition.steps[0].inputs["raster"].input
     execution = metadata["execution"]
     execution.update(
@@ -313,7 +336,17 @@ def record_model_preparation(
         }
     )
     execution["sources"][raster_name]["grid"] = spec.grid.model_dump(mode="json")
-    if spec.grid.groundArea is not None:
+    if isinstance(spec, ClipSpec):
+        execution["numericalPolicy"] = {
+            "version": "raster.clip.v1",
+            "grid": "native",
+            "resampling": "none",
+            "numericInclusion": "all_touched",
+            "nodata": "preserve_source_nodata_and_mask_invalid",
+            "valueDomain": "stored_native_values",
+            "overviewResampling": "nearest",
+        }
+    elif spec.grid.groundArea is not None:
         execution["numericalPolicy"]["groundArea"] = spec.grid.groundArea.model_dump(
             mode="json"
         )
@@ -336,7 +369,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         row: A job record already checked to belong to the requesting browser session.
 
     Returns:
-        Model identity, status, progress, errors, expiry dates and available CSV links.
+        Model identity, status, progress, errors, expiry and available result links.
         Expired results have no download links.
     """
     summary = row.get("summary") or row["spec"]
@@ -345,7 +378,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         status = "expired"
     artifact = row.get("artifact") if status == "ready" else None
     progress = row["progress"]
-    # Existing aggregate progress counts are native blocks within the current phase.
+    # Both existing operations report native blocks within the current phase.
     measured = {"phase": progress.get("phase")}
     if "completedBlocks" in progress and progress.get("totalBlocks", 0) > 0:
         measured.update(
@@ -375,8 +408,16 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
                 "filename": artifact["filename"],
                 "bytes": artifact["size"],
                 "sha256": artifact["sha256"],
-                "rows": artifact["rows"],
-                "cacheHit": False,
+                **(
+                    {
+                        "kind": "raster",
+                        "mediaType": "image/tiff",
+                        "grid": row["spec"]["calculation"]["grid"],
+                        "validPixels": artifact["valid_pixels"],
+                    }
+                    if artifact["media_type"] == "image/tiff"
+                    else {"rows": artifact["rows"], "cacheHit": False}
+                ),
             }
         ),
     }
@@ -445,6 +486,18 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
             "status": outcome["status"],
             "error": outcome.get("error"),
             "statistics": artifact.get("rows") if artifact else None,
+            **(
+                {
+                    "raster": {
+                        "filename": artifact["filename"],
+                        "bytes": artifact["size"],
+                        "sha256": artifact["sha256"],
+                        "validPixels": artifact["valid_pixels"],
+                    }
+                }
+                if artifact and artifact["media_type"] == "image/tiff"
+                else {}
+            ),
         }
     document = RunDocument.model_validate(
         {

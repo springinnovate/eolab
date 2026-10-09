@@ -414,7 +414,7 @@ export class ModelsController {
                 draft.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ?? {...value, label: value.itemId};
                 if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = null;
                 draft.sourceReason = "Copied from the original run; choose another raster to change it.";
-            } else if (input.type === "summary_area") {
+            } else if (["summary_area", "clip_area"].includes(input.type)) {
                 draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
                 draft.areaDescription = "Exact area and filter copied from the original run.";
                 if (draft.area.kind === "catalogSelection") {

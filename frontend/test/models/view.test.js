@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelsView, describeModelProgress } from "../../src/models/view.js";
 import { createModelDraft } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { model, raster, area, invocation, job } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, job, clipModel, clipResult } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
  * @return {Object} View, document, mutable state and action log.
@@ -134,4 +134,26 @@ test("selected features have one prominent count and predicate; removed layers k
     assert.equal(h.view.setup.selectionCard.hidden, true);
     assert.equal(h.view.setup.areaDescription.hidden, false);
     assert.equal(h.view.setup.areaDescription.textContent, draft.selectionError);
+});
+
+
+test("clip setup shows supported areas and no summary formula", () => {
+    const h = fixture(); h.state.draft = createModelDraft(clipModel, {rasters: [raster], area}, "clip"); h.view.render(h.state);
+    assert.deepEqual(h.view.setup.areaMode.children.map(option => option.textContent), ["Visible map area", "Sampling area", "Vector layer"]);
+    assert.deepEqual(h.view.setup.parameters, {}); assert.equal(h.view.setup.run.disabled, false);
+});
+
+test("clip results offer a GeoTIFF with dimensions, expire correctly and retain clip progress phases", () => {
+    const h = fixture(), id = job().jobId;
+    h.state.page = "run"; h.state.selectedRun = id;
+    h.state.invocation = {...invocation, model: {...clipModel, definition: clipModel}, parameters: {}};
+    h.state.runs = [job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: clipResult})];
+    h.view.render(h.state);
+    assert.equal(h.view.run.result.children[0].children[0].textContent, "Clipped raster");
+    assert.equal(h.view.run.result.children[0].children[2].textContent, "10 × 10 pixels · 90 valid pixels");
+    const links = h.view.run.result.children[1].children;
+    assert.equal(links[0].textContent, "Download GeoTIFF"); assert.equal(links[0].href, clipResult.url);
+    h.state.runs[0].status = "expired"; h.view.render(h.state); assert.equal(h.view.run.result.children.length, 0);
+    for (const phase of ["clipping", "creating_cog", "validating", "checksumming"])
+        assert.doesNotMatch(describeModelProgress(job({status: "running", progress: {phase}})), /Preparing calculation/);
 });

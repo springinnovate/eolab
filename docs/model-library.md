@@ -1,8 +1,9 @@
 # Run a model
 
 Open **Tools → Models** in the map's right-hand Analysis area. Search the
-library by name or purpose, then choose **Set up model**. The installed
-**Raster summary** model calculates one summary formula for a raster and area.
+library by name or purpose, then choose **Set up model**. **Raster summary**
+calculates one summary formula for a raster and area. **Raster clip** produces
+a downloadable GeoTIFF of a raster within the chosen area.
 
 ## Choose inputs
 
@@ -12,8 +13,9 @@ catalog search. Removing an input layer clears that choice for a new run;
 accepted runs keep their original inputs. Duplicating a run whose original
 layers are absent requires adding them to the map or choosing replacements.
 
-Choose **Entire raster**, **Visible map area**, **Sampling area**, or
-**Vector layer**. Visible map area follows the window on screen as you pan,
+Choose **Visible map area**, **Sampling area**, or **Vector layer**. Raster
+summary also supports **Entire raster** and selected map polygons. Raster clip
+requires a box or catalog vector selection. Visible map area follows the window on screen as you pan,
 zoom or resize the map. Sampling area is the same sampling box used
 by **Raster distributions**: click the map to move it, or change its size in the
 Raster distributions controls. Setup follows those changes automatically; no
@@ -41,7 +43,13 @@ fails, setup reports that separately and the checked model selection remains
 usable. Later map filter edits do not change an already reviewed model selection
 or an accepted run.
 
-In the summary formula, `a` is the selected raster. Examples include `sum(a)`,
+Raster clip has no formula to enter. It preserves the source resolution, grid,
+coordinate system, datatype, scale, offset and units. The GeoTIFF contains the
+source pixels covering the chosen area; pixels outside selected polygons are
+masked. A pixel touching a selected polygon is included. Clipping does not
+resample, reproject or change the stored values.
+
+For Raster summary, `a` in the formula is the selected raster. Examples include `sum(a)`,
 `mean(a)`, `stdev(a)`, `count(a)`, `areaha(a > 10)` and
 `sum(a, where=a > 10)`. Point-only `pixelValue(a)` has no point input in this
 model and is rejected. Formulas are checked by the server when submitted.
@@ -55,7 +63,7 @@ enabled so this retry is also available after reloading the tab.
 
 Open **Runs** or **Tools → Model runs** to see this browser session's history.
 Use **Load older runs** for earlier pages. Select a run to see its stage,
-measured progress, saved inputs, summary values and downloads. Progress counts
+measured progress, saved inputs, results and downloads. Progress counts
 apply to the current stage; they are not an estimated percentage for the entire
 model.
 
@@ -72,7 +80,11 @@ that session's cookies loses access; these are not permanent account records.
 
 ## Inspect or download
 
-Completed summaries offer **Download CSV** and **Download provenance**.
+Completed summaries offer **Download CSV**. Completed clips show the raster
+dimensions, valid-pixel count and file size, with **Download GeoTIFF**. Both
+offer **Download provenance**. Downloads require the session that owns the run.
+A clip remains a temporary run result; it is not added to the catalog or map.
+Map previews and permanent saved results are not yet available.
 Under **Recipe & downloads**, **View Model YAML** shows the reusable recipe as
 text; **Download Model YAML** saves it. An accepted run also offers **Download
 Run YAML**, containing its captured recipe, inputs, effective parameters and

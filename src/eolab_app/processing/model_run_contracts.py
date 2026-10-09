@@ -14,6 +14,12 @@ from eolab_app.processing.aggregate_models import (
     AggregateSpec,
     UnpreparedCalculation,
 )
+from eolab_app.processing.clip_models import (
+    ClipGrid,
+    ClipResultResponse,
+    ClipSpec,
+    UnpreparedClip,
+)
 from eolab_app.processing.model_definitions import (
     ModelSchema,
     Label,
@@ -116,6 +122,10 @@ SummaryArea = Annotated[
 ]
 
 
+# Raster clips require an explicit box or catalog vector predicate.
+ClipModelArea = Annotated[BoundsArea | SelectionArea, Field(discriminator="kind")]
+
+
 class CapturedModel(ModelReference):
     """A copy of the exact model definition accepted for a run.
 
@@ -174,6 +184,8 @@ class ModelInvocation(ModelSchema):
         for name, role in definition.inputs.items():
             if role.type == "catalog_raster":
                 CatalogRasterRequest.model_validate(self.inputs[name])
+            elif role.type == "clip_area":
+                TypeAdapter(ClipModelArea).validate_python(self.inputs[name])
             elif role.type == "summary_area":
                 TypeAdapter(SummaryArea).validate_python(self.inputs[name])
             else:
@@ -189,12 +201,12 @@ class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
     The calculation starts as submitted inputs and becomes a prepared raster
-    aggregation plan. Source and implementation checksums let the worker reject
+    summary or clip plan. Source and implementation checksums let the worker reject
     changes between submission and execution.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
-    calculation: UnpreparedCalculation | AggregateSpec
+    calculation: UnpreparedCalculation | AggregateSpec | UnpreparedClip | ClipSpec
     sourceSignature: tuple[int, int, int, int]
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
@@ -236,8 +248,19 @@ class ModelProgress(JobProgressResponse):
         return self
 
 
+class ModelRasterResult(ClipResultResponse):
+    """A model's downloadable GeoTIFF and its native output grid.
+
+    The result is available only while its owning run permits downloads.
+    """
+
+    kind: Literal["raster"]
+    mediaType: Literal["image/tiff"]
+    grid: ClipGrid
+
+
 class ModelJobResponse(JobResponse):
-    """A model run's status, progress, errors and available summary downloads.
+    """A model run's status, progress, errors and available table or raster downloads.
 
     ``metadataExpiresAt`` is the deadline for reading the saved Model/Run YAML.
     Result files have their own expiry in the inherited ``expiresAt`` field.
@@ -248,7 +271,7 @@ class ModelJobResponse(JobResponse):
     label: Label
     metadataExpiresAt: datetime | None
     progress: ModelProgress
-    result: AggregateResultResponse | None
+    result: AggregateResultResponse | ModelRasterResult | None
 
 
 class ModelRunList(ModelSchema):
@@ -330,7 +353,7 @@ class ResolvedModelSource(ModelSchema):
 
     sourceSignature: Digest
     band: Literal[1]
-    grid: AggregateGrid | None = None
+    grid: AggregateGrid | ClipGrid | None = None
 
 
 class ModelExecutionLimits(ModelSchema):
@@ -362,8 +385,29 @@ class SummaryNumericalPolicy(ModelSchema):
     groundArea: GroundAreaPlan | None = None
 
 
+class ClipNumericalPolicy(ModelSchema):
+    """Rules for a native-grid clip with a validity mask and lossless COG output."""
+
+    version: Literal["raster.clip.v1"]
+    grid: Literal["native"]
+    resampling: Literal["none"]
+    numericInclusion: Literal["all_touched"]
+    nodata: Literal["preserve_source_nodata_and_mask_invalid"]
+    valueDomain: Literal["stored_native_values"]
+    overviewResampling: Literal["nearest"]
+
+
+class ModelRasterOutcome(ModelSchema):
+    """Raster file metadata retained in Run YAML after the download expires."""
+
+    filename: Annotated[str, Field(min_length=1, max_length=1024)]
+    bytes: Annotated[int, Field(ge=0)]
+    sha256: Digest
+    validPixels: Annotated[int, Field(ge=0)]
+
+
 class ModelOutcome(ModelSchema):
-    """A finished run's final status, error or calculated summary values.
+    """A finished run's final status, error, summary values or raster file metadata.
 
     This record remains available after result files expire, until the run's
     metadata expires or the user deletes the run.
@@ -372,6 +416,7 @@ class ModelOutcome(ModelSchema):
     status: Literal["ready", "failed", "cancelled", "interrupted"]
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
+    raster: ModelRasterOutcome | None = None
 
 
 class ModelExecution(ModelSchema):
@@ -386,7 +431,7 @@ class ModelExecution(ModelSchema):
     operations: dict[Name, OperationImplementation] = Field(min_length=1, max_length=1)
     sources: dict[Name, ResolvedModelSource] = Field(min_length=1, max_length=1)
     limits: ModelExecutionLimits | None = None
-    numericalPolicy: SummaryNumericalPolicy | None = None
+    numericalPolicy: SummaryNumericalPolicy | ClipNumericalPolicy | None = None
     outcome: ModelOutcome | None = None
 
     @model_validator(mode="after")
