@@ -382,6 +382,37 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
+    """Read the recipe and input values saved for a model run.
+
+    Args:
+        row: A job record already authorized for the requesting session.
+
+    Returns:
+        The saved recipe, input selections and effective parameter values.
+
+    Raises:
+        ProcessingError: If the job is not a model run, was deleted, or its
+            saved metadata expired.
+        ValidationError: If the saved invocation is invalid.
+    """
+    expiry = row.get("metadata_expires_at")
+    if row["operation"] != MODEL_OPERATION:
+        raise ProcessingError("job_not_found", "This model run is unavailable.", 404)
+    if (
+        row["status"] == "deleted"
+        or not row.get("retained_metadata")
+        or (expiry is not None and expiry <= datetime.now(timezone.utc))
+    ):
+        raise ProcessingError(
+            "model_metadata_expired",
+            "This run's captured metadata is no longer available.",
+            410,
+        )
+    metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
+    return ModelInvocation.model_validate(metadata["invocation"])
+
+
 def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
     """Generate Model YAML or Run YAML from the recipe and data saved with a job.
 
@@ -402,21 +433,8 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
             metadata expired; also if the YAML exceeds export limits.
         ValidationError: If the saved recipe or execution details are invalid.
     """
-    expiry = row.get("metadata_expires_at")
-    if row["operation"] != MODEL_OPERATION:
-        raise ProcessingError("job_not_found", "This model run is unavailable.", 404)
-    if (
-        row["status"] == "deleted"
-        or not row.get("retained_metadata")
-        or (expiry is not None and expiry <= datetime.now(timezone.utc))
-    ):
-        raise ProcessingError(
-            "model_metadata_expired",
-            "This run's captured metadata is no longer available.",
-            410,
-        )
+    invocation = read_model_invocation(row)
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
-    invocation = ModelInvocation.model_validate(metadata["invocation"])
     if not run:
         return export_yaml(invocation.model.definition.to_document())
     execution = metadata["execution"]

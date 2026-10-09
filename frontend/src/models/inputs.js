@@ -1,0 +1,87 @@
+/** Build model drafts from catalog identities and explicit analysis areas. */
+import { normalizeCalculationArea } from "../processing/calculation-area.js";
+
+/** Identify a catalog source without using its label or map visibility.
+ * @param {Object} source Catalog collection and item IDs.
+ * @return {string} Composite identity for a choice list.
+ */
+export function modelSourceKey(source) { return JSON.stringify([source.collectionId, source.itemId]); }
+
+/** Explain the saved polygon selection without exposing server paths.
+ * @param {Object} filter Typed catalog filter.
+ * @return {string} Readable predicate, including its all/any rule.
+ */
+export function describeModelFilter(filter) {
+    if (!filter?.enabled || !filter.rules.length) return "All features (no filter)";
+    const operators = {eq: "equals", ne: "does not equal", gt: ">", ge: "≥", lt: "<", le: "≤", contains: "contains", missing: "is missing", present: "is present"};
+    return filter.rules.map(rule => `${rule.field} ${operators[rule.operator] ?? rule.operator}${["missing", "present"].includes(rule.operator) ? "" : ` ${JSON.stringify(rule.value)}`}`)
+        .join(filter.match === "any" ? " OR " : " AND ");
+}
+
+/** Translate a browser calculation area to the model submission schema.
+ * @param {Object} area Explicit browser area descriptor.
+ * @return {Object} Model area with catalog selections and upload references preserved.
+ * @throws {Error} If the area is invalid.
+ */
+export function modelAreaInput(area) {
+    const value = normalizeCalculationArea(area);
+    if (value.kind === "catalogSelection") return {kind: value.kind, selection: value.catalogSelection};
+    if (value.kind === "polygonArea") return {kind: value.kind, reference: value.polygonArea};
+    return structuredClone(value);
+}
+
+/** Create an editable setup with explanations for unambiguous suggestions.
+ * @param {Object} model Installed recipe.
+ * @param {Object} context Catalog and map choices supplied by browser composition.
+ * @param {string} id Local draft identity.
+ * @return {Object} Draft values and independent copies of suggested inputs.
+ */
+export function createModelDraft(model, context, id) {
+    const sources = structuredClone(context.rasters ?? []);
+    const selected = context.selectedRaster;
+    if (selected && !sources.some(source => modelSourceKey(source) === modelSourceKey(selected))) sources.unshift(structuredClone(selected));
+    const enabled = sources.filter(source => source.visible);
+    const suggestion = selected ?? (enabled.length === 1 ? enabled[0] : sources.length === 1 ? sources[0] : null);
+    const area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
+    return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
+        raster: suggestion ? structuredClone(suggestion) : null,
+        sourceReason: selected ? "Suggested from the item selected in the catalog." : suggestion ?
+            enabled.length === 1 ? "Suggested because it is the only enabled raster on this map." : "Suggested because it is the only raster on this map." :
+            "Choose a raster; there is no single clear match. Hidden layers and catalog search are available.",
+        area, capturedArea: structuredClone(area), areaMode: area.kind === "wholeRaster" ? "whole" : "captured", areaDescription: context.areaDescription ?? "Current map selection, copied into this draft.",
+        bounds: area.kind === "selectedArea" ? {...area.selectedBounds} : {west: "", south: "", east: "", north: ""},
+        vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
+        parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
+        sourceQuery: "", vectorQuery: "", sourceNext: null, vectorNext: null, searchError: "", searching: false};
+}
+
+/** Capture one draft as a model request, validating area and source choices.
+ * @param {Object} draft Editable model setup.
+ * @param {string} requestId Stable retry identity generated before dispatch.
+ * @return {Object} Independent submission, unaffected by later map or draft edits.
+ * @throws {Error} If a required input, label, area or parameter is missing.
+ */
+export function captureModelSubmission(draft, requestId) {
+    if (!draft.label.trim() || draft.label.length > 80) throw new Error("Name this run using 1–80 characters.");
+    if (!draft.raster) throw new Error("Choose a raster for this model.");
+    if (draft.selecting || !draft.area) throw new Error("Select and review the analysis area first.");
+    const inputs = {};
+    for (const [name, input] of Object.entries(draft.model.inputs)) {
+        if (input.type === "catalog_raster") inputs[name] = {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
+        else if (input.type === "summary_area") inputs[name] = structuredClone(draft.area);
+        else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
+    }
+    const area = Object.values(inputs).find(value => value.kind);
+    if (area.kind === "selectedArea") modelAreaInput(area);
+    else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
+    else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
+    for (const [name, parameter] of Object.entries(draft.model.parameters)) {
+        const value = draft.parameters[name];
+        if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");
+        if (["number", "optional_number"].includes(parameter.type) && !(value === null && parameter.type === "optional_number") &&
+            (!Number.isFinite(value) || parameter.minimum != null && value < parameter.minimum ||
+                parameter.exclusiveMinimum != null && value <= parameter.exclusiveMinimum)) throw new Error(`Check ${parameter.label}.`);
+    }
+    const {id, version, definitionSha256} = draft.model;
+    return structuredClone({requestId, model: {id, version, definitionSha256}, inputs, parameters: draft.parameters, label: draft.label.trim()});
+}

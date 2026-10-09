@@ -93,11 +93,19 @@ function validateJob(job) {
     opaqueId(job?.jobId);
     if (!["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired", "deleted"].includes(job.status) ||
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
+    if (job.operation === "model.run.v1") {
+        validateModelIdentity(job.model);
+        if (typeof job.label !== "string" || !["createdAt", "updatedAt"].every(key => Number.isFinite(Date.parse(job[key]))) ||
+            !["expiresAt", "metadataExpiresAt"].every(key => job[key] === null || Number.isFinite(Date.parse(job[key]))) ||
+            ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
+            job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
+            throw new Error("Processing returned invalid model run details.");
+    }
     if (job.grid) validateGrid(job.grid, job.operation);
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
-        if (job.operation === "raster.aggregate.v1") {
+        if (["raster.aggregate.v1", "model.run.v1"].includes(job.operation)) {
             validateCalculationRows(job.result.rows);
             if (job.result.cacheHit != null && typeof job.result.cacheHit !== "boolean") {
                 throw new Error("Processing returned invalid cache metadata.");
@@ -120,6 +128,33 @@ function validateCalculationRows(rows) {
                 .every(value => Number.isSafeInteger(value) && value >= 0)))) {
         throw new Error("Processing returned an invalid calculation result table.");
     }
+}
+
+/** Check a model identity before building URLs or recovering saved inputs.
+ * @param {Object} model Model ID, version and definition checksum.
+ * @return {Object} Validated identity.
+ * @throws {Error} If identity fields are malformed.
+ */
+function validateModelIdentity(model) {
+    if (!model || !/^[a-z][a-z0-9_-]{0,63}$/.test(model.id) ||
+        !/^\d+\.\d+\.\d+$/.test(model.version) || model.version.length > 32 ||
+        !/^[a-f0-9]{64}$/.test(model.definitionSha256)) throw new Error("Invalid model identity.");
+    return model;
+}
+
+/** Check the recipe fields used to construct a setup form.
+ * @param {Object} model Installed recipe with its checksum.
+ * @return {Object} Validated recipe.
+ * @throws {Error} If the recipe is missing its display or form fields.
+ */
+function validateAvailableModel(model) {
+    validateModelIdentity(model);
+    if (model.schema !== "eolab.model/v1" || typeof model.title !== "string" || typeof model.description !== "string" ||
+        ![model.inputs, model.parameters, model.outputs].every(value => value && typeof value === "object" && !Array.isArray(value)) ||
+        !Object.values(model.inputs).every(input => typeof input?.type === "string" && typeof input.label === "string") ||
+        !Object.values(model.parameters).every(parameter => typeof parameter?.type === "string" && typeof parameter.label === "string"))
+        throw new Error("Invalid model setup definition.");
+    return model;
 }
 
 /** Own HTTP serialization and cookie-session establishment for Downloads. */
@@ -329,6 +364,85 @@ export class ProcessingApiClient {
         } catch (error) { for (const caller of pending) caller.reject(error); }
     }
 
+    /** Discover installed model recipes and their form fields.
+     * @return {Promise<Object[]>} Recipes available on this server.
+     * @throws {Error} If discovery fails or contains malformed definitions.
+     */
+    async discoverModels() {
+        await this.ensureSession();
+        const response = await this.request("/models");
+        if (!Array.isArray(response.models)) throw new Error("Invalid model library.");
+        return response.models.map(validateAvailableModel);
+    }
+
+    /** Read a page of this browser session's model history.
+     * @param {string|null} [cursor=null] Continuation returned by the preceding page.
+     * @return {Promise<{jobs:Object[],nextCursor:string|null}>} Runs and the next page token.
+     * @throws {Error} If the request fails or pagination data is invalid.
+     */
+    async listModelRuns(cursor = null) {
+        await this.ensureSession();
+        const response = await this.request(`/model-runs?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+        if (!Array.isArray(response.jobs) || !(response.nextCursor === null || typeof response.nextCursor === "string"))
+            throw new Error("Invalid model run history.");
+        response.jobs.forEach(job => {
+            validateJob(job);
+            if (job.operation !== "model.run.v1") throw new Error("Unexpected job in model history.");
+        });
+        return response;
+    }
+
+    /** Submit the captured setup with the same request ID on every retry.
+     * @param {Object} submission Model identity, inputs, parameters, label and request ID.
+     * @return {Promise<Object>} Accepted job status.
+     * @throws {ProcessingRequestError|Error} If admission fails or the reply is invalid.
+     */
+    async submitModelRun(submission) {
+        await this.ensureSession();
+        const job = validateJob(await this.request("/model-runs", "POST", submission));
+        if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
+        return job;
+    }
+
+    /** Read the exact recipe and inputs originally accepted for a run.
+     * @param {string} id Session-owned model run ID.
+     * @return {Promise<Object>} Saved invocation for details or duplication.
+     * @throws {Error} If access fails, metadata expired, or the reply is invalid.
+     */
+    async readModelInvocation(id) {
+        await this.ensureSession();
+        const invocation = await this.request(`/jobs/${opaqueId(id)}/invocation`);
+        validateModelIdentity(invocation.model);
+        validateAvailableModel({...invocation.model.definition, definitionSha256: invocation.model.definitionSha256});
+        if (!invocation.inputs || !invocation.parameters || typeof invocation.label !== "string")
+            throw new Error("Invalid saved model inputs.");
+        return invocation;
+    }
+
+    /** Build the installed recipe's download address.
+     * @param {Object} model Validated model identity.
+     * @return {string} Same-origin Model YAML URL.
+     * @throws {Error} If the model identity is invalid.
+     */
+    modelYamlUrl(model) {
+        validateModelIdentity(model);
+        return `/api/processing/models/${model.id}/versions/${model.version}/yaml`;
+    }
+
+    /** Read Model YAML for an inline, text-only preview.
+     * @param {Object} model Installed recipe identity.
+     * @param {string|null} [jobId=null] Read the accepted recipe instead when supplied.
+     * @return {Promise<string>} YAML text.
+     * @throws {ProcessingRequestError|Error} If access fails or metadata has expired.
+     */
+    async readModelYaml(model, jobId = null) {
+        await this.ensureSession();
+        const url = jobId ? processingDownloadUrl(`/api/processing/jobs/${jobId}/model-yaml`, jobId, "model-yaml") : this.modelYamlUrl(model);
+        const response = await this.fetch.call(globalThis, url, {credentials: "same-origin", cache: "no-store", headers: {Accept: "application/yaml"}});
+        if (!response.ok) throw new ProcessingRequestError("Model YAML is unavailable or has expired.", response.status);
+        return response.text();
+    }
+
     /** Read a tracked job even if it falls outside recent history. @param {string} id Job ID. @return {Promise<Object>} Owned job. */
     async getJob(id) {
         await this.ensureSession();
@@ -387,11 +501,11 @@ export class ProcessingApiClient {
 /**
  * Allow direct browser navigation only to the owned result endpoints.
  * @param {string} value API-supplied relative URL. @param {string} id Owning job.
- * @param {"result"|"provenance"} kind Artifact type. @return {string} Safe local download URL.
+ * @param {"result"|"provenance"|"model-yaml"|"run-yaml"} kind Artifact type. @return {string} Safe local download URL.
  */
 export function processingDownloadUrl(value, id, kind) {
     const expected = `/api/processing/jobs/${opaqueId(id)}/${kind}`;
-    if (!["result", "provenance"].includes(kind) || value !== expected) {
+    if (!["result", "provenance", "model-yaml", "run-yaml"].includes(kind) || value !== expected) {
         throw new TypeError("Invalid processing download address.");
     }
     return expected;

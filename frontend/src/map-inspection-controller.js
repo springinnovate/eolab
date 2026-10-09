@@ -91,6 +91,8 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
+            { name: "models", label: "Models", panel: documentContext.querySelector("#models-panel"),
+                tab: documentContext.querySelector("#map-inspection-tab-models") },
             { name: "raster-series", label: "Raster stack", panel: this.rasterSeries, raster: true,
                 tab: documentContext.querySelector("#open-raster-series-dock") },
             { name: "annotations", label: "Shared layer", panel: this.annotations,
@@ -340,6 +342,12 @@ export class MapInspectionController {
 
     /** Close raster-series plotting while retaining its settings. @return {void} */
     hideRasterSeries() { this.#hideTool("raster-series"); }
+
+    /** Reveal Models without changing any model draft or accepted job. @return {void} */
+    showModels() { this.#showTool("models"); }
+
+    /** Hide Models while its controller retains setup and run observation. @return {void} */
+    hideModels() { this.#hideTool("models"); }
 
     /** Reveal calculations independently of peer tools. @return {void} */
     showCalculations() { this.#showTool("calculations"); }

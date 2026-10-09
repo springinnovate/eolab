@@ -93,13 +93,16 @@ import {
     validateVectorFeatureFocus,
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
-import { vectorFilterStatus } from "./vector/filter.js";
+import { vectorFilterStatus, EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
+import { ModelsController } from "./models/controller.js";
+import { ModelsView } from "./models/view.js";
+import "./models/style.css";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
@@ -758,14 +761,17 @@ async function initializeCatalog(
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
+    let modelArea = null;
+    let modelAreaDescription = "";
     let rasterSeriesArea = null;
     let rasterSeriesAreaLabel = "";
     let pixelPoint = null;
-    /** Send committed sampling-area changes to the raster-series component.
+    /** Send committed areas to raster-stack plotting and retain model setup suggestions.
      * @param {Object|null} area Path-free Processing area.
      * @param {string} label Selection description. @return {void}
      */
     const updateRasterSeriesArea = (area, label) => {
+        modelArea = area ? structuredClone(area) : null; modelAreaDescription = label;
         rasterSeriesArea = area; rasterSeriesAreaLabel = label;
         rasterSeries?.setArea(area, label);
     };
@@ -932,7 +938,7 @@ async function initializeCatalog(
             updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
         },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
-            activate: !selectingMapClick && !calculations.isActive,
+            activate: !selectingMapClick && !calculations.isActive && mapInspection.activeTool !== "models",
         }),
         onHistogramChange: snapshot => {
             latestHistogramPresentation = snapshot;
@@ -977,6 +983,46 @@ async function initializeCatalog(
         .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
         .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
             filter: record.adapter.exportFilterState(record) }));
+    const modelSourceSearch = {raster: new CatalogSearchClient(catalogUrl), vector: new CatalogSearchClient(catalogUrl)};
+    const models = new ModelsController({
+        api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        /** Supply suggestions only; hidden and non-rendered catalog sources remain valid inputs.
+         * @return {Object} Independent raster, vector and area choices.
+         */
+        getContext: () => ({
+            rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+                .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
+            selectedRaster: catalogState.selectedItem?.collection === "eolab-mounted-geotiffs" ? clipSource(catalogState.selectedItem) : null,
+            vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter})),
+            area: modelArea, areaDescription: modelAreaDescription,
+        }),
+        /** Search the catalog independently of its left-panel search and map publication.
+         * @param {"raster"|"vector"} kind Requested catalog source type.
+         * @param {string} query Search text.
+         * @param {Object|null} next Existing STAC pagination link.
+         * @return {Promise<Object|null>} Path-free choices and continuation, or a superseded response.
+         */
+        searchSources: async (kind, query, next) => {
+            const client = modelSourceSearch[kind];
+            const result = await (next ? client.follow(next) : client.search(`type:${kind} ${query}`));
+            if (!result) return null;
+            const filters = catalogPolygonTargets();
+            return {sources: result.features.filter(item => item.collection === (kind === "raster" ? "eolab-mounted-geotiffs" : "eolab-mounted-vectors"))
+                .map(item => ({...clipSource(item), filter: filters.find(target => target.item.id === item.id && target.item.collection === item.collection)?.filter ?? EMPTY_VECTOR_FILTER})),
+                next: result.links?.find(link => link.rel === "next") ?? null};
+        },
+        /** Read the draft's vector and predicate without requiring a display layer.
+         * @param {Object} source Catalog source and captured filter.
+         * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
+         * @return {Promise<Object>} Selection descriptor, bounds and matched feature count.
+         */
+        prepareVector: (source, signal) => createVectorSamplingArea(
+            {collection: source.collectionId, id: source.itemId}, source.filter ?? EMPTY_VECTOR_FILTER, signal),
+        onOpen: () => mapInspection.showModels(),
+        onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
+    });
+    mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
+    models.start();
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(),
         getTargets: catalogPolygonTargets,
@@ -1003,6 +1049,7 @@ async function initializeCatalog(
         },
         onInvalidate: id => {
             vectorSamplingOverlay.clear();
+            modelArea = null; modelAreaDescription = "";
             rasterVisualization.setVectorSelection(null);
             calculations.invalidateSamplingArea(id);
         },

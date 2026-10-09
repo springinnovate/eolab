@@ -189,3 +189,10 @@ resource controls.
 - [Raster clips](docs/raster-clips.md): exported values, masks and downloads.
 
 EOLab is open-source software under the [Apache License 2.0](LICENSE).
+
+## Model library
+
+Use **Tools → Models** to configure and run an installed raster-summary model,
+then inspect its progress, results and YAML in the right-hand Analysis panel.
+See [Run a model](docs/model-library.md) for input selection, cancellation,
+recovery and temporary result downloads.
