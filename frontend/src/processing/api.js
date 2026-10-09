@@ -101,6 +101,7 @@ function validateJob(job) {
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
+        if (job.artifacts != null) validateModelArtifacts(job.artifacts, job);
     }
     if (job.grid) validateGrid(job.grid, job.operation);
     if (job.result) {
@@ -116,6 +117,37 @@ function validateJob(job) {
         }
     }
     return job;
+}
+
+/** Validate a run's bounded file inventory before exposing any download links.
+ * @param {Object} manifest Complete file metadata from the server.
+ * @param {Object} job Owning model job and its lifecycle snapshot.
+ * @return {void}
+ * @throws {Error} If identities, availability, sizes or download URLs are invalid.
+ */
+function validateModelArtifacts(manifest, job) {
+    if (manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
+        !["pending", "available", "unavailable"].includes(manifest.availability) ||
+        !Array.isArray(manifest.files) || manifest.files.length > 64 ||
+        !Number.isSafeInteger(manifest.totalBytes) || manifest.totalBytes < 0 ||
+        (manifest.availability === "available" ? job.status !== "ready" || !manifest.files.length : manifest.files.length || manifest.totalBytes))
+        throw new Error("Processing returned invalid result file availability.");
+    const ids = new Set(), names = new Set();
+    let total = 0;
+    for (const file of manifest.files) {
+        if (!file || !/^[a-f0-9]{32}$/.test(file.artifactId) || ids.has(file.artifactId) ||
+            typeof file.name !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(file.name) || names.has(file.name) ||
+            typeof file.label !== "string" || !file.label || file.label.length > 200 ||
+            !["result", "intermediate", "provenance"].includes(file.role) ||
+            typeof file.filename !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(file.filename) ||
+            typeof file.mediaType !== "string" || file.mediaType.length > 100 || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(file.mediaType) ||
+            !Number.isSafeInteger(file.bytes) || file.bytes < 0 || !/^[a-f0-9]{64}$/.test(file.sha256))
+            throw new Error("Processing returned invalid result file details.");
+        processingArtifactDownloadUrl(file.url, job.jobId, file.artifactId);
+        ids.add(file.artifactId); names.add(file.name); total += file.bytes;
+    }
+    if (!Number.isSafeInteger(total) || total > manifest.totalBytes)
+        throw new Error("Processing returned invalid result file sizes.");
 }
 
 /** Check a model identity before building URLs or recovering saved inputs.
@@ -496,5 +528,18 @@ export function processingDownloadUrl(value, id, kind) {
     if (!["result", "provenance", "model-yaml", "run-yaml"].includes(kind) || value !== expected) {
         throw new TypeError("Invalid processing download address.");
     }
+    return expected;
+}
+
+/** Allow downloads only from a file's owning run and opaque artifact ID.
+ * @param {string} value API-supplied relative download URL.
+ * @param {string} jobId Owning model run.
+ * @param {string} artifactId File identity from its validated manifest.
+ * @return {string} Safe same-origin file URL.
+ * @throws {TypeError} If an identity or address is invalid.
+ */
+export function processingArtifactDownloadUrl(value, jobId, artifactId) {
+    const expected = `/api/processing/jobs/${opaqueId(jobId)}/artifacts/${opaqueId(artifactId)}`;
+    if (value !== expected) throw new TypeError("Invalid result file download address.");
     return expected;
 }

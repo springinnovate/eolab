@@ -324,6 +324,12 @@ def validate_operation(definition: ModelDefinition) -> None:
     contract = OPERATIONS.get(step.operation)
     valid = contract is not None
     if contract is not None:
+        outputs = {
+            item.name: item for item in (contract.output, *contract.additional_outputs)
+        }
+        requested = [
+            output.source.split(".")[1] for output in definition.outputs.values()
+        ]
         valid = (
             {
                 name: definition.inputs[item.input].type
@@ -335,18 +341,19 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.parameters.items()
             }
             == dict(contract.parameters)
-            and {
-                output.source.split(".")[1]: output.presentation
-                for output in definition.outputs.values()
-            }
-            == {contract.output.name: contract.output.presentation}
-            and len(definition.outputs) == 1
+            and contract.output.name in requested
+            and len(set(requested)) == len(requested)
+            and "provenance" not in definition.outputs
             and definition.executionProfile == contract.execution_profile
             and {item.input for item in step.inputs.values()} == set(definition.inputs)
             and {item.parameter for item in step.parameters.values()}
             == set(definition.parameters)
             and all(
-                output.role == "result" and output.type in (None, contract.output.kind)
+                output.source.split(".")[1] in outputs
+                and output.role == outputs[output.source.split(".")[1]].role
+                and output.type in (None, outputs[output.source.split(".")[1]].kind)
+                and output.presentation
+                == outputs[output.source.split(".")[1]].presentation
                 for output in definition.outputs.values()
             )
         )

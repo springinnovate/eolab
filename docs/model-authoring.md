@@ -1,7 +1,7 @@
 # Add a model recipe
 
 A model is an installed YAML recipe. It describes the setup form, binds inputs
-and parameters to a registered operation, and names its output. A run is a
+and parameters to a registered operation, and names its outputs. A run is a
 separate, session-owned job containing a captured recipe and input choices.
 
 ## Reuse an operation
@@ -55,7 +55,9 @@ A summary recipe can rename its formula parameter and change its default, such
 as `mean(a)` or `stdev(a)`. Formula syntax and area support remain governed by
 the registered operation. Execution profiles select supported server policy;
 recipes cannot raise deployment resource limits. The current runner accepts
-one step, one catalog raster and one output file, plus provenance. `map` and
+one step and one catalog raster. Recipes can retain multiple outputs declared
+by that operation, plus provenance. The bundled summary and clip operations
+currently each produce one scientific result. `map` and
 `saveEligible` describe output capabilities; map previews and permanent saving
 are not implemented yet. YAML import from the browser is also not available.
 
@@ -77,8 +79,61 @@ time limits, disk admission and atomic file publication. Native kernels and
 storage adapters do not import recipe definitions or inspect model IDs.
 Registered numerical policy reports what the implementation actually did;
 YAML cannot claim different resampling or inclusion rules. Adding new input
-capabilities, multiple sources, multiple steps or multiple outputs requires an
+capabilities, multiple sources or multiple steps requires an
 explicit contract extension rather than an unvalidated recipe workaround.
+
+## Retain several files from a run
+
+An operation registration declares its primary `output` and optional
+`additional_outputs`. Each declares a name, format, presentation and role
+(`result` or `intermediate`). A recipe must bind the primary output and may bind
+any of the additional outputs using `step.output`; the recipe supplies the
+labels shown to the user. Output aliases must be unique; `provenance` is reserved.
+The recipe's role, type and presentation must match the registered contract.
+
+The native operation returns its usual primary `Artifact`, with completed
+`ProducedFile` entries in `additional_outputs`. Each entry identifies a flat
+workspace basename and supplies its exact size, checksum, download name and
+media type. The operation's preparation must reserve disk for all files it can
+produce, including scratch and provenance. YAML cannot increase that reservation.
+Adding another recipe that selects these outputs needs no API or UI dispatch.
+
+After native execution exits, the worker binds completed files to the captured
+recipe. Storage independently measures sizes and SHA-256 checksums, removes
+unretained scratch, writes `manifest.json`, then atomically publishes the whole
+directory. Missing or changed declared files fail the run; partial files never
+receive download links. File hashing cooperates with cancellation and the worker
+waits for publication to stop before cleanup. The final database transition still
+checks the attempt, lease and deadline after the directory rename.
+
+Storage permits up to 64 retained files and a 64 KiB inventory. Model YAML
+permits up to 32 scientific outputs. A closed workspace may contain up to 128
+flat regular files; nested directories, symbolic links, junctions and hard links
+are rejected. Basenames must be portable and cannot be filesystem paths or
+Windows device names. The exact disk charge includes every retained file and
+the inventory itself. Failed attempts retain their reservation until cleanup.
+
+Model status includes an `artifacts` manifest; it is also available from
+`GET /api/processing/jobs/{jobId}/artifacts`. Each file has an opaque `artifactId`,
+recipe name, label, role, media type, download filename, size, SHA-256 checksum
+and a run-scoped URL. `GET`/`HEAD` on
+`/api/processing/jobs/{jobId}/artifacts/{artifactId}` supports the existing single
+byte-range download behavior. Every request checks the browser session's
+ownership and current availability; knowing an ID grants no access. Private
+workspace names and filesystem paths are absent from public manifests and YAML.
+
+The run view lists its result and intermediate downloads together. All files
+share the run's temporary expiry and deletion lifecycle. Deleting a run prevents
+new transfers; existing leases retain the entire directory until those transfers
+finish. Ordinary shared calculations keep their subscriber-aware deletion rules
+and caller-specific downloads. Named-file endpoints apply only to model runs.
+Run YAML retains file names and checksums for its metadata lifetime after the
+files expire, without claiming they are still downloadable. There is no live
+workspace browsing, per-file deletion, permanent saving or catalog publication.
+
+Existing `/result` and `/provenance` links continue to work, including historical
+runs without inventories. Storage still accepts historical primary-only result
+metadata, while newly executed jobs publish measured manifests.
 
 ## Reuse an output type
 

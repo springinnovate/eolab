@@ -3,6 +3,8 @@
 from typing import Protocol, Any
 from pathlib import Path
 from datetime import datetime
+from threading import Event
+from eolab_app.processing.artifact_manifest import ArtifactManifest, FileDeclaration
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -453,16 +455,43 @@ class JobArtifactStore(Protocol):
         """
         ...
 
-    def publish(self, attempt: str, reservation: int) -> None:
-        """Atomically rename a closed, validated attempt on the same volume.
+    def publish(
+        self,
+        attempt: str,
+        reservation: int,
+        declarations: tuple[FileDeclaration, ...],
+        cancelled: Event,
+    ) -> ArtifactManifest:
+        """Validate declared files and atomically publish their immutable inventory.
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
             reservation: Admitted scratch/output ceiling, checked before publish.
+            declarations: Files explicitly approved for retention by the application.
+            cancelled: Signal checked during hashing and before publication. The
+                caller must wait for publication to exit before cleaning up.
+
+        Returns:
+            Verified files and exact retained bytes, including the manifest file.
 
         Raises:
             ProcessingError: If the completed output exceeds its reservation.
             OSError: If atomic publication fails.
+        """
+        ...
+
+    def artifact_path(self, attempt: str, storage_name: str) -> Path:
+        """Locate a retained file after ownership and transfer authorization.
+
+        Args:
+            attempt: Owned published attempt ID.
+            storage_name: Private basename from its validated manifest.
+
+        Returns:
+            Existing confined regular file.
+
+        Raises:
+            ProcessingError: If the name is unsafe or the file is unavailable.
         """
         ...
 

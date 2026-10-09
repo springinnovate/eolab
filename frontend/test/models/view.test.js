@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelsView, describeModelProgress } from "../../src/models/view.js";
 import { createModelDraft } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
  * @return {Object} View, document, mutable state and action log.
@@ -40,6 +40,22 @@ test("ready results show exact integer values and safe CSV/provenance/YAML links
     assert.match(h.view.run.details.run.href, /run-yaml$/);
     h.state.runs[0].status = "expired"; h.state.runs[0].result = null; h.view.render(h.state);
     assert.equal(h.view.run.result.children.length, 0); assert.match(h.view.run.status.textContent, /expired/);
+});
+
+test("run files distinguish coverage from results and replace legacy duplicate links", () => {
+    const h = fixture(), artifacts = fileManifest();
+    h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
+    h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
+    h.view.render(h.state);
+    const children = h.view.run.result.children;
+    assert.equal(children.length, 5); // Primary scientific card, heading, three file cards.
+    assert.equal(children[1].textContent, "Files from this run");
+    assert.match(children[3].children[1].textContent, /Intermediate result/);
+    assert.equal(children[4].children[0].textContent, "Download Calculation details");
+    for (let index = 0; index < 3; index++) assert.equal(children[index + 2].children[0].href, artifacts.files[index].url);
+    h.state.runs[0].expiresAt = "2000-01-01T00:00:00Z";
+    h.view.render(h.state);
+    assert.equal(h.view.run.result.children.length, 0);
 });
 
 test("run controls and open details remain stable through progress updates", () => {

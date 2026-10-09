@@ -16,6 +16,34 @@ from eolab_app.processing.model_yaml import (
     parse_yaml,
 )
 from eolab_app.processing.models import ProcessingError
+from model_recipe_support import multiple_output_recipe
+
+
+def test_recipe_selects_registered_outputs_and_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YAML names retained intermediates without changing model-name dispatch.
+
+    Args:
+        monkeypatch: Scoped fixture operation registry.
+    """
+    recipe = multiple_output_recipe(monkeypatch)
+    assert ModelRegistry((recipe,)).get(recipe.id, recipe.version) == recipe
+    for name, change in (
+        ("inspected_coverage", {"role": "result"}),
+        ("habitat_totals", {"source": "evaluate.unknown"}),
+        ("habitat_totals", {"type": "raster"}),
+    ):
+        document = recipe.to_document()
+        document["outputs"][name].update(change)
+        with pytest.raises(ProcessingError):
+            ModelRegistry((ModelDefinition.model_validate(document),))
+    document = recipe.to_document()
+    document["outputs"].pop("inspected_coverage")
+    assert ModelRegistry((ModelDefinition.model_validate(document),))
+    document["outputs"].pop("habitat_result")
+    with pytest.raises(ProcessingError):
+        ModelRegistry((ModelDefinition.model_validate(document),))
 
 
 @pytest.mark.parametrize("model_count", [1, 101])

@@ -6,6 +6,9 @@ from eolab_app.catalog_selection import (
 )
 import asyncio
 from contextlib import suppress
+from dataclasses import replace
+from pathlib import PurePath
+from threading import Event
 import logging
 from typing import Any
 
@@ -14,6 +17,7 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import Artifact, ProcessingError
+from eolab_app.processing.artifact_manifest import FileDeclaration
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
@@ -28,6 +32,7 @@ from eolab_app.processing.model_runs import (
     get_application_build_id,
     compute_implementation_checksum,
     record_model_preparation,
+    declare_model_files,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -228,8 +233,7 @@ class ProcessingWorker:
             if value is not None:
                 if resolved_area is not None:
                     await self.areas.resolve_for_sampling(resolved_area.selection)
-                self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
-                return value
+                return await self._publish_result(row, value)
         status, value = await run_process(
             target,
             (action, (authorized.source_path, spec, directory, limits)),
@@ -240,12 +244,77 @@ class ProcessingWorker:
             raise ProcessingError(*value)
         if resolved_area is not None:
             await self.areas.resolve_for_sampling(resolved_area.selection)
-        # The heartbeat/fencing check in finish is still required after rename;
-        # if cancellation wins the race, this private file is never advertised.
-        # This bounded local-directory rename must finish before cancellation
-        # can mark the attempt terminal and permit cleanup of its files.
-        self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
-        return value
+        return await self._publish_result(row, value)
+
+    async def _publish_result(
+        self, row: dict[str, Any], artifact: Artifact
+    ) -> Artifact:
+        """Publish complete declared files without blocking heartbeats or racing cleanup.
+
+        Args:
+            row: Running attempt with its admitted disk reservation and declarations.
+            artifact: Native result metadata; all native file handles are closed.
+
+        Returns:
+            The original scientific result with its verified immutable inventory.
+
+        Raises:
+            ProcessingError: If file validation, retention limits or publication fail.
+            asyncio.CancelledError: After the publication thread has stopped writing.
+        """
+        if row["spec"]["operation"] == MODEL_OPERATION:
+            declarations = declare_model_files(row, artifact)
+        else:
+            declarations = (
+                FileDeclaration(
+                    name="result",
+                    label="Result",
+                    role="result",
+                    storage_name=getattr(artifact, "result_name", "result.tif"),
+                    filename=artifact.filename,
+                    media_type=artifact.media_type,
+                    size=artifact.size,
+                    sha256=artifact.sha256,
+                ),
+            )
+        declarations += (
+            FileDeclaration(
+                name="provenance",
+                label="Provenance",
+                role="provenance",
+                storage_name="provenance.json",
+                filename=str(PurePath(artifact.filename).with_suffix(".json")),
+                media_type="application/json",
+            ),
+        )
+        cancelled = Event()
+        publication = asyncio.create_task(
+            asyncio.to_thread(
+                self.artifacts.publish,
+                row["attempt_id"],
+                row["reserved_bytes"],
+                declarations,
+                cancelled,
+            )
+        )
+        try:
+            manifest = await asyncio.shield(publication)
+        except asyncio.CancelledError:
+            cancelled.set()
+            # Repeated shutdown/cancel signals must not release cleanup while the
+            # underlying thread is still hashing, deleting scratch, or renaming.
+            while not publication.done():
+                try:
+                    await asyncio.shield(publication)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not publication.cancelled():
+                publication.exception()
+            raise
+        # Database finish still fences cancellation/late attempts after the rename.
+        return replace(artifact, manifest=manifest, additional_outputs=())
 
     async def run_once(self) -> bool:
         """Claim and fully supervise one attempt, or report that the slot is busy.
