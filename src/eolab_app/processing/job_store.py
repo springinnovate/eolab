@@ -37,18 +37,18 @@ PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 UNFINISHED = ("queued", "running", "cancelling")
 
 
-def retained_metadata(value: dict[str, object] | None) -> Jsonb | None:
-    """Bound opaque operation metadata, reserving room for its terminal outcome.
+def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None:
+    """Check retained job details and convert them to PostgreSQL JSON.
 
     Args:
-        value: Application-validated path-free record, or no retained record.
+        value: Operation details already validated by the calling service, or None.
 
     Returns:
-        PostgreSQL JSON wrapper, at most 192 KiB, or None. The database enforces
-        256 KiB for metadata plus its final artifact/error snapshot.
+        A PostgreSQL JSON value of at most 192 KiB, or None. This leaves room for
+        the final result or error within the database's combined 256 KiB limit.
 
     Raises:
-        ProcessingError: If the record is oversized or not finite JSON.
+        ProcessingError: If the details exceed the size limit or contain non-JSON values.
     """
     if value is None:
         return None
@@ -462,7 +462,7 @@ class PostgresJobStore:
                             Jsonb(expected.summary),
                             expected.operation,
                             expected.work_key,
-                            retained_metadata(expected.retained_metadata),
+                            serialize_retained_metadata(expected.retained_metadata),
                             self.limits.metadata_ttl_seconds,
                         )
                     )
@@ -574,7 +574,7 @@ class PostgresJobStore:
                 (
                     Jsonb(prepared.specification),
                     Jsonb(prepared.summary),
-                    retained_metadata(prepared.retained_metadata),
+                    serialize_retained_metadata(prepared.retained_metadata),
                     0 if waiting else prepared.reserved_bytes,
                     prepared.reserved_bytes,
                     "queued" if waiting else "running",

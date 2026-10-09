@@ -190,18 +190,23 @@ class ProcessingService:
     async def submit_model_run(
         self, owner: str, request: ModelRunRequest
     ) -> dict[str, Any]:
-        """Admit one model after recovering retries and capturing authorized inputs.
+        """Start a model run, or recover a previously accepted submission.
+
+        Checks the selected model and source, fills in defaults, and saves the
+        inputs before queueing work. Repeating the same request ID and inputs
+        returns the original run even if its model or source is no longer installed.
 
         Args:
-            owner: Current Processing session hash.
-            request: Bounded model reference, explicit inputs and parameter values.
+            owner: Hash of the requesting browser's Processing session cookie.
+            request: The chosen model, input datasets, area, parameters and run label.
 
         Returns:
-            The same owned job on an unchanged retry, or a newly queued model.
+            The newly queued run, or the original run for an unchanged retry.
 
         Raises:
-            ProcessingError: For conflicts, invalid models, unavailable inputs or limits.
-            RasterFeatureError: If the catalog cannot authorize the requested source.
+            ProcessingError: If the retry conflicts, model inputs are invalid, or
+                the configured queue or storage limits prevent submission.
+            RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
         request_hash = hashlib.sha256(
             encode_canonical_json(
@@ -242,41 +247,42 @@ class ProcessingService:
         return public_job(row)
 
     async def list_models(self) -> dict[str, Any]:
-        """Read the complete installed library without source or rendering access.
+        """List every installed model recipe and its setup fields.
 
         Returns:
-            Versioned definitions and typed setup metadata.
+            Model definitions, versions and checksums, without accessing datasets or rendering.
         """
         return {"models": self.model_registry.list_models()}
 
-    async def model_yaml(self, identifier: str, version: str) -> bytes:
-        """Export an exact installed reusable recipe.
+    async def export_installed_model_yaml(self, identifier: str, version: str) -> bytes:
+        """Export an installed model definition as reusable Model YAML.
 
         Args:
-            identifier: Model ID returned by discovery.
-            version: Explicit installed version.
+            identifier: The model ID returned by discovery.
+            version: The installed model version to export.
 
         Returns:
-            Bounded UTF-8 YAML.
+            UTF-8 YAML bytes describing the recipe.
 
         Raises:
-            ProcessingError: If this definition is unavailable.
+            ProcessingError: If the model version is unavailable or cannot be exported.
         """
         return export_yaml(self.model_registry.get(identifier, version).to_document())
 
-    async def run_yaml(self, owner: str, identifier: str, *, run: bool) -> bytes:
-        """Export a run's capture independently of the installed recipe library.
+    async def export_job_yaml(self, owner: str, identifier: str, *, run: bool) -> bytes:
+        """Export the recipe or run details saved with this browser session's job.
 
         Args:
-            owner: Current browser-session hash.
-            identifier: Owned job ID.
-            run: Export the complete invocation/execution rather than only its recipe.
+            owner: Hash of the requesting browser's Processing session cookie.
+            identifier: The model run's job ID.
+            run: True for Run YAML including inputs and execution details; False for
+                only the reusable Model YAML recipe.
 
         Returns:
-            Path-free YAML under the original session authorization.
+            UTF-8 YAML bytes using the saved recipe, independent of the current library.
 
         Raises:
-            ProcessingError: If the owner, model or retained metadata is unavailable.
+            ProcessingError: If the job is unavailable to this session or its metadata expired.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         return export_model_job_yaml(row, run=run)

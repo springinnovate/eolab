@@ -390,7 +390,9 @@ def create_processing_router(
             HTTPException: If the requested model version is unavailable.
         """
         _get_session_owner_hash(request, response, session_ttl_seconds)
-        data = await _await_service_result(service.model_yaml(model_id, model_version))
+        data = await _await_service_result(
+            service.export_installed_model_yaml(model_id, model_version)
+        )
         return Response(
             data,
             media_type="application/yaml",
@@ -481,7 +483,7 @@ def create_processing_router(
             HTTPException: If the run belongs to another session, was deleted, or its metadata expired.
         """
         data = await _await_service_result(
-            service.run_yaml(
+            service.export_job_yaml(
                 _get_session_owner_hash(request, response, session_ttl_seconds),
                 job_id,
                 run=document_kind == "run-yaml",
