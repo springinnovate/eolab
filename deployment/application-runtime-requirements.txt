@@ -1,5 +1,8 @@
 # Linux x86_64 / CPython 3.12 wheels. See docs/deployment-and-operations.md#build-information.
 # Generated from the deployed resolution; review changes before building.
+
+# Model YAML: reviewed CPython 3.12 Linux amd64 wheel, no source build.
+PyYAML==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
 affine==3.0.1 --hash=sha256:cda3b303325e7bf2bf34817e68753a0d1c4cacbdd451fe67c4878dc2ecbaa540
 annotated_doc==0.0.5 --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101
 annotated_types==0.8.0 --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0

@@ -2,9 +2,11 @@
 
 Status: design for [#694](https://github.com/springinnovate/eolab/issues/694),
 tracked by [#449](https://github.com/springinnovate/eolab/issues/449).
-These are proposed contracts for the following implementation issues, **not
-features or endpoints available in EOLab 0.9.0**. This change installs no models,
-parser, routes, scheduler, database migrations or UI.
+The backend foundation in [#695](https://github.com/springinnovate/eolab/issues/695)
+implements the installed raster-summary recipe, model API, existing-queue execution
+and YAML exports described below. The Models UI, downstream adapter, multiple
+artifacts, previews and Save remain follow-up work. These features were not part
+of the tagged EOLab 0.9.0 release.
 
 The implementation baseline inspected for this design is main commit
 `e9ffef35be759a1d4de776e6a61cc95e37e82cf7`. Subsequent work must inspect current
@@ -43,7 +45,7 @@ Intermediate artifacts are available after successful publication, not by browsi
 a live scratch directory. A transient selection mask may be inspected for its run,
 but cannot become another run's source or a persistent geometry snapshot.
 
-## Existing owners and evidence
+## Existing owners and evidence at the design baseline
 
 Paths below are relative to the repository. Current code is evidence for the
 extension points, not a reason to consolidate different capabilities.
@@ -72,9 +74,9 @@ for existing contracts.
 
 ## Ownership and permitted dependency changes
 
-This PR changes documentation only: **zero runtime edges added, removed or
-redirected, zero new services, zero deployed public-contract changes**. It
-specifies the following future extensions, each owned by its linked issue.
+The #694 design PR changed documentation only. It approved the following
+extensions, each owned by its linked implementation issue. The implemented
+foundation is described separately below.
 
 | Owner | Used by | Depends on | Coordinates with |
 | --- | --- | --- | --- |
@@ -263,9 +265,9 @@ Use a bounded safe parser in #695 with justified/pinned deployment dependencies;
   #695 adds YAML package resources and verifies discovery from the built wheel
   and production API/worker images. No runtime parser dependency is added here.
 
-## Proposed HTTP and run contracts
+## Model HTTP and run contracts
 
-All routes below are **future** same-origin Processing endpoints. Reuse the
+The foundation routes below are same-origin Processing endpoints. Reuse the
 existing session cookie, mutation header, owner isolation, sanitized errors and
 status handling. Never accept an owner, filesystem path, execution target or
 resource override from a model-run request.
@@ -280,7 +282,8 @@ resource override from a model-run request.
 | `GET /api/processing/jobs/{jobId}/model-yaml` and `/run-yaml` | Owner-authorized captured definition and invocation exports, even if the installed definition changes. Availability is bounded by metadata retention; missing/expired captures are explicit (#695). |
 | `GET /api/processing/jobs/{jobId}/artifacts/{artifactId}` | Authorized leased download of a declared ready artifact (#697). Preview capabilities are a separate bounded contract in #698. |
 
-Existing `/jobs` listing continues to serve the existing clip/calculation views;
+The artifact-ID download route remains future #697 work; initial summaries use
+the existing result/provenance routes. Existing `/jobs` listing continues to serve the existing clip/calculation views;
 model discovery uses `/model-runs`. Shared status-by-ID projection recognizes the
 new operation without turning legacy consumers into model editors. #695/#696
 must test mixed status responses and operation filtering in the shared observer.
@@ -439,6 +442,57 @@ implementations. Import/storage/publication, multi-step recipes, arbitrary
 multi-raster math, output chaining, live stage previews and checkpoint/resume
 are outside these first foundation contracts until separately scoped.
 
+## Implemented foundation (#695)
+
+`processing/model_definitions.py` owns immutable recipe validation and the
+installed operation registry. `processing/model_run_contracts.py` owns typed
+submission, progress and export values. `processing/model_runs.py` binds a recipe
+to the existing aggregate contract; `ProcessingService` and `ProcessingWorker`
+coordinate admission and execution. Storage and native execution remain unaware
+of model definitions. The native aggregate implementation is unchanged.
+
+Only `raster-summary` version `1.0.0` is installed. Discovery returns its complete
+typed form metadata and `definitionSha256`. Submit the envelope illustrated in
+`model-examples/raster-summary.request.json`, replacing the synthetic source and
+bounds with catalog inputs and using the digest returned by this deployment.
+The request requires the existing session cookie and `X-EOLab-Processing: 1`
+mutation header. A 202 response includes the existing job URL in `Location`.
+Poll that URL or the existing batched status endpoint; explicit Cancel/Delete
+use the same lifecycle. No browser navigation hook cancels a model run.
+
+Omitted parameters use the captured definition's defaults. Retry identity is the
+canonical JSON submission envelope without `requestId`; reuse the same envelope
+and key after a lost acknowledgement. Changing an omission to an explicit value
+is a changed request, even if that value happens to equal today's default.
+Recovery precedes library lookup and source authorization, so an already accepted
+request remains recoverable after its model or input disappears.
+
+Run YAML captures source identity at admission, then appends the prepared native
+grid, resource limits and numerical policy. The raster signature exported is an
+opaque digest of the existing scanner identity, not a full content checksum.
+API and worker compare their build identities and a digest of the installed
+backend package and numerical/native-library versions before execution.
+Production provenance also records
+the source commit supplied to the image build; development builds are explicitly
+identified by package version and implementation digest.
+
+The generic storage extension retains opaque metadata separately from scratch:
+192 KiB maximum at admission/preparation and 256 KiB including the terminal outcome,
+bounded in aggregate by the existing `max_job_records` policy. A database transition
+captures the first terminal outcome and sets its seven-day metadata deadline.
+Cleanup never restarts that deadline. Exports return 410 after metadata expiry or
+Delete; output expiry alone does not remove the captured recipe. Model runs do not
+join active calculations or use the numerical result cache in this first slice.
+
+PyYAML **6.0.3** is the one added runtime dependency. It supplies the established
+YAML scanner/parser and safe emitter; maintaining another YAML implementation is
+outside this application. The Models boundary adds byte/token/depth limits before
+construction, duplicate-key checks, JSON-compatible types and strict typed
+definitions; `safe_load` alone is insufficient. The production Linux wheel is
+pinned by SHA-256 in `deployment/application-runtime-requirements.txt`. Recipes
+are setuptools package resources, and image construction checks discovery from
+the installed distribution outside the source directory.
+
 ## Implementation sequence
 
 Each issue is independently reviewed from current main after its prerequisites.
@@ -458,6 +512,6 @@ hydrology is not needed to validate the full interaction.
 | 9 | [#702: saved runs](https://github.com/springinnovate/eolab/issues/702) | #694, #696, #697, ownership gate | Durable private access/retention with quotas and deletion. |
 
 Draft PRs remain draft until richpsharp personally verifies their deployment and
-behavior. This design PR is reviewed as documentation; it has no changed runtime
-to deploy. Future runtime issues carry their own tests, deployment SHA and
+behavior. The original #694 PR was documentation only. Runtime issues carry
+their own tests, deployment SHA and
 architectural impact rather than inheriting blanket approval from this document.

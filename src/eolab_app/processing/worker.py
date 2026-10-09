@@ -44,6 +44,13 @@ from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
+from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunSpec
+from eolab_app.processing.model_runs import (
+    application_build,
+    implementation_revision,
+    prepare_model_job,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +85,9 @@ class ProcessingWorker:
         self.limits = limits
         self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
+        # Fail startup for invalid packaged definitions rather than hiding them
+        # from discovery or accepting work the worker cannot dispatch.
+        ModelRegistry.installed()
 
     async def _prepare_calculation(self, row: dict[str, Any]) -> AuthorizedRaster:
         """Prepare queued summary inputs and publish their estimates on the same job.
@@ -95,7 +105,14 @@ class ProcessingWorker:
                 cancellation or insufficient storage.
             TimeoutError: If preparation exceeds its separate time limit.
         """
-        queued = UnpreparedCalculation.model_validate(row["spec"])
+        model = (
+            ModelRunSpec.model_validate(row["spec"])
+            if row["spec"]["operation"] == MODEL_OPERATION
+            else None
+        )
+        queued = UnpreparedCalculation.model_validate(
+            model.calculation if model else row["spec"]
+        )
         request = queued.request
         async with asyncio.timeout(self.limits.plan_timeout_seconds):
             alive = await asyncio.to_thread(
@@ -111,6 +128,12 @@ class ProcessingWorker:
             alias, source = next(iter(request.sources.items()))
             authorized = await self.authorizer.authorize(source)
             signature = tuple(authorized.source_signature.to_catalog())
+            if model is not None and signature != model.sourceSignature:
+                raise ProcessingError(
+                    "source_changed",
+                    "The raster changed after this model run was accepted.",
+                    409,
+                )
             resolved = None
             if request.catalogSelection:
                 if self.areas is None:
@@ -122,9 +145,13 @@ class ProcessingWorker:
                 resolved = await self.areas.resolve_for_sampling(
                     request.catalogSelection
                 )
-            cached = await asyncio.to_thread(
-                self.jobs.get_cached_calculation_results,
-                calculation_result_cache_keys(request, signature),
+            cached = (
+                {}
+                if model
+                else await asyncio.to_thread(
+                    self.jobs.get_cached_calculation_results,
+                    calculation_result_cache_keys(request, signature),
+                )
             )
             spec = restore_cached_calculation_plan(
                 request, signature, cached, queued.polygonArea
@@ -181,11 +208,14 @@ class ProcessingWorker:
                     area=area,
                     grid=grid,
                 )
+            prepared = prepare_aggregate_job(spec, self.aggregate_limits)
+            if model is not None:
+                prepared = prepare_model_job(row, prepared, self.limits)
             updated = await asyncio.to_thread(
                 self.jobs.save_prepared_job,
                 row["id"],
                 row["attempt_id"],
-                prepare_aggregate_job(spec, self.aggregate_limits),
+                prepared,
             )
             row.update(updated)
             return authorized
@@ -278,8 +308,24 @@ class ProcessingWorker:
             ProcessingError: If the source, resources, or native operation fail.
         """
         operation = row["spec"]["operation"]
+        model = (
+            ModelRunSpec.model_validate(row["spec"])
+            if operation == MODEL_OPERATION
+            else None
+        )
+        if model is not None and (
+            model.implementationRevision != implementation_revision()
+            or model.applicationBuild != application_build()
+        ):
+            raise ProcessingError(
+                "model_implementation_changed",
+                "The model implementation changed before execution. Submit a new run.",
+                409,
+            )
         authorized = None
-        if operation == "raster.aggregate.v1" and "request" in row["spec"]:
+        if (
+            model is not None and isinstance(model.calculation, UnpreparedCalculation)
+        ) or (operation == "raster.aggregate.v1" and "request" in row["spec"]):
             authorized = await self._prepare_calculation(row)
         elif operation == "raster.clip.v1" and "request" in row["spec"]:
             await self._prepare_clip(row)
@@ -289,8 +335,12 @@ class ProcessingWorker:
             spec = ClipSpec.model_validate(row["spec"])
             source = spec.source
             target, action, limits = clip_process_target, "clip", self.limits
-        elif operation == "raster.aggregate.v1":
-            spec = AggregateSpec.model_validate(row["spec"])
+        elif operation in {"raster.aggregate.v1", MODEL_OPERATION}:
+            spec = AggregateSpec.model_validate(
+                ModelRunSpec.model_validate(row["spec"]).calculation
+                if model
+                else row["spec"]
+            )
             required_disk_bytes = estimate_calculation_disk_bytes(
                 spec, self.aggregate_limits
             )
@@ -332,6 +382,15 @@ class ProcessingWorker:
             )
         if authorized is None:
             authorized = await self.authorizer.authorize(source)
+        if (
+            model is not None
+            and tuple(authorized.source_signature.to_catalog()) != model.sourceSignature
+        ):
+            raise ProcessingError(
+                "source_changed",
+                "The raster changed after this model run was accepted.",
+                409,
+            )
         directory = await asyncio.to_thread(
             self.artifacts.prepare,
             row["attempt_id"],

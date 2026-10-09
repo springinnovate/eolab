@@ -341,6 +341,7 @@ def create_app(
             (Path.cwd(), app_global_configuration.scan_mount_path),
         ),
         changes=processing_events,
+        model_authorizer=raster_source_authorizer,
     )
     application.include_router(create_processing_router(processing_service))
     scan_manager = ScanManager(

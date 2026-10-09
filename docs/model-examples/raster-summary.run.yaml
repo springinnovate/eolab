@@ -59,7 +59,7 @@ execution:
   operations:
     calculate:
       id: raster.aggregate.v1
-      implementationRevision: "0000000000000000000000000000000000000000"
+      implementationRevision: "0000000000000000000000000000000000000000000000000000000000000000"
   sources:
     raster:
       sourceSignature: "1111111111111111111111111111111111111111111111111111111111111111"
@@ -71,6 +71,13 @@ execution:
         transform: [0.1, 0.0, -1.0, 0.0, -0.1, 1.0]
         dtype: float32
         nodata: null
+        window: [0, 0, 10, 10]
+        nativeBlocks: 1
+        decodedBytes: 400
+        estimatedMemoryBytes: 1048576
+        scale: "1"
+        offset: "0"
+        storedUnit: null
   numericalPolicy:
     version: raster.aggregate.v1
     grid: native

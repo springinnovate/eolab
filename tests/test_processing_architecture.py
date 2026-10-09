@@ -199,3 +199,21 @@ def test_retired_upload_runtime_is_absent() -> None:
         assert retired_control not in markup
     compose = Path("docker-compose.yml").read_text()
     assert "TEMPORARY_AOI" not in compose
+
+
+def test_storage_and_native_mechanisms_do_not_know_model_definitions() -> None:
+    """Model dispatch remains above opaque persistence and native execution ports."""
+    for path in (
+        "src/eolab_app/processing/job_store.py",
+        "src/eolab_app/processing/artifacts.py",
+        "src/eolab_app/processing/models.py",
+        "src/eolab_app/processing/ports.py",
+        "src/eolab_app/execution/reusable_process.py",
+        "src/eolab_app/execution/bounded_process.py",
+        "src/eolab_app/raster/source_contract.py",
+    ):
+        assert not {
+            name
+            for name in imports(Path(path))
+            if name.startswith("eolab_app.processing.model_")
+        }, path

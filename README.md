@@ -190,8 +190,10 @@ resource controls.
 
 ## Planned model integration
 
-The [Models architecture and YAML contracts](docs/models.md) describe the planned
-model library, owned runs and downstream beneficiary integration. This is a design
-for upcoming implementation; the Models interface is not available in 0.9.0.
+The [Models architecture and YAML contracts](docs/models.md) describe the model
+library and downstream beneficiary integration. The backend foundation provides
+an installed raster-summary recipe, owned Processing runs and Model/Run YAML
+exports. The Models interface and downstream adapter are follow-up work; they
+are not available in 0.9.0.
 
 EOLab is open-source software under the [Apache License 2.0](LICENSE).

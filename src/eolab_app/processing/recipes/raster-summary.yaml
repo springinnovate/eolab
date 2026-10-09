@@ -1,0 +1,35 @@
+# Application-installed single-raster summary recipe.
+schema: eolab.model/v1
+id: raster-summary
+version: "1.0.0"
+title: Raster summary
+description: Calculate one scalar expression for an explicit raster and area.
+inputs:
+  raster:
+    type: catalog_raster
+    label: Raster
+  area:
+    type: summary_area
+    label: Analysis area
+parameters:
+  summary:
+    type: summary_expression
+    label: Summary formula
+    alias: a
+    grammar: eolab.scalar/v1
+    default: "sum(a)"
+steps:
+  - id: calculate
+    operation: raster.aggregate.v1
+    inputs:
+      raster: {input: raster}
+      area: {input: area}
+    parameters:
+      expression: {parameter: summary}
+outputs:
+  statistics:
+    source: calculate.statistics
+    role: result
+    presentation: table
+    saveEligible: true
+executionProfile: raster-summary

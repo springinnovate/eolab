@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import Field, ValidationError
 from starlette.responses import FileResponse, StreamingResponse
@@ -43,13 +43,20 @@ from eolab_app.processing.polygon_areas import (
     PolygonAreaUploadResponse,
 )
 from eolab_app.processing.service import ProcessingService
+from eolab_app.processing.model_run_contracts import (
+    ModelJobResponse,
+    ModelLibrary,
+    ModelRunList,
+    ModelRunRequest,
+)
 from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.http_disconnect import wait_for_http_disconnect
 
 SupportedJobResponse = Annotated[
-    ClipJobResponse | AggregateJobResponse, Field(discriminator="operation")
+    ClipJobResponse | AggregateJobResponse | ModelJobResponse,
+    Field(discriminator="operation"),
 ]
 
 COOKIE = "__Host-eolab-processing"
@@ -324,6 +331,177 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         tags=["processing"],
         route_class=BoundedProcessingRoute,
     )
+
+    @router.get("/models", response_model=ModelLibrary)
+    async def models(request: Request, response: Response) -> dict[str, Any]:
+        """Discover installed recipes and typed setup fields.
+
+        Args:
+            request: Browser session context.
+            response: Private-cache and capability-cookie response.
+
+        Returns:
+            Bounded versioned model definitions.
+        """
+        _owner(request, response)
+        return await _result(service.list_models())
+
+    @router.get("/models/{model_id}/versions/{model_version}/yaml")
+    async def model_yaml(
+        model_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
+        model_version: Annotated[str, Path(pattern=r"^\d+\.\d+\.\d+$", max_length=32)],
+        request: Request,
+        response: Response,
+    ) -> Response:
+        """Download an installed reusable recipe with no source bindings.
+
+        Args:
+            model_id: Discovered model identifier.
+            model_version: Explicit installed version.
+            request: Browser session context.
+            response: Cookie and cache-policy response.
+
+        Returns:
+            Bounded YAML attachment.
+
+        Raises:
+            HTTPException: If the recipe version is unavailable.
+        """
+        _owner(request, response)
+        data = await _result(service.model_yaml(model_id, model_version))
+        return Response(
+            data,
+            media_type="application/yaml",
+            headers={
+                **dict(response.headers),
+                "Content-Disposition": f'attachment; filename="{model_id}-{model_version}.yaml"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @router.post(
+        "/model-runs",
+        status_code=202,
+        response_model=ModelJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def submit_model(
+        body: ModelRunRequest, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Submit captured model inputs to the existing owned Processing queue.
+
+        Args:
+            body: Complete bounded model submission.
+            request: Same-origin browser context.
+            response: Acknowledgement with recovery Location and secure cookie.
+
+        Returns:
+            The accepted or idempotently recovered job.
+
+        Raises:
+            HTTPException: For invalid inputs, ownership, source or admission failures.
+        """
+        job = await _result(service.submit_model_run(_owner(request, response), body))
+        response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
+        return job
+
+    @router.get("/model-runs", response_model=ModelRunList)
+    async def model_runs(
+        request: Request,
+        response: Response,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        """Recover one owner's model history independently of Statistics traffic.
+
+        Args:
+            request: Browser session context.
+            response: Private-cache/cookie response.
+            limit: Maximum visible entries.
+            cursor: Opaque continuation token returned by a previous page.
+
+        Returns:
+            Owned model snapshots and the next cursor, if present.
+
+        Raises:
+            HTTPException: For invalid pagination or unavailable storage.
+        """
+        return await _result(
+            service.list_model_runs(_owner(request, response), limit, cursor)
+        )
+
+    async def captured_yaml(
+        job_id: JobId,
+        document_kind: str,
+        request: Request,
+        response: Response,
+    ) -> Response:
+        """Export an owned capture even when the installed definition has changed.
+
+        Args:
+            job_id: Opaque owned run identifier.
+            document_kind: Reusable definition or full captured run.
+            request: Browser capability context.
+            response: Private-cache/cookie response.
+
+        Returns:
+            Bounded YAML attachment without private execution capabilities.
+
+        Raises:
+            HTTPException: For unowned, deleted or metadata-expired runs.
+        """
+        data = await _result(
+            service.run_yaml(
+                _owner(request, response), job_id, run=document_kind == "run-yaml"
+            )
+        )
+        return Response(
+            data,
+            media_type="application/yaml",
+            headers={
+                **dict(response.headers),
+                "Content-Disposition": f'attachment; filename="{job_id}-{document_kind}.yaml"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @router.get("/jobs/{job_id}/model-yaml")
+    async def captured_model_yaml(
+        job_id: JobId, request: Request, response: Response
+    ) -> Response:
+        """Download this owner's captured reusable model definition.
+
+        Args:
+            job_id: Owned run identifier.
+            request: Browser capability context.
+            response: Private-cache/cookie response.
+
+        Returns:
+            Captured YAML attachment.
+
+        Raises:
+            HTTPException: If the capture is unavailable to the owner.
+        """
+        return await captured_yaml(job_id, "model-yaml", request, response)
+
+    @router.get("/jobs/{job_id}/run-yaml")
+    async def captured_run_yaml(
+        job_id: JobId, request: Request, response: Response
+    ) -> Response:
+        """Download this owner's captured invocation and execution record.
+
+        Args:
+            job_id: Owned run identifier.
+            request: Browser capability context.
+            response: Private-cache/cookie response.
+
+        Returns:
+            Captured YAML attachment.
+
+        Raises:
+            HTTPException: If the capture is unavailable to the owner.
+        """
+        return await captured_yaml(job_id, "run-yaml", request, response)
 
     @router.delete("/polygon-areas/{area_id}", openapi_extra=MUTATION_SCHEMA)
     async def discard_polygon_area(

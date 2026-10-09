@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 SUITES = (
+    "test_model_runs_postgres.py",
     "test_processing_jobs.py",
     "test_processing_admission_postgres.py",
     "test_annotation_sessions_postgres.py",
@@ -96,6 +97,7 @@ def main() -> int:
                 f"--processing-dsn={args.dsn}",
                 *(str(root / "tests" / name) for name in SUITES),
                 str(root / "tests" / "test_processing_database_safety.py"),
+                str(root / "tests" / "test_model_definitions.py"),
             ],
             plugins=[RequiredDatabaseTests()],
         )

@@ -21,6 +21,8 @@ class PreparedJobPlan:
         operation: Opaque versioned operation discriminator supplied by its owner.
         work_key: Complete computation identity; None means never join active work.
         presentation: Small caller-specific labels, separate from shared execution.
+        retained_metadata: Optional bounded, path-free operation record retained
+            independently of scratch cleanup for seven days after completion.
     """
 
     specification: dict[str, object]
@@ -29,6 +31,7 @@ class PreparedJobPlan:
     operation: str = ""
     work_key: str | None = None
     presentation: dict[str, object] | None = None
+    retained_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

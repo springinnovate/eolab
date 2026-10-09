@@ -2,6 +2,7 @@
 
 from typing import Protocol, Any
 from pathlib import Path
+from datetime import datetime
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -211,11 +212,14 @@ class JobStore(Protocol):
         """
         ...
 
-    def list_owned(self, owner: str) -> list[dict[str, Any]]:
+    def list_owned(
+        self, owner: str, operations: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
         """Return at most 50 recent jobs for session recovery.
 
         Args:
             owner: Current session hash.
+            operations: Optional opaque operation filter applied before the limit.
 
         Returns:
             Newest owned jobs first, with no global listing.
@@ -234,6 +238,30 @@ class JobStore(Protocol):
         Returns:
             Matching owned records, including deleted jobs, in unspecified order.
             Foreign and nonexistent IDs are omitted.
+        """
+        ...
+
+    def list_owned_page(
+        self,
+        owner: str,
+        operations: tuple[str, ...],
+        limit: int,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read an owner-only, operation-filtered page with stable ordering.
+
+        Args:
+            owner: Current session hash.
+            operations: Application-owned operation discriminators.
+            limit: One to 101 rows, including an optional next-page sentinel.
+            before: Exclusive creation timestamp and public ID boundary.
+
+        Returns:
+            Newest matching nondeleted rows first.
+
+        Raises:
+            ValueError: If query limits are invalid.
+            ProcessingError: If storage is unavailable.
         """
         ...
 
