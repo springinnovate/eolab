@@ -10,9 +10,9 @@ from dataclasses import asdict
 from datetime import datetime
 from importlib.resources import files
 import json
-from eolab_app.processing.artifact_manifest import read_artifact_manifest
 from typing import Any, Iterator
 from uuid import uuid4
+from eolab_app.processing.artifact_manifest import read_artifact_manifest
 
 import psycopg
 from psycopg.rows import dict_row

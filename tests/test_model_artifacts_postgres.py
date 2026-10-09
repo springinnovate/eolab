@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.artifact_manifest import ProducedFile
+from eolab_app.processing.artifact_manifest import read_artifact_manifest
+from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.raster_clip import create_clip, clip_process_target
@@ -22,6 +24,7 @@ from model_recipe_support import multiple_output_recipe
 from test_model_runs_postgres import model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from test_raster_clips import SOURCE
+from uuid import uuid4
 
 
 def multiple_files_target(
@@ -237,3 +240,62 @@ def test_missing_declared_intermediate_never_publishes(
     client.portal.call(worker.cleanup)
     assert not list((worker.artifacts.root / "results").iterdir())
     assert not list((worker.artifacts.root / "attempts").iterdir())
+
+
+def test_file_ids_cannot_cross_runs_and_finish_preserves_reservation(
+    multiple_boundary: Any, store: Any
+) -> None:
+    """Scope IDs to their run and reject oversized or late manifest publication.
+
+    Args:
+        multiple_boundary: Actual model execution producing several retained files.
+        store: Durable reservation and attempt-fencing authority.
+    """
+    client, worker, _, body = multiple_boundary
+    first = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    first_base = f"/api/processing/jobs/{first['jobId']}"
+    manifest = client.get(first_base + "/artifacts").json()
+    second = submit(client, {**body, "requestId": uuid4().hex})
+    assert client.portal.call(worker.run_once)
+    other_base = f"/api/processing/jobs/{second['jobId']}"
+    for file in manifest["files"]:
+        assert (
+            client.get(other_base + "/artifacts/" + file["artifactId"]).status_code
+            == 404
+        )
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    row = store.get(first["jobId"], owner)
+    stored = row["artifact"]
+    artifact = Artifact(
+        stored["size"],
+        stored["sha256"],
+        stored["filename"],
+        media_type=stored["media_type"],
+        manifest=read_artifact_manifest(stored["manifest"]),
+    )
+    identifier = store.submit(
+        "fixture-owner",
+        uuid4().hex,
+        PreparedJobPlan(
+            {}, {}, artifact.manifest.total_bytes - 1, operation="fixture.files.v1"
+        ),
+        uuid4().hex,
+    )["id"]
+    claimed = store.claim_next_job()
+    assert claimed["id"] == identifier
+    with pytest.raises(ProcessingError) as error:
+        store.finish(identifier, claimed["attempt_id"], artifact)
+    assert error.value.code == "output_too_large"
+    unchanged = store.get(identifier, "fixture-owner")
+    assert unchanged["status"] == "running" and unchanged["artifact"] is None
+    assert unchanged["reserved_bytes"] == artifact.manifest.total_bytes - 1
+    assert not store.finish(identifier, "0" * 32, artifact)
+    assert store.finish(
+        identifier,
+        claimed["attempt_id"],
+        None,
+        {"code": "fixture_failure", "detail": "Stopped"},
+    )
+    assert not store.finish(identifier, claimed["attempt_id"], artifact)
+    assert store.get(identifier, "fixture-owner")["artifact"] is None

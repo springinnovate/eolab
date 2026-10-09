@@ -152,7 +152,8 @@ class ArtifactManifest:
 
     Attributes:
         files: At most 64 files, with unique IDs, aliases and private basenames.
-        total_bytes: File bytes plus the encoded inventory, limited to 64 KiB.
+        total_bytes: File bytes plus the encoded inventory. Only the inventory
+            itself is limited to 64 KiB.
         version: Persisted manifest schema version.
     """
 

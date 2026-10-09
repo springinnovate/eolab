@@ -951,7 +951,8 @@ def create_processing_router(
             )
         )
 
-    @router.api_route("/jobs/{job_id}/artifacts/{artifact_id}", methods=["GET", "HEAD"])
+    @router.get("/jobs/{job_id}/artifacts/{artifact_id}")
+    @router.head("/jobs/{job_id}/artifacts/{artifact_id}")
     async def download_model_artifact(
         job_id: JobId, artifact_id: JobId, request: Request, response: Response
     ) -> Response:
