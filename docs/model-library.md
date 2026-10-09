@@ -11,8 +11,16 @@ Hidden map layers remain available, and **Search catalog** finds sources that
 have not been added to the map. Use **More matches** to retrieve later search
 pages. A source does not need a rendered map layer to be analyzed.
 
-Choose the whole raster, copy the current map selection, enter a bounding box,
-or select catalog vector features. Vector choices copy the layer's applied
+Choose the whole raster, **Use visible map extent**, **Copy selected analysis
+area**, enter a bounding box, or select catalog vector features. Visible map
+extent copies the geographic rectangle currently shown on screen; no map click
+is required. Selected analysis area copies an existing sampling box around a
+map click or selected polygons. It is unavailable until an area is selected.
+The captured bounds are shown before Run. Panning or zooming does not change a
+draft automatically; choose **Update from map** to copy the new extent or
+selection. Blank margins outside the map's single world are excluded.
+
+Vector choices copy the layer's applied
 filter when the draft is created; catalog-only vectors initially select all
 features. Setup shows the predicate and matching feature count before Run.
 To use a different map filter, apply it to the layer and create a fresh setup.

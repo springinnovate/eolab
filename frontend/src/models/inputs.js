@@ -30,6 +30,27 @@ export function modelAreaInput(area) {
     return structuredClone(value);
 }
 
+/** Capture the visible part of the map within the canonical geographic world.
+ * Blank margins outside the single map world are excluded from the rectangle.
+ * @param {{west:number,south:number,east:number,north:number}|null} bounds Visible WGS 84 map bounds.
+ * @return {Object} Independent, validated model area.
+ * @throws {Error} If the viewport has no valid geographic rectangle.
+ */
+export function modelViewportArea(bounds) {
+    if (!bounds || ![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite)) {
+        throw new Error("The visible map extent is unavailable. Move the map or enter a bounding box.");
+    }
+    if (bounds.west === bounds.east || bounds.south === bounds.north) {
+        throw new Error("The map has no visible area. Make room for the map, then update the area, or enter a bounding box.");
+    }
+    const selectedBounds = {west: Math.max(-180, bounds.west), south: Math.max(-90, bounds.south),
+        east: Math.min(180, bounds.east), north: Math.min(90, bounds.north)};
+    if (selectedBounds.west >= selectedBounds.east || selectedBounds.south >= selectedBounds.north) {
+        throw new Error("Move the map inside the world bounds, then update the area from the map.");
+    }
+    return modelAreaInput({kind: "selectedArea", selectedBounds});
+}
+
 /** Create an editable setup with explanations for unambiguous suggestions.
  * @param {Object} model Installed recipe.
  * @param {Object} context Catalog and map choices supplied by browser composition.
@@ -64,7 +85,8 @@ export function createModelDraft(model, context, id) {
 export function captureModelSubmission(draft, requestId) {
     if (!draft.label.trim() || draft.label.length > 80) throw new Error("Name this run using 1–80 characters.");
     if (!draft.raster) throw new Error("Choose a raster for this model.");
-    if (draft.selecting || !draft.area) throw new Error("Select and review the analysis area first.");
+    if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
+    if (!draft.area) throw new Error(draft.selectionError || "Choose an analysis area before running the model.");
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         if (input.type === "catalog_raster") inputs[name] = {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};

@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { ModelsController } from "../../src/models/controller.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
-import { captureModelSubmission, createModelDraft } from "../../src/models/inputs.js";
+import { captureModelSubmission, createModelDraft, modelViewportArea } from "../../src/models/inputs.js";
 import { model, raster, area, invocation, selection, job } from "../../test-support/models/fixtures.js";
 
 /** Compose the real controller and observer with controllable boundary responses.
@@ -129,4 +129,45 @@ test("duplicating a run cannot inherit an in-flight vector suggestion from the c
     assert.equal(prepared, 0); assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
     h.controller.chooseArea("whole"); h.controller.chooseArea("captured");
     assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
+});
+
+
+test("visible map extent runs without a clicked selection and changes only when explicitly updated", async () => {
+    const h = fixture(); h.context.area = null;
+    h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5};
+    h.controller.chooseModel(model); h.controller.chooseArea("viewport");
+    const original = structuredClone(h.controller.state.draft.area);
+    assert.deepEqual(original, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
+    h.context.viewportBounds.west = -20;
+    assert.deepEqual(h.controller.state.draft.area, original);
+    h.handlers.onUpdateArea();
+    assert.equal(h.controller.state.draft.area.selectedBounds.west, -20);
+    await h.controller.submit();
+    assert.equal(h.submitted.length, 1);
+    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -20);
+    h.context.viewportBounds.west = -30;
+    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -20);
+});
+
+test("a missing analysis selection explains alternatives and can be copied after a map click", async () => {
+    const h = fixture(); h.context.area = null; h.controller.chooseModel(model);
+    h.controller.chooseArea("map"); await h.controller.submit();
+    assert.equal(h.submitted.length, 0);
+    assert.match(h.controller.state.error, /No selected analysis area.*Use visible map extent/);
+    h.context.area = structuredClone(area);
+    assert.equal(h.controller.state.draft.area, null);
+    h.handlers.onUpdateArea();
+    assert.deepEqual(h.controller.state.draft.area, area); assert.equal(h.controller.state.error, "");
+    await h.controller.submit(); assert.equal(h.submitted.length, 1);
+});
+
+test("viewport capture excludes blank world margins and rejects unavailable or empty bounds", () => {
+    assert.deepEqual(modelViewportArea({west: -240, south: -95, east: 240, north: 95}),
+        {kind: "selectedArea", selectedBounds: {west: -180, south: -90, east: 180, north: 90}});
+    assert.throws(() => modelViewportArea(null), /unavailable/);
+    assert.throws(() => modelViewportArea({west: 0, east: 0, south: 0, north: 10}), /no visible area/);
+    assert.throws(() => modelViewportArea({west: NaN, south: 0, east: 20, north: 10}), /unavailable/);
+    assert.throws(() => modelViewportArea({west: 190, south: 0, east: 200, north: 10}), /inside the world/);
+    const h = fixture(); h.controller.chooseModel(model); h.controller.chooseArea("viewport");
+    assert.equal(h.controller.state.draft.area, null); assert.match(h.controller.state.draft.selectionError, /unavailable/);
 });

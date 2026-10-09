@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job } from "../../test-support/models/
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "UpdateArea", "Vector", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -26,6 +26,7 @@ test("all model controls exist in production markup and progress retains field f
     h.view.render(h.state);
     assert.equal(h.doc.activeElement, field); assert.equal(field.value, "mean(a)"); assert.equal(h.view.setup.parameters.summary, field);
     assert.match(h.view.setup.areaDescription.textContent, /Box/);
+    assert.match(h.view.setup.areaDescription.textContent, /W 0\.0000°/);
 });
 
 test("ready results show exact integer values and safe CSV/provenance/YAML links", () => {
@@ -54,4 +55,22 @@ test("stage feedback covers terminal states and an unknown total stays indetermi
     for (const status of ["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired"])
         assert.ok(describeModelProgress(job({status})));
     assert.equal(describeModelProgress(job({status: "running", progress: {phase: "preparing_polygon_mask"}})), "Creating the analysis mask…");
+});
+
+
+test("area controls distinguish visible extent from a selection and prevent running without an area", () => {
+    const h = fixture();
+    const labels = h.view.setup.areaMode.children.map(option => option.textContent);
+    assert.ok(labels.includes("Use visible map extent")); assert.ok(labels.includes("Copy selected analysis area"));
+    h.state.draft.areaMode = "map"; h.state.draft.area = null;
+    h.state.draft.selectionError = "No selected analysis area. Choose Use visible map extent.";
+    h.view.render(h.state);
+    assert.equal(h.view.setup.run.disabled, true); assert.equal(h.view.setup.updateArea.hidden, false);
+    assert.match(h.view.setup.areaDescription.textContent, /No selected analysis area/);
+    h.view.setup.updateArea.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "UpdateArea");
+    h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.state.draft.selectionError = "";
+    h.view.render(h.state);
+    assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.areaDescription.textContent, /Box/);
+    assert.match(h.view.setup.mapHelp.textContent, /Panning|After changing the map/);
+    h.state.draft.areaMode = "whole"; h.view.render(h.state); assert.equal(h.view.setup.updateArea.hidden, true);
 });

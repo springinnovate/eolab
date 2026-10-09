@@ -1,7 +1,7 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea } from "./inputs.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 
@@ -12,7 +12,7 @@ export class ModelsController {
      * @param {Object} dependencies.api Processing API client.
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
-     * @param {()=>Object} dependencies.getContext Catalog/map suggestions, independent of rendering.
+     * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
      * @param {(kind:string,query:string,next:Object|null)=>Promise<Object>} dependencies.searchSources Catalog search with pagination.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
@@ -32,6 +32,7 @@ export class ModelsController {
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
+            onUpdateArea: () => this.chooseArea(this.state.draft.areaMode),
             onVector: key => void this.chooseVector(key), onSearch: (kind, more) => void this.search(kind, more),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
@@ -116,20 +117,25 @@ export class ModelsController {
     }
 
     /** Choose an explicit area; later map changes never update it automatically.
-     * @param {string} mode Whole raster, current map selection, custom bounds or vector.
+     * @param {string} mode Whole raster, retained area, viewport, selected analysis area, custom bounds or vector.
      * @return {void}
      */
     chooseArea(mode) {
         const draft = this.state.draft; if (!draft) return;
         this.selectionAbort?.abort(); this.selectionRevision += 1; draft.selecting = false;
-        draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = "";
+        draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
         if (mode === "whole") draft.area = {kind: "wholeRaster"};
         else if (mode === "captured") draft.area = structuredClone(draft.capturedArea);
         else if (mode === "map") {
             const context = this.getContext();
             draft.area = context.area ? modelAreaInput(context.area) : null;
             draft.areaDescription = context.areaDescription ?? "Current map selection copied into this draft.";
-            if (!draft.area) draft.selectionError = "Select a map sampling box or enter bounds below.";
+            if (!draft.area) draft.selectionError = "No selected analysis area. Click the map to create a sampling box, select vector features, or choose Use visible map extent.";
+        } else if (mode === "viewport") {
+            draft.area = null;
+            try { draft.area = modelViewportArea(this.getContext().viewportBounds); }
+            catch (error) { draft.selectionError = error.message; }
+            draft.areaDescription = "Visible map extent copied into this draft.";
         } else if (mode === "bounds") draft.area = {kind: "selectedArea", selectedBounds: {...draft.bounds}};
         else draft.area = null;
         this.render();

@@ -9,13 +9,14 @@ const RESULT_STATES = {no_matches: "No cells matched the condition.", no_valid_d
 
 /** Describe the explicit area shown in setup and saved run details.
  * @param {Object|null} area Model area descriptor.
- * @return {string} Source, bounds or predicate description.
+ * @return {string} Source, bounds rounded to four decimal places, or predicate description.
  */
 export function describeModelArea(area) {
     if (!area) return "No analysis area selected.";
     if (area.kind === "wholeRaster") return "Whole raster";
     if (area.kind === "selectedArea") {
-        const b = area.selectedBounds;
+        const b = Object.fromEntries(Object.entries(area.selectedBounds).map(([key, value]) =>
+            [key, Number.isFinite(value) ? value.toFixed(4) : "—"]));
         return `Box · W ${b.west}°, S ${b.south}°, E ${b.east}°, N ${b.north}°`;
     }
     if (area.kind === "catalogSelection") return `${area.selection.layerName} · ${describeModelFilter(area.selection.filter)}`;
@@ -129,7 +130,7 @@ export class ModelsView {
         const rasterSearch = this.searchFields("raster"); fields.append(rasterSearch.root);
         const areaMode = this.element("select");
         this.options(areaMode, [{value: "whole", label: "Whole raster"}, {value: "captured", label: "Retained area"},
-            {value: "map", label: "Copy current map selection"}, {value: "bounds", label: "Enter a bounding box"}, {value: "vector", label: "Use catalog vector features"}], draft.areaMode);
+            {value: "viewport", label: "Use visible map extent"}, {value: "map", label: "Copy selected analysis area"}, {value: "bounds", label: "Enter a bounding box"}, {value: "vector", label: "Use catalog vector features"}], draft.areaMode);
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
         fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => input.type === "summary_area")?.label ?? "Analysis area", areaMode));
         const boundsGroup = this.element("div", "", "models-bounds"); const bounds = {};
@@ -144,7 +145,9 @@ export class ModelsView {
         vectorGroup.append(this.field("models-vector", "Vector layer and its current filter", vector));
         const vectorSearch = this.searchFields("vector"); vectorGroup.append(vectorSearch.root);
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
-        fields.append(boundsGroup, vectorGroup, areaDescription);
+        const updateArea = this.button("Update from map", this.handlers.onUpdateArea);
+        const mapHelp = this.element("p", "Visible map extent copies the area shown on screen. Selected analysis area copies a sampling box or selected polygons. After changing the map, choose Update from map to replace this draft’s area.", "models-help");
+        fields.append(boundsGroup, vectorGroup, areaDescription, updateArea, mapHelp);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
             const input = this.element(parameter.type === "summary_expression" ? "textarea" : "input");
@@ -163,7 +166,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, boundsGroup, bounds, vectorGroup, vector, areaDescription,
-            rasterSearch, vectorSearch, parameters, run, details};
+            rasterSearch, vectorSearch, parameters, run, details, updateArea, mapHelp};
     }
 
     /** Build a catalog search input, submit button and pagination action.
@@ -211,16 +214,17 @@ export class ModelsView {
         s.boundsGroup.hidden = draft.areaMode !== "bounds"; s.vectorGroup.hidden = draft.areaMode !== "vector";
         for (const [name, input] of Object.entries(s.bounds)) { input.required = draft.areaMode === "bounds"; if (this.document.activeElement !== input) input.value = draft.bounds[name]; }
         this.options(s.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
+        s.updateArea.hidden = s.mapHelp.hidden = !["map", "viewport"].includes(draft.areaMode);
         const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
-            `${describeModelArea(draft.area)}${count}${["captured", "map"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;
+            `${describeModelArea(draft.area)}${count}${["captured", "map", "viewport"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         for (const [prefix, search] of [["source", s.rasterSearch], ["vector", s.vectorSearch]]) {
             if (this.document.activeElement !== search.input) search.input.value = draft[`${prefix}Query`];
             search.search.disabled = draft.searching; search.more.hidden = !draft[`${prefix}Next`]; search.more.disabled = draft.searching;
         }
         const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area"].includes(input.type));
-        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || !supported;
+        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || !draft.area || !supported;
         s.run.textContent = state.submitting ? "Submitting…" : "Run model";
         s.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         s.details.run.hidden = true;

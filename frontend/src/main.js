@@ -987,15 +987,19 @@ async function initializeCatalog(
     const models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         /** Supply suggestions only; hidden and non-rendered catalog sources remain valid inputs.
-         * @return {Object} Independent raster, vector and area choices.
+         * @return {Object} Independent raster, vector, selected area and visible map bounds.
          */
-        getContext: () => ({
-            rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
-                .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
-            selectedRaster: catalogState.selectedItem?.collection === "eolab-mounted-geotiffs" ? clipSource(catalogState.selectedItem) : null,
-            vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter})),
-            area: modelArea, areaDescription: modelAreaDescription,
-        }),
+        getContext: () => {
+            const viewport = leafletMap.getBounds();
+            return {
+                rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+                    .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
+                selectedRaster: catalogState.selectedItem?.collection === "eolab-mounted-geotiffs" ? clipSource(catalogState.selectedItem) : null,
+                vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter})),
+                area: modelArea, areaDescription: modelAreaDescription,
+                viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
+            };
+        },
         /** Search the catalog independently of its left-panel search and map publication.
          * @param {"raster"|"vector"} kind Requested catalog source type.
          * @param {string} query Search text.
