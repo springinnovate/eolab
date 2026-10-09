@@ -215,14 +215,18 @@ class JobStore(Protocol):
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:
-        """Return at most 50 recent jobs for session recovery.
+        """Return the recent-job preview used by the existing clip/statistics UI.
+
+        This preview contains at most 50 jobs; it does not delete older records.
+        A known older job can still be read by ID. Model history uses the separate
+        paginated query so users can retrieve every retained model run.
 
         Args:
-            owner: Current session hash.
-            operations: Optional opaque operation filter applied before the limit.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Optional job types to include before choosing the newest 50.
 
         Returns:
-            Newest owned jobs first, with no global listing.
+            Up to 50 matching jobs for this session, newest first.
         """
         ...
 

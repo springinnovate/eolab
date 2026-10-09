@@ -615,15 +615,18 @@ class PostgresJobStore:
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:
-        """Return at most 50 recent jobs for session recovery.
+        """Return the recent-job preview used by the existing clip/statistics UI.
+
+        Older jobs remain readable by ID until normal retention removes them.
+        Model history uses the separate paginated query instead of this preview.
 
         Args:
-            owner: Current session hash.
-            operations: Optional opaque application-owned filter, applied before
-                the recent-50 limit. None preserves the complete storage view.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Optional job types to include before choosing the newest 50.
+                None includes all types in the preview.
 
         Returns:
-            Newest owned jobs first, with no global listing.
+            Up to 50 matching jobs for this session, newest first.
         """
         with self._transaction() as cursor:
             cursor.execute(

@@ -235,6 +235,43 @@ def test_model_owner_idempotency_pagination_and_cancel(
     )
 
 
+def test_model_history_pages_through_more_than_fifty_runs(model_boundary: Any) -> None:
+    """Retrieve every retained model run when the session has more than 50.
+
+    Args:
+        model_boundary: Model HTTP service and its real PostgreSQL store.
+    """
+    client, _, _ = model_boundary
+    template = model_request(client)
+    submitted = []
+    for index in range(55):
+        job = submit(
+            client,
+            {**template, "requestId": uuid4().hex, "label": f"Run {index}"},
+        )
+        submitted.append(job["jobId"])
+        # Keep the queue allowance available without deleting history.
+        response = client.post(
+            f"/api/processing/jobs/{job['jobId']}/cancel", headers=HEADERS
+        )
+        assert response.status_code == 202, response.text
+
+    collected = []
+    cursor = None
+    for expected_size in (20, 20, 15):
+        params = {"limit": 20}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = client.get("/api/processing/model-runs", params=params)
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert len(page["jobs"]) == expected_size
+        collected.extend(job["jobId"] for job in page["jobs"])
+        cursor = page["nextCursor"]
+    assert cursor is None
+    assert collected == list(reversed(submitted))
+
+
 @pytest.mark.parametrize("terminal", ["ready", "interrupted", "cancelled", "failed"])
 def test_model_capture_survives_cleanup_then_expires(
     model_boundary: Any, store: Any, terminal: str
