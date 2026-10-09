@@ -117,17 +117,26 @@ def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
     store.save_prepared_job.side_effect = save
 
 
-@pytest.mark.parametrize("custom", [False, True])
-@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
+@pytest.mark.parametrize(
+    "model_id,custom",
+    [
+        ("raster-summary", False),
+        ("raster-summary", True),
+        ("raster-clip", False),
+        ("raster-clip", True),
+        ("raster-clip", "multiple"),
+    ],
+)
 def test_model_worker_executes_native_results_and_exports_yaml(
-    tmp_path: Path, model_id: str, custom: bool
+    tmp_path: Path, model_id: str, custom: bool | str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Model dispatch reuses native operations and preserves typed result/YAML contracts.
 
     Args:
         tmp_path: Private source and output fixtures.
         model_id: Installed summary or clip operation under the model lifecycle.
-        custom: Exercise new recipe identities, argument names and output labels.
+        custom: Exercise renamed recipe bindings; "multiple" also produces extra files.
+        monkeypatch: Scoped operation replacement for the multi-file fixture.
     """
     from eolab_app.processing.model_definitions import ModelRegistry
     from eolab_app.processing.model_run_contracts import (
@@ -142,7 +151,8 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     )
     from eolab_app.processing.model_yaml import parse_yaml
     from eolab_app.processing.model_operations import get_model_operation
-    from model_recipe_support import custom_recipe
+    from model_recipe_support import custom_recipe, multiple_output_recipe
+    from test_model_artifacts_postgres import multiple_files_target
 
     values = np.arange(1024, dtype="int16").reshape(32, 32)
     path = write_source(tmp_path / "source.tif", values)
@@ -155,8 +165,17 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     registry = ModelRegistry.load_installed()
     definition = registry.get(model_id, "1.0.0")
     if custom:
-        definition = custom_recipe(model_id)
+        definition = (
+            multiple_output_recipe(monkeypatch)
+            if custom == "multiple"
+            else custom_recipe(model_id)
+        )
         registry = ModelRegistry((definition,))
+        if custom == "multiple":
+            monkeypatch.setattr(
+                "eolab_app.processing.raster_operations.clip_process_target",
+                multiple_files_target,
+            )
     request = ModelRunRequest(
         model={
             "id": definition.id,
@@ -227,6 +246,22 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
     store.get_cached_calculation_results.assert_not_called()
+    if custom == "multiple":
+        assert {file.name for file in response.artifacts.files} == {
+            "habitat_result",
+            "inspected_coverage",
+            "habitat_totals",
+            "provenance",
+        }
+        directory = artifacts.result_path(row["attempt_id"]).parent
+        assert response.artifacts.totalBytes == sum(
+            file.stat().st_size for file in directory.iterdir()
+        )
+        assert not (directory / "scratch.bin").exists()
+        with rasterio.open(directory / "coverage.tif") as coverage:
+            assert coverage.dtypes == ("uint8",) and np.all(coverage.read(1) <= 1)
+        assert (directory / "totals.csv").read_text().startswith("sum\n")
+        assert len(document.execution.outcome.artifacts) == 4
     if custom:
         assert response.result.name == "habitat_result"
         assert response.result.label == "Habitat output"

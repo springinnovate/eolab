@@ -881,12 +881,19 @@ class PostgresJobStore:
             identifier: Running job.
             attempt: Execution fencing token.
             artifact: Atomically published immutable result, or None on failure.
+                Manifest-backed results replace the working reservation with their
+                exact retained byte count, including every file and the inventory.
             error: Sanitized reason for a failed or interrupted operation.
             reusable_results: Small completed values keyed by the operation's
                 input hash. Stored only if this attempt becomes ready.
 
         Returns:
             True only if the still-current attempt reached the requested state.
+
+        Raises:
+            ProcessingError: If retained files exceed the admitted reservation or
+                durable storage is unavailable.
+            ValidationError: If the supplied manifest violates its storage contract.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
