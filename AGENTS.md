@@ -332,6 +332,11 @@ affect layout, visibility, focus, or interaction.
 Every new or materially modified named class, function, method, or public
 contract must have complete type information and documentation.
 
+Before accepting a name and its documentation, ask: **Can someone unfamiliar
+with this implementation understand the name and first sentence together?**
+The name and first sentence should establish understanding; the remaining
+documentation should add precision.
+
 Names and documentation must make sense to a developer reading the code:
 
 - Name classes for what they represent and functions or methods for what they
