@@ -297,8 +297,9 @@ def record_model_preparation(
         limits: The worker's configured time, memory, disk and result-retention limits.
 
     Returns:
-        The model job plan with preparation details ready to save. Its original
-        recipe and selected inputs remain unchanged.
+        The model job plan with preparation details ready to save. Raster result
+        grids also enter the public summary, which outlives saved YAML metadata.
+        The original recipe and selected inputs remain unchanged.
 
     Raises:
         ProcessingError: If the updated Run YAML exceeds its document limits.
@@ -357,7 +358,14 @@ def record_model_preparation(
         specification=wrapper.model_copy(update={"calculation": spec}).model_dump(
             mode="json", by_alias=True
         ),
-        summary=row["summary"],
+        summary={
+            **row["summary"],
+            **(
+                {"grid": spec.grid.model_dump(mode="json")}
+                if isinstance(spec, ClipSpec)
+                else {}
+            ),
+        },
         retained_metadata=metadata,
     )
 
@@ -412,7 +420,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
                     {
                         "kind": "raster",
                         "mediaType": "image/tiff",
-                        "grid": row["spec"]["calculation"]["grid"],
+                        "grid": summary["grid"],
                         "validPixels": artifact["valid_pixels"],
                     }
                     if artifact["media_type"] == "image/tiff"

@@ -225,6 +225,8 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         "status": "ready",
         "artifact": asdict(artifact),
         "retained_outcome": {"status": "ready", "artifact": asdict(artifact)},
+        # The owned SQL view exposes the public summary, never worker inputs.
+        "spec": row["summary"],
     }
     response = ModelJobResponse.model_validate(public_job(ready))
     document = RunDocument.model_validate(
