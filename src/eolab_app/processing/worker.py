@@ -87,7 +87,7 @@ class ProcessingWorker:
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
         # Fail startup for invalid packaged definitions rather than hiding them
         # from discovery or accepting work the worker cannot dispatch.
-        ModelRegistry.installed()
+        ModelRegistry.load_installed()
 
     async def _prepare_calculation(self, row: dict[str, Any]) -> AuthorizedRaster:
         """Prepare queued summary inputs and publish their estimates on the same job.

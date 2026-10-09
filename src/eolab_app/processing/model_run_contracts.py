@@ -15,11 +15,11 @@ from eolab_app.processing.aggregate_models import (
     UnpreparedCalculation,
 )
 from eolab_app.processing.model_definitions import (
-    Contract,
+    ModelSchema,
     Label,
     ModelDefinition,
     Name,
-    SummaryParameter,
+    SummaryExpressionParameter,
     Version,
 )
 from eolab_app.processing.models import (
@@ -36,7 +36,7 @@ MODEL_OPERATION = "model.run.v1"
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 
 
-class ModelReference(Contract):
+class ModelReference(ModelSchema):
     """Exact installed recipe identity supplied by discovery or an export."""
 
     id: Name
@@ -44,7 +44,7 @@ class ModelReference(Contract):
     definitionSha256: Digest
 
 
-class ModelRunRequest(Contract):
+class ModelRunRequest(ModelSchema):
     """Bounded submission envelope; the installed definition validates each value."""
 
     requestId: Annotated[
@@ -70,28 +70,28 @@ class ModelRunRequest(Contract):
         return self
 
 
-class BoundsArea(Contract):
+class BoundsArea(ModelSchema):
     """Explicit WGS84 area for a model summary."""
 
     kind: Literal["selectedArea"]
     selectedBounds: Wgs84Bounds
 
 
-class SelectionArea(Contract):
+class SelectionArea(ModelSchema):
     """Immutable original catalog source and typed filter, not copied geometry."""
 
     kind: Literal["catalogSelection"]
     selection: CatalogSelection
 
 
-class PolygonArea(Contract):
+class PolygonArea(ModelSchema):
     """Owner-authorized temporary polygon capability."""
 
     kind: Literal["polygonArea"]
     reference: PolygonAreaReference
 
 
-class WholeRasterArea(Contract):
+class WholeRasterArea(ModelSchema):
     """Explicit whole-source summary request."""
 
     kind: Literal["wholeRaster"]
@@ -127,7 +127,7 @@ class CapturedModel(ModelReference):
         return self
 
 
-class ModelInvocation(Contract):
+class ModelInvocation(ModelSchema):
     """Immutable submitted intent with explicit effective parameter defaults."""
 
     model: CapturedModel
@@ -158,13 +158,13 @@ class ModelInvocation(Contract):
             else:
                 raise ValueError("Unsupported captured input type")
         for name, parameter in definition.parameters.items():
-            SummaryParameter.model_validate(
+            SummaryExpressionParameter.model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
             )
         return self
 
 
-class ModelRunSpec(Contract):
+class ModelRunSpec(ModelSchema):
     """Private persisted execution wrapper; numerical work retains its own contract."""
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
@@ -217,7 +217,7 @@ class ModelJobResponse(JobResponse):
     result: AggregateResultResponse | None
 
 
-class ModelRunList(Contract):
+class ModelRunList(ModelSchema):
     """Bounded owner-only model page with an opaque continuation token."""
 
     jobs: list[ModelJobResponse]
@@ -230,13 +230,13 @@ class AvailableModel(ModelDefinition):
     definitionSha256: Digest
 
 
-class ModelLibrary(Contract):
+class ModelLibrary(ModelSchema):
     """Complete installed definition discovery response, with no model count limit."""
 
     models: list[AvailableModel]
 
 
-class RunDocument(Contract):
+class RunDocument(ModelSchema):
     """Authorized YAML export; execution records contain no native capabilities."""
 
     schema_version: Literal["eolab.run/v1"] = Field(alias="schema")
@@ -272,14 +272,14 @@ class RunDocument(Contract):
         return self
 
 
-class OperationImplementation(Contract):
+class OperationImplementation(ModelSchema):
     """Installed operation contract and exact implementation identity."""
 
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
     implementationRevision: Digest
 
 
-class ResolvedModelSource(Contract):
+class ResolvedModelSource(ModelSchema):
     """Public source identity and prepared native grid, without a native path."""
 
     sourceSignature: Digest
@@ -287,7 +287,7 @@ class ResolvedModelSource(Contract):
     grid: AggregateGrid | None = None
 
 
-class ModelExecutionLimits(Contract):
+class ModelExecutionLimits(ModelSchema):
     """Server-resolved policy recorded for reproducibility, not client overrides."""
 
     runtimeSeconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -296,7 +296,7 @@ class ModelExecutionLimits(Contract):
     resultTtlSeconds: Annotated[int, Field(gt=0)]
 
 
-class SummaryNumericalPolicy(Contract):
+class SummaryNumericalPolicy(ModelSchema):
     """Existing aggregate grid, NoData and optional ground-area measurement policy."""
 
     version: Literal["raster.aggregate.v1"]
@@ -308,7 +308,7 @@ class SummaryNumericalPolicy(Contract):
     groundArea: GroundAreaPlan | None = None
 
 
-class ModelOutcome(Contract):
+class ModelOutcome(ModelSchema):
     """Sanitized terminal outcome independent of later output/scratch expiry."""
 
     status: Literal["ready", "failed", "cancelled", "interrupted"]
@@ -316,7 +316,7 @@ class ModelOutcome(Contract):
     statistics: list[AggregateValue] | None
 
 
-class ModelExecution(Contract):
+class ModelExecution(ModelSchema):
     """Bounded public execution record; preparation appends authoritative grid policy."""
 
     state: Literal["pending", "prepared"]

@@ -19,9 +19,9 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from eolab_app.processing.aggregate_models import AggregateJobRequest, AggregateSpec
 from eolab_app.processing.model_definitions import (
-    Contract,
+    ModelSchema,
     ModelRegistry,
-    SummaryParameter,
+    SummaryExpressionParameter,
     validate_operation,
 )
 from eolab_app.processing.model_run_contracts import (
@@ -135,7 +135,7 @@ def resolve_model_request(
     try:
         source = CatalogRasterRequest.model_validate(request.inputs[raster_name])
         area = TypeAdapter(SummaryArea).validate_python(request.inputs[area_name])
-        parameter = SummaryParameter.model_validate(
+        parameter = SummaryExpressionParameter.model_validate(
             {
                 **declaration.model_dump(),
                 "default": request.parameters.get(parameter_name, declaration.default),
@@ -164,7 +164,7 @@ def resolve_model_request(
             {
                 "model": {
                     **request.model.model_dump(),
-                    "definition": definition.document(),
+                    "definition": definition.to_document(),
                 },
                 "inputs": {
                     raster_name: source.model_dump(mode="json", by_alias=True),
@@ -392,7 +392,7 @@ def owned_model_yaml(row: dict[str, Any], *, run: bool) -> bytes:
     metadata = json.loads(canonical_json(row["retained_metadata"]))
     invocation = ModelInvocation.model_validate(metadata["invocation"])
     if not run:
-        return export_yaml(invocation.model.definition.document())
+        return export_yaml(invocation.model.definition.to_document())
     execution = metadata["execution"]
     outcome = row.get("retained_outcome")
     if outcome is not None:
@@ -416,7 +416,7 @@ def owned_model_yaml(row: dict[str, Any], *, run: bool) -> bytes:
     )
 
 
-class PageCursor(Contract):
+class PageCursor(ModelSchema):
     """Bounded continuation value; authorization is always reapplied to the query."""
 
     createdAt: AwareDatetime

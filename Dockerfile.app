@@ -99,7 +99,7 @@ COPY --from=versioner /revision /app/revision
 RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
         --check-build-dependencies --no-deps . \
     && python -m pip check \
-    && cd /tmp && python -c "from eolab_app.processing.model_definitions import ModelRegistry; assert ModelRegistry.installed().get('raster-summary', '1.0.0')" && cd /app \
+    && cd /tmp && python -c "from eolab_app.processing.model_definitions import ModelRegistry; assert ModelRegistry.load_installed().get('raster-summary', '1.0.0')" && cd /app \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy')" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
     && mkdir -p /processing-data \

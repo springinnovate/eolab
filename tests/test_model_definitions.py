@@ -28,10 +28,10 @@ def test_discovery_and_recipe_export_need_no_catalog_or_renderer(
     from eolab_app.processing.service import ProcessingService
     from eolab_app.routes.processing import create_processing_router
 
-    definition = ModelRegistry.installed().get("raster-summary", "1.0.0")
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
     definitions = tuple(
         ModelDefinition.model_validate(
-            {**definition.document(), "version": f"1.0.{index}"}
+            {**definition.to_document(), "version": f"1.0.{index}"}
         )
         for index in range(model_count)
     )
@@ -76,15 +76,15 @@ def summary_request() -> dict[str, Any]:
 
 def test_installed_summary_matches_approved_example_and_round_trips() -> None:
     """Installed package discovery and YAML round trips preserve definition identity."""
-    definition = ModelRegistry.installed().get("raster-summary", "1.0.0")
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
     example = parse_yaml(
         Path("docs/model-examples/raster-summary.model.yaml").read_bytes()
     )
-    assert definition.document() == example
+    assert definition.to_document() == example
     reloaded = ModelDefinition.model_validate(
-        parse_yaml(export_yaml(definition.document()))
+        parse_yaml(export_yaml(definition.to_document()))
     )
-    assert canonical_json(reloaded.document()) == canonical_json(definition.document())
+    assert canonical_json(reloaded.to_document()) == canonical_json(definition.to_document())
     assert definition.digest == summary_request()["model"]["definitionSha256"]
     with pytest.raises(TypeError):
         definition.inputs["other"] = definition.inputs["raster"]
@@ -172,7 +172,7 @@ def test_definition_rejects_invalid_contract_fields(change: dict[str, Any]) -> N
     Args:
         change: Top-level invalid replacement fields.
     """
-    value = ModelRegistry.installed().get("raster-summary", "1.0.0").document()
+    value = ModelRegistry.load_installed().get("raster-summary", "1.0.0").to_document()
     with pytest.raises(ValidationError):
         ModelDefinition.model_validate({**value, **change})
 
@@ -184,10 +184,10 @@ def test_registry_rejects_definitions_that_cannot_execute(kind: str) -> None:
     """Fail library readiness rather than hide incompatible installed recipes.
 
     Args:
-        kind: Contract mismatch introduced into a valid recipe.
+        kind: ModelSchema mismatch introduced into a valid recipe.
     """
-    definition = ModelRegistry.installed().get("raster-summary", "1.0.0")
-    value = copy.deepcopy(definition.document())
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
+    value = copy.deepcopy(definition.to_document())
     if kind == "operation":
         value["steps"][0]["operation"] = "python.shell.v1"
     elif kind == "input":
@@ -210,7 +210,7 @@ def test_model_defaults_bind_to_existing_aggregate_contract() -> None:
     value = summary_request()
     value["parameters"] = {}
     calculation, invocation = resolve_model_request(
-        ModelRunRequest.model_validate(value), ModelRegistry.installed()
+        ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
     )
     assert calculation.calculations[0].expression == "sum(a)"
     assert invocation.parameters == {"summary": "sum(a)"}
@@ -244,5 +244,5 @@ def test_model_submission_rejects_invalid_bindings(kind: str) -> None:
         value["parameters"]["summary"] = float("nan")
     with pytest.raises((ProcessingError, ValidationError)):
         resolve_model_request(
-            ModelRunRequest.model_validate(value), ModelRegistry.installed()
+            ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
         )

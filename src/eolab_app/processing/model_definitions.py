@@ -1,4 +1,4 @@
-"""Immutable installed model recipes and trusted operation contracts."""
+"""Define model recipes and check that their calculation steps can run in EOlab."""
 
 from dataclasses import dataclass
 from importlib.resources import files
@@ -28,21 +28,35 @@ Label = Annotated[str, Field(strict=True, min_length=1, max_length=80)]
 Number = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
 
-class Contract(BaseModel):
-    """Reject unknown fields and assignment at every model contract boundary."""
+class ModelSchema(BaseModel):
+    """Base schema for model recipes and run data.
+
+    Unknown fields are rejected so misspelled settings cannot be silently ignored.
+    Fields cannot be reassigned after validation; recipes also make their nested
+    input, parameter and output mappings read-only.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class InputRole(Contract):
-    """Required catalog/selection role exposed as an editable form input."""
+class ModelInput(ModelSchema):
+    """A dataset or analysis area that the user must choose before running a model.
+
+    The type determines which inputs the model accepts, and the label names the
+    input in model setup. A recipe describes the input here; each run supplies
+    the actual catalog dataset or area.
+    """
 
     type: Literal["catalog_raster", "summary_area", "mask_source", "prepared_hydrology"]
     label: Label
 
 
-class NumericParameter(Contract):
-    """Finite numeric parameter whose definition owns its unit and lower bound."""
+class NumericParameter(ModelSchema):
+    """A numeric model setting with a label, unit, minimum and default value.
+
+    An ``optional_number`` may default to None. Every non-null value must meet
+    either the inclusive minimum or the exclusive minimum declared by the recipe.
+    """
 
     type: Literal["number", "optional_number"]
     label: Label
@@ -53,13 +67,13 @@ class NumericParameter(Contract):
 
     @model_validator(mode="after")
     def check_default(self) -> Self:
-        """Require one lower bound and a default satisfying its declared type.
+        """Check that the parameter has one minimum and a valid default.
 
         Returns:
-            This validated declaration.
+            This parameter after checking its minimum and default.
 
         Raises:
-            ValueError: If bounds or default violate the parameter contract.
+            ValueError: If both or neither minimum is supplied, or the default is invalid.
         """
         if (self.minimum is None) == (self.exclusiveMinimum is None):
             raise ValueError("Declare exactly one lower bound")
@@ -67,13 +81,13 @@ class NumericParameter(Contract):
         return self
 
     def validate_value(self, value: float | None) -> None:
-        """Check a typed value against this declaration.
+        """Check whether a number is allowed for this parameter.
 
         Args:
-            value: Finite numeric value or explicit null.
+            value: A finite number, or None for an optional parameter.
 
         Raises:
-            ValueError: If a required value is null or outside its bounds.
+            ValueError: If a required value is missing or a number is below the minimum.
         """
         if value is None:
             if self.type != "optional_number":
@@ -84,8 +98,12 @@ class NumericParameter(Contract):
             raise ValueError("Value is below the declared bound")
 
 
-class SummaryParameter(Contract):
-    """Single-source scalar expression using the existing bounded grammar."""
+class SummaryExpressionParameter(ModelSchema):
+    """A raster-summary formula setting, such as ``sum(a)`` or ``mean(a)``.
+
+    The letter ``a`` refers to the run's raster. Formulas must produce a summary
+    for an area; ``pixelValue`` is excluded because these models have no point input.
+    """
 
     type: Literal["summary_expression"]
     label: Label
@@ -95,13 +113,13 @@ class SummaryParameter(Contract):
 
     @model_validator(mode="after")
     def check_default(self) -> Self:
-        """Validate the default against the point-free scalar expression contract.
+        """Check that the default formula is a supported area summary.
 
         Returns:
-            Validated parameter declaration.
+            This parameter after validating its default formula.
 
         Raises:
-            ValueError: If the expression is invalid or needs a clicked point.
+            ValueError: If the formula is invalid or requires a clicked point.
         """
         try:
             tree = compile_expression(self.default, self.alias)
@@ -112,23 +130,37 @@ class SummaryParameter(Contract):
         return self
 
 
-Parameter = Annotated[NumericParameter | SummaryParameter, Field(discriminator="type")]
+Parameter = Annotated[
+    NumericParameter | SummaryExpressionParameter, Field(discriminator="type")
+]
 
 
-class InputBinding(Contract):
-    """Reference to a named input, never a path or interpolation expression."""
+class InputBinding(ModelSchema):
+    """Choose which model input supplies an argument to a calculation step.
+
+    For example, ``input: population`` passes the dataset selected for the model's
+    ``population`` input to the operation argument containing this binding.
+    """
 
     input: Name
 
 
-class ParameterBinding(Contract):
-    """Reference to a declared parameter whose default is resolved at admission."""
+class ParameterBinding(ModelSchema):
+    """Choose which model parameter supplies an argument to a calculation step.
+
+    The run uses the user's value, or the recipe's default when it is omitted.
+    """
 
     parameter: Name
 
 
-class ModelStep(Contract):
-    """One trusted operation invocation with explicit typed bindings."""
+class ModelStep(ModelSchema):
+    """A calculation in a model, naming the operation and its arguments.
+
+    For example, a summary step runs ``raster.aggregate.v1`` with the model's
+    raster and area inputs and its summary-formula parameter. The bindings map
+    those model inputs and parameters to the operation's argument names.
+    """
 
     id: Name
     operation: Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
@@ -138,31 +170,37 @@ class ModelStep(Contract):
     @field_validator("inputs", "parameters", mode="after")
     @classmethod
     def freeze_bindings(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Freeze validated binding maps.
+        """Prevent changes to a step's input and parameter assignments.
 
         Args:
-            value: Validated named bindings.
+            value: Validated mapping from operation arguments to model inputs or parameters.
 
         Returns:
-            Read-only mapping containing immutable bindings.
+            A read-only copy of the mapping.
         """
         return MappingProxyType(dict(value))
 
     @field_serializer("inputs", "parameters")
     def serialize_bindings(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        """Export frozen bindings using their ordinary JSON contract.
+        """Convert a step's argument assignments to dictionaries for JSON or YAML.
 
         Args:
-            value: Frozen named bindings.
+            value: The step's input or parameter assignments.
 
         Returns:
-            JSON-compatible binding map.
+            A dictionary preserving the argument names and their references.
         """
         return {key: item.model_dump(mode="json") for key, item in value.items()}
 
 
-class ModelOutput(Contract):
-    """Named declared output; storage alone mints its eventual artifact identity."""
+class ModelOutput(ModelSchema):
+    """Describe a result or intermediate output produced by a model step.
+
+    ``source`` names the step and output, such as ``calculate.statistics``.
+    ``presentation`` says whether it is a map layer or table; ``role`` distinguishes
+    final results from intermediate outputs. This describes an output, while a
+    particular run creates its files and download links.
+    """
 
     source: Annotated[
         str,
@@ -173,15 +211,20 @@ class ModelOutput(Contract):
     saveEligible: bool = Field(strict=True)
 
 
-class ModelDefinition(Contract):
-    """Version-one reusable recipe, independent of installed runtime availability."""
+class ModelDefinition(ModelSchema):
+    """A reusable analysis recipe with inputs, parameters, a step and outputs.
+
+    The ID and version identify the recipe. Dataset selections and user-supplied
+    parameter values belong to individual runs. EOlab currently executes one
+    calculation step per recipe.
+    """
 
     schema_version: Literal["eolab.model/v1"] = Field(alias="schema")
     id: Name
     version: Version
     title: Label
     description: Annotated[str, Field(strict=True, min_length=1, max_length=2048)]
-    inputs: Mapping[Name, InputRole] = Field(min_length=1, max_length=16)
+    inputs: Mapping[Name, ModelInput] = Field(min_length=1, max_length=16)
     parameters: Mapping[Name, Parameter] = Field(max_length=32)
     steps: tuple[ModelStep, ...] = Field(min_length=1, max_length=1)
     outputs: Mapping[Name, ModelOutput] = Field(min_length=1, max_length=32)
@@ -190,25 +233,25 @@ class ModelDefinition(Contract):
     @field_validator("inputs", "parameters", "outputs", mode="after")
     @classmethod
     def freeze_declarations(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Freeze named input, parameter and output declarations.
+        """Prevent changes to the recipe's inputs, parameters and output descriptions.
 
         Args:
-            value: Typed declarations.
+            value: Validated named inputs, parameters or outputs.
 
         Returns:
-            Read-only map of immutable contract objects.
+            A read-only copy of those descriptions.
         """
         return MappingProxyType(dict(value))
 
     @field_serializer("inputs", "parameters", "outputs")
     def serialize_declarations(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        """Preserve explicit null defaults while omitting absent optional bounds.
+        """Convert named inputs, parameters or outputs to their JSON and YAML form.
 
         Args:
-            value: Frozen declarations.
+            value: The recipe's read-only input, parameter or output mapping.
 
         Returns:
-            JSON-compatible declared fields.
+            Dictionaries preserving explicit null defaults and omitting unset fields.
         """
         return {
             key: item.model_dump(mode="json", exclude_unset=True)
@@ -217,13 +260,14 @@ class ModelDefinition(Contract):
 
     @model_validator(mode="after")
     def check_references(self) -> Self:
-        """Require every reference to resolve within this single-operation recipe.
+        """Check that step arguments and outputs refer to names in this recipe.
 
         Returns:
-            Validated definition.
+            This recipe after checking its input, parameter and step references.
 
         Raises:
-            ValueError: If a binding names an undeclared value or output step.
+            ValueError: If an argument references an unknown input or parameter, or an
+                output references an unknown step.
         """
         step = self.steps[0]
         if any(item.input not in self.inputs for item in step.inputs.values()):
@@ -236,11 +280,11 @@ class ModelDefinition(Contract):
             raise ValueError("Unknown output step")
         return self
 
-    def document(self) -> dict[str, Any]:
-        """Return the normalized public definition used for export and digest.
+    def to_document(self) -> dict[str, Any]:
+        """Return the recipe as a dictionary for YAML export and checksum calculation.
 
         Returns:
-            Independent JSON-compatible recipe value.
+            A new JSON-compatible dictionary using the published recipe field names.
         """
         return self.model_dump(
             mode="json", by_alias=True, include=set(ModelDefinition.model_fields)
@@ -248,13 +292,18 @@ class ModelDefinition(Contract):
 
     @property
     def digest(self) -> str:
-        """Return the canonical SHA-256 definition identity."""
-        return definition_digest(self.document())
+        """Return the recipe's SHA-256 checksum, independent of YAML formatting."""
+        return definition_digest(self.to_document())
 
 
 @dataclass(frozen=True)
-class OperationContract:
-    """Installed operation's accepted argument and output types, with no code paths."""
+class OperationDefinition:
+    """The input, parameter and output types accepted by a backend calculation.
+
+    Each tuple pairs an argument or output name with its type. The execution
+    profile identifies the server resource policy for this calculation. Recipes
+    must match this description before EOlab offers them to users.
+    """
 
     inputs: tuple[tuple[str, str], ...]
     parameters: tuple[tuple[str, str], ...]
@@ -264,7 +313,7 @@ class OperationContract:
 
 OPERATIONS = MappingProxyType(
     {
-        "raster.aggregate.v1": OperationContract(
+        "raster.aggregate.v1": OperationDefinition(
             (("raster", "catalog_raster"), ("area", "summary_area")),
             (("expression", "summary_expression"),),
             (("statistics", "table"),),
@@ -275,13 +324,14 @@ OPERATIONS = MappingProxyType(
 
 
 def validate_operation(definition: ModelDefinition) -> None:
-    """Check a definition against reviewed operation contracts installed in this build.
+    """Check that EOlab can execute the operation described by a model recipe.
 
     Args:
-        definition: Structurally validated recipe.
+        definition: A recipe whose internal references have already been validated.
 
     Raises:
-        ProcessingError: For unavailable operations, incompatible roles or outputs.
+        ProcessingError: If the operation is unavailable or its arguments, outputs
+            or execution profile do not match the installed implementation.
     """
     step = definition.steps[0]
     contract = OPERATIONS.get(step.operation)
@@ -318,16 +368,17 @@ def validate_operation(definition: ModelDefinition) -> None:
 
 
 class ModelRegistry:
-    """Read-only installed library, validated eagerly before API/worker readiness."""
+    """Installed model definitions indexed by model ID and version."""
 
     def __init__(self, definitions: tuple[ModelDefinition, ...]) -> None:
-        """Validate installed definitions, rejecting duplicate identities.
+        """Build a read-only library of valid, executable model recipes.
 
         Args:
-            definitions: Application-installed recipes, with no count limit.
+            definitions: Installed recipes, with no count limit.
 
         Raises:
-            ProcessingError: If definitions conflict or an operation is unsupported.
+            ProcessingError: If recipes repeat an ID/version, require an unsupported
+                operation, or cannot be exported as valid Model YAML.
         """
         entries = {}
         for definition in definitions:
@@ -337,19 +388,19 @@ class ModelRegistry:
                 raise ProcessingError(
                     "invalid_model_library", "Duplicate model identity."
                 )
-            export_yaml(definition.document())
+            export_yaml(definition.to_document())
             entries[key] = definition
         self._entries = MappingProxyType(entries)
 
     @classmethod
-    def installed(cls) -> "ModelRegistry":
-        """Load packaged YAML resources from a source checkout or installed wheel.
+    def load_installed(cls) -> "ModelRegistry":
+        """Load all Model YAML files packaged in EOlab's recipes directory.
 
         Returns:
-            Validated registry, never a silently truncated library.
+            A registry containing every installed recipe, checked before use.
 
         Raises:
-            ProcessingError: For missing, malformed or unsupported bundled models.
+            ProcessingError: If recipes are missing, invalid, duplicated or unsupported.
         """
         try:
             paths = sorted(
@@ -372,17 +423,17 @@ class ModelRegistry:
             ) from error
 
     def get(self, identifier: str, version: str) -> ModelDefinition:
-        """Resolve one exact installed version.
+        """Look up an installed model by its ID and version.
 
         Args:
-            identifier: Public model ID.
-            version: Explicit semantic version.
+            identifier: Model ID returned by discovery.
+            version: The requested model version, such as ``1.0.0``.
 
         Returns:
-            Immutable definition.
+            The matching model definition.
 
         Raises:
-            ProcessingError: If this version is not installed.
+            ProcessingError: If that model version is not installed.
         """
         try:
             return self._entries[(identifier, version)]
@@ -392,12 +443,12 @@ class ModelRegistry:
             ) from error
 
     def list_models(self) -> list[dict[str, Any]]:
-        """Expose typed form metadata and exact identities for every installed model.
+        """Return all installed recipes with the information needed for model setup.
 
         Returns:
-            All installed definitions with their canonical digests.
+            Definitions and their checksums, sorted by model ID and version.
         """
         return [
-            {**item.document(), "definitionSha256": item.digest}
+            {**item.to_document(), "definitionSha256": item.digest}
             for _, item in sorted(self._entries.items())
         ]

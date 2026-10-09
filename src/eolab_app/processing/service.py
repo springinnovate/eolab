@@ -181,7 +181,9 @@ class ProcessingService:
         self.changes = changes
         self.submission_wait_seconds = submission_wait_seconds
         self.model_registry = (
-            model_registry if model_registry is not None else ModelRegistry.installed()
+            model_registry
+            if model_registry is not None
+            else ModelRegistry.load_installed()
         )
         self.model_authorizer = model_authorizer
 
@@ -256,7 +258,7 @@ class ProcessingService:
         Raises:
             ProcessingError: If this definition is unavailable.
         """
-        return export_yaml(self.model_registry.get(identifier, version).document())
+        return export_yaml(self.model_registry.get(identifier, version).to_document())
 
     async def run_yaml(self, owner: str, identifier: str, *, run: bool) -> bytes:
         """Export a run's capture independently of the installed recipe library.
