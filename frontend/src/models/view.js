@@ -140,9 +140,8 @@ export class ModelsView {
         vectorGroup.append(editFilter, filterDescription,
             this.element("p", "Choose features for this run. Editing this filter leaves the map layer unchanged.", "models-help"));
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
-        const updateArea = this.button("Update from map", this.handlers.onUpdateArea);
         const mapHelp = this.element("p", "", "models-help");
-        fields.append(vectorGroup, areaDescription, updateArea, mapHelp);
+        fields.append(vectorGroup, areaDescription, mapHelp);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
             const input = this.element(parameter.type === "summary_expression" ? "textarea" : "input");
@@ -161,7 +160,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            rasterSearch, vectorSearch, parameters, run, details, updateArea, mapHelp, editFilter, filterDescription};
+            rasterSearch, vectorSearch, parameters, run, details, mapHelp, editFilter, filterDescription};
     }
 
     /** Build a catalog search input, submit button and pagination action.
@@ -211,27 +210,31 @@ export class ModelsView {
         this.options(s.source, [{value: "", label: "Choose a raster…"}, ...draft.sources.map(source => ({value: modelSourceKey(source),
             label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
         s.reason.textContent = draft.sourceReason;
-        const areaChoices = [{value: "whole", label: "Entire raster"}, {value: "viewport", label: "Visible map area"}, {value: "vector", label: "Vector layer"}];
-        if (["selectedArea", "polygonArea"].includes(draft.capturedArea?.kind) || draft.areaMode === "captured") {
-            areaChoices.push({value: "captured", label: draft.areaOrigin === "run" ? "Area from original run" :
-                draft.capturedArea.kind === "selectedArea" ? "Map sampling box" : "Polygons selected on map"});
+        const areaChoices = [{value: "whole", label: "Entire raster"}, {value: "viewport", label: "Visible map area"},
+            {value: "mapBox", label: "Box around map location"}, {value: "vector", label: "Vector layer"}];
+        if (draft.capturedArea?.kind === "polygonArea" && draft.areaOrigin === "map") {
+            areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
+        }
+        if (draft.areaOrigin === "run" && draft.capturedArea?.kind !== "wholeRaster") {
+            areaChoices.push({value: "captured", label: "Area from original run"});
         }
         this.options(s.areaMode, areaChoices, draft.areaMode);
         s.vectorGroup.hidden = draft.areaMode !== "vector";
         this.options(s.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
-        s.updateArea.hidden = !(draft.areaMode === "viewport" || draft.areaMode === "captured" && draft.areaOrigin === "map");
-        s.updateArea.textContent = draft.areaMode === "viewport" ? "Update from map" : draft.capturedArea.kind === "selectedArea" ? "Update sampling box" : "Update polygons";
-        s.mapHelp.hidden = !["viewport", "captured"].includes(draft.areaMode);
-        s.mapHelp.textContent = draft.areaMode === "viewport" ? "Uses the visible map window. After panning or zooming, choose Update from map to use the new window." :
-            draft.areaOrigin === "run" ? "Uses the exact area from the original run. Choose another area above to change it." :
-                draft.capturedArea.kind === "selectedArea" ? "Uses the box around a map click. Click the map to choose a new box, then choose Update sampling box." : "Uses the polygons already selected on the map. Choose Update polygons to use a new selection.";
+        s.mapHelp.hidden = !["viewport", "mapBox", "mapPolygons", "captured"].includes(draft.areaMode);
+        s.mapHelp.textContent = ({
+            viewport: "Uses the visible map area when you choose Run model. Pan or zoom to change it.",
+            mapBox: "Uses the same box as Raster distributions. Click the map to move the box. Run model uses its latest position and size.",
+            mapPolygons: "Uses the polygons selected on the map when you choose Run model.",
+            captured: "Uses the exact area from the original run. Choose another area above to change it.",
+        })[draft.areaMode] ?? "";
         s.editFilter.disabled = !draft.vectorKey || draft.selecting || Boolean(draft.filterOpening);
         s.editFilter.textContent = draft.filterOpening ? "Opening filter…" : "Edit filter";
         const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
         s.filterDescription.textContent = vectorSource ? `Filter: ${describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter)}` : "Choose a vector layer, then edit its filter.";
         const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
-            `${describeModelArea(draft.area)}${count}${["captured", "viewport"].includes(draft.areaMode) ? ` · ${draft.areaDescription}` : ""}`;
+            `${describeModelArea(draft.area)}${count}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         for (const [prefix, search] of [["source", s.rasterSearch], ["vector", s.vectorSearch]]) {
             if (this.document.activeElement !== search.input) search.input.value = draft[`${prefix}Query`];

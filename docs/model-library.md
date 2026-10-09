@@ -14,17 +14,18 @@ layers have the equivalent optional catalog search. Neither search adds an
 extra required input. Use **More matches** to retrieve later search pages.
 A source does not need a rendered map layer to be analyzed.
 
-Choose **Entire raster**, **Visible map area**, or **Vector layer**. Visible
-map area uses the geographic window currently shown on screen; no map click is
-required. A sampling box or drawn polygon area already selected on the map is
-named **Map sampling box** or **Polygons selected on map**. These are distinct
-from the visible window. Duplicating a run with a fixed area labels it **Area
-from original run**. No coordinate entry is needed.
+Choose **Entire raster**, **Visible map area**, **Box around map location**, or
+**Vector layer**. Visible map area follows the window on screen as you pan,
+zoom or resize the map. Box around map location is the same sampling box used
+by **Raster distributions**: click the map to move it, or change its size in the
+Raster distributions controls. Setup follows those changes automatically; no
+Update button or coordinate entry is needed. Blank margins outside the map's
+single world are excluded.
 
-Panning or zooming does not change a draft automatically. Choose **Update from
-map** to use the new visible window, or **Update sampling box** to use
-the box around a new map click. Blank margins outside the map's single world are
-excluded. The chosen area is shown before Run.
+Selected map polygons also follow the current polygon selection. **Run model**
+fixes the displayed area and other inputs for that run. Later map changes do
+not affect it. A duplicated run keeps its fixed **Area from original run**
+until you choose another area mode.
 
 Choose a **Vector layer**, then **Edit filter** to set field/comparison/value
 conditions using the existing filter editor. **Use filter** checks the matching

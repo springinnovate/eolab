@@ -761,17 +761,19 @@ async function initializeCatalog(
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
+    let models = null;
     let modelArea = null;
     let modelAreaDescription = "";
     let rasterSeriesArea = null;
     let rasterSeriesAreaLabel = "";
     let pixelPoint = null;
-    /** Send committed areas to raster-stack plotting and retain model setup suggestions.
+    /** Send selected map areas to raster-stack plotting and map-linked model setup.
      * @param {Object|null} area Path-free Processing area.
      * @param {string} label Selection description. @return {void}
      */
     const updateRasterSeriesArea = (area, label) => {
         modelArea = area ? structuredClone(area) : null; modelAreaDescription = label;
+        models?.refreshMapArea();
         rasterSeriesArea = area; rasterSeriesAreaLabel = label;
         rasterSeries?.setArea(area, label);
     };
@@ -986,9 +988,9 @@ async function initializeCatalog(
         .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
             filter: record.adapter.exportFilterState(record) }));
     const modelSourceSearch = {raster: new CatalogSearchClient(catalogUrl), vector: new CatalogSearchClient(catalogUrl)};
-    const models = new ModelsController({
+    models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
-        /** Supply suggestions only; hidden and non-rendered catalog sources remain valid inputs.
+        /** Supply catalog choices and current map areas independently of rendering.
          * @return {Object} Independent raster, vector, selected area and visible map bounds.
          */
         getContext: () => {
@@ -1043,6 +1045,7 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();
+    leafletMap.on("moveend resize", () => models.refreshMapArea());
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(),
         getTargets: catalogPolygonTargets,
@@ -1070,6 +1073,7 @@ async function initializeCatalog(
         onInvalidate: id => {
             vectorSamplingOverlay.clear();
             modelArea = null; modelAreaDescription = "";
+            models.refreshMapArea();
             rasterVisualization.setVectorSelection(null);
             calculations.invalidateSamplingArea(id);
         },

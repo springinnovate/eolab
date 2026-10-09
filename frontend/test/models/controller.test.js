@@ -40,11 +40,13 @@ test("ambiguous rasters require a choice; hidden and selected catalog inputs rem
     assert.equal(draft.raster.itemId, "hidden"); assert.match(draft.sourceReason, /catalog/);
 });
 
-test("map edits and closing the tool do not mutate captured inputs or cancel accepted work", async () => {
+test("Run captures the current box while later map edits and closing leave accepted work unchanged", async () => {
     const h = fixture(); h.controller.chooseModel(model);
     h.context.area.selectedBounds.west = -10; h.context.rasters[0].itemId = "changed";
     await h.controller.submit();
-    assert.equal(h.submitted[0].inputs.raster.itemId, "population"); assert.equal(h.submitted[0].inputs.area.selectedBounds.west, 0);
+    assert.equal(h.submitted[0].inputs.raster.itemId, "population"); assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -10);
+    h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();
+    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -10);
     h.handlers.onClose(); h.controller.navigate("library"); h.controller.destroy();
     assert.deepEqual(h.cancelled, []); assert.equal(h.values.size, 0);
 });
@@ -134,33 +136,63 @@ test("duplicating a run cannot inherit an in-flight vector suggestion from the c
 });
 
 
-test("visible map extent runs without a clicked selection and changes only when explicitly updated", async () => {
+test("visible map area follows map changes and Run captures the latest viewport", async () => {
     const h = fixture(); h.context.area = null;
     h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5};
     h.controller.chooseModel(model); h.controller.chooseArea("viewport");
-    const original = structuredClone(h.controller.state.draft.area);
-    assert.deepEqual(original, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
-    h.context.viewportBounds.west = -20;
-    assert.deepEqual(h.controller.state.draft.area, original);
-    h.handlers.onUpdateArea();
+    assert.deepEqual(h.controller.state.draft.area, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
+    h.context.viewportBounds.west = -20; h.controller.refreshMapArea();
     assert.equal(h.controller.state.draft.area.selectedBounds.west, -20);
+    // Submission also reads the latest bounds if it precedes moveend.
+    h.context.viewportBounds.west = -25;
     await h.controller.submit();
-    assert.equal(h.submitted.length, 1);
-    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -20);
-    h.context.viewportBounds.west = -30;
-    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -20);
+    assert.equal(h.submitted.length, 1); assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -25);
+    h.context.viewportBounds.west = -30; h.controller.refreshMapArea();
+    assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -25);
 });
 
-test("a copied map box is named by its source and changes only on an explicit update", async () => {
+test("map box follows clicks and resizing; a cleared selection cannot run the previous box", async () => {
     const h = fixture(); h.controller.chooseModel(model);
-    assert.equal(h.controller.state.draft.areaOrigin, "map");
-    h.context.area.selectedBounds.west = -10;
-    assert.equal(h.controller.state.draft.area.selectedBounds.west, 0);
-    h.handlers.onUpdateArea(); assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
-    h.context.area = null; h.handlers.onUpdateArea();
-    assert.match(h.controller.state.error, /unchanged/);
+    assert.equal(h.controller.state.draft.areaMode, "mapBox");
+    h.context.area.selectedBounds.west = -10; h.controller.refreshMapArea();
     assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
-    await h.controller.submit(); assert.equal(h.submitted[0].inputs.area.selectedBounds.west, -10);
+    h.context.area.selectedBounds.east = 10; h.controller.refreshMapArea();
+    assert.equal(h.controller.state.draft.area.selectedBounds.east, 10);
+    h.context.area = null; h.controller.refreshMapArea();
+    assert.equal(h.controller.state.draft.area, null);
+    assert.match(h.controller.state.draft.selectionError, /Click the map/);
+    await h.controller.submit(); assert.equal(h.submitted.length, 0);
+    h.context.area = structuredClone(area); h.controller.refreshMapArea();
+    assert.equal(h.controller.state.draft.selectionError, "");
+    await h.controller.submit(); assert.equal(h.submitted.length, 1);
+});
+
+test("map changes preserve duplicate areas, model vector filters and recoverable submissions", async () => {
+    const h = fixture(); await h.controller.loadLibrary(); await h.controller.showRun(job().jobId);
+    await h.controller.duplicateRun();
+    h.context.area.selectedBounds.west = -10; h.controller.refreshMapArea();
+    assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
+    await h.controller.submit(); assert.deepEqual(h.submitted[0].inputs.area, invocation.inputs.area);
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    const draft = h.controller.state.draft; draft.area = {kind: "catalogSelection", selection};
+    h.controller.refreshMapArea(); assert.deepEqual(draft.area, {kind: "catalogSelection", selection});
+    h.controller.chooseArea("mapBox");
+    h.api.submitModelRun = async () => { throw new TypeError("Connection lost"); };
+    await h.controller.submit(); const pending = structuredClone(h.controller.state.pending);
+    h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();
+    assert.deepEqual(h.controller.state.pending, pending);
+    assert.deepEqual(draft.area, pending.inputs.area);
+});
+
+test("map-linked setup refreshes after navigation and an invalid viewport clears its old bounds", () => {
+    const h = fixture(); h.controller.chooseModel(model);
+    h.controller.navigate("library"); h.context.area.selectedBounds.west = -5;
+    h.controller.navigate("setup"); assert.equal(h.controller.state.draft.area.selectedBounds.west, -5);
+    h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5}; h.controller.chooseArea("viewport");
+    h.context.viewportBounds = null; h.controller.refreshMapArea();
+    assert.equal(h.controller.state.draft.area, null); assert.match(h.controller.state.draft.selectionError, /unavailable/);
+    h.context.viewportBounds = {west: -20, south: -5, east: 10, north: 5}; h.controller.setActive(true);
+    assert.equal(h.controller.state.draft.area.selectedBounds.west, -20);
 });
 
 test("viewport capture excludes blank world margins and rejects unavailable or empty bounds", () => {

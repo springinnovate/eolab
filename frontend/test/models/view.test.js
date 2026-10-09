@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job } from "../../test-support/models/
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "UpdateArea", "Vector", "EditFilter", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -58,19 +58,18 @@ test("stage feedback covers terminal states and an unknown total stays indetermi
 });
 
 
-test("area choices name the actual area and omit coordinates and unexplained retained state", () => {
+test("area choices use histogram terminology and follow the map without Update controls", () => {
     const h = fixture();
     const labels = () => h.view.setup.areaMode.children.map(option => option.textContent);
-    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Vector layer", "Map sampling box"]);
-    assert.equal(h.view.setup.bounds, undefined);
-    assert.equal(h.view.setup.updateArea.textContent, "Update sampling box");
-    h.state.draft.areaOrigin = "run"; h.view.render(h.state);
-    assert.equal(labels().at(-1), "Area from original run"); assert.equal(h.view.setup.updateArea.hidden, true);
+    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Box around map location", "Vector layer"]);
+    assert.equal(h.view.setup.bounds, undefined); assert.equal(h.view.setup.updateArea, undefined);
+    assert.match(h.view.setup.mapHelp.textContent, /same box as Raster distributions/);
+    h.state.draft.areaOrigin = "run"; h.state.draft.areaMode = "captured"; h.view.render(h.state);
+    assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.mapHelp.textContent, /exact area from the original run/);
     h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);
-    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Vector layer"]);
+    assert.ok(labels().includes("Box around map location"));
     h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.view.render(h.state);
-    assert.equal(h.view.setup.run.disabled, false); assert.equal(h.view.setup.updateArea.hidden, false);
-    h.view.setup.updateArea.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "UpdateArea");
+    assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.mapHelp.textContent, /Pan or zoom/);
     h.state.draft.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
 });
 

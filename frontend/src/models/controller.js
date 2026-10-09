@@ -33,7 +33,6 @@ export class ModelsController {
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
-            onUpdateArea: () => this.updateAreaFromMap(),
             onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(), onSearch: (kind, more) => void this.search(kind, more),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
@@ -59,12 +58,13 @@ export class ModelsController {
      */
     open() { this.onOpen(); void this.loadLibrary(); void this.loadRuns(); }
 
-    /** Change presentation visibility without changing server work or draft inputs.
+    /** Change visibility and refresh a map-linked setup without changing server work.
      * @param {boolean} active Whether Models is the visible Analysis tool.
      * @return {void}
      */
     setActive(active) {
         this.state.active = active;
+        if (active) this.refreshMapArea();
         for (const job of this.runSnapshots.values()) this.rememberRun(job);
         this.jobs.schedule(); this.render();
     }
@@ -84,7 +84,7 @@ export class ModelsController {
      * @param {string} page Library, setup, runs or run.
      * @return {void}
      */
-    navigate(page) { this.revision += 1; this.state.page = page; this.state.error = ""; this.render(); if (page === "runs") void this.loadRuns(); }
+    navigate(page) { this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
     /** Create a fresh draft from the current source suggestions.
      * @param {Object} model Installed recipe chosen by the user.
@@ -114,40 +114,46 @@ export class ModelsController {
         this.state.error = "";
     }
 
-    /** Choose an explicit area; later map changes never update it automatically.
-     * @param {string} mode Whole raster, copied map/run area, visible viewport or vector features.
+    /** Choose whether setup uses the live map area, vector features or a fixed area.
+     * @param {string} mode Whole raster, viewport, mapBox, mapPolygons, vector or captured run area.
      * @return {void}
      */
     chooseArea(mode) {
-        const draft = this.state.draft; if (!draft) return;
+        const draft = this.state.draft; if (!draft || this.state.submitting) return;
         this.selectionAbort?.abort(); this.selectionRevision += 1; draft.selecting = false;
         draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
         if (mode === "whole") draft.area = {kind: "wholeRaster"};
         else if (mode === "captured") draft.area = structuredClone(draft.capturedArea);
-        else if (mode === "viewport") {
-            draft.area = null;
-            try { draft.area = modelViewportArea(this.getContext().viewportBounds); }
-            catch (error) { draft.selectionError = error.message; }
-            draft.areaDescription = "Visible map extent copied into this draft.";
-        } else draft.area = null;
+        else if (["viewport", "mapBox", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
+        else draft.area = null;
         this.render();
     }
 
-    /** Replace the draft area only after an explicit request to use the latest map area.
-     * A missing sampling box leaves the previous draft area available for review.
+    /** Refresh a map-linked setup from composition's latest area and viewport.
+     * Called after map changes and immediately before Run. Pending submissions,
+     * duplicated fixed areas and model-specific vector filters remain unchanged.
      * @return {void}
      */
-    updateAreaFromMap() {
-        const draft = this.state.draft; if (!draft) return;
-        if (draft.areaMode === "viewport") { this.chooseArea("viewport"); return; }
+    refreshMapArea() {
+        const draft = this.state.draft;
+        if (!draft || this.destroyed || this.state.page !== "setup" || this.state.submitting || this.state.pending ||
+            !["viewport", "mapBox", "mapPolygons"].includes(draft.areaMode)) return;
         const context = this.getContext();
-        if (!["selectedArea", "polygonArea"].includes(context.area?.kind)) {
-            this.state.error = "Select a sampling box on the map first. The area already shown in this draft is unchanged.";
-            this.render(); return;
-        }
-        draft.capturedArea = modelAreaInput(context.area);
-        draft.areaOrigin = "map"; draft.areaDescription = context.areaDescription ?? "Area selected on the map.";
-        this.chooseArea("captured");
+        draft.area = null; draft.selectionError = "";
+        try {
+            if (draft.areaMode === "viewport") {
+                draft.area = modelViewportArea(context.viewportBounds);
+                draft.areaDescription = "Visible map area";
+            } else {
+                const kind = draft.areaMode === "mapBox" ? "selectedArea" : "polygonArea";
+                if (context.area?.kind !== kind) throw new Error(draft.areaMode === "mapBox"
+                    ? "Click the map to choose a box for this analysis."
+                    : "Select polygons on the map to choose an area for this analysis.");
+                draft.area = modelAreaInput(context.area);
+                draft.areaDescription = draft.areaMode === "mapBox" ? "Box around map location" : "Polygons selected on map";
+            }
+        } catch (error) { draft.selectionError = error.message; }
+        this.render();
     }
 
     /** Select a vector's draft filter and show any feature-selection failure in setup.
@@ -254,6 +260,7 @@ export class ModelsController {
         const draft = this.state.draft; const revision = this.revision;
         this.state.error = "";
         try {
+            if (!retry) this.refreshMapArea();
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
             if (!this.storage) throw new Error("Enable session storage to submit a recoverable model run.");
