@@ -9,7 +9,7 @@ import { FakeRasterControlDocument } from "../../test-support/raster/fake-contro
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
 import { captureModelSubmission, createModelDraft, modelViewportArea } from "../../src/models/inputs.js";
-import { model, raster, area, invocation, selection, job } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, selection, job, clipModel } from "../../test-support/models/fixtures.js";
 
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
@@ -414,4 +414,26 @@ test("choosing or clearing a raster immediately refreshes Run availability", () 
     assert.equal(view.setup.run.disabled, false);
     view.setup.source.value = ""; view.setup.source.dispatchEvent(new Event("change"));
     assert.equal(view.setup.run.disabled, true);
+});
+
+
+test("clip setup defaults to the visible map when the current area is unsupported", () => {
+    const context = {rasters: [raster], area: {kind: "wholeRaster"}, viewportBounds: {west: 1, south: 2, east: 3, north: 4}};
+    const draft = createModelDraft(clipModel, context, "clip");
+    assert.equal(draft.areaMode, "viewport"); assert.deepEqual(draft.area.selectedBounds, context.viewportBounds);
+    assert.deepEqual(captureModelSubmission(draft, "request").parameters, {});
+    draft.area = {kind: "wholeRaster"}; assert.throws(() => captureModelSubmission(draft, "request"), /supported by this model/);
+    const unavailable = createModelDraft(clipModel, {rasters: [raster]}, "no-view");
+    assert.equal(unavailable.area, null); assert.match(unavailable.selectionError, /extent is unavailable/);
+});
+
+test("clip run duplication preserves its exact area and has no summary parameter", async () => {
+    const saved = {...invocation, model: {...clipModel, definition: clipModel}, parameters: {}};
+    const h = fixture({discoverModels: async () => [clipModel], readModelInvocation: async () => saved});
+    await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
+    h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();
+    assert.deepEqual(h.controller.state.draft.area, saved.inputs.area);
+    assert.deepEqual(h.controller.state.draft.parameters, {});
+    await h.controller.submit(); assert.deepEqual(h.submitted[0].inputs, saved.inputs);
+    assert.equal(h.submitted[0].model.id, "raster-clip");
 });

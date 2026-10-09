@@ -1,4 +1,5 @@
 /** Same-origin Processing API for catalog rasters, owned polygon inputs and job results. */
+import { validateCalculationRows, validateModelResult } from "./model-results.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
@@ -105,7 +106,9 @@ function validateJob(job) {
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
-        if (["raster.aggregate.v1", "model.run.v1"].includes(job.operation)) {
+        if (job.operation === "model.run.v1") {
+            validateModelResult(job.result);
+        } else if (job.operation === "raster.aggregate.v1") {
             validateCalculationRows(job.result.rows);
             if (job.result.cacheHit != null && typeof job.result.cacheHit !== "boolean") {
                 throw new Error("Processing returned invalid cache metadata.");
@@ -113,21 +116,6 @@ function validateJob(job) {
         }
     }
     return job;
-}
-
-/** Validate the bounded typed table consumed by inline results. @param {Object[]} rows API values. @return {void} */
-function validateCalculationRows(rows) {
-    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 5 || rows.some(row =>
-        typeof row.label !== "string" || typeof row.expression !== "string" ||
-        !["ok", "no_matches", "no_valid_data", "invalid_arithmetic", "overflow"].includes(row.state) ||
-        !(row.value === null || typeof row.value === "string" &&
-            (row.valueType === "integer" ? /^-?\d+$/.test(row.value) : row.valueType === "float" && Number.isFinite(Number(row.value)))) ||
-        !Array.isArray(row.aggregates) || row.aggregates.some(aggregate =>
-            typeof aggregate.function !== "string" ||
-            ![aggregate.validPixels, aggregate.matchedPixels, aggregate.invalidArithmeticPixels]
-                .every(value => Number.isSafeInteger(value) && value >= 0)))) {
-        throw new Error("Processing returned an invalid calculation result table.");
-    }
 }
 
 /** Check a model identity before building URLs or recovering saved inputs.

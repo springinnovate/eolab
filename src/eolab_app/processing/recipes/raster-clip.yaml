@@ -1,0 +1,30 @@
+# Reuse the existing native-grid clipping operation in Models.
+schema: eolab.model/v1
+id: raster-clip
+version: "1.0.0"
+title: Raster clip
+description: Download a GeoTIFF of a raster within a sampling area or selected vector features, preserving its original resolution and values.
+inputs:
+  raster:
+    type: catalog_raster
+    label: Raster
+  area:
+    type: clip_area
+    label: Analysis area
+parameters: {}
+steps:
+  - id: clip
+    operation: raster.clip.v1
+    inputs:
+      raster: {input: raster}
+      area: {input: area}
+    parameters: {}
+outputs:
+  raster:
+    type: raster
+    label: Clipped raster
+    source: clip.raster
+    role: result
+    presentation: map
+    saveEligible: true
+executionProfile: raster-clip

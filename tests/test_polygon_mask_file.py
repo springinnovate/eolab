@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 from affine import Affine
 import numpy as np
@@ -159,8 +160,8 @@ def test_storage_admission_and_old_job_guard(
         == limits.result_reservation_bytes
         + masks.estimate_mask_disk_bytes(plan.grid.width, plan.grid.height)
     )
-    worker = object.__new__(ProcessingWorker)
-    worker.aggregate_limits = limits
+    authorizer, jobs, artifacts = Mock(), Mock(), Mock()
+    worker = ProcessingWorker(authorizer, jobs, artifacts, limits)
     with pytest.raises(ProcessingError, match="reserved less disk space") as error:
         asyncio.run(
             worker._execute(
@@ -172,6 +173,8 @@ def test_storage_admission_and_old_job_guard(
             )
         )
     assert error.value.code == "insufficient_disk_reservation"
+    authorizer.authorize.assert_not_called()
+    artifacts.prepare.assert_not_called()
     monkeypatch.setattr(masks.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
     with rasterio.open(source) as dataset, pytest.raises(ProcessingError) as error:
         with masks.temporary_polygon_mask(

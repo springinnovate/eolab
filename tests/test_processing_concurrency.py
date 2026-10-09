@@ -254,7 +254,9 @@ def test_stopping_one_native_child_does_not_stop_other_jobs(
     store.limits = replace(
         store.limits, worker_count=2, max_execution_memory_bytes=4 * 1024**3
     )
-    monkeypatch.setattr(worker_module, "clip_process_target", _paused_clip)
+    monkeypatch.setattr(
+        "eolab_app.processing.raster_operations.clip_process_target", _paused_clip
+    )
     payload = clip_inputs(client)
     jobs = [
         client.post(

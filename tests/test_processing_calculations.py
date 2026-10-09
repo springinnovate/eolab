@@ -749,7 +749,10 @@ def test_calculation_cancel_joins_native_child_and_removes_private_results(
     job = submit_calculation(
         client, calculation_inputs(client, selectedBounds=AREA, **expressions)
     )
-    monkeypatch.setattr(worker_module, "aggregate_process_target", paused_calculation)
+    monkeypatch.setattr(
+        "eolab_app.processing.raster_operations.aggregate_process_target",
+        paused_calculation,
+    )
     if stop == "deadline":
         worker.limits = replace(worker.limits, runtime_seconds=2)
 

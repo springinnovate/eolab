@@ -1,11 +1,8 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { calculationValue } from "../processing/calculation-result-view.js";
-import { modelSourceKey, describeModelFilter } from "./inputs.js";
-
-const RESULT_STATES = {no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
-    invalid_arithmetic: "The expression has no defined numeric result.", overflow: "The result exceeded the supported numeric range."};
+import { renderModelResult } from "./result-view.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea } from "./inputs.js";
 
 /** Describe the explicit area shown in setup and saved run details.
  * @param {Object|null} area Model area descriptor.
@@ -32,7 +29,8 @@ export function describeModelProgress(job) {
     if (status !== "running") return ({queued: "Queued", cancelling: "Cancelling…", ready: "Ready", failed: "Failed",
         cancelled: "Cancelled", interrupted: "Interrupted", expired: "Results expired", deleted: "Deleted"})[status] ?? status;
     const phase = ({preparing: "Preparing inputs", preparing_selected_polygons: "Reading selected features",
-        preparing_polygon_mask: "Creating the analysis mask", calculating: "Calculating", writing_results: "Writing results"})[job.progress.phase] ?? "Preparing calculation";
+        preparing_polygon_mask: "Creating the analysis mask", calculating: "Calculating", writing_results: "Writing results",
+        clipping: "Clipping raster", creating_cog: "Preparing GeoTIFF", validating: "Checking GeoTIFF", checksumming: "Finishing download"})[job.progress.phase] ?? "Preparing calculation";
     return job.progress.total > 0 ? `${phase} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${phase}…`;
 }
 
@@ -129,7 +127,7 @@ export class ModelsView {
         fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => input.type === "catalog_raster")?.label ?? "Raster", source), reason);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
-        fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => input.type === "summary_area")?.label ?? "Analysis area", areaMode));
+        fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type))?.label ?? "Analysis area", areaMode));
         const vectorGroup = this.element("div", "", "models-vector");
         const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
         vectorGroup.append(this.field("models-vector", "Vector layer", vector));
@@ -202,9 +200,10 @@ export class ModelsView {
         this.options(s.source, [{value: "", label: "Choose a raster…"}, ...draft.sources.map(source => ({value: modelSourceKey(source),
             label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
         s.reason.textContent = draft.sourceReason;
-        const areaChoices = [{value: "whole", label: "Entire raster"}, {value: "viewport", label: "Visible map area"},
+        const areaChoices = [{value: "viewport", label: "Visible map area"},
             {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
-        if (draft.capturedArea?.kind === "polygonArea" && draft.areaOrigin === "map") {
+        if (modelSupportsArea(draft.model, {kind: "wholeRaster"})) areaChoices.unshift({value: "whole", label: "Entire raster"});
+        if (draft.capturedArea?.kind === "polygonArea" && draft.areaOrigin === "map" && modelSupportsArea(draft.model, draft.capturedArea)) {
             areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
         }
         if (draft.areaOrigin === "run" && draft.capturedArea?.kind !== "wholeRaster") {
@@ -235,7 +234,7 @@ export class ModelsView {
         s.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
             `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area"].includes(input.type));
+        const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area", "clip_area"].includes(input.type));
         s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !draft.area || !draft.raster || !supported;
         s.run.textContent = state.submitting ? "Submitting…" : "Run model";
         s.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
@@ -283,18 +282,7 @@ export class ModelsView {
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
             if (available && job.result) {
-                for (const row of job.result.rows) {
-                    const card = this.element("article", "", "models-result");
-                    card.append(this.element("strong", row.label), this.element("code", row.expression),
-                        this.element("strong", calculationValue(row), "models-result-value"));
-                    if (row.state !== "ok") card.append(this.element("p", RESULT_STATES[row.state] ?? row.state));
-                    r.result.append(card);
-                }
-                const links = this.element("div", "", "models-actions");
-                for (const [kind, label] of [["result", "Download CSV"], ["provenance", "Download provenance"]]) {
-                    const link = this.element("a", label); link.href = processingDownloadUrl(kind === "result" ? job.result.url : job.result.provenanceUrl, id, kind); link.download = ""; links.append(link);
-                }
-                r.result.append(links);
+                renderModelResult(r.result, job.result, id, this.element.bind(this));
             }
         }
         r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +

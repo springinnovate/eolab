@@ -314,3 +314,143 @@ def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
         row["metadata_expires_at"] = None
         row["status"] = "deleted"
         assert client.get(path).status_code == 410
+
+
+@pytest.mark.parametrize("kind", ["selectedArea", "catalogSelection"])
+def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
+    """Installed clip YAML translates explicit areas without summary parameters.
+
+    Args:
+        kind: Supported box or filtered-vector area.
+    """
+    from eolab_app.processing.clip_models import ClipJobRequest
+    from eolab_app.processing.model_run_contracts import ModelInvocation
+
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("raster-clip", "1.0.0")
+    assert (
+        ModelDefinition.model_validate(
+            parse_yaml(export_yaml(definition.to_document()))
+        ).digest
+        == definition.digest
+    )
+    body = summary_request()
+    body["model"] = {
+        "id": definition.id,
+        "version": definition.version,
+        "definitionSha256": definition.digest,
+    }
+    body["parameters"] = {}
+    if kind == "catalogSelection":
+        body["inputs"]["area"] = {
+            "kind": kind,
+            "selection": {
+                "collectionId": "eolab-mounted-vectors",
+                "itemId": "countries",
+                "assetKey": "data",
+                "layerName": "countries",
+                "sourceSignature": "b" * 64,
+                "filter": {"enabled": True, "match": "all", "rules": []},
+            },
+        }
+    request, invocation = build_model_calculation_request(
+        ModelRunRequest.model_validate(body), registry
+    )
+    assert isinstance(request, ClipJobRequest)
+    assert invocation.parameters == {} and invocation.inputs == body["inputs"]
+    assert (
+        ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
+        == invocation
+    )
+
+
+@pytest.mark.parametrize(
+    "area",
+    [
+        {"kind": "wholeRaster"},
+        {"kind": "polygonArea", "reference": {"id": "a" * 32, "checksum": "b" * 64}},
+    ],
+)
+def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None:
+    """Models cannot bypass the clip operation's explicit-area contract.
+
+    Args:
+        area: An area supported by summaries but not by clip submission.
+    """
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("raster-clip", "1.0.0")
+    body = summary_request()
+    body["parameters"] = {}
+    body["model"] = {
+        "id": definition.id,
+        "version": definition.version,
+        "definitionSha256": definition.digest,
+    }
+    body["inputs"]["area"] = area
+    with pytest.raises(ProcessingError, match="area"):
+        build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
+
+
+def test_clip_recipe_rejects_extra_parameters_and_mismatched_output_contract() -> None:
+    """A clip model cannot accept formulas or declare a scalar table result."""
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("raster-clip", "1.0.0")
+    body = summary_request()
+    body["model"] = {
+        "id": definition.id,
+        "version": definition.version,
+        "definitionSha256": definition.digest,
+    }
+    body["parameters"] = {"summary": "sum(a)"}
+    with pytest.raises(ProcessingError, match="declared parameters"):
+        build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
+    document = definition.to_document()
+    document["outputs"]["raster"]["presentation"] = "table"
+    with pytest.raises(ProcessingError, match="operation contract"):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+@pytest.mark.parametrize(
+    "model_id,wrong_type", [("raster-summary", "raster"), ("raster-clip", "statistics")]
+)
+def test_recipe_cannot_mislabel_its_operation_output(
+    model_id: str, wrong_type: str
+) -> None:
+    """YAML labels may change, but its declared scientific type must match execution.
+
+    Args:
+        model_id: Installed recipe to change.
+        wrong_type: Type inconsistent with the registered operation.
+    """
+    document = ModelRegistry.load_installed().get(model_id, "1.0.0").to_document()
+    next(iter(document["outputs"].values()))["type"] = wrong_type
+    with pytest.raises(ProcessingError, match="operation contract"):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+@pytest.mark.parametrize("policy", [{}, {"version": "raster.clip.v1"}])
+def test_saved_policy_must_include_the_registered_numerical_facts(
+    policy: dict[str, Any],
+) -> None:
+    """Incomplete or different operation policies cannot masquerade as summary execution.
+
+    Args:
+        policy: Incomplete or incompatible persisted numerical policy.
+    """
+    from eolab_app.processing.model_run_contracts import ModelExecution
+
+    with pytest.raises(ValidationError):
+        ModelExecution.model_validate(
+            {
+                "state": "pending",
+                "applicationBuild": "test",
+                "operations": {
+                    "calculate": {
+                        "id": "raster.aggregate.v1",
+                        "implementationRevision": "a" * 64,
+                    }
+                },
+                "sources": {"raster": {"sourceSignature": "b" * 64, "band": 1}},
+                "numericalPolicy": policy,
+            }
+        )

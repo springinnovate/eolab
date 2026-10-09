@@ -3,23 +3,30 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, Field, JsonValue, TypeAdapter, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    JsonValue,
+    SerializeAsAny,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.processing.aggregate_models import (
-    AggregateResultResponse,
     AggregateGrid,
     AggregateValue,
-    GroundAreaPlan,
-    AggregateSpec,
-    UnpreparedCalculation,
+)
+from eolab_app.processing.clip_models import (
+    ClipGrid,
 )
 from eolab_app.processing.model_definitions import (
     ModelSchema,
     Label,
     ModelDefinition,
     Name,
-    SummaryExpressionParameter,
     Version,
 )
 from eolab_app.processing.models import (
@@ -31,6 +38,8 @@ from eolab_app.processing.models import (
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.processing.model_yaml import encode_canonical_json
+from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing.model_result_contracts import ModelResult
 
 MODEL_OPERATION = "model.run.v1"
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
@@ -116,6 +125,10 @@ SummaryArea = Annotated[
 ]
 
 
+# Raster clips require an explicit box or catalog vector predicate.
+ClipModelArea = Annotated[BoundsArea | SelectionArea, Field(discriminator="kind")]
+
+
 class CapturedModel(ModelReference):
     """A copy of the exact model definition accepted for a run.
 
@@ -171,15 +184,17 @@ class ModelInvocation(ModelSchema):
             definition.parameters
         ):
             raise ValueError("Captured bindings do not match the definition")
+        input_types = {
+            "catalog_raster": CatalogRasterRequest,
+            "clip_area": ClipModelArea,
+            "summary_area": SummaryArea,
+        }
         for name, role in definition.inputs.items():
-            if role.type == "catalog_raster":
-                CatalogRasterRequest.model_validate(self.inputs[name])
-            elif role.type == "summary_area":
-                TypeAdapter(SummaryArea).validate_python(self.inputs[name])
-            else:
+            if role.type not in input_types:
                 raise ValueError("Unsupported captured input type")
+            TypeAdapter(input_types[role.type]).validate_python(self.inputs[name])
         for name, parameter in definition.parameters.items():
-            SummaryExpressionParameter.model_validate(
+            type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
             )
         return self
@@ -189,15 +204,41 @@ class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
     The calculation starts as submitted inputs and becomes a prepared raster
-    aggregation plan. Source and implementation checksums let the worker reject
+    summary or clip plan. Source and implementation checksums let the worker reject
     changes between submission and execution.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
-    calculation: UnpreparedCalculation | AggregateSpec
+    calculation: SerializeAsAny[BaseModel]
     sourceSignature: tuple[int, int, int, int]
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
+
+    @field_validator("calculation", mode="before")
+    @classmethod
+    def parse_calculation(cls, value: BaseModel | dict[str, Any]) -> BaseModel:
+        """Validate a stored calculation with its registered operation schema.
+
+        Args:
+            value: Queued or prepared operation data from storage.
+
+        Returns:
+            The operation's validated queued or prepared model.
+
+        Raises:
+            ValueError: If the operation data is malformed.
+            ProcessingError: If its implementation is not installed.
+        """
+        if not isinstance(value, (BaseModel, dict)):
+            raise ValueError("Stored calculation must be an operation object")
+        identifier = (
+            getattr(value, "operation", None)
+            if isinstance(value, BaseModel)
+            else value.get("operation")
+        )
+        if not isinstance(identifier, str):
+            raise ValueError("Stored calculation requires an operation ID")
+        return get_model_operation(identifier).parse_specification(value)
 
 
 class ModelIdentity(ModelReference):
@@ -237,7 +278,7 @@ class ModelProgress(JobProgressResponse):
 
 
 class ModelJobResponse(JobResponse):
-    """A model run's status, progress, errors and available summary downloads.
+    """A model run's status, progress, errors and available table or raster downloads.
 
     ``metadataExpiresAt`` is the deadline for reading the saved Model/Run YAML.
     Result files have their own expiry in the inherited ``expiresAt`` field.
@@ -248,7 +289,7 @@ class ModelJobResponse(JobResponse):
     label: Label
     metadataExpiresAt: datetime | None
     progress: ModelProgress
-    result: AggregateResultResponse | None
+    result: ModelResult | None
 
 
 class ModelRunList(ModelSchema):
@@ -330,7 +371,7 @@ class ResolvedModelSource(ModelSchema):
 
     sourceSignature: Digest
     band: Literal[1]
-    grid: AggregateGrid | None = None
+    grid: AggregateGrid | ClipGrid | None = None
 
 
 class ModelExecutionLimits(ModelSchema):
@@ -346,24 +387,17 @@ class ModelExecutionLimits(ModelSchema):
     resultTtlSeconds: Annotated[int, Field(gt=0)]
 
 
-class SummaryNumericalPolicy(ModelSchema):
-    """Rules used to select and measure raster cells in a summary.
+class ModelRasterOutcome(ModelSchema):
+    """Raster file metadata retained in Run YAML after the download expires."""
 
-    Records the grid, resampling, NoData handling, value interpretation and any
-    ground-area calculation settings so exported results can be interpreted.
-    """
-
-    version: Literal["raster.aggregate.v1"]
-    grid: Literal["native"]
-    resampling: Literal["none"]
-    numericInclusion: Literal["cell_center"]
-    nodata: Literal["exclude_source_nodata_and_nonfinite"]
-    valueDomain: Literal["stored_native_values"]
-    groundArea: GroundAreaPlan | None = None
+    filename: Annotated[str, Field(min_length=1, max_length=1024)]
+    bytes: Annotated[int, Field(ge=0)]
+    sha256: Digest
+    validPixels: Annotated[int, Field(ge=0)]
 
 
 class ModelOutcome(ModelSchema):
-    """A finished run's final status, error or calculated summary values.
+    """A finished run's final status, error, summary values or raster file metadata.
 
     This record remains available after result files expire, until the run's
     metadata expires or the user deletes the run.
@@ -372,6 +406,7 @@ class ModelOutcome(ModelSchema):
     status: Literal["ready", "failed", "cancelled", "interrupted"]
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
+    raster: ModelRasterOutcome | None = None
 
 
 class ModelExecution(ModelSchema):
@@ -386,8 +421,44 @@ class ModelExecution(ModelSchema):
     operations: dict[Name, OperationImplementation] = Field(min_length=1, max_length=1)
     sources: dict[Name, ResolvedModelSource] = Field(min_length=1, max_length=1)
     limits: ModelExecutionLimits | None = None
-    numericalPolicy: SummaryNumericalPolicy | None = None
+    numericalPolicy: SerializeAsAny[BaseModel] | None = None
     outcome: ModelOutcome | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_numerical_policy(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Validate numerical facts using the recorded operation's policy contract.
+
+        Args:
+            value: Execution details loaded from retained run metadata or YAML.
+
+        Returns:
+            Execution details with a typed, operation-validated policy.
+
+        Raises:
+            ValueError: If the policy does not match the recorded operation.
+            ProcessingError: If the recorded operation is not installed.
+        """
+        if not isinstance(value, dict):
+            raise ValueError("Execution details must be an object")
+        if value.get("numericalPolicy") is None:
+            return value
+        records = value.get("operations", {})
+        if len(records) != 1:
+            raise ValueError("Numerical policy requires one recorded operation")
+        record = next(iter(records.values()))
+        identifier = (
+            record.id
+            if isinstance(record, OperationImplementation)
+            else record.get("id")
+        )
+        operation = get_model_operation(identifier)
+        return {
+            **value,
+            "numericalPolicy": operation.policy_type.model_validate(
+                value["numericalPolicy"]
+            ),
+        }
 
     @model_validator(mode="after")
     def check_preparation(self) -> "ModelExecution":

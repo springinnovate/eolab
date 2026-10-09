@@ -536,7 +536,7 @@ def test_cache_hit_skips_planning_and_pins_values(
         side_effect=AssertionError("Cache reuse must not inspect raster metadata")
     )
     monkeypatch.setattr(worker_module, "run_process", forbidden)
-    asyncio.run(worker._prepare_calculation(row))
+    asyncio.run(worker._prepare_operation(row))
     forbidden.assert_not_called()
     retained = AggregateSpec.model_validate(row["spec"])
     assert retained.cachedRows[0].value == "42"
@@ -556,7 +556,7 @@ def test_cache_hit_skips_planning_and_pins_values(
         mode="json", by_alias=True
     )
     with pytest.raises(ProcessingError):
-        asyncio.run(worker._prepare_calculation(row))
+        asyncio.run(worker._prepare_operation(row))
 
 
 def test_partial_or_malformed_cache_still_requires_normal_planning(

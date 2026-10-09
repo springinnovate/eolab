@@ -219,7 +219,7 @@ def test_cached_area_skips_geometry_work_even_after_entry_expires(
     monkeypatch.setattr(worker_module, "run_process", forbid_native_work)
     submitted = submit_calculation(client, calculation_inputs(client, **area))
     claimed = store.claim_next_job()
-    asyncio.run(worker._prepare_calculation(claimed))
+    asyncio.run(worker._prepare_operation(claimed))
     assert claimed["spec"]["cachedRows"] == original["result"]["rows"]
     with psycopg.connect(store.conninfo) as connection:
         connection.execute("DELETE FROM processing.calculation_results")

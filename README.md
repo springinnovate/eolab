@@ -192,7 +192,8 @@ EOLab is open-source software under the [Apache License 2.0](LICENSE).
 
 ## Model library
 
-Use **Tools → Models** to configure and run an installed raster-summary model,
-then inspect its progress, results and YAML in the right-hand Analysis panel.
+Use **Tools → Models** to run **Raster summary** or **Raster clip**, then inspect
+progress, results and YAML in the right-hand Analysis panel. Raster summary
+returns values and a CSV; Raster clip returns a GeoTIFF for the selected area.
 See [Run a model](docs/model-library.md) for input selection, cancellation,
 recovery and temporary result downloads.
