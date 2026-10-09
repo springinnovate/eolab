@@ -1,4 +1,4 @@
-"""Path-free model submissions and model-specific Processing job projections."""
+"""Request, status and YAML-export schemas for model runs."""
 
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -37,7 +37,11 @@ Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 
 
 class ModelReference(ModelSchema):
-    """Exact installed recipe identity supplied by discovery or an export."""
+    """A model's ID, version and definition checksum.
+
+    The checksum lets submission detect a recipe that changed after the user
+    opened model setup, even if its ID and version stayed the same.
+    """
 
     id: Name
     version: Version
@@ -45,7 +49,12 @@ class ModelReference(ModelSchema):
 
 
 class ModelRunRequest(ModelSchema):
-    """Bounded submission envelope; the installed definition validates each value."""
+    """A user's request to run a model with selected inputs and parameter values.
+
+    ``requestId`` identifies retries of the same submission. ``model`` selects
+    the recipe version; ``inputs`` supplies datasets and an area. Omitted
+    parameters use the recipe's defaults, and ``label`` names the run for the user.
+    """
 
     requestId: Annotated[
         str,
@@ -58,41 +67,45 @@ class ModelRunRequest(ModelSchema):
 
     @model_validator(mode="after")
     def check_json_values(self) -> "ModelRunRequest":
-        """Reject nonfinite values before request hashing or model resolution.
+        """Reject NaN and infinity in submitted inputs or parameters.
 
         Returns:
-            This finite JSON submission.
+            This request after checking that its numbers can be represented in JSON.
 
         Raises:
-            ValueError: If any supplied number is nonfinite.
+            ValueError: If a supplied number is NaN or infinite.
         """
         canonical_json(self.model_dump(mode="json"))
         return self
 
 
 class BoundsArea(ModelSchema):
-    """Explicit WGS84 area for a model summary."""
+    """A rectangular analysis area specified by longitude and latitude bounds."""
 
     kind: Literal["selectedArea"]
     selectedBounds: Wgs84Bounds
 
 
 class SelectionArea(ModelSchema):
-    """Immutable original catalog source and typed filter, not copied geometry."""
+    """An analysis area selected from a catalog vector layer using its filter.
+
+    The stored selection identifies the original dataset and filter rules.
+    Processing reads the matching features when preparing the run.
+    """
 
     kind: Literal["catalogSelection"]
     selection: CatalogSelection
 
 
 class PolygonArea(ModelSchema):
-    """Owner-authorized temporary polygon capability."""
+    """An analysis area referencing polygons uploaded by the same browser session."""
 
     kind: Literal["polygonArea"]
     reference: PolygonAreaReference
 
 
 class WholeRasterArea(ModelSchema):
-    """Explicit whole-source summary request."""
+    """An analysis area covering the entire selected raster."""
 
     kind: Literal["wholeRaster"]
 
@@ -104,19 +117,23 @@ SummaryArea = Annotated[
 
 
 class CapturedModel(ModelReference):
-    """Full accepted definition, independent of later library availability."""
+    """A copy of the exact model definition accepted for a run.
+
+    Keeping the definition with the run allows later inspection even if the
+    installed recipe changes or is removed.
+    """
 
     definition: ModelDefinition
 
     @model_validator(mode="after")
     def check_identity(self) -> "CapturedModel":
-        """Verify stored definition identity at the persisted-data boundary.
+        """Check that the stored recipe matches its recorded ID, version and checksum.
 
         Returns:
-            Validated capture.
+            This saved model after checking its identity.
 
         Raises:
-            ValueError: If the definition does not match its recorded identity.
+            ValueError: If the definition differs from its recorded identity.
         """
         if (self.id, self.version, self.definitionSha256) != (
             self.definition.id,
@@ -128,7 +145,11 @@ class CapturedModel(ModelReference):
 
 
 class ModelInvocation(ModelSchema):
-    """Immutable submitted intent with explicit effective parameter defaults."""
+    """The model recipe, inputs and effective parameter values saved for a run.
+
+    Unlike a submission request, this includes the complete recipe and the
+    default values filled in when the run was accepted.
+    """
 
     model: CapturedModel
     inputs: dict[Name, JsonValue]
@@ -137,13 +158,13 @@ class ModelInvocation(ModelSchema):
 
     @model_validator(mode="after")
     def check_bindings(self) -> "ModelInvocation":
-        """Validate captured role values again when reading persisted run records.
+        """Check the saved inputs and parameters against the saved model definition.
 
         Returns:
-            Invocation whose values satisfy its captured definition.
+            This invocation after validating its dataset, area and formula values.
 
         Raises:
-            ValueError: If a capture has missing, unknown or invalid role values.
+            ValueError: If a saved input or parameter is missing, unknown or invalid.
         """
         definition = self.model.definition
         if set(self.inputs) != set(definition.inputs) or set(self.parameters) != set(
@@ -165,7 +186,12 @@ class ModelInvocation(ModelSchema):
 
 
 class ModelRunSpec(ModelSchema):
-    """Private persisted execution wrapper; numerical work retains its own contract."""
+    """The saved calculation instructions used by the model worker.
+
+    The calculation starts as submitted inputs and becomes a prepared raster
+    aggregation plan. Source and implementation checksums let the worker reject
+    changes between submission and execution.
+    """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
     calculation: UnpreparedCalculation | AggregateSpec
@@ -175,13 +201,17 @@ class ModelRunSpec(ModelSchema):
 
 
 class ModelIdentity(ModelReference):
-    """Small model identity retained in lifecycle summaries."""
+    """The model's ID, version, checksum and title shown in run status responses."""
 
     title: Label
 
 
 class ModelProgress(JobProgressResponse):
-    """Measured work counters for one named phase; absent totals are unknown."""
+    """Completed and total work for the current stage of a model run.
+
+    For example, a raster summary reports processed raster blocks. A missing
+    total means that the amount of work is not yet known.
+    """
 
     completed: Annotated[int, Field(ge=0)] | None = None
     total: Annotated[int, Field(ge=0)] | None = None
@@ -189,13 +219,13 @@ class ModelProgress(JobProgressResponse):
 
     @model_validator(mode="after")
     def check_counts(self) -> "ModelProgress":
-        """Require measured completed work not to exceed a supplied total.
+        """Check that completed work does not exceed the reported total.
 
         Returns:
-            Validated phase counters.
+            This progress report after checking its counts.
 
         Raises:
-            ValueError: If the counters are inconsistent.
+            ValueError: If completed work exceeds the total.
         """
         if (
             self.total is not None
@@ -207,7 +237,11 @@ class ModelProgress(JobProgressResponse):
 
 
 class ModelJobResponse(JobResponse):
-    """Existing owned lifecycle extended with model identity and typed scalar rows."""
+    """A model run's status, progress, errors and available summary downloads.
+
+    ``metadataExpiresAt`` is the deadline for reading the saved Model/Run YAML.
+    Result files have their own expiry in the inherited ``expiresAt`` field.
+    """
 
     operation: Literal["model.run.v1"]
     model: ModelIdentity
@@ -218,26 +252,34 @@ class ModelJobResponse(JobResponse):
 
 
 class ModelRunList(ModelSchema):
-    """Bounded owner-only model page with an opaque continuation token."""
+    """One page of the current browser session's model runs.
+
+    Pass ``nextCursor`` with the next list request to retrieve older runs.
+    A null cursor means there are no more matching runs.
+    """
 
     jobs: list[ModelJobResponse]
     nextCursor: str | None
 
 
 class AvailableModel(ModelDefinition):
-    """Installed typed setup metadata with a server-computed definition digest."""
+    """An installed recipe returned by discovery, including its definition checksum."""
 
     definitionSha256: Digest
 
 
 class ModelLibrary(ModelSchema):
-    """Complete installed definition discovery response, with no model count limit."""
+    """All model recipes available for setup on this EOlab deployment."""
 
     models: list[AvailableModel]
 
 
 class RunDocument(ModelSchema):
-    """Authorized YAML export; execution records contain no native capabilities."""
+    """The downloadable Run YAML describing what was submitted and executed.
+
+    It includes the saved recipe, selected inputs, effective parameters, software
+    versions, calculation settings and any completed result or failure.
+    """
 
     schema_version: Literal["eolab.run/v1"] = Field(alias="schema")
     jobId: OpaqueId
@@ -247,13 +289,13 @@ class RunDocument(ModelSchema):
 
     @model_validator(mode="after")
     def check_execution_bindings(self) -> "RunDocument":
-        """Keep execution identities attached to this invocation's declared roles.
+        """Check that execution details describe the recipe and inputs saved for this run.
 
         Returns:
-            Validated run export.
+            This run document after matching its operation and raster input names.
 
         Raises:
-            ValueError: If recorded operations or sources do not match the recipe.
+            ValueError: If the recorded operation or sources do not match the saved recipe.
         """
         definition = self.invocation.model.definition
         step = definition.steps[0]
@@ -273,14 +315,18 @@ class RunDocument(ModelSchema):
 
 
 class OperationImplementation(ModelSchema):
-    """Installed operation contract and exact implementation identity."""
+    """The operation ID and software checksum used to execute a model step."""
 
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
     implementationRevision: Digest
 
 
 class ResolvedModelSource(ModelSchema):
-    """Public source identity and prepared native grid, without a native path."""
+    """A raster input's checksum, band and grid information recorded for a run.
+
+    The source checksum is recorded at submission; grid details are filled in
+    after the worker reads and prepares the raster.
+    """
 
     sourceSignature: Digest
     band: Literal[1]
@@ -288,7 +334,11 @@ class ResolvedModelSource(ModelSchema):
 
 
 class ModelExecutionLimits(ModelSchema):
-    """Server-resolved policy recorded for reproducibility, not client overrides."""
+    """The server's time, memory, disk and result-retention limits for this run.
+
+    These values record the settings used by the worker; a submitted recipe
+    cannot override them.
+    """
 
     runtimeSeconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     processMemoryBytes: Annotated[int, Field(gt=0)]
@@ -297,7 +347,11 @@ class ModelExecutionLimits(ModelSchema):
 
 
 class SummaryNumericalPolicy(ModelSchema):
-    """Existing aggregate grid, NoData and optional ground-area measurement policy."""
+    """Rules used to select and measure raster cells in a summary.
+
+    Records the grid, resampling, NoData handling, value interpretation and any
+    ground-area calculation settings so exported results can be interpreted.
+    """
 
     version: Literal["raster.aggregate.v1"]
     grid: Literal["native"]
@@ -309,7 +363,11 @@ class SummaryNumericalPolicy(ModelSchema):
 
 
 class ModelOutcome(ModelSchema):
-    """Sanitized terminal outcome independent of later output/scratch expiry."""
+    """A finished run's final status, error or calculated summary values.
+
+    This record remains available after result files expire, until the run's
+    metadata expires or the user deletes the run.
+    """
 
     status: Literal["ready", "failed", "cancelled", "interrupted"]
     error: JobFailureResponse | None
@@ -317,7 +375,11 @@ class ModelOutcome(ModelSchema):
 
 
 class ModelExecution(ModelSchema):
-    """Bounded public execution record; preparation appends authoritative grid policy."""
+    """Software, source data, calculation settings and results recorded for a run.
+
+    Before preparation, it records the software and source checksums. Preparation
+    adds grid details and calculation limits; completion adds the outcome.
+    """
 
     state: Literal["pending", "prepared"]
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
@@ -329,13 +391,13 @@ class ModelExecution(ModelSchema):
 
     @model_validator(mode="after")
     def check_preparation(self) -> "ModelExecution":
-        """Require prepared records to contain their resolved policy and grids.
+        """Check that a prepared run includes its grid and calculation settings.
 
         Returns:
-            Consistent pending or prepared execution record.
+            This execution record after checking its preparation details.
 
         Raises:
-            ValueError: If a prepared record omits authoritative execution details.
+            ValueError: If a prepared record lacks limits, numerical settings or a grid.
         """
         if self.state == "prepared" and (
             self.limits is None
