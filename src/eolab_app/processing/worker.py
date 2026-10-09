@@ -47,9 +47,9 @@ from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunSpec
 from eolab_app.processing.model_runs import (
-    application_build,
-    implementation_revision,
-    prepare_model_job,
+    get_application_build_id,
+    compute_implementation_checksum,
+    record_model_preparation,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ class ProcessingWorker:
                 )
             prepared = prepare_aggregate_job(spec, self.aggregate_limits)
             if model is not None:
-                prepared = prepare_model_job(row, prepared, self.limits)
+                prepared = record_model_preparation(row, prepared, self.limits)
             updated = await asyncio.to_thread(
                 self.jobs.save_prepared_job,
                 row["id"],
@@ -314,8 +314,8 @@ class ProcessingWorker:
             else None
         )
         if model is not None and (
-            model.implementationRevision != implementation_revision()
-            or model.applicationBuild != application_build()
+            model.implementationRevision != compute_implementation_checksum()
+            or model.applicationBuild != get_application_build_id()
         ):
             raise ProcessingError(
                 "model_implementation_changed",

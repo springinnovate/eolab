@@ -37,12 +37,12 @@ from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunRequest
 from eolab_app.processing.model_runs import (
-    capture_model_job,
-    decode_cursor,
-    encode_cursor,
-    owned_model_yaml,
-    public_model_job,
-    resolve_model_request,
+    build_model_job_submission,
+    decode_model_run_cursor,
+    encode_model_run_cursor,
+    export_model_job_yaml,
+    serialize_model_job,
+    build_model_calculation_request,
 )
 from eolab_app.processing.model_yaml import canonical_json, export_yaml
 
@@ -80,7 +80,7 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
         Public lifecycle, grid, source, and result links without storage metadata.
     """
     if row.get("operation") == MODEL_OPERATION:
-        return public_model_job(row)
+        return serialize_model_job(row)
     identifier = row["id"]
     spec = row.get("spec") or {}
     if "request" in spec:
@@ -218,7 +218,9 @@ class ProcessingService:
                     409,
                 )
             return public_job(existing)
-        calculation, invocation = resolve_model_request(request, self.model_registry)
+        calculation, invocation = build_model_calculation_request(
+            request, self.model_registry
+        )
         if self.model_authorizer is None:
             raise ProcessingError(
                 "models_unavailable", "Model source authorization is unavailable.", 503
@@ -227,7 +229,7 @@ class ProcessingService:
         submission = await self.build_calculation_submission(owner, calculation, {})
         if isinstance(submission.prepared, ProcessingError):
             raise submission.prepared
-        prepared = capture_model_job(
+        prepared = build_model_job_submission(
             submission.prepared,
             invocation,
             tuple(authorized.source_signature.to_catalog()),
@@ -275,7 +277,7 @@ class ProcessingService:
             ProcessingError: If the owner, model or retained metadata is unavailable.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
-        return owned_model_yaml(row, run=run)
+        return export_model_job_yaml(row, run=run)
 
     async def list_model_runs(
         self, owner: str, limit: int, cursor: str | None
@@ -302,11 +304,13 @@ class ProcessingService:
             owner,
             (MODEL_OPERATION,),
             limit + 1,
-            decode_cursor(cursor),
+            decode_model_run_cursor(cursor),
         )
         return {
             "jobs": [public_job(row) for row in rows[:limit]],
-            "nextCursor": encode_cursor(rows[limit - 1]) if len(rows) > limit else None,
+            "nextCursor": (
+                encode_model_run_cursor(rows[limit - 1]) if len(rows) > limit else None
+            ),
         }
 
     async def subscribe_jobs(self, owner: str) -> JobSubscription:

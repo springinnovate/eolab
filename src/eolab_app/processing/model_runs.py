@@ -1,4 +1,4 @@
-"""Model application adapters above existing Processing and aggregate contracts."""
+"""Build model calculation jobs, record how they run, and export their results."""
 
 import base64
 from dataclasses import replace
@@ -47,12 +47,20 @@ from eolab_app.raster.models import CatalogRasterRequest
 
 
 @lru_cache(maxsize=1)
-def implementation_revision() -> str:
-    """Identify the installed summary implementation and native library versions.
+def compute_implementation_checksum() -> str:
+    """Compute a checksum of the installed backend code and numerical libraries.
+
+    The checksum includes EOlab's Python source files and the installed versions
+    of its numerical libraries. It is cached for the process lifetime. The API
+    saves it when accepting a run; the worker compares it before execution to
+    avoid silently running that request with different software.
 
     Returns:
-        SHA-256 of reviewed source modules and installed numerical dependencies.
-        The API and worker must agree before an accepted model can execute.
+        A SHA-256 hexadecimal checksum, not a Git commit or model version.
+
+    Raises:
+        OSError: If installed source files cannot be read.
+        PackageNotFoundError: If required package version metadata is unavailable.
     """
     digest = hashlib.sha256()
     # Identify the installed package as a build artifact; do not import or
@@ -82,11 +90,16 @@ def implementation_revision() -> str:
     return digest.hexdigest()
 
 
-def application_build() -> str:
-    """Read the production source revision, with an explicit local-build identity.
+def get_application_build_id() -> str:
+    """Read the application's Git commit, or identify a development installation.
 
     Returns:
-        Git-derived production revision or a content-identified development build.
+        The production commit from ``/app/revision`` when available. Otherwise,
+        a development identifier containing the package version and code checksum.
+
+    Raises:
+        OSError: If the revision or installed source files cannot be read.
+        PackageNotFoundError: If required package version metadata is unavailable.
     """
     path = Path("/app/revision")
     if path.is_file():
@@ -95,24 +108,28 @@ def application_build() -> str:
             character in "0123456789abcdef" for character in value
         ):
             return value
-    return f"development:{version('eolab')}:{implementation_revision()}"
+    return f"development:{version('eolab')}:{compute_implementation_checksum()}"
 
 
-def resolve_model_request(
+def build_model_calculation_request(
     request: ModelRunRequest,
     registry: ModelRegistry,
 ) -> tuple[AggregateJobRequest, ModelInvocation]:
-    """Bind a submitted recipe to the installed single-source aggregate contract.
+    """Translate model inputs and parameters into a raster-summary request.
+
+    Checks the selected recipe version and checksum, applies parameter defaults,
+    and saves the effective inputs alongside the calculation request.
 
     Args:
-        request: Validated bounded submission envelope.
-        registry: Eagerly validated installed definitions.
+        request: The model, datasets, analysis area, parameters and label submitted by a user.
+        registry: Installed model definitions available on this deployment.
 
     Returns:
-        Existing numerical request and immutable-intent capture with defaults.
+        The aggregate request to execute and the recipe/input record to save with it.
 
     Raises:
-        ProcessingError: For missing models, changed digests or invalid role values.
+        ProcessingError: If the model is unavailable, its definition has changed,
+            or the selected input, area or formula is invalid.
     """
     definition = registry.get(request.model.id, request.model.version)
     if definition.digest != request.model.definitionSha256:
@@ -182,27 +199,28 @@ def resolve_model_request(
     return calculation, invocation
 
 
-def capture_model_job(
+def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
     signature: tuple[int, int, int, int],
 ) -> PreparedJobPlan:
-    """Wrap existing calculation inputs in one model job with retained provenance.
+    """Create a model job submission and save its recipe, inputs and software identity.
 
     Args:
-        prepared: Existing aggregate submission, including any owned polygon copy.
-        invocation: Validated effective model intent.
-        signature: Catalog-authorized raster identity captured at admission.
+        prepared: The aggregate submission, including any polygons already copied for this run.
+        invocation: The model definition, selected inputs and effective parameter values.
+        signature: The raster's catalog source signature at submission.
 
     Returns:
-        Unshared model submission using the existing queue and private workspace.
+        A model job ready to queue, with the information needed for later Run YAML
+        export. It does not join another run's calculation.
 
     Raises:
-        ProcessingError: If retained export metadata exceeds its bounded envelope.
+        ProcessingError: If the saved recipe and inputs exceed the YAML size limits.
     """
     definition = invocation.model.definition
-    revision = implementation_revision()
-    build = application_build()
+    revision = compute_implementation_checksum()
+    build = get_application_build_id()
     metadata = {
         "invocation": invocation.model_dump(mode="json", by_alias=True),
         "execution": {
@@ -248,24 +266,25 @@ def capture_model_job(
     )
 
 
-def prepare_model_job(
+def record_model_preparation(
     row: dict[str, Any],
     prepared: PreparedJobPlan,
     limits: ProcessingLimits,
 ) -> PreparedJobPlan:
-    """Append resolved numerical policy while preserving the accepted invocation.
+    """Add the prepared raster grid and calculation settings to a model job.
 
     Args:
-        row: Current fenced model attempt with its retained metadata.
-        prepared: Prepared aggregate plan and its full disk reservation.
-        limits: Effective worker policy, never values supplied by YAML.
+        row: The worker's current job record, including the recipe and inputs saved at submission.
+        prepared: The prepared raster-summary plan and required disk reservation.
+        limits: The worker's configured time, memory, disk and result-retention limits.
 
     Returns:
-        Wrapped plan and resolved provenance for atomic storage publication.
+        The model job plan with preparation details ready to save. Its original
+        recipe and selected inputs remain unchanged.
 
     Raises:
-        ProcessingError: If the resolved export exceeds its document limits.
-        ValidationError: If persisted model or aggregate data is invalid.
+        ProcessingError: If the updated Run YAML exceeds its document limits.
+        ValidationError: If the stored model or prepared calculation is invalid.
     """
     wrapper = ModelRunSpec.model_validate(row["spec"])
     spec = AggregateSpec.model_validate(prepared.specification)
@@ -310,14 +329,15 @@ def prepare_model_job(
     )
 
 
-def public_model_job(row: dict[str, Any]) -> dict[str, Any]:
-    """Project an already owned model row without native source or storage details.
+def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert a model job record into the status response shown to its user.
 
     Args:
-        row: Authorized subscriber row or newly admitted row.
+        row: A job record already checked to belong to the requesting browser session.
 
     Returns:
-        Model lifecycle, measured progress and currently available CSV downloads.
+        Model identity, status, progress, errors, expiry dates and available CSV links.
+        Expired results have no download links.
     """
     summary = row.get("summary") or row["spec"]
     status = row["status"]
@@ -362,19 +382,25 @@ def public_model_job(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def owned_model_yaml(row: dict[str, Any], *, run: bool) -> bytes:
-    """Export a captured definition/run without requiring its installed version.
+def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
+    """Generate Model YAML or Run YAML from the recipe and data saved with a job.
+
+    The export uses the saved recipe even if its installed version has changed
+    or been removed. The caller must first check that the requesting browser
+    session owns the job.
 
     Args:
-        row: Owner-authorized job; deleted and metadata-expired rows are unavailable.
-        run: Include invocation, resolved execution and sanitized terminal outcome.
+        row: The requesting session's job record.
+        run: True for the full Run YAML; False for only the reusable model recipe.
 
     Returns:
-        Bounded UTF-8 YAML containing catalog references, never native capabilities.
+        UTF-8 YAML bytes ready to download. Run YAML includes the selected inputs,
+        calculation settings and any finished summary values or failure.
 
     Raises:
-        ProcessingError: If the job has no available model capture.
-        ValidationError: If persisted invocation metadata violates its contract.
+        ProcessingError: If the job is not a model run, was deleted, or its saved
+            metadata expired; also if the YAML exceeds export limits.
+        ValidationError: If the saved recipe or execution details are invalid.
     """
     expiry = row.get("metadata_expires_at")
     if row["operation"] != MODEL_OPERATION:
@@ -416,24 +442,28 @@ def owned_model_yaml(row: dict[str, Any], *, run: bool) -> bytes:
     )
 
 
-class PageCursor(ModelSchema):
-    """Bounded continuation value; authorization is always reapplied to the query."""
+class ModelRunPageCursor(ModelSchema):
+    """The creation time and job ID marking where a model-history page ends.
+
+    This value selects the next page; it does not grant access to any job.
+    Each database query still filters by the requesting browser session.
+    """
 
     createdAt: AwareDatetime
     jobId: OpaqueId
 
 
-def decode_cursor(value: str | None) -> tuple[datetime, str] | None:
-    """Read an opaque model-list continuation token.
+def decode_model_run_cursor(value: str | None) -> tuple[datetime, str] | None:
+    """Decode the starting point for the next page of model runs.
 
     Args:
-        value: Optional URL-safe base64 token.
+        value: The previous response's nextCursor value, or None for the first page.
 
     Returns:
-        Exclusive timestamp/ID boundary, or no boundary.
+        The creation time and job ID to list older entries than, or None.
 
     Raises:
-        ProcessingError: For an oversized or invalid cursor.
+        ProcessingError: If the cursor is invalid or exceeds its size limit.
     """
     if value is None:
         return None
@@ -443,7 +473,7 @@ def decode_cursor(value: str | None) -> tuple[datetime, str] | None:
         data = base64.b64decode(
             value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
         )
-        cursor = PageCursor.model_validate_json(data)
+        cursor = ModelRunPageCursor.model_validate_json(data)
         return cursor.createdAt, cursor.jobId
     except (ValueError, ValidationError) as error:
         raise ProcessingError(
@@ -451,14 +481,14 @@ def decode_cursor(value: str | None) -> tuple[datetime, str] | None:
         ) from error
 
 
-def encode_cursor(row: dict[str, Any]) -> str:
-    """Encode a stable page boundary without embedding an owner or source identity.
+def encode_model_run_cursor(row: dict[str, Any]) -> str:
+    """Create a continuation token from the last model run returned on a page.
 
     Args:
-        row: Last visible row in the page.
+        row: The last visible job record in a model-history page.
 
     Returns:
-        URL-safe opaque continuation token.
+        A URL-safe token encoding that job's creation time and ID.
     """
     payload = {"createdAt": row["created_at"].isoformat(), "jobId": row["id"]}
     return (

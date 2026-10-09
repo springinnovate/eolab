@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest, RunDocument
-from eolab_app.processing.model_runs import resolve_model_request
+from eolab_app.processing.model_runs import build_model_calculation_request
 from eolab_app.processing.model_yaml import canonical_json, export_yaml, parse_yaml
 from eolab_app.processing.models import ProcessingError
 
@@ -84,7 +84,9 @@ def test_installed_summary_matches_approved_example_and_round_trips() -> None:
     reloaded = ModelDefinition.model_validate(
         parse_yaml(export_yaml(definition.to_document()))
     )
-    assert canonical_json(reloaded.to_document()) == canonical_json(definition.to_document())
+    assert canonical_json(reloaded.to_document()) == canonical_json(
+        definition.to_document()
+    )
     assert definition.digest == summary_request()["model"]["definitionSha256"]
     with pytest.raises(TypeError):
         definition.inputs["other"] = definition.inputs["raster"]
@@ -209,7 +211,7 @@ def test_model_defaults_bind_to_existing_aggregate_contract() -> None:
     """A real summary request uses native aggregate validation, with explicit defaults."""
     value = summary_request()
     value["parameters"] = {}
-    calculation, invocation = resolve_model_request(
+    calculation, invocation = build_model_calculation_request(
         ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
     )
     assert calculation.calculations[0].expression == "sum(a)"
@@ -243,6 +245,6 @@ def test_model_submission_rejects_invalid_bindings(kind: str) -> None:
     else:
         value["parameters"]["summary"] = float("nan")
     with pytest.raises((ProcessingError, ValidationError)):
-        resolve_model_request(
+        build_model_calculation_request(
             ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
         )
