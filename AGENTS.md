@@ -332,6 +332,27 @@ affect layout, visibility, focus, or interaction.
 Every new or materially modified named class, function, method, or public
 contract must have complete type information and documentation.
 
+Names and documentation must make sense to a developer reading the code:
+
+- Name classes for what they represent and functions or methods for what they
+  do. Use an action and its object when needed: `discover_models`,
+  `download_model_yaml`, or `compute_implementation_checksum`. Avoid vague
+  nouns for actions and do not make names longer just to repeat clear context.
+- Start module and symbol documentation with its purpose or behavior in plain
+  language. The description must agree with the name and implementation.
+- Use established domain terms and explain necessary technical language.
+  Avoid unexplained phrases such as "bounded submission envelope" or a
+  description that only says a component sits "above" another component.
+- Keep important contract details after the purpose. Explain concrete limits,
+  session ownership, checksum contents, side effects, expiry and cancellation
+  where relevant; do not replace those details with vague assurances.
+- Write documentation for its reader and the current behavior. Do not turn
+  README sections or docstrings into implementation plans, progress reports,
+  or narratives about how the code was generated.
+- Before renaming, trace callers, registration, serialization and public
+  exports. Internal clarity must not silently change a supported API, CLI,
+  environment setting, database field or wire format.
+
 For Python:
 
 - use complete type annotations;
