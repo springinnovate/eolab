@@ -463,6 +463,7 @@ class PostgresJobStore:
                             expected.operation,
                             expected.work_key,
                             retained_metadata(expected.retained_metadata),
+                            self.limits.metadata_ttl_seconds,
                         )
                     )
                     waiting += 1
@@ -497,8 +498,8 @@ class PostgresJobStore:
             with cursor.connection.pipeline():
                 if new_jobs:
                     cursor.executemany(
-                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -1063,8 +1064,9 @@ class PostgresJobStore:
         """Prune old job records, expire inputs/results, and find removable files.
 
         Already-cleaned terminal jobs are forgotten seven days after their last
-        update, provided no transfer is active. Pruning runs even when no files need
-        removal; submission and individual cleanup acknowledgements do not prune.
+        update, once their saved metadata has also expired and no transfer is active.
+        Pruning runs even when no files need removal; submission and individual
+        cleanup acknowledgements do not prune.
 
         Returns:
             At most 100 rows with no active transfer; budgets remain reserved
@@ -1102,7 +1104,10 @@ class PostgresJobStore:
             )
 
     def _delete_old_job_records(self, cursor: Any) -> None:
-        """Forget cleaned terminal jobs after their seven-day idempotency lifetime.
+        """Delete cleaned jobs once both retry history and saved metadata have expired.
+
+        Retry records last seven days after the last update. A longer configured
+        metadata lifetime keeps the record available until that deadline as well.
 
         Args:
             cursor: Cursor inside the worker maintenance transaction holding the
@@ -1112,6 +1117,7 @@ class PostgresJobStore:
             "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL "
             "AND status NOT IN ('queued','running','cancelling','ready') "
             "AND updated_at<now()-interval '7 days' "
+            "AND (metadata_expires_at IS NULL OR metadata_expires_at<=now()) "
             "AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=jobs.id)"
         )
 

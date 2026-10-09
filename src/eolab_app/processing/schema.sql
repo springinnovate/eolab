@@ -132,11 +132,16 @@ END $$;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_metadata jsonb;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_outcome jsonb;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_expires_at timestamptz;
+-- Capture the deployment's chosen lifetime when each job is submitted. Existing
+-- records keep the original seven-day policy; terminal deadlines never restart.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_ttl_seconds bigint
+    NOT NULL DEFAULT 604800 CHECK (metadata_ttl_seconds > 0);
 CREATE OR REPLACE FUNCTION processing.retain_terminal_metadata() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.retained_metadata IS NOT NULL AND NEW.metadata_expires_at IS NULL
        AND NEW.status IN ('ready','failed','cancelled','interrupted') THEN
-        NEW.metadata_expires_at := clock_timestamp() + interval '7 days';
+        NEW.metadata_expires_at := clock_timestamp()
+            + NEW.metadata_ttl_seconds * interval '1 second';
         NEW.retained_outcome := jsonb_build_object(
             'status', NEW.status, 'artifact', NEW.artifact, 'error', NEW.error);
     END IF;
@@ -220,3 +225,4 @@ CREATE INDEX IF NOT EXISTS jobs_cleaned_history ON processing.jobs(updated_at)
 INSERT INTO processing.schema_version VALUES (14) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (15) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (16) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (17) ON CONFLICT DO NOTHING;

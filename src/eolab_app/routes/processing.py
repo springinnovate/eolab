@@ -137,16 +137,19 @@ class RequestSizeLimitedRoute(APIRoute):
         return check_request_size
 
 
-def _get_session_owner_hash(request: Request, response: Response) -> str:
+def _get_session_owner_hash(
+    request: Request, response: Response, session_ttl_seconds: int
+) -> str:
     """Identify the browser session allowed to access its processing jobs.
 
-    Creates a random session cookie when needed and returns its hash for database
-    ownership checks. The raw cookie remains HttpOnly. Mutation requests must come
-    from the same origin and include the Processing header.
+    Creates a random session cookie when needed, renews its lifetime and returns
+    its hash for database ownership checks. The raw cookie remains HttpOnly.
+    Mutation requests must come from the same origin and include the Processing header.
 
     Args:
         request: The incoming request and its session cookie.
         response: The response receiving session-cookie and private-cache headers.
+        session_ttl_seconds: Cookie lifetime covering retained results and run metadata.
 
     Returns:
         The session-cookie hash used to keep this browser's jobs private.
@@ -167,15 +170,15 @@ def _get_session_owner_hash(request: Request, response: Response) -> str:
     token = request.cookies.get(COOKIE, "")
     if not re.fullmatch(r"[a-f0-9]{64}", token):
         token = secrets.token_hex(32)
-        response.set_cookie(
-            COOKIE,
-            token,
-            max_age=7 * 86_400,
-            secure=True,
-            httponly=True,
-            samesite="lax",
-            path="/",
-        )
+    response.set_cookie(
+        COOKIE,
+        token,
+        max_age=session_ttl_seconds,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
     response.headers["Cache-Control"] = "private, no-store"
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -332,11 +335,15 @@ class JobDownloadResponse(FileResponse):
                 await self.service.transfer_heartbeat(self.lease, release=True)
 
 
-def create_processing_router(service: ProcessingService) -> APIRouter:
+def create_processing_router(
+    service: ProcessingService, *, session_ttl_seconds: int = 7 * 86_400
+) -> APIRouter:
     """Create endpoints for model discovery, job execution and result downloads.
 
     Args:
         service: The Processing service handling requests and checking job ownership.
+        session_ttl_seconds: Browser cookie lifetime, chosen by application settings
+            to cover retained results and metadata; defaults to seven days.
 
     Returns:
         The /api/processing router, usable independently of the map viewer.
@@ -358,7 +365,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         Returns:
             Every installed model version, including inputs, parameters and definition checksum.
         """
-        _get_session_owner_hash(request, response)
+        _get_session_owner_hash(request, response, session_ttl_seconds)
         return await _await_service_result(service.list_models())
 
     @router.get("/models/{model_id}/versions/{model_version}/yaml")
@@ -382,7 +389,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         Raises:
             HTTPException: If the requested model version is unavailable.
         """
-        _get_session_owner_hash(request, response)
+        _get_session_owner_hash(request, response, session_ttl_seconds)
         data = await _await_service_result(service.model_yaml(model_id, model_version))
         return Response(
             data,
@@ -417,7 +424,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             HTTPException: If inputs are invalid, access is denied, or queue capacity is exhausted.
         """
         job = await _await_service_result(
-            service.submit_model_run(_get_session_owner_hash(request, response), body)
+            service.submit_model_run(
+                _get_session_owner_hash(request, response, session_ttl_seconds), body
+            )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
@@ -445,7 +454,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return await _await_service_result(
             service.list_model_runs(
-                _get_session_owner_hash(request, response), limit, cursor
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                limit,
+                cursor,
             )
         )
 
@@ -471,7 +482,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         data = await _await_service_result(
             service.run_yaml(
-                _get_session_owner_hash(request, response),
+                _get_session_owner_hash(request, response, session_ttl_seconds),
                 job_id,
                 run=document_kind == "run-yaml",
             )
@@ -543,7 +554,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         await _await_service_result(
             service.discard_polygon_area(
-                _get_session_owner_hash(request, response), area_id
+                _get_session_owner_hash(request, response, session_ttl_seconds), area_id
             )
         )
         return {"deleted": True}
@@ -571,7 +582,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return await _await_service_result(
             service.upload_polygon_area(
-                _get_session_owner_hash(request, response), body
+                _get_session_owner_hash(request, response, session_ttl_seconds), body
             )
         )
 
@@ -598,7 +609,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             HTTPException: If the request is invalid, access is denied, or capacity is exhausted.
         """
         job = await _await_service_result(
-            service.submit_raster_clip(_get_session_owner_hash(request, response), body)
+            service.submit_raster_clip(
+                _get_session_owner_hash(request, response, session_ttl_seconds), body
+            )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
@@ -620,7 +633,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         Raises:
             HTTPException: If the request fails origin checks.
         """
-        _get_session_owner_hash(request, response)
+        _get_session_owner_hash(request, response, session_ttl_seconds)
         return {"valid": True}
 
     @router.post(
@@ -649,7 +662,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         job = await _await_service_result(
             service.submit_calculation_inputs(
-                _get_session_owner_hash(request, response), body
+                _get_session_owner_hash(request, response, session_ttl_seconds), body
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -676,7 +689,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         Raises:
             HTTPException: If the session checks or shared database transaction fail.
         """
-        owner = _get_session_owner_hash(request, response)
+        owner = _get_session_owner_hash(request, response, session_ttl_seconds)
         results: list[dict[str, Any]] = []
         valid: list[AggregateJobRequest] = []
         indices: list[int] = []
@@ -741,7 +754,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return {
             "jobs": await _await_service_result(
-                service.list_owned(_get_session_owner_hash(request, response))
+                service.list_owned(
+                    _get_session_owner_hash(request, response, session_ttl_seconds)
+                )
             )
         }
 
@@ -768,7 +783,8 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return await _await_service_result(
             service.read_job_statuses(
-                _get_session_owner_hash(request, response), body.jobIds
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                body.jobIds,
             )
         )
 
@@ -798,7 +814,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         ):
             raise HTTPException(403, "Use same-origin job updates.")
         subscription = await _await_service_result(
-            service.subscribe_jobs(_get_session_owner_hash(request, response))
+            service.subscribe_jobs(
+                _get_session_owner_hash(request, response, session_ttl_seconds)
+            )
         )
         return JobEventResponse(subscription, dict(response.headers))
 
@@ -820,7 +838,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             HTTPException: If the job is unavailable to this session.
         """
         return await _await_service_result(
-            service.get(_get_session_owner_hash(request, response), job_id)
+            service.get(
+                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+            )
         )
 
     @router.post(
@@ -846,7 +866,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             HTTPException: If the job is unavailable to this session.
         """
         return await _await_service_result(
-            service.cancel(_get_session_owner_hash(request, response), job_id)
+            service.cancel(
+                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+            )
         )
 
     @router.delete(
@@ -872,7 +894,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return await _await_service_result(
             service.cancel(
-                _get_session_owner_hash(request, response), job_id, delete=True
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                job_id,
+                delete=True,
             )
         )
 
@@ -897,7 +921,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         if len(range_header) > 128 or "," in range_header:
             raise HTTPException(416, "Use one byte range per job download request.")
         artifact = await _await_service_result(
-            service.download(_get_session_owner_hash(request, response), job_id)
+            service.download(
+                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+            )
         )
         return JobDownloadResponse(artifact, service)
 
@@ -920,7 +946,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         artifact = await _await_service_result(
             service.download(
-                _get_session_owner_hash(request, response), job_id, provenance=True
+                _get_session_owner_hash(request, response, session_ttl_seconds),
+                job_id,
+                provenance=True,
             )
         )
         return JobDownloadResponse(artifact, service)

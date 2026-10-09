@@ -14,7 +14,7 @@ APPLICATION_VERSION_PATH = Path("/app/version")
 
 
 def load_processing_limits() -> RasterClipLimits:
-    """Load the same queue, execution and storage budgets for the app and worker.
+    """Load queue, execution, storage and retention settings for the app and worker.
 
     Returns:
         Processing limits with validated worker count and resource budgets.
@@ -38,6 +38,7 @@ def load_processing_limits() -> RasterClipLimits:
         "PROCESSING_FREE_SPACE_FLOOR_BYTES": ("free_space_floor", 0),
         "PROCESSING_EXECUTION_TIMEOUT_SECONDS": ("runtime_seconds", 1),
         "PROCESSING_RESULT_TTL_SECONDS": ("result_ttl_seconds", 1),
+        "PROCESSING_METADATA_TTL_SECONDS": ("metadata_ttl_seconds", 1),
     }
     values: dict[str, int] = {}
     for environment_name, (attribute, minimum) in settings.items():
@@ -51,7 +52,8 @@ def load_processing_limits() -> RasterClipLimits:
                 f"{environment_name} must be between {minimum} and {2**63 - 1}"
             )
         if (
-            attribute in {"runtime_seconds", "result_ttl_seconds"}
+            attribute
+            in {"runtime_seconds", "result_ttl_seconds", "metadata_ttl_seconds"}
             and value > 31_536_000
         ):
             raise ValueError(f"{environment_name} must not exceed one year")

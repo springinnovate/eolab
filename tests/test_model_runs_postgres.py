@@ -1,6 +1,7 @@
 """Real model HTTP, catalog, PostgreSQL and supervised aggregate boundaries."""
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import asyncio
 import hashlib
 from pathlib import Path
@@ -339,6 +340,53 @@ def test_model_capture_survives_cleanup_then_expires(
             "SELECT retained_metadata,retained_outcome FROM processing.jobs WHERE id=%s",
             (identifier,),
         ).fetchone() == (None, None)
+
+
+@pytest.mark.parametrize("retention_seconds", [3600, 14 * 86_400])
+def test_model_metadata_keeps_the_retention_chosen_at_submission(
+    model_boundary: Any, store: Any, retention_seconds: int
+) -> None:
+    """Honor a configured lifetime without shortening it during later cleanup.
+
+    Args:
+        model_boundary: Model HTTP service and its worker.
+        store: Real job storage with replaceable deployment limits.
+        retention_seconds: A shorter or longer lifetime than the seven-day default.
+    """
+    client, _, _ = model_boundary
+    store.limits = replace(store.limits, metadata_ttl_seconds=retention_seconds)
+    job = submit(client, model_request(client))
+    identifier = job["jobId"]
+    # A deployment setting changed while this job waits must not alter its promise.
+    store.limits = replace(store.limits, metadata_ttl_seconds=2 * 86_400)
+    before = datetime.now(timezone.utc)
+    cancelled = client.post(
+        f"/api/processing/jobs/{identifier}/cancel", headers=HEADERS
+    )
+    assert cancelled.status_code == 202, cancelled.text
+    after = datetime.now(timezone.utc)
+    deadline = datetime.fromisoformat(cancelled.json()["metadataExpiresAt"])
+    assert before + timedelta(seconds=retention_seconds) <= deadline
+    assert deadline <= after + timedelta(seconds=retention_seconds)
+    store.cleaned(identifier)
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET updated_at=now()-interval '8 days' WHERE id=%s",
+            (identifier,),
+        )
+    store.cleanup_candidates()
+    assert client.get(f"/api/processing/jobs/{identifier}/run-yaml").status_code == 200
+    assert (
+        client.get(f"/api/processing/jobs/{identifier}").json()["metadataExpiresAt"]
+        == cancelled.json()["metadataExpiresAt"]
+    )
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET metadata_expires_at=now()-interval '1 second' WHERE id=%s",
+            (identifier,),
+        )
+    store.cleanup_candidates()
+    assert client.get(f"/api/processing/jobs/{identifier}").status_code == 404
 
 
 def test_model_delete_revokes_exports_and_retry_recovers_after_input_loss(

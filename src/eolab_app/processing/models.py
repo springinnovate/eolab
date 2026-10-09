@@ -21,8 +21,8 @@ class PreparedJobPlan:
         operation: Opaque versioned operation discriminator supplied by its owner.
         work_key: Complete computation identity; None means never join active work.
         presentation: Small caller-specific labels, separate from shared execution.
-        retained_metadata: Optional bounded, path-free operation record retained
-            independently of scratch cleanup for seven days after completion.
+        retained_metadata: Optional operation details kept after scratch files are
+            removed, for the configured metadata lifetime after the job finishes.
     """
 
     specification: dict[str, object]
@@ -138,6 +138,9 @@ class ProcessingLimits:
     container memory must additionally cover idle processes and the supervisor.
     max_job_records includes finished jobs and seven-day idempotency records.
     Metadata retention uses record counts and individual request size limits.
+    metadata_ttl_seconds controls how long saved run details remain available
+    after the first completed, failed, cancelled or interrupted state. The chosen
+    duration is stored with each new job; seven days is the default.
     max_stored_bytes bounds artifact and scratch disk reservations after preparation.
 
     calculation_cache_capacity bounds the number of shared numerical results;
@@ -152,6 +155,7 @@ class ProcessingLimits:
     max_execution_memory_bytes: int = 2 * 1024**3
     runtime_seconds: float = 600
     result_ttl_seconds: int = 86_400
+    metadata_ttl_seconds: int = 7 * 86_400
     max_waiting_jobs: int = 128
     max_owner_waiting_jobs: int = 32
     max_job_records: int = 4096
