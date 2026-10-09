@@ -93,13 +93,16 @@ import {
     validateVectorFeatureFocus,
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
-import { vectorFilterStatus } from "./vector/filter.js";
+import { vectorFilterStatus, EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
+import { ModelsController } from "./models/controller.js";
+import { ModelsView } from "./models/view.js";
+import "./models/style.css";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
@@ -758,14 +761,19 @@ async function initializeCatalog(
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
+    let models = null;
+    let modelArea = null;
+    let modelAreaDescription = "";
     let rasterSeriesArea = null;
     let rasterSeriesAreaLabel = "";
     let pixelPoint = null;
-    /** Send committed sampling-area changes to the raster-series component.
+    /** Send selected map areas to raster-stack plotting and map-linked model setup.
      * @param {Object|null} area Path-free Processing area.
      * @param {string} label Selection description. @return {void}
      */
     const updateRasterSeriesArea = (area, label) => {
+        modelArea = area ? structuredClone(area) : null; modelAreaDescription = label;
+        models?.refreshMapArea();
         rasterSeriesArea = area; rasterSeriesAreaLabel = label;
         rasterSeries?.setArea(area, label);
     };
@@ -820,6 +828,7 @@ async function initializeCatalog(
             vectorSampling?.refresh();
             summarySampling?.refresh();
             calculations?.refreshSourceNames();
+            models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -929,10 +938,10 @@ async function initializeCatalog(
         },
         onSamplingAreaChange: area => {
             calculations.setSelection(area);
-            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
+            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
         },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
-            activate: !selectingMapClick && !calculations.isActive,
+            activate: !selectingMapClick && !calculations.isActive && mapInspection.activeTool !== "models",
         }),
         onHistogramChange: snapshot => {
             latestHistogramPresentation = snapshot;
@@ -953,6 +962,7 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    let modelFilterControls = null;
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
         getTarget: (key) => {
@@ -977,6 +987,60 @@ async function initializeCatalog(
         .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
         .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
             filter: record.adapter.exportFilterState(record) }));
+    models = new ModelsController({
+        api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        /** Supply catalog choices and current map areas independently of rendering.
+         * @return {Object} Independent raster, vector, selected area and visible map bounds.
+         */
+        getContext: () => {
+            const viewport = leafletMap.getBounds();
+            return {
+                rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+                    .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
+                vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
+                area: modelArea, areaDescription: modelAreaDescription,
+                viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
+            };
+        },
+        /** Read the draft's vector and predicate without requiring a display layer.
+         * @param {Object} source Catalog source and captured filter.
+         * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
+         * @return {Promise<Object>} Selection descriptor, bounds and matched feature count.
+         */
+        prepareVector: (source, signal) => createVectorSamplingArea(
+            {collection: source.collectionId, id: source.itemId}, source.filter ?? EMPTY_VECTOR_FILTER, signal),
+        /** Open the existing rule editor inside setup using the chosen map layer's fields.
+         * @param {Object} request Inline host, source, predicate and model-owned callbacks.
+         * @return {void}
+         */
+        editVectorFilter: request => {
+            modelFilterControls?.destroy();
+            const target = {key: request.key, label: request.source.label, fields: request.source.fields ?? [], filter: request.filter};
+            modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
+                getTarget: key => key === target.key && request.isCurrent() ? target : null});
+            modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
+                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
+                help: "Apply this filter to the model and its map layer.",
+            });
+        },
+        closeVectorFilter: () => modelFilterControls?.close(),
+        /** Apply reviewed rules to the corresponding map layer; Models reports display failures separately.
+         * @param {Object} source Catalog collection/item identity from Map layers.
+         * @param {Object} filter Checked attribute rules.
+         * @return {Promise<Object|null>} Applied filter, or null when superseded.
+         * @throws {Error} If the layer was removed or its map filter cannot be applied.
+         */
+        applyMapFilter: async (source, filter) => {
+            const record = mapLayerController.getRecord(getCatalogItemKey({collection: source.collectionId, id: source.itemId}));
+            if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector layer is no longer in Map layers.");
+            return record.adapter.applyFilterState(record, filter);
+        },
+        onOpen: () => mapInspection.showModels(),
+        onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },
+    });
+    mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
+    models.start();
+    leafletMap.on("moveend resize", () => models.refreshMapArea());
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(),
         getTargets: catalogPolygonTargets,
@@ -1003,6 +1067,8 @@ async function initializeCatalog(
         },
         onInvalidate: id => {
             vectorSamplingOverlay.clear();
+            modelArea = null; modelAreaDescription = "";
+            models.refreshMapArea();
             rasterVisualization.setVectorSelection(null);
             calculations.invalidateSamplingArea(id);
         },
@@ -1272,7 +1338,7 @@ async function initializeCatalog(
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
                 onSelected: area => {
                     calculations.setSelection(area);
-                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
+                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
                     calculations.calculateSelection();
                 },
             });

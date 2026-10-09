@@ -373,6 +373,32 @@ For JavaScript:
 Do not perform repository-wide docstring churn as part of an unrelated issue.
 Untouched undocumented code is a separate finding.
 
+## UI wording and naming
+
+Apply the same reader-first standard to labels, buttons, headings, help text,
+status messages, errors and accessible names. The audience is a nontechnical
+person trying to complete a task, not a developer studying the implementation.
+
+Before accepting UI wording, ask: **Can someone unfamiliar with the
+implementation understand what this control does and what will happen next?**
+
+- Name the user's action, object or result in familiar language. Prefer
+  "Visible map area" to "Retained area" and "Run model" to "Submit invocation".
+- Make the affected area, layer or run clear when ambiguity could change the
+  result. Do not use "current selection" when it could mean the visible map,
+  a clicked location or selected features; name the actual choice.
+- Let the label establish understanding. Use nearby help to add useful detail,
+  not to repair a label that only makes sense to its author.
+- Explain implementation details only when they help the user make a decision.
+  Keep internal identifiers, lifecycle terms and architecture out of ordinary
+  controls. Explain necessary domain terms in the user's context.
+- Use consistent words for the same action across the UI. Distinguish actions
+  with different effects, especially choosing inputs, changing map display,
+  running a model and cancelling work.
+- State errors in terms of what happened and what the user can do next.
+- Review wording in the rendered UI, including accessible names and surrounding
+  controls. Apply this rule to the requested work without unrelated text churn.
+
 ## Verification
 
 - Add tests at the component that owns the behavior.

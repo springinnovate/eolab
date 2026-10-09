@@ -41,6 +41,7 @@ from eolab_app.processing.model_runs import (
     decode_model_run_cursor,
     encode_model_run_cursor,
     export_model_job_yaml,
+    read_model_invocation,
     serialize_model_job,
     build_model_calculation_request,
 )
@@ -286,6 +287,23 @@ class ProcessingService:
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         return export_model_job_yaml(row, run=run)
+
+    async def get_model_invocation(self, owner: str, identifier: str) -> dict[str, Any]:
+        """Read a run's original setup for inspection or duplication.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            identifier: The accepted model run's job ID.
+
+        Returns:
+            The saved recipe, inputs and effective parameter values as JSON data.
+
+        Raises:
+            ProcessingError: If the session cannot access the run or its metadata
+                is no longer available.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        return read_model_invocation(row).model_dump(mode="json", by_alias=True)
 
     async def list_model_runs(
         self, owner: str, limit: int, cursor: str | None

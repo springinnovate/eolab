@@ -12,11 +12,12 @@ export class VectorFilterControls {
      * @param {Object} options Panel dependencies.
      * @param {(key:string)=>Object|null} options.getTarget Composition-owned target lookup.
      * @param {Object} options.inspection Neutral dock presentation.
+     * @param {HTMLElement|null} [options.host=null] Inline container; keeps editing in the caller's panel.
      * @param {Document} [options.documentContext=document] Owning document.
      * @param {Function} [options.setTimer] Debounce scheduler.
      * @param {Function} [options.clearTimer] Debounce canceller.
      */
-    constructor({ getTarget, inspection, documentContext = document,
+    constructor({ getTarget, inspection, host = null, documentContext = document,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
         clearTimer = (timer) => globalThis.clearTimeout(timer) }) {
         this.document = documentContext;
@@ -24,20 +25,24 @@ export class VectorFilterControls {
         this.inspection = inspection;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
-        this.root = documentContext.querySelector("#vector-filter-panel");
-        this.title = documentContext.querySelector("#vector-filter-title");
-        this.rules = documentContext.querySelector("#vector-filter-rules");
-        this.enabled = documentContext.querySelector("#vector-filter-enabled");
-        this.match = documentContext.querySelector("#vector-filter-match");
-        this.status = documentContext.querySelector("#vector-filter-status");
-        this.applied = documentContext.querySelector("#vector-filter-applied");
-        this.count = documentContext.querySelector("#vector-filter-count");
-        this.add = documentContext.querySelector("#vector-filter-add");
-        this.clear = documentContext.querySelector("#vector-filter-clear");
-        this.closeButton = documentContext.querySelector("#close-vector-filter");
-        this.applyButton = documentContext.querySelector("#vector-filter-apply");
-        this.cancelButton = documentContext.querySelector("#vector-filter-cancel");
-        this.help = documentContext.querySelector("#vector-filter-help");
+        this.host = host;
+        const template = documentContext.querySelector("#vector-filter-panel");
+        this.root = host ? template.cloneNode(true) : template;
+        const controls = {title: "vector-filter-title", rules: "vector-filter-rules", enabled: "vector-filter-enabled",
+            match: "vector-filter-match", status: "vector-filter-status", applied: "vector-filter-applied",
+            count: "vector-filter-count", add: "vector-filter-add", clear: "vector-filter-clear",
+            closeButton: "close-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
+        for (const [name, id] of Object.entries(controls)) {
+            this[name] = host ? this.root.querySelector(`#${id}`) : documentContext.querySelector(`#${id}`);
+            if (host) this[name].id = `${host.id}-${name}`;
+        }
+        if (host) {
+            this.root.id = `${host.id}-panel`; this.root.className = "vector-filter-inline";
+            this.root.setAttribute("role", "group"); this.root.removeAttribute("aria-labelledby");
+            this.root.setAttribute("aria-label", "Filter features");
+            this.title.hidden = this.applied.hidden = this.count.hidden = true;
+            host.replaceChildren(this.root);
+        }
         this.attempt = 0;
         this.key = null;
         this.timer = null;
@@ -75,18 +80,23 @@ export class VectorFilterControls {
 
     /**
      * Open the chosen vector's retained filter draft.
-     * @param {string} key Retained layer identity.
+     * @param {string} key Layer or composed analysis-target identity.
      * @param {Object|null} [action=null] Explicit analysis action supplied by composition.
      * @param {Function} action.apply Apply a complete predicate and return success or null.
      * @param {Function} action.complete Present the successfully selected area.
      * @param {Function} action.cancel Cancel the explicitly applied selection.
      * @param {Object|null} action.filter Current analysis predicate, if selected.
+     * @param {string} [action.applyLabel] Action label; defaults to selecting features and calculating statistics.
+     * @param {string} [action.help] Description of the action's effect.
+     * @param {string} [action.filterLabel] Name for the action's applied predicate.
+     * @param {()=>void} [action.onClose] Release action-owned preparation when the panel closes or changes targets.
      * @return {void}
      */
     open(key, action = null) {
         const target = this.getTarget(key);
         if (!target) return;
         if (this.key !== null) {
+            this.action?.onClose?.();
             this.#saveDraft();
             if (this.timer !== null) void this.#apply();
         }
@@ -95,17 +105,18 @@ export class VectorFilterControls {
         this.action = action;
         this.cancelButton.hidden = true;
         this.generation++;
-        this.applyButton.textContent = action ? "Use filtered features & calculate" : "Apply filter";
-        this.help.textContent = action
+        this.applyButton.textContent = action?.applyLabel ?? (action ? "Use filtered features & calculate" : "Apply filter");
+        this.help.textContent = action?.help ?? (action
             ? "Use every matching polygon as the sampling area and calculate configured statistics. The sampling filter is independent of map styling and visibility."
-            : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.";
+            : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.");
         this.opener = this.document.activeElement;
         this.draft = structuredClone(this.drafts.get(key) ?? action?.filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
         this.title.textContent = target.label;
         this.#renderDraft();
         this.refresh();
         this.#validate();
-        this.inspection.showFilter(target.label);
+        if (this.host) this.root.hidden = false;
+        else this.inspection.showFilter(target.label);
         this.closeButton.focus();
     }
 
@@ -115,21 +126,23 @@ export class VectorFilterControls {
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
         this.title.textContent = target.label;
-        this.inspection.updateLayerEditorName("filter", target.label);
+        if (!this.host) this.inspection.updateLayerEditorName("filter", target.label);
         this.applied.textContent = this.action
-            ? `Sampling filter: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
+            ? `${this.action.filterLabel ?? "Sampling filter"}: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
             : `Applied: ${vectorFilterSummary(target.filter)}`;
         this.count.textContent = this.action ? "The complete selection is checked when you apply." : target.status || "All features are included.";
         this.add.disabled = target.fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
     }
 
-    /** Save the draft, finish valid pending edits, and restore focus. @return {void} */
+    /** Save edits, release optional action preparation, hide the panel and restore focus. @return {void} */
     close() {
         if (this.key === null) return;
         this.#saveDraft();
         if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
+        this.action?.onClose?.();
         this.key = null;
-        this.inspection.hideFilter();
+        if (this.host) this.root.hidden = true;
+        else this.inspection.hideFilter();
         if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
     }
 

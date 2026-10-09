@@ -26,6 +26,7 @@ function fixture(configureDocument = () => {}) {
     const vectorFeatureProfile = doc.querySelector("#vector-feature-profile");
     doc.querySelector("#vector-filter-panel").hidden = true;
     doc.querySelector("#raster-clips-panel").hidden = true;
+    doc.querySelector("#models-panel").hidden = true;
     doc.querySelector("#calculations-panel").hidden = true;
     doc.querySelector("#annotations-panel").hidden = true;
     doc.querySelector("#raster-series").hidden = true;

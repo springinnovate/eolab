@@ -44,6 +44,7 @@ from eolab_app.processing.polygon_areas import (
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.model_run_contracts import (
     ModelJobResponse,
+    ModelInvocation,
     ModelLibrary,
     ModelRunList,
     ModelRunRequest,
@@ -497,6 +498,29 @@ def create_processing_router(
                 "Content-Disposition": f'attachment; filename="{job_id}-{document_kind}.yaml"',
                 "X-Content-Type-Options": "nosniff",
             },
+        )
+
+    @router.get("/jobs/{job_id}/invocation", response_model=ModelInvocation)
+    async def read_saved_model_inputs(
+        job_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Return the recipe and input values originally submitted for a run.
+
+        Args:
+            job_id: The accepted model run's job ID.
+            request: The request carrying the browser's Processing session cookie.
+            response: The response receiving private-cache and session headers.
+
+        Returns:
+            Saved setup data suitable for creating a new editable draft.
+
+        Raises:
+            HTTPException: If the session cannot access the run or its metadata expired.
+        """
+        return await _await_service_result(
+            service.get_model_invocation(
+                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+            )
         )
 
     @router.get("/jobs/{job_id}/model-yaml")

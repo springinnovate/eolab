@@ -112,6 +112,11 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     assert definition.digest == body["model"]["definitionSha256"]
     pending = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     captured = parse_yaml(pending.content, run=True)
+    invocation_response = client.get(f"/api/processing/jobs/{identifier}/invocation")
+    assert invocation_response.status_code == 200
+    assert invocation_response.json() == captured["invocation"]
+    assert "no-store" in invocation_response.headers["cache-control"]
+    assert "source_path" not in invocation_response.text
     assert captured["invocation"]["parameters"] == {"summary": "sum(a)"}
     assert captured["execution"]["state"] == "pending"
     assert "source_path" not in pending.text and "://" not in pending.text
@@ -215,6 +220,12 @@ def test_model_owner_idempotency_pagination_and_cancel(
             stranger.get(f"/api/processing/jobs/{first['jobId']}/run-yaml").status_code
             == 404
         )
+        assert (
+            stranger.get(
+                f"/api/processing/jobs/{first['jobId']}/invocation"
+            ).status_code
+            == 404
+        )
         assert stranger.get("/api/processing/model-runs").json()["jobs"] == []
         assert (
             stranger.get(
@@ -315,6 +326,9 @@ def test_model_capture_survives_cleanup_then_expires(
         store.cleaned(candidate["id"])
     exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     assert exported.status_code == 200, exported.text
+    assert (
+        client.get(f"/api/processing/jobs/{identifier}/invocation").status_code == 200
+    )
     document = parse_yaml(exported.content, run=True)
     assert document["execution"]["outcome"]["status"] == terminal
     assert (
@@ -334,6 +348,9 @@ def test_model_capture_survives_cleanup_then_expires(
             (identifier,),
         )
     assert client.get(f"/api/processing/jobs/{identifier}/run-yaml").status_code == 410
+    assert (
+        client.get(f"/api/processing/jobs/{identifier}/invocation").status_code == 410
+    )
     store.cleanup_candidates()
     with psycopg.connect(store.conninfo) as connection:
         assert connection.execute(
@@ -649,3 +666,44 @@ def test_model_navigation_progress_and_running_cancel(
             await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(exercise())
+
+
+def test_duplicate_saved_model_inputs_creates_an_independent_run(
+    model_boundary: Any,
+) -> None:
+    """Run an edited copy without changing its original inputs or summary result.
+
+    Args:
+        model_boundary: Real model HTTP, storage and native worker fixture.
+    """
+    client, worker, _ = model_boundary
+    original = submit(client, model_request(client))
+    assert client.portal.call(worker.run_once)
+    identifier = original["jobId"]
+    saved = client.get(f"/api/processing/jobs/{identifier}/invocation").json()
+    copied = submit(
+        client,
+        {
+            "requestId": uuid4().hex,
+            "model": {
+                key: saved["model"][key]
+                for key in ("id", "version", "definitionSha256")
+            },
+            "inputs": saved["inputs"],
+            "parameters": {"summary": "mean(a)"},
+            "label": "Edited copy",
+        },
+    )
+    assert copied["jobId"] != identifier
+    assert client.portal.call(worker.run_once)
+    assert (
+        client.get(f"/api/processing/jobs/{copied['jobId']}").json()["status"]
+        == "ready"
+    )
+    assert client.get(f"/api/processing/jobs/{identifier}/invocation").json() == saved
+    assert (
+        client.get(f"/api/processing/jobs/{identifier}").json()["result"]["rows"][0][
+            "expression"
+        ]
+        == "sum(a)"
+    )

@@ -313,7 +313,7 @@ export class SummaryStatisticsController {
         this.state.area = area;
         this.onAreaChange(area, ["catalogSelection", "polygonArea"].includes(area?.kind)
             ? this.state.vectorArea?.label ?? "Selected polygons"
-            : area?.kind === "wholeRaster" ? "Whole raster" : area ? "Current map sampling box" : "");
+            : area?.kind === "wholeRaster" ? "Whole raster" : area ? "Sampling area" : "");
         for (const card of this.state.statistics) {
             card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic && area ? "automatic" : null;

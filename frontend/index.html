@@ -572,6 +572,8 @@
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Analysis</strong>
+          <button id="open-models" class="workspace-tool-action" type="button" aria-controls="models-panel">Models</button>
+          <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Model runs</button>
           <button id="open-raster-series" class="workspace-tool-action" type="button"
             aria-controls="raster-series">Plot raster stack</button>
         </div>
@@ -622,6 +624,7 @@
           <div class="map-inspection-navigation">
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
+            <button id="map-inspection-tab-models" class="map-inspection-tab" type="button" role="tab" aria-controls="models-panel" aria-selected="false" tabindex="-1" hidden>Models</button>
             <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Shared layer</button>
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
@@ -645,6 +648,37 @@
           </div>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
+          <section id="models-panel" role="tabpanel" aria-labelledby="map-inspection-tab-models" hidden>
+            <header class="map-histogram-toolbar">
+              <h2 id="models-heading" tabindex="-1">Model library</h2>
+              <button id="models-close" class="secondary-button" type="button" aria-label="Close Models">×</button>
+            </header>
+            <nav class="models-navigation" aria-label="Models">
+              <button id="models-nav-library" type="button" aria-pressed="true">Library</button>
+              <button id="models-nav-setup" type="button" aria-pressed="false" disabled>Setup</button>
+              <button id="models-nav-runs" type="button" aria-pressed="false">Runs</button>
+            </nav>
+            <p id="models-error" class="models-error" role="alert" hidden></p>
+            <div id="models-recovery" hidden>
+              <p>A submission needs confirmation. Recovery uses its original inputs and request ID.</p>
+              <button id="models-recover" class="secondary-button" type="button">Recover submission</button>
+            </div>
+            <div id="models-library">
+              <label class="models-field" for="models-query">Find a model<input id="models-query" type="search" placeholder="Search by name or purpose"></label>
+              <p id="models-library-status" class="models-help" role="status"></p>
+              <div id="models-library-items"></div>
+              <button id="models-refresh" class="secondary-button" type="button">Refresh library</button>
+            </div>
+            <div id="models-setup" hidden></div>
+            <div id="models-run" hidden></div>
+            <div id="models-runs" hidden>
+              <p id="models-runs-status" class="models-help" role="status"></p>
+              <button id="models-refresh-runs" class="secondary-button" type="button">Refresh runs</button>
+              <div id="models-runs-list"></div>
+              <button id="models-more" class="secondary-button" type="button" hidden>Load older runs</button>
+            </div>
+            <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
+          </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
               <h2>Raster stack</h2>
@@ -1065,7 +1099,7 @@
                         <input id="use-map-window-for-raster" type="radio"
                           name="raster-sampling-area" value="selectedArea" />
                         <span>
-                          <strong>Box around map location</strong>
+                          <strong>Sampling area</strong>
                           <small>Start at the map center; click the map to reposition.</small>
                         </span>
                       </label>

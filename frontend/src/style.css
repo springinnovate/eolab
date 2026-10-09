@@ -4043,6 +4043,7 @@ article.raster-histogram-summary {
 #raster-series,
 #annotations-panel,
 #calculations-panel,
+#models-panel,
 #raster-clips-panel,
 #layer-style-editor,
 #vector-filter-panel,
@@ -4073,6 +4074,7 @@ article.raster-histogram-summary {
 #raster-series[hidden],
 #annotations-panel[hidden],
 #calculations-panel[hidden],
+#models-panel[hidden],
 #raster-clips-panel[hidden],
 #layer-style-editor[hidden],
 #vector-filter-panel[hidden],
@@ -4086,6 +4088,7 @@ article.raster-histogram-summary {
 #raster-series:not([data-map-inspection-active="true"]),
 #annotations-panel:not([data-map-inspection-active="true"]),
 #calculations-panel:not([data-map-inspection-active="true"]),
+#models-panel:not([data-map-inspection-active="true"]),
 #raster-clips-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
 #vector-filter-panel:not([data-map-inspection-active="true"]),
@@ -5172,3 +5175,7 @@ summary:hover > .raster-disclosure-chevron {
   .categorical-area-row { grid-template-columns: minmax(36px, 1fr) 48px 76px; }
   .categorical-area-name { grid-column: 1 / -1; }
 }
+
+.vector-filter-inline { border: 1px solid var(--border-1); border-radius: var(--radius); padding: 10px; min-width: 0; }
+.vector-filter-inline .layer-style-header { position: static; padding: 0; }
+.vector-filter-inline[hidden] { display: none; }

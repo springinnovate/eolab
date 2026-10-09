@@ -252,3 +252,65 @@ def test_model_submission_rejects_invalid_bindings(kind: str) -> None:
         build_model_calculation_request(
             ModelRunRequest.model_validate(value), ModelRegistry.load_installed()
         )
+
+
+def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
+    """Expose exact setup JSON only to the owning session during metadata retention."""
+    import hashlib
+    from datetime import datetime, timedelta, timezone
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from eolab_app.processing.service import ProcessingService
+    from eolab_app.routes.processing import COOKIE, create_processing_router
+
+    _, invocation = build_model_calculation_request(
+        ModelRunRequest.model_validate(summary_request()),
+        ModelRegistry.load_installed(),
+    )
+    owner = hashlib.sha256(b"a" * 64).hexdigest()
+    row = {
+        "operation": "model.run.v1",
+        "status": "ready",
+        "metadata_expires_at": None,
+        "retained_metadata": {
+            "invocation": invocation.model_dump(mode="json", by_alias=True)
+        },
+    }
+
+    class SessionJobStore:
+        """Supply a saved run only to the test's authorized browser session."""
+
+        def get(self, identifier: str, requesting_owner: str) -> dict[str, Any]:
+            """Read the test run after matching its job ID and session.
+
+            Args:
+                identifier: Requested public job ID.
+                requesting_owner: Hash of the requesting session cookie.
+
+            Returns:
+                The test's saved job record.
+
+            Raises:
+                ProcessingError: If the requested job is not owned by this session.
+            """
+            if identifier != "1" * 32 or requesting_owner != owner:
+                raise ProcessingError("job_not_found", "Job unavailable", 404)
+            return row
+
+    app = FastAPI()
+    app.include_router(
+        create_processing_router(ProcessingService(SessionJobStore(), object()))
+    )
+    with TestClient(app, base_url="https://testserver") as client:
+        path = f"/api/processing/jobs/{'1' * 32}/invocation"
+        assert client.get(path).status_code == 404
+        client.cookies.set(COOKIE, "a" * 64)
+        response = client.get(path)
+        assert response.status_code == 200, response.text
+        assert response.json() == invocation.model_dump(mode="json", by_alias=True)
+        assert "no-store" in response.headers["cache-control"]
+        row["metadata_expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+        assert client.get(path).status_code == 410
+        row["metadata_expires_at"] = None
+        row["status"] = "deleted"
+        assert client.get(path).status_code == 410

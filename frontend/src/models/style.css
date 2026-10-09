@@ -1,0 +1,40 @@
+/* Models uses the existing Analysis panel's typography, colors and controls. */
+#models-panel { min-width: 0; }
+#models-panel h2 { font-size: 1rem; margin: 0; }
+#models-panel h3 { font-size: 0.95rem; margin: 0 0 6px; }
+.models-navigation, .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.models-navigation button { padding: 5px 8px; border: 0; background: transparent; color: var(--brand); font: inherit; cursor: pointer; }
+.models-navigation button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-1); border-radius: var(--radius); }
+.models-navigation button:disabled { opacity: var(--disabled-opacity); cursor: default; }
+.models-field { display: grid; gap: 4px; min-width: 0; font-size: 0.8rem; }
+#models-panel input, #models-panel select, #models-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: 7px; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
+#models-panel textarea { font-family: monospace; resize: vertical; }
+.models-form fieldset { display: grid; gap: 10px; border: 0; padding: 0; margin: 12px 0; min-width: 0; }
+.models-form legend { padding: 0; font-weight: 600; }
+.models-help { color: var(--text-2); font-size: 0.78rem; margin: 4px 0; overflow-wrap: anywhere; }
+.models-vector { display: grid; gap: 8px; }
+.models-library-card, .models-result { padding: 12px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
+.models-library-card p { font-size: 0.8rem; }
+.models-result { display: grid; gap: 5px; }
+.models-result-value { font: 500 1.25rem/1.4 monospace; }
+.models-history-row { display: grid; gap: 4px; border-bottom: 1px solid var(--border-1); padding: 10px 0; }
+.models-history-row button { width: fit-content; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.models-history-row small { color: var(--text-2); }
+.models-details { margin: 12px 0; font-size: 0.8rem; }
+.models-details summary { cursor: pointer; color: var(--brand); }
+.models-details dd { margin: 3px 0 10px; overflow-wrap: anywhere; }
+.models-details dt { font-weight: 600; }
+.models-error { color: var(--status-danger); overflow-wrap: anywhere; }
+#models-recovery { padding: 10px; border: 1px solid var(--status-warning); }
+#models-yaml { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; border: 1px solid var(--border-1); padding: 10px; max-height: 24rem; overflow: auto; }
+#models-panel [hidden] { display: none; }
+#models-panel :is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+@media (pointer: coarse) { #models-panel :is(button, select, input, summary, a) { min-height: 44px; } }
+
+.models-selection { border: 1px solid var(--brand); border-radius: var(--radius); padding: 10px; background: var(--surface-selected); }
+.models-selection-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.models-selection-header strong { font-size: 0.9rem; }
+.models-selection-filter { margin: 8px 0; color: var(--text-1); font-size: 0.85rem; overflow-wrap: anywhere; }
+.models-selection .models-edit-filter { width: auto; padding: 3px 6px; border: 0; background: transparent; }
+#models-panel .models-filter-editor input[type="checkbox"] { width: auto; }
