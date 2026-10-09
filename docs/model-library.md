@@ -6,13 +6,11 @@ library by name or purpose, then choose **Set up model**. The installed
 
 ## Choose inputs
 
-Setup explains any suggested raster. If several inputs could fit, choose one.
-Choose one raster from the list; hidden map layers remain available. To find a
-raster that is not listed, open **Choose a different raster from the catalog**
-and search by name. Results become choices in the same raster list. Vector
-layers have the equivalent optional catalog search. Neither search adds an
-extra required input. Use **More matches** to retrieve later search pages.
-A source does not need a rendered map layer to be analyzed.
+Choose one raster from **Map layers**. Hidden layers remain available. To use
+another raster or vector, add it to Map layers first. Model setup has no separate
+catalog search. Removing an input layer clears that choice for a new run;
+accepted runs keep their original inputs. Duplicating a run whose original
+layers are absent requires adding them to the map or choosing replacements.
 
 Choose **Entire raster**, **Visible map area**, **Box around map location**, or
 **Vector layer**. Visible map area follows the window on screen as you pan,

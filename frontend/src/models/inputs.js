@@ -60,20 +60,16 @@ export function modelViewportArea(bounds) {
  */
 export function createModelDraft(model, context, id) {
     const sources = structuredClone(context.rasters ?? []);
-    const selected = context.selectedRaster;
-    if (selected && !sources.some(source => modelSourceKey(source) === modelSourceKey(selected))) sources.unshift(structuredClone(selected));
     const enabled = sources.filter(source => source.visible);
-    const suggestion = selected ?? (enabled.length === 1 ? enabled[0] : sources.length === 1 ? sources[0] : null);
+    const suggestion = enabled.length === 1 ? enabled[0] : sources.length === 1 ? sources[0] : null;
     const area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
         raster: suggestion ? structuredClone(suggestion) : null,
-        sourceReason: selected ? "Suggested from the item selected in the catalog." : suggestion ?
-            enabled.length === 1 ? "Suggested because it is the only enabled raster on this map." : "Suggested because it is the only raster on this map." :
-            "Choose a raster; there is no single clear match. Hidden layers and catalog search are available.",
+        sourceReason: sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
         area, capturedArea: structuredClone(area), areaMode: ({wholeRaster: "whole", selectedArea: "mapBox", polygonArea: "mapPolygons"})[area.kind] ?? "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
-        sourceQuery: "", vectorQuery: "", sourceNext: null, vectorNext: null, searchError: "", searching: false};
+        };
 }
 
 /** Capture one draft as a model request, validating area and source choices.
@@ -84,7 +80,10 @@ export function createModelDraft(model, context, id) {
  */
 export function captureModelSubmission(draft, requestId) {
     if (!draft.label.trim() || draft.label.length > 80) throw new Error("Name this run using 1–80 characters.");
-    if (!draft.raster) throw new Error("Choose a raster for this model.");
+    if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
+        throw new Error("Choose a raster from Map layers.");
+    if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
+        throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
     if (!draft.area) throw new Error(draft.selectionError || "Choose an analysis area before running the model.");
     const inputs = {};

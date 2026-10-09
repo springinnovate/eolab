@@ -828,6 +828,7 @@ async function initializeCatalog(
             vectorSampling?.refresh();
             summarySampling?.refresh();
             calculations?.refreshSourceNames();
+            models?.refreshMapLayers();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -987,7 +988,6 @@ async function initializeCatalog(
         .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
         .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
             filter: record.adapter.exportFilterState(record) }));
-    const modelSourceSearch = {raster: new CatalogSearchClient(catalogUrl), vector: new CatalogSearchClient(catalogUrl)};
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         /** Supply catalog choices and current map areas independently of rendering.
@@ -998,26 +998,10 @@ async function initializeCatalog(
             return {
                 rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
                     .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
-                selectedRaster: catalogState.selectedItem?.collection === "eolab-mounted-geotiffs" ? clipSource(catalogState.selectedItem) : null,
-                vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter})),
+                vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
-        },
-        /** Search the catalog independently of its left-panel search and map publication.
-         * @param {"raster"|"vector"} kind Requested catalog source type.
-         * @param {string} query Search text.
-         * @param {Object|null} next Existing STAC pagination link.
-         * @return {Promise<Object|null>} Path-free choices and continuation, or a superseded response.
-         */
-        searchSources: async (kind, query, next) => {
-            const client = modelSourceSearch[kind];
-            const result = await (next ? client.follow(next) : client.search(`type:${kind} ${query}`));
-            if (!result) return null;
-            const filters = catalogPolygonTargets();
-            return {sources: result.features.filter(item => item.collection === (kind === "raster" ? "eolab-mounted-geotiffs" : "eolab-mounted-vectors"))
-                .map(item => ({...clipSource(item), filter: filters.find(target => target.item.id === item.id && target.item.collection === item.collection)?.filter ?? EMPTY_VECTOR_FILTER})),
-                next: result.links?.find(link => link.rel === "next") ?? null};
         },
         /** Read the draft's vector and predicate without requiring a display layer.
          * @param {Object} source Catalog source and captured filter.

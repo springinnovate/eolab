@@ -124,17 +124,15 @@ export class ModelsView {
         fields.append(this.field("models-run-label", "Run name", label));
         const source = this.element("select"); source.required = true;
         source.addEventListener("change", () => this.handlers.onEdit({raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
-            sourceReason: "You selected this raster."}));
+            sourceReason: "Choose a raster from Map layers."}));
         const reason = this.element("p", "", "models-help"); reason.id = "models-source-reason"; source.setAttribute("aria-describedby", reason.id);
         fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => input.type === "catalog_raster")?.label ?? "Raster", source), reason);
-        const rasterSearch = this.searchFields("raster"); fields.append(rasterSearch.root);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
         fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => input.type === "summary_area")?.label ?? "Analysis area", areaMode));
         const vectorGroup = this.element("div", "", "models-vector");
         const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
         vectorGroup.append(this.field("models-vector", "Vector layer", vector));
-        const vectorSearch = this.searchFields("vector"); vectorGroup.append(vectorSearch.root);
         const editFilter = this.button("Edit filter", this.handlers.onEditFilter);
         const vectorStatus = this.element("p", "", "models-help"); vectorStatus.setAttribute("role", "status");
         const filterDescription = this.element("p", "", "models-help");
@@ -161,27 +159,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            rasterSearch, vectorSearch, parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription};
-    }
-
-    /** Build a catalog search input, submit button and pagination action.
-     * @param {"raster"|"vector"} kind Source type.
-     * @return {Object} Search controls and their wrapper.
-     */
-    searchFields(kind) {
-        const root = this.element("details", "", "models-details");
-        root.append(this.element("summary", `Choose a different ${kind === "raster" ? "raster" : "vector layer"} from the catalog`),
-            this.element("p", `Optional. Find a ${kind === "raster" ? "raster" : "vector layer"} that is not listed above. Search results become choices in the list above.`, "models-help"));
-        const controls = this.element("div", "", "models-search");
-        const input = this.element("input"); input.type = "search";
-        input.placeholder = `Search ${kind}s by name`;
-        input.addEventListener("input", () => this.handlers.onEdit({[kind === "raster" ? "sourceQuery" : "vectorQuery"]: input.value}));
-        input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); this.handlers.onSearch(kind, false); } });
-        const search = this.button("Search catalog", () => this.handlers.onSearch(kind, false));
-        const more = this.button("More matches", () => this.handlers.onSearch(kind, true));
-        controls.append(this.field(`models-search-${kind}`, `Search ${kind}s by name`, input), search, more);
-        root.append(controls);
-        return {root, input, search, more};
+            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription};
     }
 
     /** Create the secondary YAML actions without expanding permanent setup chrome.
@@ -240,12 +218,8 @@ export class ModelsView {
         s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
             `${describeModelArea(draft.area)}${count}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        for (const [prefix, search] of [["source", s.rasterSearch], ["vector", s.vectorSearch]]) {
-            if (this.document.activeElement !== search.input) search.input.value = draft[`${prefix}Query`];
-            search.search.disabled = draft.searching; search.more.hidden = !draft[`${prefix}Next`]; search.more.disabled = draft.searching;
-        }
         const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area"].includes(input.type));
-        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || !draft.area || !supported;
+        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || !draft.area || !draft.raster || !supported;
         s.run.textContent = state.submitting ? "Submitting…" : "Run model";
         s.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         s.details.run.hidden = true;
@@ -336,7 +310,7 @@ export class ModelsView {
         for (const [page, node] of Object.entries(this.navigation)) node.setAttribute("aria-pressed", String(state.page === page || page === "runs" && state.page === "run"));
         this.navigation.setup.disabled = !state.draft;
         this.elements.heading.textContent = ({library: "Model library", setup: "Model setup", runs: "Model runs", run: "Model run"})[state.page];
-        const error = state.error || (state.page === "setup" ? state.draft?.searchError : state.observationError) || "";
+        const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
         this.elements.recovery.hidden = !state.pending; this.elements.recover.disabled = state.submitting;
         const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));

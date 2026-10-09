@@ -87,18 +87,12 @@ test("vector setup offers Edit filter and describes the predicate belonging to t
 });
 
 
-test("catalog searches are optional alternative choices and stay collapsed during updates", () => {
+test("setup offers only map layers and explains how to add a missing raster", () => {
     const h = fixture();
-    for (const [search, label] of [[h.view.setup.rasterSearch, "raster"], [h.view.setup.vectorSearch, "vector layer"]]) {
-        assert.ok(!search.root.open);
-        assert.equal(search.root.children[0].textContent, `Choose a different ${label} from the catalog`);
-        assert.match(search.root.children[1].textContent, /Optional.*choices in the list above/);
-        search.root.open = true;
-        search.input.focus();
-        h.view.render(h.state);
-        assert.equal(search.root.open, true);
-        assert.equal(h.doc.activeElement, search.input);
-    }
+    assert.equal(h.view.setup.rasterSearch, undefined); assert.equal(h.view.setup.vectorSearch, undefined);
+    h.state.draft = createModelDraft(model, {}, "empty-map"); h.view.render(h.state);
+    assert.match(h.view.setup.reason.textContent, /Add a raster to Map layers/);
+    assert.equal(h.view.setup.run.disabled, true);
 });
 
 

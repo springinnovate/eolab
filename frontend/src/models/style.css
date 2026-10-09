@@ -12,8 +12,6 @@
 .models-form fieldset { display: grid; gap: 10px; border: 0; padding: 0; margin: 12px 0; min-width: 0; }
 .models-form legend { padding: 0; font-weight: 600; }
 .models-help { color: var(--text-2); font-size: 0.78rem; margin: 4px 0; overflow-wrap: anywhere; }
-.models-search { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; }
-.models-search .models-field { flex: 1 1 160px; }
 .models-vector { display: grid; gap: 8px; }
 .models-library-card, .models-result { padding: 12px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
 .models-library-card p { font-size: 0.8rem; }

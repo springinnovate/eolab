@@ -13,7 +13,6 @@ export class ModelsController {
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
      * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
-     * @param {(kind:string,query:string,next:Object|null)=>Promise<Object>} dependencies.searchSources Catalog search with pagination.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor for this draft only.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
@@ -21,19 +20,19 @@ export class ModelsController {
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, searchSources, prepareVector, editVectorFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, storage = null, onOpen, onClose,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
-        Object.assign(this, {api, jobs, view, getContext, searchSources, prepareVector, editVectorFilter, storage, onOpen, onClose, newId});
+        Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, storage, onOpen, onClose, newId});
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false};
-        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0; this.searchRevision = 0;
+        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0;
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
-            onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(), onSearch: (kind, more) => void this.search(kind, more),
+            onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml()});
@@ -64,7 +63,7 @@ export class ModelsController {
      */
     setActive(active) {
         this.state.active = active;
-        if (active) this.refreshMapArea();
+        if (active) { this.refreshMapLayers(); this.refreshMapArea(); }
         for (const job of this.runSnapshots.values()) this.rememberRun(job);
         this.jobs.schedule(); this.render();
     }
@@ -91,21 +90,21 @@ export class ModelsController {
      * @return {void}
      */
     chooseModel(model) {
-        this.selectionAbort?.abort(); this.selectionRevision += 1; this.searchRevision += 1; this.revision += 1;
+        this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
         this.state.draft = createModelDraft(model, this.getContext(), this.newId());
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.area?.kind === "catalogSelection") {
             const selection = draft.area.selection;
             const source = {collectionId: selection.collectionId, itemId: selection.itemId, label: selection.layerName, filter: selection.filter};
-            draft.vectors = [source, ...draft.vectors.filter(value => modelSourceKey(value) !== modelSourceKey(source))];
             draft.areaMode = "vector";
-            void this.chooseVector(modelSourceKey(source));
+            if (draft.vectors.some(value => modelSourceKey(value) === modelSourceKey(source))) void this.chooseVector(modelSourceKey(source));
+            else { draft.area = null; draft.selectionError = "Choose a vector layer from Map layers."; this.render(); }
         }
     }
 
     /** Update draft fields without changing a pending or accepted submission.
-     * @param {Object} change Edited label, raster, parameters or search text.
+     * @param {Object} change Edited label, raster or parameters.
      * @return {void}
      */
     editDraft(change) {
@@ -227,28 +226,26 @@ export class ModelsController {
         finally { draft.filterOpening = false; this.render(); }
     }
 
-    /** Search catalog sources independently of map rendering or visibility.
-     * @param {"raster"|"vector"} kind Input type to search.
-     * @param {boolean} [more=false] Follow the previous page's continuation.
-     * @return {Promise<void>}
+    /** Refresh choices from Map layers without changing accepted runs or chosen filters.
+     * Removed inputs must be added to the map again or replaced before a new run.
+     * @return {void}
      */
-    async search(kind, more = false) {
-        const draft = this.state.draft; if (!draft) return;
-        const revision = ++this.searchRevision; draft.searching = true; draft.searchError = ""; this.render();
-        const prefix = kind === "raster" ? "source" : "vector";
-        try {
-            const result = await this.searchSources(kind, draft[`${prefix}Query`], more ? draft[`${prefix}Next`] : null);
-            if (!result || revision !== this.searchRevision || this.state.draft !== draft) return;
-            const field = kind === "raster" ? "sources" : "vectors";
-            const choices = new Map(draft[field].map(source => [modelSourceKey(source), source]));
-            for (const source of result.sources) {
-                const key = modelSourceKey(source); const previous = choices.get(key);
-                choices.set(key, kind === "vector" && previous ? {...source, filter: previous.filter} : source);
-            }
-            draft[field] = [...choices.values()];
-            draft[`${prefix}Next`] = result.next; draft.searchError = result.sources.length ? "" : "No matching catalog sources.";
-        } catch (error) { if (revision === this.searchRevision) draft.searchError = error.message; }
-        finally { if (revision === this.searchRevision) { draft.searching = false; this.render(); } }
+    refreshMapLayers() {
+        const draft = this.state.draft;
+        if (!draft || this.destroyed || this.state.submitting || this.state.pending) return;
+        const context = this.getContext();
+        draft.sources = structuredClone(context.rasters ?? []);
+        draft.raster = draft.sources.find(source => draft.raster && modelSourceKey(source) === modelSourceKey(draft.raster)) ?? null;
+        const previous = new Map(draft.vectors.map(source => [modelSourceKey(source), source]));
+        draft.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
+            filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
+        draft.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
+        if (draft.vectorKey && !draft.vectors.some(source => modelSourceKey(source) === draft.vectorKey)) {
+            this.selectionAbort?.abort(); this.selectionRevision++;
+            draft.vectorKey = ""; draft.area = null; draft.vectorInfo = null; draft.selecting = false;
+            draft.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+        }
+        this.render();
     }
 
     /** Submit once, or recover an uncertain response using its original request ID.
@@ -260,7 +257,7 @@ export class ModelsController {
         const draft = this.state.draft; const revision = this.revision;
         this.state.error = "";
         try {
-            if (!retry) this.refreshMapArea();
+            if (!retry) { this.refreshMapLayers(); this.refreshMapArea(); }
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
             if (!this.storage) throw new Error("Enable session storage to submit a recoverable model run.");
@@ -366,7 +363,7 @@ export class ModelsController {
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This exact model version is no longer installed. Its YAML remains available until metadata expires."; this.render(); return; }
-        this.selectionAbort?.abort(); this.selectionRevision += 1; this.searchRevision += 1; this.revision += 1;
+        this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
         const draft = createModelDraft(model, this.getContext(), this.newId());
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = saved.label; draft.parameters = structuredClone(saved.parameters);
@@ -374,7 +371,7 @@ export class ModelsController {
             if (input.type === "catalog_raster") {
                 const value = saved.inputs[name];
                 draft.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ?? {...value, label: value.itemId};
-                if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.sources.push(draft.raster);
+                if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = null;
                 draft.sourceReason = "Copied from the original run; choose another raster to change it.";
             } else if (input.type === "summary_area") {
                 draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
@@ -384,8 +381,13 @@ export class ModelsController {
                     const key = modelSourceKey(selection);
                     const source = {...draft.vectors.find(value => modelSourceKey(value) === key),
                         collectionId: selection.collectionId, itemId: selection.itemId, label: selection.layerName, filter: structuredClone(selection.filter)};
-                    draft.vectors = [source, ...draft.vectors.filter(value => modelSourceKey(value) !== key)];
                     draft.vectorKey = key; draft.areaMode = "vector";
+                    if (draft.vectors.some(value => modelSourceKey(value) === key)) {
+                        draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? source : value);
+                    } else {
+                        draft.vectorKey = ""; draft.area = null;
+                        draft.selectionError = "Add the original vector layer to Map layers, or choose another layer.";
+                    }
                 }
             }
         }
