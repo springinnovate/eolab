@@ -71,6 +71,7 @@ def build_image(application_image: str | None) -> str:
         "RUN python -m venv --system-site-packages /test-venv "
         "&& /test-venv/bin/python -m pip install --no-cache-dir 'pytest==8.4.2'\n"
         "COPY pyproject.toml ./\nCOPY tests/ ./tests/\nCOPY scripts/ ./scripts/\n"
+        "COPY docs/model-examples/ ./docs/model-examples/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
         'ENV PYTHONPATH="" PYTEST_ADDOPTS=""\n'
         "USER 65534:65534\nENTRYPOINT []\nHEALTHCHECK NONE\n"
@@ -90,9 +91,15 @@ def build_image(application_image: str | None) -> str:
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-v1.json")
                 paths.append(ROOT / "tests" / "fixtures" / "saved-map-v2.json")
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]
+                paths += list((ROOT / "docs" / "model-examples").glob("*"))
                 if not application_image:
                     paths += list((ROOT / "src").rglob("*.py"))
                     paths += list((ROOT / "src").rglob("*.sql"))
+                    paths += list(
+                        (ROOT / "src" / "eolab_app" / "processing" / "recipes").glob(
+                            "*.yaml"
+                        )
+                    )
                 for path in sorted(paths):
                     if path.is_symlink():
                         raise ValueError(

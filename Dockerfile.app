@@ -8,13 +8,15 @@ WORKDIR /source
 
 RUN if [ "$SOURCE_COMMIT" = "Version cannot be determined outside a Coolify deployment" ]; then \
         printf '%s\n' "$SOURCE_COMMIT" > /version; \
+        printf '%s\n' 'unavailable' > /revision; \
     else \
         test -n "$SOURCE_COMMIT" \
         && git init \
         && git remote add origin https://github.com/springinnovate/eolab.git \
         && git fetch --filter=blob:none --tags origin "$SOURCE_COMMIT" \
         && git checkout --detach FETCH_HEAD \
-        && git describe --tags --always > /version; \
+        && git describe --tags --always > /version \
+        && git rev-parse HEAD > /revision; \
     fi \
     && test -s /version
 
@@ -92,10 +94,12 @@ COPY --chmod=0555 deployment/require-read-only-scan-source.sh \
 COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
 COPY --from=frontend-builder /frontend-build-versions.txt /app/build-inputs/
 COPY --from=versioner /version /app/version
+COPY --from=versioner /revision /app/revision
 
 RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
         --check-build-dependencies --no-deps . \
     && python -m pip check \
+    && cd /tmp && python -c "from eolab_app.processing.model_definitions import ModelRegistry; assert ModelRegistry.load_installed().get('raster-summary', '1.0.0')" && cd /app \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy')" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
     && mkdir -p /processing-data \

@@ -1,11 +1,13 @@
 """Shared app/worker configuration for durable Processing queue and storage limits."""
 
 from pathlib import Path
+from fastapi.testclient import TestClient
 import pytest
 
 from eolab_app.main import create_app
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.settings import load_processing_limits
+from eolab_app.routes.processing import COOKIE
 
 OVERRIDES = {
     "PROCESSING_WORKER_COUNT": ("worker_count", 2),
@@ -21,6 +23,7 @@ OVERRIDES = {
     "PROCESSING_FREE_SPACE_FLOOR_BYTES": ("free_space_floor", 0),
     "PROCESSING_EXECUTION_TIMEOUT_SECONDS": ("runtime_seconds", 120),
     "PROCESSING_RESULT_TTL_SECONDS": ("result_ttl_seconds", 3600),
+    "PROCESSING_METADATA_TTL_SECONDS": ("metadata_ttl_seconds", 1209600),
 }
 
 
@@ -66,6 +69,9 @@ def test_defaults_and_all_environment_overrides(
         ("PROCESSING_EXECUTION_TIMEOUT_SECONDS", "oops"),
         ("PROCESSING_RESULT_TTL_SECONDS", "0"),
         ("PROCESSING_RESULT_TTL_SECONDS", "31536001"),
+        ("PROCESSING_METADATA_TTL_SECONDS", "0"),
+        ("PROCESSING_METADATA_TTL_SECONDS", ""),
+        ("PROCESSING_METADATA_TTL_SECONDS", "31536001"),
     ],
 )
 def test_bad_budget_names_its_variable_before_app_starts(
@@ -87,6 +93,39 @@ def test_bad_budget_names_its_variable_before_app_starts(
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match=name):
         create_app(version_file_path)
+
+
+def test_processing_cookie_covers_configured_metadata_retention(
+    configured_environment: None,
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep browser access to retained runs and renew the same session on access.
+
+    Args:
+        configured_environment: Valid application environment values.
+        version_file_path: The installed application version fixture.
+        monkeypatch: Sets a fourteen-day metadata lifetime.
+    """
+    monkeypatch.setenv("PROCESSING_METADATA_TTL_SECONDS", "1209600")
+    app = create_app(version_file_path)
+    # Discovery uses installed recipes only; these requests do not start services.
+    client = TestClient(app, base_url="https://testserver")
+    try:
+        first = client.get("/api/processing/models")
+        assert first.status_code == 200, first.text
+        token = client.cookies.get(COOKIE)
+        second = client.get("/api/processing/models")
+        assert second.status_code == 200, second.text
+        assert client.cookies.get(COOKIE) == token
+        for response in (first, second):
+            cookie = response.headers["set-cookie"]
+            assert "Max-Age=1209600" in cookie
+            assert (
+                "HttpOnly" in cookie and "Secure" in cookie and "SameSite=lax" in cookie
+            )
+    finally:
+        client.close()
 
 
 def test_compose_shares_each_budget_with_app_and_worker() -> None:

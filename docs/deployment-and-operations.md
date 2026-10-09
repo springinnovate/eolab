@@ -509,12 +509,14 @@ fail startup. Omitted values use the defaults below.
 | `EOLAB_PROCESSING_FREE_SPACE_FLOOR_BYTES` | 2147483648 | Physical free space to leave unused; zero disables the floor |
 | `EOLAB_PROCESSING_EXECUTION_TIMEOUT_SECONDS` | 600 | Maximum duration of an executing job, excluding queue wait |
 | `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Result lifetime starting at completion |
+| `EOLAB_PROCESSING_METADATA_TTL_SECONDS` | 604800 | Saved model recipe, inputs and outcome lifetime, starting when a run first finishes, fails, is cancelled or is interrupted |
 
 Counts, durations and byte limits must be positive integers (the free-space
 floor may be zero; durations cannot exceed one year). Pending input reservations
 remain held after cancellation until cleanup succeeds. Small summaries and idempotency records remain bounded
 by the record limit after input payloads are removed. Cleaned terminal records
-become eligible for removal seven days after their last update. The existing
+become eligible for removal seven days after their last update, once any retained
+model metadata has also expired. The existing
 worker maintenance pass prunes them, including when there are no files to remove.
 Submission and individual file-cleanup acknowledgements do not prune history.
 Recent request keys remain recoverable even when new admission is full. If the
@@ -523,6 +525,15 @@ returns `job_record_capacity`; retry after maintenance runs. All workers busy
 with long jobs can delay maintenance until a worker returns to its loop.
 Deleting a result releases its input/artifact reservations
 after cleanup, but does not immediately discard its idempotency record.
+
+Set `EOLAB_PROCESSING_METADATA_TTL_SECONDS` in Compose or Coolify to change how
+long Model/Run YAML remains downloadable. For example, `1209600` keeps it for
+14 days. Each new job records the configured duration; changing the environment
+does not change an accepted job's retention or extend an existing deadline.
+Result files still use their separate result lifetime. Processing session
+cookies are renewed on access and last at least as long as the configured result
+and metadata lifetimes, with a seven-day minimum. Clearing the cookie still
+removes that browser's access to its private runs.
 
 Submission returns distinct 429 error codes: `owner_queue_full` for the session's
 waiting allowance, `queue_full` for the global backlog, `job_record_capacity` for

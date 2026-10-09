@@ -33,6 +33,18 @@ from eolab_app.processing.ports import (
     JobSubscription,
 )
 from eolab_app.raster.models import CatalogRasterRequest
+from eolab_app.raster.ports import RasterSourceAuthorizer
+from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunRequest
+from eolab_app.processing.model_runs import (
+    build_model_job_submission,
+    decode_model_run_cursor,
+    encode_model_run_cursor,
+    export_model_job_yaml,
+    serialize_model_job,
+    build_model_calculation_request,
+)
+from eolab_app.processing.model_yaml import encode_canonical_json, export_yaml
 
 
 def require_operation(row: dict[str, Any], operation: str) -> None:
@@ -67,6 +79,8 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Public lifecycle, grid, source, and result links without storage metadata.
     """
+    if row.get("operation") == MODEL_OPERATION:
+        return serialize_model_job(row)
     identifier = row["id"]
     spec = row.get("spec") or {}
     if "request" in spec:
@@ -140,6 +154,8 @@ class ProcessingService:
         *,
         changes: JobChanges | None = None,
         submission_wait_seconds: float = 0.45,
+        model_registry: ModelRegistry | None = None,
+        model_authorizer: RasterSourceAuthorizer | None = None,
     ) -> None:
         """Compose job storage and currently supported raster-operation capabilities.
 
@@ -150,6 +166,10 @@ class ProcessingService:
             submission_wait_seconds: Observation budget per calculation submission,
                 finite and non-negative; zero gives immediate acknowledgement. The final
                 owned-state read also incurs the ordinary database access latency.
+            model_registry: Validated installed recipes; bundled definitions load
+                eagerly when omitted, failing readiness if invalid.
+            model_authorizer: Catalog-only source authority for capturing model
+                inputs at admission. Existing raster endpoints retain their behavior.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -160,6 +180,146 @@ class ProcessingService:
         self.artifacts = artifacts
         self.changes = changes
         self.submission_wait_seconds = submission_wait_seconds
+        self.model_registry = (
+            model_registry
+            if model_registry is not None
+            else ModelRegistry.load_installed()
+        )
+        self.model_authorizer = model_authorizer
+
+    async def submit_model_run(
+        self, owner: str, request: ModelRunRequest
+    ) -> dict[str, Any]:
+        """Start a model run, or recover a previously accepted submission.
+
+        Checks the selected model and source, fills in defaults, and saves the
+        inputs before queueing work. Repeating the same request ID and inputs
+        returns the original run even if its model or source is no longer installed.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            request: The chosen model, input datasets, area, parameters and run label.
+
+        Returns:
+            The newly queued run, or the original run for an unchanged retry.
+
+        Raises:
+            ProcessingError: If the retry conflicts, model inputs are invalid, or
+                the configured queue or storage limits prevent submission.
+            RasterFeatureError: If the catalog cannot authorize the selected raster.
+        """
+        request_hash = hashlib.sha256(
+            encode_canonical_json(
+                request.model_dump(mode="json", exclude={"requestId"})
+            )
+        ).hexdigest()
+        existing = await asyncio.to_thread(
+            self.jobs.find_request, owner, request.requestId
+        )
+        if existing is not None:
+            require_operation(existing, MODEL_OPERATION)
+            if existing["request_hash"] != request_hash:
+                raise ProcessingError(
+                    "request_conflict",
+                    "That request ID has different model inputs.",
+                    409,
+                )
+            return public_job(existing)
+        calculation, invocation = build_model_calculation_request(
+            request, self.model_registry
+        )
+        if self.model_authorizer is None:
+            raise ProcessingError(
+                "models_unavailable", "Model source authorization is unavailable.", 503
+            )
+        authorized = await self.model_authorizer.authorize(calculation.sources["a"])
+        submission = await self.build_calculation_submission(owner, calculation, {})
+        if isinstance(submission.prepared, ProcessingError):
+            raise submission.prepared
+        prepared = build_model_job_submission(
+            submission.prepared,
+            invocation,
+            tuple(authorized.source_signature.to_catalog()),
+        )
+        row = await asyncio.to_thread(
+            self.jobs.submit, owner, request.requestId, prepared, request_hash
+        )
+        return public_job(row)
+
+    async def list_models(self) -> dict[str, Any]:
+        """List every installed model recipe and its setup fields.
+
+        Returns:
+            Model definitions, versions and checksums, without accessing datasets or rendering.
+        """
+        return {"models": self.model_registry.list_models()}
+
+    async def export_installed_model_yaml(self, identifier: str, version: str) -> bytes:
+        """Export an installed model definition as reusable Model YAML.
+
+        Args:
+            identifier: The model ID returned by discovery.
+            version: The installed model version to export.
+
+        Returns:
+            UTF-8 YAML bytes describing the recipe.
+
+        Raises:
+            ProcessingError: If the model version is unavailable or cannot be exported.
+        """
+        return export_yaml(self.model_registry.get(identifier, version).to_document())
+
+    async def export_job_yaml(self, owner: str, identifier: str, *, run: bool) -> bytes:
+        """Export the recipe or run details saved with this browser session's job.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            identifier: The model run's job ID.
+            run: True for Run YAML including inputs and execution details; False for
+                only the reusable Model YAML recipe.
+
+        Returns:
+            UTF-8 YAML bytes using the saved recipe, independent of the current library.
+
+        Raises:
+            ProcessingError: If the job is unavailable to this session or its metadata expired.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        return export_model_job_yaml(row, run=run)
+
+    async def list_model_runs(
+        self, owner: str, limit: int, cursor: str | None
+    ) -> dict[str, Any]:
+        """Return one page of the requesting browser session's model runs.
+
+        Args:
+            owner: Hash of the browser's Processing session cookie.
+            limit: Maximum runs to return on this page, between one and 100.
+            cursor: The previous response's nextCursor, or None for the newest runs.
+
+        Returns:
+            Model run statuses and a nextCursor when older matching runs exist.
+
+        Raises:
+            ProcessingError: If pagination values are invalid or job storage is unavailable.
+        """
+        if not 1 <= limit <= 100:
+            raise ProcessingError(
+                "invalid_limit", "Choose between one and 100 model runs."
+            )
+        rows = await asyncio.to_thread(
+            self.jobs.list_session_jobs_page,
+            owner,
+            (MODEL_OPERATION,),
+            limit + 1,
+            decode_model_run_cursor(cursor),
+        )
+        return {
+            "jobs": [public_job(row) for row in rows[:limit]],
+            "nextCursor": (
+                encode_model_run_cursor(rows[limit - 1]) if len(rows) > limit else None
+            ),
+        }
 
     async def subscribe_jobs(self, owner: str) -> JobSubscription:
         """Subscribe to hints for the same owner used by ordinary job reads.
@@ -545,7 +705,9 @@ class ProcessingService:
         Returns:
             At most 50 public job summaries, newest first.
         """
-        rows = await asyncio.to_thread(self.jobs.list_owned, owner)
+        rows = await asyncio.to_thread(
+            self.jobs.list_owned, owner, ("raster.clip.v1", "raster.aggregate.v1")
+        )
         return [public_job(row) for row in rows]
 
     async def read_job_statuses(

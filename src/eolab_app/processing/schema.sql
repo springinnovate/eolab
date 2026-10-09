@@ -127,6 +127,34 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Optional opaque application metadata survives scratch cleanup. Counts are
+-- bounded by max_job_records; each metadata/outcome pair has a 256 KiB ceiling.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_metadata jsonb;
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_outcome jsonb;
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_expires_at timestamptz;
+-- Capture the deployment's chosen lifetime when each job is submitted. Existing
+-- records keep the original seven-day policy; terminal deadlines never restart.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_ttl_seconds bigint
+    NOT NULL DEFAULT 604800 CHECK (metadata_ttl_seconds > 0);
+CREATE OR REPLACE FUNCTION processing.retain_terminal_metadata() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.retained_metadata IS NOT NULL AND NEW.metadata_expires_at IS NULL
+       AND NEW.status IN ('ready','failed','cancelled','interrupted') THEN
+        NEW.metadata_expires_at := clock_timestamp()
+            + NEW.metadata_ttl_seconds * interval '1 second';
+        NEW.retained_outcome := jsonb_build_object(
+            'status', NEW.status, 'artifact', NEW.artifact, 'error', NEW.error);
+    END IF;
+    IF coalesce(octet_length(NEW.retained_metadata::text),0)
+       + coalesce(octet_length(NEW.retained_outcome::text),0) > 262144 THEN
+        RAISE EXCEPTION 'Processing retained metadata exceeds its byte limit';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS processing_retained_metadata ON processing.jobs;
+CREATE TRIGGER processing_retained_metadata BEFORE INSERT OR UPDATE ON processing.jobs
+FOR EACH ROW EXECUTE FUNCTION processing.retain_terminal_metadata();
+
 CREATE OR REPLACE VIEW processing.subscribed_jobs AS
 SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        j.created_at,s.created_at AS subscribed_at,
@@ -136,7 +164,13 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        j.operation,CASE WHEN j.spec IS NULL THEN NULL ELSE j.summary END AS spec,
        j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
-       CASE WHEN s.status IS NULL THEN j.error END AS error
+       CASE WHEN s.status IS NULL THEN j.error END AS error,
+       j.summary,j.metadata_expires_at,
+       CASE WHEN s.status IS DISTINCT FROM 'deleted'
+                 AND (j.metadata_expires_at IS NULL OR j.metadata_expires_at>now())
+            THEN j.retained_metadata END AS retained_metadata,
+       CASE WHEN s.status IS DISTINCT FROM 'deleted' AND j.metadata_expires_at>now()
+            THEN j.retained_outcome END AS retained_outcome
 FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id;
 
 CREATE OR REPLACE FUNCTION processing.notify_job_change() RETURNS trigger
@@ -190,3 +224,5 @@ CREATE INDEX IF NOT EXISTS jobs_cleaned_history ON processing.jobs(updated_at)
       AND status NOT IN ('queued','running','cancelling','ready');
 INSERT INTO processing.schema_version VALUES (14) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (15) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (16) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (17) ON CONFLICT DO NOTHING;

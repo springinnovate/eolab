@@ -341,8 +341,18 @@ def create_app(
             (Path.cwd(), app_global_configuration.scan_mount_path),
         ),
         changes=processing_events,
+        model_authorizer=raster_source_authorizer,
     )
-    application.include_router(create_processing_router(processing_service))
+    application.include_router(
+        create_processing_router(
+            processing_service,
+            session_ttl_seconds=max(
+                7 * 86_400,
+                processing_limits.result_ttl_seconds,
+                processing_limits.metadata_ttl_seconds,
+            ),
+        )
+    )
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(

@@ -7,6 +7,7 @@ grids, AOI geometry, or any other operation-specific input fields.
 
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime
 from importlib.resources import files
 import json
 from typing import Any, Iterator
@@ -34,6 +35,31 @@ from eolab_app.processing.models import (
 # Other components using this database must allocate a different advisory key.
 PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 UNFINISHED = ("queued", "running", "cancelling")
+
+
+def serialize_retained_metadata(value: dict[str, object] | None) -> Jsonb | None:
+    """Check retained job details and convert them to PostgreSQL JSON.
+
+    Args:
+        value: Operation details already validated by the calling service, or None.
+
+    Returns:
+        A PostgreSQL JSON value of at most 192 KiB, or None. This leaves room for
+        the final result or error within the database's combined 256 KiB limit.
+
+    Raises:
+        ProcessingError: If the details exceed the size limit or contain non-JSON values.
+    """
+    if value is None:
+        return None
+    try:
+        if len(json.dumps(value, allow_nan=False).encode("utf-8")) > 192 * 1024:
+            raise ValueError("Metadata too large")
+    except (ValueError, TypeError) as error:
+        raise ProcessingError(
+            "metadata_size", "This run exceeds its retained metadata limit.", 413
+        ) from error
+    return Jsonb(value)
 
 
 class PostgresJobStore:
@@ -436,6 +462,8 @@ class PostgresJobStore:
                             Jsonb(expected.summary),
                             expected.operation,
                             expected.work_key,
+                            serialize_retained_metadata(expected.retained_metadata),
+                            self.limits.metadata_ttl_seconds,
                         )
                     )
                     waiting += 1
@@ -470,8 +498,8 @@ class PostgresJobStore:
             with cursor.connection.pipeline():
                 if new_jobs:
                     cursor.executemany(
-                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s)",
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -536,7 +564,7 @@ class PostgresJobStore:
                 used["bytes"] + prepared.reserved_bytes > self.limits.max_stored_bytes
             )
             cursor.execute(
-                "UPDATE processing.jobs SET spec=%s,summary=%s,reserved_bytes=%s,"
+                "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),reserved_bytes=%s,"
                 "required_disk_bytes=%s,status=%s,"
                 "attempt_id=CASE WHEN %s THEN NULL ELSE attempt_id END,"
                 "lease_until=CASE WHEN %s THEN NULL ELSE lease_until END,"
@@ -546,6 +574,7 @@ class PostgresJobStore:
                 (
                     Jsonb(prepared.specification),
                     Jsonb(prepared.summary),
+                    serialize_retained_metadata(prepared.retained_metadata),
                     0 if waiting else prepared.reserved_bytes,
                     prepared.reserved_bytes,
                     "queued" if waiting else "running",
@@ -584,19 +613,28 @@ class PostgresJobStore:
             )
         return row
 
-    def list_owned(self, owner: str) -> list[dict[str, Any]]:
-        """Return at most 50 recent jobs for session recovery.
+    def list_owned(
+        self, owner: str, operations: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return the recent-job preview used by the existing clip/statistics UI.
+
+        Older jobs remain readable by ID until normal retention removes them.
+        Model history uses the separate paginated query instead of this preview.
 
         Args:
-            owner: Current session hash.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Optional job types to include before choosing the newest 50.
+                None includes all types in the preview.
 
         Returns:
-            Newest owned jobs first, with no global listing.
+            Up to 50 matching jobs for this session, newest first.
         """
         with self._transaction() as cursor:
             cursor.execute(
-                "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND status<>'deleted' ORDER BY subscribed_at DESC LIMIT 50",
-                (owner,),
+                "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND status<>'deleted' "
+                + ("AND operation=ANY(%s) " if operations is not None else "")
+                + "ORDER BY subscribed_at DESC LIMIT 50",
+                (owner, list(operations)) if operations is not None else (owner,),
             )
             return cursor.fetchall()
 
@@ -617,6 +655,47 @@ class PostgresJobStore:
             cursor.execute(
                 "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND id=ANY(%s)",
                 (owner, identifiers),
+            )
+            return cursor.fetchall()
+
+    def list_session_jobs_page(
+        self,
+        owner: str,
+        operations: tuple[str, ...],
+        limit: int,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return one page of jobs belonging to the requesting browser session.
+
+        The owner value is the hash of the browser's Processing cookie, not a user
+        account ID. Filtering by it keeps another browser from listing these jobs.
+        The continuation cursor chooses older entries but never grants access to them.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Job types to include, such as ``model.run.v1``.
+            limit: Number of rows to read, from one to 101. The caller may read one
+                extra row to determine whether another page exists.
+            before: Return jobs older than this creation-time and job-ID pair;
+                None starts at the newest job.
+
+        Returns:
+            Matching, nondeleted jobs for this session, newest first. Equal creation
+            times are ordered by job ID so page boundaries stay consistent.
+
+        Raises:
+            ValueError: If the page size or operation count is invalid.
+            ProcessingError: If job storage is unavailable.
+        """
+        if not 1 <= limit <= 101 or not 1 <= len(operations) <= 16:
+            raise ValueError("Invalid operation page limits")
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE owner=%s "
+                "AND operation=ANY(%s) AND status<>'deleted' "
+                + ("AND (created_at,id)<(%s,%s) " if before else "")
+                + "ORDER BY created_at DESC,id DESC LIMIT %s",
+                (owner, list(operations), *(before or ()), limit),
             )
             return cursor.fetchall()
 
@@ -985,8 +1064,9 @@ class PostgresJobStore:
         """Prune old job records, expire inputs/results, and find removable files.
 
         Already-cleaned terminal jobs are forgotten seven days after their last
-        update, provided no transfer is active. Pruning runs even when no files need
-        removal; submission and individual cleanup acknowledgements do not prune.
+        update, once their saved metadata has also expired and no transfer is active.
+        Pruning runs even when no files need removal; submission and individual
+        cleanup acknowledgements do not prune.
 
         Returns:
             At most 100 rows with no active transfer; budgets remain reserved
@@ -999,6 +1079,10 @@ class PostgresJobStore:
             cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             self._delete_old_job_records(cursor)
+            cursor.execute(
+                "UPDATE processing.jobs SET retained_metadata=NULL,retained_outcome=NULL "
+                "WHERE metadata_expires_at<=now() AND retained_metadata IS NOT NULL"
+            )
             cursor.execute(
                 "UPDATE processing.jobs SET status='expired',updated_at=now() WHERE status='ready' AND expires_at<=now()"
             )
@@ -1020,7 +1104,10 @@ class PostgresJobStore:
             )
 
     def _delete_old_job_records(self, cursor: Any) -> None:
-        """Forget cleaned terminal jobs after their seven-day idempotency lifetime.
+        """Delete cleaned jobs once both retry history and saved metadata have expired.
+
+        Retry records last seven days after the last update. A longer configured
+        metadata lifetime keeps the record available until that deadline as well.
 
         Args:
             cursor: Cursor inside the worker maintenance transaction holding the
@@ -1030,6 +1117,7 @@ class PostgresJobStore:
             "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL "
             "AND status NOT IN ('queued','running','cancelling','ready') "
             "AND updated_at<now()-interval '7 days' "
+            "AND (metadata_expires_at IS NULL OR metadata_expires_at<=now()) "
             "AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=jobs.id)"
         )
 

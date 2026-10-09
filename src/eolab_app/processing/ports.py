@@ -2,6 +2,7 @@
 
 from typing import Protocol, Any
 from pathlib import Path
+from datetime import datetime
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -211,14 +212,21 @@ class JobStore(Protocol):
         """
         ...
 
-    def list_owned(self, owner: str) -> list[dict[str, Any]]:
-        """Return at most 50 recent jobs for session recovery.
+    def list_owned(
+        self, owner: str, operations: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return the recent-job preview used by the existing clip/statistics UI.
+
+        This preview contains at most 50 jobs; it does not delete older records.
+        A known older job can still be read by ID. Model history uses the separate
+        paginated query so users can retrieve every retained model run.
 
         Args:
-            owner: Current session hash.
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Optional job types to include before choosing the newest 50.
 
         Returns:
-            Newest owned jobs first, with no global listing.
+            Up to 50 matching jobs for this session, newest first.
         """
         ...
 
@@ -234,6 +242,37 @@ class JobStore(Protocol):
         Returns:
             Matching owned records, including deleted jobs, in unspecified order.
             Foreign and nonexistent IDs are omitted.
+        """
+        ...
+
+    def list_session_jobs_page(
+        self,
+        owner: str,
+        operations: tuple[str, ...],
+        limit: int,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return one page of jobs belonging to the requesting browser session.
+
+        The owner value is the hash of the browser's Processing cookie, not a user
+        account ID. Filtering by it keeps another browser from listing these jobs.
+        The continuation cursor chooses older entries but never grants access to them.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            operations: Job types to include, such as ``model.run.v1``.
+            limit: Number of rows to read, from one to 101. The caller may read one
+                extra row to determine whether another page exists.
+            before: Return jobs older than this creation-time and job-ID pair;
+                None starts at the newest job.
+
+        Returns:
+            Matching, nondeleted jobs for this session, newest first. Equal creation
+            times are ordered by job ID so page boundaries stay consistent.
+
+        Raises:
+            ValueError: If the page size or operation count is invalid.
+            ProcessingError: If job storage is unavailable.
         """
         ...
 
