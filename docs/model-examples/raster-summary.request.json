@@ -1,0 +1,20 @@
+{
+  "requestId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "model": {
+    "id": "raster-summary",
+    "version": "1.0.0",
+    "definitionSha256": "ef5845f4f67a4d7c5daa867191562c5f7f5d149f1fa31237c538cf0e5fa5aee7"
+  },
+  "inputs": {
+    "raster": {
+      "collectionId": "eolab-mounted-geotiffs",
+      "itemId": "geotiff-111111111111111111111111"
+    },
+    "area": {
+      "kind": "selectedArea",
+      "selectedBounds": {"west": -1.0, "south": 0.0, "east": 0.0, "north": 1.0}
+    }
+  },
+  "parameters": {"summary": "sum(a)"},
+  "label": "Example raster summary"
+}
