@@ -66,7 +66,7 @@ export function createModelDraft(model, context, id) {
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
         raster: suggestion ? structuredClone(suggestion) : null,
         sourceReason: sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
-        area, capturedArea: structuredClone(area), areaMode: ({wholeRaster: "whole", selectedArea: "mapBox", polygonArea: "mapPolygons"})[area.kind] ?? "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
+        area, capturedArea: structuredClone(area), areaMode: ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
         };

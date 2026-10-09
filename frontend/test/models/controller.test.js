@@ -153,7 +153,7 @@ test("visible map area follows map changes and Run captures the latest viewport"
 
 test("map box follows clicks and resizing; a cleared selection cannot run the previous box", async () => {
     const h = fixture(); h.controller.chooseModel(model);
-    assert.equal(h.controller.state.draft.areaMode, "mapBox");
+    assert.equal(h.controller.state.draft.areaMode, "samplingArea");
     h.context.area.selectedBounds.west = -10; h.controller.refreshMapArea();
     assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
     h.context.area.selectedBounds.east = 10; h.controller.refreshMapArea();
@@ -176,7 +176,7 @@ test("map changes preserve duplicate areas, model vector filters and recoverable
     h.controller.chooseModel(model); h.controller.chooseArea("vector");
     const draft = h.controller.state.draft; draft.area = {kind: "catalogSelection", selection};
     h.controller.refreshMapArea(); assert.deepEqual(draft.area, {kind: "catalogSelection", selection});
-    h.controller.chooseArea("mapBox");
+    h.controller.chooseArea("samplingArea");
     h.api.submitModelRun = async () => { throw new TypeError("Connection lost"); };
     await h.controller.submit(); const pending = structuredClone(h.controller.state.pending);
     h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();

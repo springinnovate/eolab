@@ -12,9 +12,9 @@ catalog search. Removing an input layer clears that choice for a new run;
 accepted runs keep their original inputs. Duplicating a run whose original
 layers are absent requires adding them to the map or choosing replacements.
 
-Choose **Entire raster**, **Visible map area**, **Box around map location**, or
+Choose **Entire raster**, **Visible map area**, **Sampling area**, or
 **Vector layer**. Visible map area follows the window on screen as you pan,
-zoom or resize the map. Box around map location is the same sampling box used
+zoom or resize the map. Sampling area is the same sampling box used
 by **Raster distributions**: click the map to move it, or change its size in the
 Raster distributions controls. Setup follows those changes automatically; no
 Update button or coordinate entry is needed. Blank margins outside the map's

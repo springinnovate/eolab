@@ -190,7 +190,7 @@ export class ModelsView {
             label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
         s.reason.textContent = draft.sourceReason;
         const areaChoices = [{value: "whole", label: "Entire raster"}, {value: "viewport", label: "Visible map area"},
-            {value: "mapBox", label: "Box around map location"}, {value: "vector", label: "Vector layer"}];
+            {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
         if (draft.capturedArea?.kind === "polygonArea" && draft.areaOrigin === "map") {
             areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
         }
@@ -200,10 +200,10 @@ export class ModelsView {
         this.options(s.areaMode, areaChoices, draft.areaMode);
         s.vectorGroup.hidden = draft.areaMode !== "vector";
         this.options(s.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
-        s.mapHelp.hidden = !["viewport", "mapBox", "mapPolygons", "captured"].includes(draft.areaMode);
+        s.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(draft.areaMode);
         s.mapHelp.textContent = ({
             viewport: "Uses the visible map area when you choose Run model. Pan or zoom to change it.",
-            mapBox: "Uses the same box as Raster distributions. Click the map to move the box. Run model uses its latest position and size.",
+            samplingArea: "Uses the sampling area shown in Raster distributions. Click the map to move the box. Run model uses its latest position and size.",
             mapPolygons: "Uses the polygons selected on the map when you choose Run model.",
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[draft.areaMode] ?? "";

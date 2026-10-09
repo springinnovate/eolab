@@ -938,7 +938,7 @@ async function initializeCatalog(
         },
         onSamplingAreaChange: area => {
             calculations.setSelection(area);
-            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
+            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
         },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
             activate: !selectingMapClick && !calculations.isActive && mapInspection.activeTool !== "models",
@@ -1327,7 +1327,7 @@ async function initializeCatalog(
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
                 onSelected: area => {
                     calculations.setSelection(area);
-                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
+                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
                     calculations.calculateSelection();
                 },
             });

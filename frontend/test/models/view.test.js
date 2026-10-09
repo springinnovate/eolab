@@ -61,13 +61,13 @@ test("stage feedback covers terminal states and an unknown total stays indetermi
 test("area choices use histogram terminology and follow the map without Update controls", () => {
     const h = fixture();
     const labels = () => h.view.setup.areaMode.children.map(option => option.textContent);
-    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Box around map location", "Vector layer"]);
+    assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
     assert.equal(h.view.setup.bounds, undefined); assert.equal(h.view.setup.updateArea, undefined);
-    assert.match(h.view.setup.mapHelp.textContent, /same box as Raster distributions/);
+    assert.match(h.view.setup.mapHelp.textContent, /sampling area shown in Raster distributions/);
     h.state.draft.areaOrigin = "run"; h.state.draft.areaMode = "captured"; h.view.render(h.state);
     assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.mapHelp.textContent, /exact area from the original run/);
     h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);
-    assert.ok(labels().includes("Box around map location"));
+    assert.ok(labels().includes("Sampling area"));
     h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.view.render(h.state);
     assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.mapHelp.textContent, /Pan or zoom/);
     h.state.draft.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);

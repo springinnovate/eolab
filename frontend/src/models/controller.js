@@ -114,7 +114,7 @@ export class ModelsController {
     }
 
     /** Choose whether setup uses the live map area, vector features or a fixed area.
-     * @param {string} mode Whole raster, viewport, mapBox, mapPolygons, vector or captured run area.
+     * @param {string} mode Whole raster, viewport, samplingArea, mapPolygons, vector or captured run area.
      * @return {void}
      */
     chooseArea(mode) {
@@ -123,7 +123,7 @@ export class ModelsController {
         draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
         if (mode === "whole") draft.area = {kind: "wholeRaster"};
         else if (mode === "captured") draft.area = structuredClone(draft.capturedArea);
-        else if (["viewport", "mapBox", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
+        else if (["viewport", "samplingArea", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
         else draft.area = null;
         this.render();
     }
@@ -136,7 +136,7 @@ export class ModelsController {
     refreshMapArea() {
         const draft = this.state.draft;
         if (!draft || this.destroyed || this.state.page !== "setup" || this.state.submitting || this.state.pending ||
-            !["viewport", "mapBox", "mapPolygons"].includes(draft.areaMode)) return;
+            !["viewport", "samplingArea", "mapPolygons"].includes(draft.areaMode)) return;
         const context = this.getContext();
         draft.area = null; draft.selectionError = "";
         try {
@@ -144,12 +144,12 @@ export class ModelsController {
                 draft.area = modelViewportArea(context.viewportBounds);
                 draft.areaDescription = "Visible map area";
             } else {
-                const kind = draft.areaMode === "mapBox" ? "selectedArea" : "polygonArea";
-                if (context.area?.kind !== kind) throw new Error(draft.areaMode === "mapBox"
+                const kind = draft.areaMode === "samplingArea" ? "selectedArea" : "polygonArea";
+                if (context.area?.kind !== kind) throw new Error(draft.areaMode === "samplingArea"
                     ? "Click the map to choose a box for this analysis."
                     : "Select polygons on the map to choose an area for this analysis.");
                 draft.area = modelAreaInput(context.area);
-                draft.areaDescription = draft.areaMode === "mapBox" ? "Box around map location" : "Polygons selected on map";
+                draft.areaDescription = draft.areaMode === "samplingArea" ? "Sampling area" : "Polygons selected on map";
             }
         } catch (error) { draft.selectionError = error.message; }
         this.render();
