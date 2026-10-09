@@ -69,7 +69,7 @@ export function createModelDraft(model, context, id) {
         area, capturedArea: structuredClone(area), areaMode: ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured", areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError: "",
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
-        };
+    };
 }
 
 /** Capture one draft as a model request, validating area and source choices.

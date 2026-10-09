@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job } from "../../test-support/models/
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Search", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -82,7 +82,7 @@ test("vector setup offers Edit filter and describes the predicate belonging to t
     h.state.draft.area = null; h.view.render(h.state);
     assert.equal(h.view.setup.editFilter.disabled, false); assert.match(h.view.setup.filterDescription.textContent, /BASIN equals "North"/);
     h.view.setup.editFilter.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "EditFilter");
-    h.state.draft.filterOpening = true; h.view.render(h.state);
+    h.state.draft.filterOpening = true; h.state.draft.filterEditing = true; h.view.render(h.state);
     assert.equal(h.view.setup.editFilter.disabled, true); assert.equal(h.view.setup.editFilter.textContent, "Opening filter…");
 });
 
@@ -96,21 +96,42 @@ test("setup offers only map layers and explains how to add a missing raster", ()
 });
 
 
-test("vector loading explains the disabled filter control and clears when ready or failed", () => {
+test("vector checks leave Edit filter available and show selection errors next to the count", () => {
     const h = fixture(); const draft = h.state.draft;
     draft.areaMode = "vector"; draft.vectorKey = '["vectors","countries"]';
     draft.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries"}];
     draft.area = null; draft.selecting = true; h.view.render(h.state);
-    assert.equal(h.view.setup.editFilter.textContent, "Loading features…");
-    assert.equal(h.view.setup.editFilter.disabled, true);
-    assert.equal(h.view.setup.editFilter.getAttribute("aria-busy"), "true");
-    assert.equal(h.view.setup.vectorStatus.getAttribute("role"), "status");
-    assert.match(h.view.setup.vectorStatus.textContent, /Loading features from Countries.*Edit filter will be available/);
-    assert.equal(h.view.setup.run.disabled, true);
-    draft.selecting = false; draft.selectionError = "Could not read this layer."; h.view.render(h.state);
-    assert.equal(h.view.setup.vectorStatus.textContent, "");
     assert.equal(h.view.setup.editFilter.textContent, "Edit filter");
     assert.equal(h.view.setup.editFilter.disabled, false);
-    assert.equal(h.view.setup.editFilter.getAttribute("aria-busy"), "false");
-    assert.match(h.view.setup.areaDescription.textContent, /Could not read this layer/);
+    assert.match(h.view.setup.selectedCount.textContent, /Checking selected features/);
+    assert.equal(h.view.setup.vectorStatus.getAttribute("role"), "status");
+    assert.match(h.view.setup.vectorStatus.textContent, /You can edit the filter while this check runs/);
+    assert.equal(h.view.setup.run.disabled, true);
+    draft.selecting = false; draft.selectionError = "Could not read this layer."; h.view.render(h.state);
+    assert.equal(h.view.setup.vectorStatus.textContent, "Could not read this layer.");
+    assert.equal(h.view.setup.editFilter.textContent, "Edit filter");
+    assert.equal(h.view.setup.editFilter.disabled, false);
+    assert.equal(h.view.setup.areaDescription.hidden, true);
+});
+
+
+test("selected features have one prominent count and predicate; removed layers keep their error visible", () => {
+    const h = fixture(), draft = h.state.draft;
+    const filter = {enabled: true, match: "all", rules: [{field: "NAME", operator: "eq", value: "Cuba"}]};
+    draft.areaMode = "vector"; draft.vectorKey = '["vectors","countries"]';
+    draft.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries", filter}];
+    draft.area = {kind: "catalogSelection", selection: {filter}}; draft.vectorInfo = {matched: 1, total: 253};
+    h.view.render(h.state);
+    assert.equal(h.view.setup.selectedCount.textContent, "1 of 253 features selected");
+    assert.equal(h.view.setup.filterDescription.textContent, 'NAME equals "Cuba"');
+    assert.equal(h.view.setup.areaDescription.hidden, true);
+    draft.filterEditing = true; h.view.render(h.state);
+    assert.equal(h.view.getVectorFilterHost().hidden, false);
+    assert.equal(h.view.setup.editFilter.getAttribute("aria-expanded"), "true");
+    assert.equal(h.view.setup.run.disabled, true);
+    draft.vectors = []; draft.vectorKey = ""; draft.area = null;
+    draft.selectionError = "Add the vector layer to Map layers, or choose another layer."; h.view.render(h.state);
+    assert.equal(h.view.setup.selectionCard.hidden, true);
+    assert.equal(h.view.setup.areaDescription.hidden, false);
+    assert.equal(h.view.setup.areaDescription.textContent, draft.selectionError);
 });

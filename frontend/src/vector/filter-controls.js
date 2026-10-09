@@ -12,11 +12,12 @@ export class VectorFilterControls {
      * @param {Object} options Panel dependencies.
      * @param {(key:string)=>Object|null} options.getTarget Composition-owned target lookup.
      * @param {Object} options.inspection Neutral dock presentation.
+     * @param {HTMLElement|null} [options.host=null] Inline container; keeps editing in the caller's panel.
      * @param {Document} [options.documentContext=document] Owning document.
      * @param {Function} [options.setTimer] Debounce scheduler.
      * @param {Function} [options.clearTimer] Debounce canceller.
      */
-    constructor({ getTarget, inspection, documentContext = document,
+    constructor({ getTarget, inspection, host = null, documentContext = document,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
         clearTimer = (timer) => globalThis.clearTimeout(timer) }) {
         this.document = documentContext;
@@ -24,20 +25,24 @@ export class VectorFilterControls {
         this.inspection = inspection;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
-        this.root = documentContext.querySelector("#vector-filter-panel");
-        this.title = documentContext.querySelector("#vector-filter-title");
-        this.rules = documentContext.querySelector("#vector-filter-rules");
-        this.enabled = documentContext.querySelector("#vector-filter-enabled");
-        this.match = documentContext.querySelector("#vector-filter-match");
-        this.status = documentContext.querySelector("#vector-filter-status");
-        this.applied = documentContext.querySelector("#vector-filter-applied");
-        this.count = documentContext.querySelector("#vector-filter-count");
-        this.add = documentContext.querySelector("#vector-filter-add");
-        this.clear = documentContext.querySelector("#vector-filter-clear");
-        this.closeButton = documentContext.querySelector("#close-vector-filter");
-        this.applyButton = documentContext.querySelector("#vector-filter-apply");
-        this.cancelButton = documentContext.querySelector("#vector-filter-cancel");
-        this.help = documentContext.querySelector("#vector-filter-help");
+        this.host = host;
+        const template = documentContext.querySelector("#vector-filter-panel");
+        this.root = host ? template.cloneNode(true) : template;
+        const controls = {title: "vector-filter-title", rules: "vector-filter-rules", enabled: "vector-filter-enabled",
+            match: "vector-filter-match", status: "vector-filter-status", applied: "vector-filter-applied",
+            count: "vector-filter-count", add: "vector-filter-add", clear: "vector-filter-clear",
+            closeButton: "close-vector-filter", applyButton: "vector-filter-apply", cancelButton: "vector-filter-cancel", help: "vector-filter-help"};
+        for (const [name, id] of Object.entries(controls)) {
+            this[name] = host ? this.root.querySelector(`#${id}`) : documentContext.querySelector(`#${id}`);
+            if (host) this[name].id = `${host.id}-${name}`;
+        }
+        if (host) {
+            this.root.id = `${host.id}-panel`; this.root.className = "vector-filter-inline";
+            this.root.setAttribute("role", "group"); this.root.removeAttribute("aria-labelledby");
+            this.root.setAttribute("aria-label", "Filter features");
+            this.title.hidden = this.applied.hidden = this.count.hidden = true;
+            host.replaceChildren(this.root);
+        }
         this.attempt = 0;
         this.key = null;
         this.timer = null;
@@ -110,7 +115,8 @@ export class VectorFilterControls {
         this.#renderDraft();
         this.refresh();
         this.#validate();
-        this.inspection.showFilter(target.label);
+        if (this.host) this.root.hidden = false;
+        else this.inspection.showFilter(target.label);
         this.closeButton.focus();
     }
 
@@ -120,7 +126,7 @@ export class VectorFilterControls {
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
         this.title.textContent = target.label;
-        this.inspection.updateLayerEditorName("filter", target.label);
+        if (!this.host) this.inspection.updateLayerEditorName("filter", target.label);
         this.applied.textContent = this.action
             ? `${this.action.filterLabel ?? "Sampling filter"}: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
             : `Applied: ${vectorFilterSummary(target.filter)}`;
@@ -135,7 +141,8 @@ export class VectorFilterControls {
         if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
         this.action?.onClose?.();
         this.key = null;
-        this.inspection.hideFilter();
+        if (this.host) this.root.hidden = true;
+        else this.inspection.hideFilter();
         if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
     }
 

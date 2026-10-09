@@ -25,15 +25,21 @@ fixes the displayed area and other inputs for that run. Later map changes do
 not affect it. A duplicated run keeps its fixed **Area from original run**
 until you choose another area mode.
 
-Choose a **Vector layer**. While its features are being checked, **Loading
-features…** explains why the filter is not yet available. Once ready, choose
-**Edit filter** to set field/comparison/value
-conditions using the existing filter editor. **Use filter** checks the matching
-features and returns to model setup. Review the predicate and matching feature
-count, then choose **Run model**. Clearing the conditions includes all features.
-An initial suggestion can copy a layer's map filter; edits here belong only to
-this model draft and do not change the layer's display filter. Closing the
-filter editor without applying leaves the model's selection unchanged.
+Choose a **Vector layer**, then **Edit filter** to set field/comparison/value
+conditions inside model setup. The editor is available immediately, even while
+**Checking selected features…** is displayed. **Apply filter** checks the
+matching features and applies the same conditions to the map layer. Review the
+highlighted selected-feature count and condition, then choose **Run model**.
+Clearing the conditions includes all features. Closing the editor without
+applying leaves the selection unchanged; cancelling a check preserves the last
+successful selection.
+
+Checking features reads and validates the original polygons on the server;
+feature count alone does not describe the amount of geometry to process. The
+map display is not used as the analysis source. If applying the display filter
+fails, setup reports that separately and the checked model selection remains
+usable. Later map filter edits do not change an already reviewed model selection
+or an accepted run.
 
 In the summary formula, `a` is the selected raster. Examples include `sum(a)`,
 `mean(a)`, `stdev(a)`, `count(a)`, `areaha(a > 10)` and

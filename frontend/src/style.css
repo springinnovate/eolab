@@ -5175,3 +5175,7 @@ summary:hover > .raster-disclosure-chevron {
   .categorical-area-row { grid-template-columns: minmax(36px, 1fr) 48px 76px; }
   .categorical-area-name { grid-column: 1 / -1; }
 }
+
+.vector-filter-inline { border: 1px solid var(--border-1); border-radius: var(--radius); padding: 10px; min-width: 0; }
+.vector-filter-inline .layer-style-header { position: static; padding: 0; }
+.vector-filter-inline[hidden] { display: none; }

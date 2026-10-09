@@ -31,3 +31,10 @@
 #models-panel :is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 @media (pointer: coarse) { #models-panel :is(button, select, input, summary, a) { min-height: 44px; } }
+
+.models-selection { border: 1px solid var(--brand); border-radius: var(--radius); padding: 10px; background: var(--surface-selected); }
+.models-selection-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.models-selection-header strong { font-size: 0.9rem; }
+.models-selection-filter { margin: 8px 0; color: var(--text-1); font-size: 0.85rem; overflow-wrap: anywhere; }
+.models-selection .models-edit-filter { width: auto; padding: 3px 6px; border: 0; background: transparent; }
+#models-panel .models-filter-editor input[type="checkbox"] { width: auto; }

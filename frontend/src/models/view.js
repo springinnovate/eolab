@@ -133,11 +133,19 @@ export class ModelsView {
         const vectorGroup = this.element("div", "", "models-vector");
         const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
         vectorGroup.append(this.field("models-vector", "Vector layer", vector));
-        const editFilter = this.button("Edit filter", this.handlers.onEditFilter);
+        const selectionCard = this.element("section", "", "models-selection");
+        selectionCard.setAttribute("aria-label", "Selected features");
+        const selectionHeader = this.element("div", "", "models-selection-header");
+        const selectedCount = this.element("strong"); selectedCount.setAttribute("role", "status");
+        const editFilter = this.button("Edit filter", this.handlers.onEditFilter); editFilter.classList.add("models-edit-filter");
+        editFilter.setAttribute("aria-controls", "models-filter-editor");
+        selectionHeader.append(selectedCount, editFilter);
+        const filterDescription = this.element("p", "", "models-selection-filter");
         const vectorStatus = this.element("p", "", "models-help"); vectorStatus.setAttribute("role", "status");
-        const filterDescription = this.element("p", "", "models-help");
-        vectorGroup.append(editFilter, vectorStatus, filterDescription,
-            this.element("p", "Choose features for this run. Editing this filter leaves the map layer unchanged.", "models-help"));
+        const mapFilterStatus = this.element("p", "", "models-help"); mapFilterStatus.setAttribute("role", "status");
+        selectionCard.append(selectionHeader, filterDescription, vectorStatus, mapFilterStatus);
+        const filterHost = this.element("div", "", "models-filter-editor"); filterHost.id = "models-filter-editor";
+        vectorGroup.append(selectionCard, filterHost);
         const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
         const mapHelp = this.element("p", "", "models-help");
         fields.append(vectorGroup, areaDescription, mapHelp);
@@ -159,8 +167,13 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription};
+            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus};
     }
+
+    /** Provide an inline location for the independently owned vector filter editor.
+     * @return {HTMLElement} Stable host inside the current model setup.
+     */
+    getVectorFilterHost() { return this.setup.filterHost; }
 
     /** Create the secondary YAML actions without expanding permanent setup chrome.
      * @return {Object} Details wrapper and download controls.
@@ -207,19 +220,23 @@ export class ModelsView {
             mapPolygons: "Uses the polygons selected on the map when you choose Run model.",
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[draft.areaMode] ?? "";
-        s.editFilter.disabled = !draft.vectorKey || draft.selecting || Boolean(draft.filterOpening);
-        s.editFilter.textContent = draft.selecting ? "Loading features…" : draft.filterOpening ? "Opening filter…" : "Edit filter";
-        s.editFilter.setAttribute("aria-busy", String(Boolean(draft.selecting || draft.filterOpening)));
         const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
-        s.vectorStatus.textContent = draft.selecting ? `Loading features from ${vectorSource?.label ?? "this layer"}… Edit filter will be available when this finishes.` :
-            draft.filterOpening ? "Loading fields for the filter…" : "";
-        s.filterDescription.textContent = vectorSource ? `Filter: ${describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter)}` : "Choose a vector layer, then edit its filter.";
-        const count = draft.vectorInfo ? ` · ${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features` : "";
-        s.areaDescription.textContent = draft.selecting ? "Reading matching features…" : draft.selectionError ||
-            `${describeModelArea(draft.area)}${count}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
+        s.selectionCard.hidden = !vectorSource;
+        s.editFilter.disabled = !vectorSource || Boolean(draft.filterEditing);
+        s.editFilter.textContent = draft.filterOpening ? "Opening filter…" : "Edit filter";
+        s.editFilter.setAttribute("aria-expanded", String(Boolean(draft.filterEditing)));
+        s.filterHost.hidden = !draft.filterEditing;
+        s.selectedCount.textContent = draft.selecting ? "Checking selected features…" : draft.vectorInfo ?
+            `${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features selected` : draft.area?.kind === "catalogSelection" ? "Features from original run" : "Selection needs checking";
+        s.filterDescription.textContent = vectorSource ? describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter) : "";
+        s.vectorStatus.textContent = draft.selecting ? "You can edit the filter while this check runs." : draft.selectionError;
+        s.mapFilterStatus.textContent = draft.mapFilterMessage ?? "";
+        s.areaDescription.hidden = draft.areaMode === "vector" && Boolean(vectorSource);
+        s.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
+            `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area"].includes(input.type));
-        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || !draft.area || !draft.raster || !supported;
+        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !draft.area || !draft.raster || !supported;
         s.run.textContent = state.submitting ? "Submitting…" : "Run model";
         s.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         s.details.run.hidden = true;

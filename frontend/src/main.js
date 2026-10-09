@@ -962,11 +962,10 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
-    let modelFilterTarget = null;
+    let modelFilterControls = null;
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
         getTarget: (key) => {
-            if (modelFilterTarget?.key === key) return modelFilterTarget;
             const annotation = annotations?.filterTarget(key);
             if (annotation) return annotation;
             const record = mapLayerController.getRecord(key);
@@ -1010,19 +1009,31 @@ async function initializeCatalog(
          */
         prepareVector: (source, signal) => createVectorSamplingArea(
             {collection: source.collectionId, id: source.itemId}, source.filter ?? EMPTY_VECTOR_FILTER, signal),
-        /** Open the existing filter editor using catalog fields and model-owned actions.
-         * @param {Object} request Draft identity, vector source, predicate and lifecycle callbacks.
-         * @return {Promise<void>}
-         * @throws {Error} If the catalog item or its field metadata cannot be read.
+        /** Open the existing rule editor inside setup using the chosen map layer's fields.
+         * @param {Object} request Inline host, source, predicate and model-owned callbacks.
+         * @return {void}
          */
-        editVectorFilter: async request => {
-            const item = await catalogItemClient.get({collection: request.source.collectionId, id: request.source.itemId});
-            if (!request.isCurrent()) return;
-            modelFilterTarget = {key: request.key, label: request.source.label, fields: vectorLabelFields(item), filter: request.filter};
-            vectorFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
-                applyLabel: "Use filter", filterLabel: "Model filter", onClose: request.cancel,
-                help: "Choose the features for this model. Use filter checks the matching features and returns to setup. It does not change the map layer or start the model.",
+        editVectorFilter: request => {
+            modelFilterControls?.destroy();
+            const target = {key: request.key, label: request.source.label, fields: request.source.fields ?? [], filter: request.filter};
+            modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
+                getTarget: key => key === target.key && request.isCurrent() ? target : null});
+            modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
+                applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
+                help: "Apply this filter to the model and its map layer.",
             });
+        },
+        closeVectorFilter: () => modelFilterControls?.close(),
+        /** Apply reviewed rules to the corresponding map layer; Models reports display failures separately.
+         * @param {Object} source Catalog collection/item identity from Map layers.
+         * @param {Object} filter Checked attribute rules.
+         * @return {Promise<Object|null>} Applied filter, or null when superseded.
+         * @throws {Error} If the layer was removed or its map filter cannot be applied.
+         */
+        applyMapFilter: async (source, filter) => {
+            const record = mapLayerController.getRecord(getCatalogItemKey({collection: source.collectionId, id: source.itemId}));
+            if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector layer is no longer in Map layers.");
+            return record.adapter.applyFilterState(record, filter);
         },
         onOpen: () => mapInspection.showModels(),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },

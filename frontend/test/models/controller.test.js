@@ -14,7 +14,7 @@ import { model, raster, area, invocation, selection, job } from "../../test-supp
  * @return {Object} Component and recorded user-visible effects.
  */
 function fixture(overrides = {}) {
-    const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = [];
+    const values = new Map(); const submitted = []; const cancelled = []; const filterRequests = []; const mapFilters = [];
     const api = {discoverModels: async () => [model], listModelRuns: async () => ({jobs: [], nextCursor: null}),
         getJob: async () => job(), readModelInvocation: async () => structuredClone(invocation),
         submitModelRun: async value => { submitted.push(value); return job(); },
@@ -24,12 +24,18 @@ function fixture(overrides = {}) {
     const jobs = new ProcessingJobs(api, clock);
     const context = {rasters: [structuredClone(raster)], area: structuredClone(area)};
     let sequence = 0; let handlers;
-    const view = {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}};
+    const view = {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, getContext: () => context,
-        prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); }, onOpen: () => controller.setActive(true),
+        prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); },
+        closeVectorFilter: () => filterRequests.at(-1)?.close(),
+        applyMapFilter: async (source, filter) => {
+            mapFilters.push({source, filter});
+            context.vectors.find(value => value.collectionId === source.collectionId && value.itemId === source.itemId).filter = filter;
+            return filter;
+        }, onOpen: () => controller.setActive(true),
         onClose: () => controller.setActive(false), newId: () => String(++sequence).padStart(32, "0")});
-    return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, handlers};
+    return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers};
 }
 
 test("multiple map rasters require a choice; catalog-only inputs cannot become suggestions", () => {
@@ -207,7 +213,7 @@ test("viewport capture excludes blank world margins and rejects unavailable or e
 });
 
 
-test("model filtering uses the existing editor without modifying the map filter or submitting a run", async () => {
+test("model filtering checks features then updates the map through composition without submitting a run", async () => {
     const h = fixture();
     h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: structuredClone(selection.filter)}];
     h.controller.prepareVector = async source => ({selection: {...selection, filter: structuredClone(source.filter)}, matched: source.filter.rules[0]?.value === "South" ? 1 : 3, total: 8});
@@ -216,20 +222,21 @@ test("model filtering uses the existing editor without modifying the map filter 
     const doc = new FakeRasterControlDocument(); let request;
     const controls = new VectorFilterControls({documentContext: doc,
         getTarget: () => ({label: "Basins", fields: [{name: "BASIN", type: "str"}], filter: selection.filter,
-            apply: () => assert.fail("Model filter must not change the map"), cancelPending: () => assert.fail("Model filter must not cancel map work")}),
+            apply: () => assert.fail("Composition must own the map update"), cancelPending: () => assert.fail("Model filter must not cancel map work")}),
         inspection: {showFilter() {}, hideFilter() {}, updateLayerEditorName() {}},
         setTimer: () => assert.fail("Model filter must require explicit application"), clearTimer() {},
     });
-    h.controller.editVectorFilter = value => { request = value; controls.open(value.key, {...value, applyLabel: "Use filter", filterLabel: "Model filter", onClose: value.cancel, help: "Choose features for this model."}); };
+    h.controller.editVectorFilter = value => { request = value; controls.open(value.key, {...value, applyLabel: "Apply filter", filterLabel: "Selected features", onClose: value.close, help: "Choose features for this model."}); };
+    h.controller.closeVectorFilter = () => controls.close();
     await h.controller.openVectorFilter();
-    assert.match(request.key, /^model:/); assert.equal(controls.applyButton.textContent, "Use filter");
-    assert.match(controls.applied.textContent, /^Model filter:/); assert.equal(controls.help.textContent, "Choose features for this model.");
+    assert.match(request.key, /^model:/); assert.equal(controls.applyButton.textContent, "Apply filter");
+    assert.match(controls.applied.textContent, /^Selected features:/); assert.equal(controls.help.textContent, "Choose features for this model.");
     const input = controls.rules.children[0].children[2]; input.value = "South"; input.dispatchEvent(new Event("input"));
     assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "North");
     controls.applyButton.dispatchEvent(new Event("click")); await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
     assert.equal(h.controller.state.draft.vectorInfo.matched, 1); assert.equal(controls.key, null);
-    assert.equal(h.context.vectors[0].filter.rules[0].value, "North"); assert.equal(h.submitted.length, 0);
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "South"); assert.equal(h.submitted.length, 0);
     await h.controller.openVectorFilter();
     controls.rules.children[0].children[2].value = "West"; controls.rules.children[0].children[2].dispatchEvent(new Event("input"));
     controls.close(); assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
@@ -239,7 +246,7 @@ test("model filtering uses the existing editor without modifying the map filter 
     assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
     assert.equal(h.controller.state.draft.selecting, false);
     await h.controller.submit(); assert.equal(h.submitted[0].inputs.area.selection.filter.rules[0].value, "South");
-    assert.equal(h.context.vectors[0].filter.rules[0].value, "North"); controls.destroy();
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "South"); controls.destroy();
 });
 
 test("failed and cancelled filter reads preserve the prior reviewed vector selection", async () => {
@@ -316,7 +323,7 @@ test("map-layer refresh keeps the reviewed model filter", async () => {
     h.controller.refreshMapLayers();
     h.controller.chooseArea("whole"); h.controller.chooseArea("vector"); await h.controller.chooseVector(key);
     assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
-    assert.equal(h.context.vectors[0].filter.rules[0].value, "North");
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "South");
 });
 
 
@@ -341,4 +348,55 @@ test("duplication does not silently add missing original inputs to the map choic
     assert.equal(h.controller.state.draft.raster, null); assert.equal(h.controller.state.draft.area, null);
     assert.deepEqual(h.controller.state.draft.sources, []); assert.deepEqual(h.controller.state.draft.vectors, []);
     assert.match(h.controller.state.draft.selectionError, /original vector layer/);
+});
+
+
+test("filters can be edited during initial selection; closing before Apply leaves that check running", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    let finish, signal;
+    h.controller.prepareVector = (_source, abort) => { signal = abort; return new Promise(resolve => { finish = resolve; }); };
+    const pending = h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter();
+    assert.equal(h.filterRequests.length, 1); assert.equal(h.controller.state.draft.filterEditing, true);
+    h.filterRequests[0].close(); assert.equal(signal.aborted, false);
+    finish({selection, matched: 3, total: 8}); await pending;
+    assert.equal(h.controller.state.draft.vectorInfo.matched, 3); assert.equal(h.controller.state.draft.filterEditing, false);
+});
+
+test("applying while the original check runs cancels it and ignores its late reply", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    const requests = [];
+    h.controller.prepareVector = (source, signal) => new Promise(resolve => requests.push({source, signal, resolve}));
+    const pending = h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    const changed = structuredClone(selection.filter); changed.rules[0].value = "South";
+    const applying = action.apply(changed); assert.equal(requests[0].signal.aborted, true);
+    requests[1].resolve({selection: {...selection, filter: changed}, matched: 1, total: 8}); await applying; action.complete();
+    requests[0].resolve({selection, matched: 3, total: 8}); await pending;
+    assert.equal(h.controller.state.draft.vectorInfo.matched, 1);
+    assert.equal(h.context.vectors[0].filter.rules[0].value, "South");
+    assert.equal(h.mapFilters.length, 1); assert.equal(h.submitted.length, 0);
+});
+
+test("map filter failures do not prevent a checked model selection from running", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    h.controller.applyMapFilter = async () => { throw new Error("Map service unavailable"); };
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    await action.apply(selection.filter); action.complete();
+    assert.match(h.controller.state.draft.mapFilterMessage, /Could not update the map filter: Map service unavailable/);
+    await h.controller.submit(); assert.equal(h.submitted.length, 1);
+});
+
+test("late map filter feedback cannot overwrite a newer setup", async () => {
+    const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
+    let finish; h.controller.applyMapFilter = () => new Promise(resolve => { finish = resolve; });
+    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter(); await h.filterRequests[0].apply(selection.filter);
+    h.controller.chooseModel(model); finish(selection.filter); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.controller.state.draft.mapFilterMessage, undefined);
 });

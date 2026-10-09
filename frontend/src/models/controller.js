@@ -14,15 +14,17 @@ export class ModelsController {
      * @param {Object} dependencies.view Models view.
      * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
-     * @param {(request:{key:string,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor for this draft only.
+     * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
+     * @param {()=>void} dependencies.closeVectorFilter Close the composed inline editor.
+     * @param {(source:Object,filter:Object)=>Promise<Object|null>} dependencies.applyMapFilter Apply the selected rules to the map layer; failure must not block analysis.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
-        Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, storage, onOpen, onClose, newId});
+        Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false};
@@ -63,6 +65,7 @@ export class ModelsController {
      */
     setActive(active) {
         this.state.active = active;
+        if (!active) this.closeVectorFilter();
         if (active) { this.refreshMapLayers(); this.refreshMapArea(); }
         for (const job of this.runSnapshots.values()) this.rememberRun(job);
         this.jobs.schedule(); this.render();
@@ -83,13 +86,14 @@ export class ModelsController {
      * @param {string} page Library, setup, runs or run.
      * @return {void}
      */
-    navigate(page) { this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
+    navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
     /** Create a fresh draft from the current source suggestions.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
     chooseModel(model) {
+        this.closeVectorFilter();
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
         this.state.draft = createModelDraft(model, this.getContext(), this.newId());
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
@@ -119,6 +123,7 @@ export class ModelsController {
      */
     chooseArea(mode) {
         const draft = this.state.draft; if (!draft || this.state.submitting) return;
+        this.closeVectorFilter();
         this.selectionAbort?.abort(); this.selectionRevision += 1; draft.selecting = false;
         draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
         if (mode === "whole") draft.area = {kind: "wholeRaster"};
@@ -146,7 +151,7 @@ export class ModelsController {
             } else {
                 const kind = draft.areaMode === "samplingArea" ? "selectedArea" : "polygonArea";
                 if (context.area?.kind !== kind) throw new Error(draft.areaMode === "samplingArea"
-                    ? "Click the map to choose a box for this analysis."
+                    ? "Click the map to choose a sampling area for this analysis."
                     : "Select polygons on the map to choose an area for this analysis.");
                 draft.area = modelAreaInput(context.area);
                 draft.areaDescription = draft.areaMode === "samplingArea" ? "Sampling area" : "Polygons selected on map";
@@ -174,6 +179,7 @@ export class ModelsController {
     async selectVectorFeatures(key, filter = null) {
         const draft = this.state.draft;
         const source = draft?.vectors.find(value => modelSourceKey(value) === key);
+        if (draft?.vectorKey !== key) { this.closeVectorFilter(); if (draft) draft.mapFilterMessage = ""; }
         this.selectionAbort?.abort(); const revision = ++this.selectionRevision;
         if (!draft) return null;
         const previous = draft.vectorKey === key ? {area: draft.area, info: draft.vectorInfo} : {area: null, info: null};
@@ -190,6 +196,8 @@ export class ModelsController {
             draft.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
             draft.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
             draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
+            if (filter !== null) void this.updateMapFilter(source, area.selection.filter, draft, revision);
+            else draft.mapFilterMessage = "";
             return area;
         } catch (error) {
             if (revision !== this.selectionRevision || this.state.draft !== draft) return null;
@@ -200,30 +208,59 @@ export class ModelsController {
         } finally { if (revision === this.selectionRevision) { draft.selecting = false; this.render(); } }
     }
 
-    /** Open the existing field/condition editor for this model's vector input.
-     * Applying a filter updates only this draft; it never changes a map layer or submits a run.
+    /** Apply a reviewed model filter to its map layer without gating analysis on rendering.
+     * @param {Object} source Catalog identity of the chosen map layer.
+     * @param {Object} filter Successfully checked attribute rules.
+     * @param {Object} draft Setup that requested this change.
+     * @param {number} revision Selection revision, used to ignore obsolete display feedback.
+     * @return {Promise<void>}
+     */
+    async updateMapFilter(source, filter, draft, revision) {
+        draft.mapFilterMessage = "Updating the map filter…"; this.render();
+        let message;
+        try {
+            const applied = await this.applyMapFilter(structuredClone(source), structuredClone(filter));
+            message = applied ? "Filter applied to the map layer." : "The map filter changed before this update finished.";
+        } catch (error) { message = `Features selected for this model. Could not update the map filter: ${error.message}`; }
+        if (this.state.draft === draft && this.selectionRevision === revision) {
+            draft.mapFilterMessage = message; this.render();
+        }
+    }
+
+    /** Open the rule editor inside model setup, using fields already supplied by Map layers.
+     * Editing is available while the initial geometry check runs. Applying rules
+     * checks the selection, then updates the map separately without submitting a run.
      * @return {Promise<void>}
      */
     async openVectorFilter() {
         const draft = this.state.draft;
         const source = draft?.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
-        if (!source || draft.filterOpening || draft.selecting || this.state.submitting) return;
-        const key = draft.vectorKey;
+        if (!source || draft.filterEditing || this.state.submitting) return;
+        const key = draft.vectorKey, openingRevision = this.selectionRevision;
         const isCurrent = () => !this.destroyed && this.state.draft === draft && this.state.page === "setup" &&
             draft.areaMode === "vector" && draft.vectorKey === key && !this.state.submitting;
-        draft.filterOpening = true; this.state.error = ""; this.render();
+        draft.filterOpening = true; draft.filterEditing = true; this.state.error = ""; this.render();
         try {
-            await this.editVectorFilter({key: `model:${draft.id}:${key}`, source: structuredClone(source),
+            await this.editVectorFilter({key: `model:${draft.id}:${key}`, host: this.view.getVectorFilterHost(), source: structuredClone(source),
                 filter: structuredClone(draft.area?.selection?.filter ?? source.filter), isCurrent: () => isCurrent() && this.state.active,
                 apply: candidate => {
-                    if (!isCurrent()) throw new Error("This model setup changed. Return to Models and open its filter again.");
+                    if (!isCurrent()) throw new Error("This model setup changed. Open its filter again.");
                     return this.selectVectorFeatures(key, candidate);
                 },
-                complete: () => { if (isCurrent()) this.onOpen(); },
-                cancel: () => { if (isCurrent()) this.selectionAbort?.abort(); },
+                complete: () => { if (isCurrent()) { draft.filterEditing = false; this.render(); } },
+                cancel: () => {
+                    if (!isCurrent()) return;
+                    if (this.selectionRevision > openingRevision) this.selectionAbort?.abort();
+                },
+                close: () => {
+                    if (!isCurrent()) return;
+                    if (this.selectionRevision > openingRevision) this.selectionAbort?.abort();
+                    draft.filterEditing = false; this.render();
+                },
             });
-        } catch (error) { if (isCurrent()) this.state.error = `Could not open the vector filter: ${error.message}`; }
-        finally { draft.filterOpening = false; this.render(); }
+        } catch (error) {
+            if (isCurrent()) { draft.filterEditing = false; this.state.error = `Could not open the vector filter: ${error.message}`; }
+        } finally { draft.filterOpening = false; this.render(); }
     }
 
     /** Refresh choices from Map layers without changing accepted runs or chosen filters.
@@ -241,6 +278,7 @@ export class ModelsController {
             filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
         draft.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
         if (draft.vectorKey && !draft.vectors.some(source => modelSourceKey(source) === draft.vectorKey)) {
+            this.closeVectorFilter();
             this.selectionAbort?.abort(); this.selectionRevision++;
             draft.vectorKey = ""; draft.area = null; draft.vectorInfo = null; draft.selecting = false;
             draft.selectionError = "Add the vector layer to Map layers, or choose another layer.";
@@ -257,6 +295,7 @@ export class ModelsController {
         const draft = this.state.draft; const revision = this.revision;
         this.state.error = "";
         try {
+            if (!retry && draft?.filterEditing) throw new Error("Apply or close the filter before running the model.");
             if (!retry) { this.refreshMapLayers(); this.refreshMapArea(); }
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
@@ -326,6 +365,7 @@ export class ModelsController {
      * @return {Promise<void>}
      */
     async showRun(id) {
+        this.closeVectorFilter();
         const revision = ++this.revision;
         const previous = this.state.selectedRun;
         if (previous && !ACTIVE_JOB_STATES.has(this.runSnapshots.get(previous)?.status)) {
@@ -360,6 +400,7 @@ export class ModelsController {
      */
     async duplicateRun() {
         const saved = this.state.invocation; if (!saved) return;
+        this.closeVectorFilter();
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This exact model version is no longer installed. Its YAML remains available until metadata expires."; this.render(); return; }
@@ -415,6 +456,7 @@ export class ModelsController {
      * @return {void}
      */
     destroy() {
+        this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.selectionRevision += 1; this.selectionAbort?.abort();
         this.unsubscribe(); for (const id of this.tracked) this.jobs.tracked.delete(id); this.view.destroy();
     }
