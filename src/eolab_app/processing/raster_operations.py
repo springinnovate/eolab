@@ -32,6 +32,7 @@ from eolab_app.processing.clip_models import (
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError, Artifact
 from eolab_app.processing.ports import JobStore
+from eolab_app.processing.shared_calculations import identify_shared_calculation
 from eolab_app.processing.raster_aggregate import (
     aggregate_process_target,
     write_statistics_result,
@@ -406,7 +407,8 @@ def queue_summary(
         polygons: Owned uploaded polygons copied at admission, when requested.
 
     Returns:
-        Unshared queued plan; ordinary summary admission adds its own sharing identity.
+        Queued plan with the ordinary sharing identity. Model admission removes
+        that identity before storage so each model run remains independent.
 
     Raises:
         ValueError: If copied polygons do not match the request.
@@ -435,6 +437,7 @@ def queue_summary(
         summary=summary,
         reserved_bytes=0,
         operation=queued.operation,
+        work_key=identify_shared_calculation(queued),
         presentation={"calculations": summary["calculations"]},
     )
 
@@ -447,7 +450,8 @@ def queue_clip(request: ClipJobRequest, polygons: None) -> PreparedJobPlan:
         polygons: Always None under the clip input contract.
 
     Returns:
-        Unshared queued clip plan with no admission-time native reads.
+        Queued clip plan with its ordinary sharing identity and no native reads.
+        Model admission removes the sharing identity before storage.
     """
     inputs = ClipInputs.model_validate(
         request.model_dump(exclude={"requestId"}, by_alias=True)
@@ -466,6 +470,7 @@ def queue_clip(request: ClipJobRequest, polygons: None) -> PreparedJobPlan:
         },
         reserved_bytes=0,
         operation=queued.operation,
+        work_key=identify_shared_calculation(queued),
     )
 
 

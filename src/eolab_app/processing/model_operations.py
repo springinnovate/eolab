@@ -63,7 +63,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         bind: Translate recipe-bound arguments into the existing request contract.
         source: Extract the current operation's catalog raster identity.
         polygon: Identify an owned polygon upload that admission must copy.
-        queue: Capture inputs as an unshared queued plan.
+        queue: Capture inputs and ordinary sharing identity; model admission removes it.
         prepare: Measure native work and return the required disk reservation.
         execution: Check execution-specific limits and select the native target.
         policy: Report effective numerical settings from a prepared plan.

@@ -5,12 +5,10 @@ import hashlib
 import json
 import math
 from datetime import datetime, timezone
-from dataclasses import replace
 from pathlib import PurePath
 from typing import Any
 
 from eolab_app.processing.shared_calculations import (
-    identify_shared_calculation,
     present_calculation_rows,
 )
 from eolab_app.processing.statistics_csv import statistics_csv
@@ -450,15 +448,14 @@ class ProcessingService:
         ).hexdigest()
         operation = get_model_operation("raster.clip.v1")
         prepared = operation.queue(request, None)
-        queued = operation.parse_specification(prepared.specification)
         row = await asyncio.to_thread(
             self.jobs.submit,
             owner,
             request.requestId,
-            replace(prepared, work_key=identify_shared_calculation(queued)),
+            prepared,
             request_hash,
         )
-        require_operation(row, queued.operation)
+        require_operation(row, operation.id)
         return public_job(row)
 
     async def submit_calculation_inputs(
@@ -566,11 +563,7 @@ class ProcessingService:
                 )
         operation = get_model_operation("raster.aggregate.v1")
         prepared = operation.queue(request, polygons)
-        queued = operation.parse_specification(prepared.specification)
-        prepared = replace(prepared, work_key=identify_shared_calculation(queued))
-        return JobSubmission(
-            request.requestId, request_hash, queued.operation, prepared
-        )
+        return JobSubmission(request.requestId, request_hash, operation.id, prepared)
 
     async def submit_calculation_batch(
         self, owner: str, requests: list[AggregateJobRequest]
