@@ -14,19 +14,43 @@ from eolab_app.processing.model_yaml import canonical_json, export_yaml, parse_y
 from eolab_app.processing.models import ProcessingError
 
 
-def test_discovery_and_recipe_export_need_no_catalog_or_renderer() -> None:
-    """Expose installed form metadata without accessing sources or execution storage."""
+@pytest.mark.parametrize("model_count", [1, 101])
+def test_discovery_and_recipe_export_need_no_catalog_or_renderer(
+    model_count: int,
+) -> None:
+    """Expose the full library without a count ceiling or execution dependencies.
+
+    Args:
+        model_count: Installed versions, including a library beyond the former cap.
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from eolab_app.processing.service import ProcessingService
     from eolab_app.routes.processing import create_processing_router
 
+    definition = ModelRegistry.installed().get("raster-summary", "1.0.0")
+    definitions = tuple(
+        ModelDefinition.model_validate(
+            {**definition.document(), "version": f"1.0.{index}"}
+        )
+        for index in range(model_count)
+    )
+    registry = ModelRegistry(definitions)
     app = FastAPI()
-    app.include_router(create_processing_router(ProcessingService(object(), object())))
+    app.include_router(
+        create_processing_router(
+            ProcessingService(object(), object(), model_registry=registry)
+        )
+    )
     with TestClient(app, base_url="https://testserver") as client:
         response = client.get("/api/processing/models")
         assert response.status_code == 200, response.text
-        model = response.json()["models"][0]
+        models = response.json()["models"]
+        assert len(models) == model_count
+        assert {model["version"]: model["definitionSha256"] for model in models} == {
+            item.version: item.digest for item in definitions
+        }
+        model = models[0]
         recipe = client.get("/api/processing/models/raster-summary/versions/1.0.0/yaml")
         assert recipe.status_code == 200
         assert "no-store" in recipe.headers["cache-control"]

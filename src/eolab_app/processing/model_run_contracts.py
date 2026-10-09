@@ -231,9 +231,9 @@ class AvailableModel(ModelDefinition):
 
 
 class ModelLibrary(Contract):
-    """Bounded installed definition discovery response."""
+    """Complete installed definition discovery response, with no model count limit."""
 
-    models: list[AvailableModel] = Field(max_length=100)
+    models: list[AvailableModel]
 
 
 class RunDocument(Contract):

@@ -341,7 +341,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             response: Private-cache and capability-cookie response.
 
         Returns:
-            Bounded versioned model definitions.
+            All installed versioned model definitions.
         """
         _owner(request, response)
         return await _result(service.list_models())

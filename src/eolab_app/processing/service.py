@@ -236,7 +236,7 @@ class ProcessingService:
         return public_job(row)
 
     async def list_models(self) -> dict[str, Any]:
-        """Read the bounded installed library without source or rendering access.
+        """Read the complete installed library without source or rendering access.
 
         Returns:
             Versioned definitions and typed setup metadata.

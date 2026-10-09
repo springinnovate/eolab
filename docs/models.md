@@ -274,7 +274,7 @@ resource override from a model-run request.
 
 | Endpoint | Contract / implementation issue |
 | --- | --- |
-| `GET /api/processing/models` | Bounded installed-model discovery metadata with exact model version/digest and typed form contract (#695). |
+| `GET /api/processing/models` | Complete installed-model discovery metadata with exact model version/digest and typed form contract (#695); no installed-model count limit. |
 | `GET /api/processing/models/{modelId}/versions/{version}/yaml` | Reusable Model YAML; version must be installed (#695). |
 | `POST /api/processing/model-runs` | Submit `{requestId, model, inputs, parameters, label}`; `model` is `{id, version, definitionSha256}`. Return 202 plus `ModelJobResponse` and Location for the existing job resource (#695). |
 | `GET /api/processing/model-runs?limit=20&cursor=...` | Owner-filtered list of model jobs, bounded 1–100 items and opaque cursor ordered by creation time + ID. Returns `{jobs, nextCursor}`; unrelated Statistics traffic cannot hide runs (#695). |

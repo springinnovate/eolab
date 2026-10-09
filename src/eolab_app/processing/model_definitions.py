@@ -324,15 +324,11 @@ class ModelRegistry:
         """Validate installed definitions, rejecting duplicate identities.
 
         Args:
-            definitions: At most 100 application-installed recipes.
+            definitions: Application-installed recipes, with no count limit.
 
         Raises:
             ProcessingError: If definitions conflict or an operation is unsupported.
         """
-        if len(definitions) > 100:
-            raise ProcessingError(
-                "invalid_model_library", "Too many installed model definitions."
-            )
         entries = {}
         for definition in definitions:
             validate_operation(definition)
@@ -396,10 +392,10 @@ class ModelRegistry:
             ) from error
 
     def list_models(self) -> list[dict[str, Any]]:
-        """Expose bounded typed form metadata and exact definition identities.
+        """Expose typed form metadata and exact identities for every installed model.
 
         Returns:
-            At most 100 installed definitions with their canonical digests.
+            All installed definitions with their canonical digests.
         """
         return [
             {**item.document(), "definitionSha256": item.digest}
