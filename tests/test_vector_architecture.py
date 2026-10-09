@@ -52,6 +52,9 @@ def test_neutral_rendering_contract_does_not_depend_on_features() -> None:
     imports = {
         module
         for source_path in RENDERING_SOURCE.glob("*.py")
+        # Artifact previews use the neutral single-file raster contract approved
+        # in #698; test_rendering_architecture checks that precise edge separately.
+        if source_path.name != "artifact_preview.py"
         for module in imported_modules(source_path)
     }
 

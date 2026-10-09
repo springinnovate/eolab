@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -65,6 +65,22 @@ test("run controls and open details remain stable through progress updates", () 
     assert.equal(h.view.run.cancel, cancel); assert.equal(h.doc.activeElement, cancel); assert.equal(h.view.run.details.root.open, true);
     assert.equal(h.view.run.progress.value, 3); assert.match(h.view.run.status.textContent, /3 of 8 blocks/);
     h.state.runs[0].status = "cancelling"; h.view.render(h.state); assert.equal(cancel.disabled, true);
+});
+
+test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
+    const h = fixture(), artifacts = fileManifest(), file = artifacts.files[0];
+    h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
+    h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
+    h.state.outputPreviews = {[file.artifactId]: {canShow: true}};
+    h.view.render(h.state);
+    let button = h.view.run.result.children[2].children[3];
+    assert.equal(button.textContent, "Show on map"); button.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
+    h.state.outputPreviews[file.artifactId].busy = true; h.view.render(h.state);
+    button = h.view.run.result.children[2].children[3];
+    assert.equal(button.textContent, "Loading preview…"); assert.equal(button.disabled, true);
+    h.state.outputPreviews[file.artifactId] = {canShow: true, onMap: true}; h.view.render(h.state);
+    assert.equal(h.view.run.result.children[2].children[3].textContent, "On map");
 });
 
 test("stage feedback covers terminal states and an unknown total stays indeterminate", () => {

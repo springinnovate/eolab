@@ -65,9 +65,11 @@ export function renderModelResult(root, result, jobId, element, showDownloads = 
  * @param {HTMLElement} root Container owned by the run view.
  * @param {Object} manifest Validated available file inventory.
  * @param {Function} element Owning view's DOM element factory.
+ * @param {Object} [previews={}] Composition-supplied inclusion and loading states keyed by file ID.
+ * @param {(artifactId:string)=>void} [showOutput] Request display of one file.
  * @return {void}
  */
-export function renderModelFiles(root, manifest, element) {
+export function renderModelFiles(root, manifest, element, previews = {}, showOutput = () => {}) {
     root.append(element("h4", "Files from this run"));
     for (const file of manifest.files) {
         const card = element("article", "", "models-result");
@@ -77,6 +79,16 @@ export function renderModelFiles(root, manifest, element) {
         link.download = "";
         const role = {result: "Result", intermediate: "Intermediate result", provenance: "Inputs and calculation settings"}[file.role];
         card.append(link, element("span", `${role} · ${formatDownloadBytes(file.bytes)}`), element("span", file.filename));
+        const state = previews[file.artifactId] ?? {};
+        if (state.canShow) {
+            const button = element("button", state.onMap ? "On map" : state.busy ? "Loading preview…" : "Show on map", "secondary-button");
+            button.type = "button"; button.disabled = Boolean(state.onMap || state.busy);
+            button.setAttribute("aria-label", `${button.textContent}: ${label}`);
+            button.addEventListener("click", () => showOutput(file.artifactId)); card.append(button);
+            if (state.error) {
+                const error = element("p", state.error, "models-error"); error.setAttribute("role", "alert"); card.append(error);
+            }
+        }
         root.append(card);
     }
 }

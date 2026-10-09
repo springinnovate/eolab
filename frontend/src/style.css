@@ -746,6 +746,8 @@ h5 {
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
 .map-layer-attribution { grid-column: 2; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-3); overflow-wrap: anywhere; }
+.map-layer-group-heading { grid-column: 1 / -1; grid-row: 1; padding-top: 4px; font-size: 0.85rem; overflow-wrap: anywhere; }
+.raster-layer-row.has-group-heading .map-layer-drag-handle { grid-row: 2; }
 
 .map-layer-primary-row {
   grid-column: 2;

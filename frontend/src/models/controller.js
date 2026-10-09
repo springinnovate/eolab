@@ -20,11 +20,15 @@ export class ModelsController {
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
+     * @param {(job:Object,file:Object)=>Promise<void>} [dependencies.showOutput] Show one chosen file through composition.
+     * @param {(jobId:string,artifactId:string,file:Object)=>Object} [dependencies.outputState] Display-only map capability, inclusion and feedback.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
     constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+        showOutput = async () => {}, outputState = () => ({}),
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
+        this.outputState = outputState;
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false};
@@ -37,7 +41,12 @@ export class ModelsController {
             onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
-            onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml()});
+            onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
+            onShowOutput: artifactId => {
+                const job = this.runSnapshots.get(this.state.selectedRun);
+                const file = job?.artifacts?.files.find(value => value.artifactId === artifactId);
+                if (file) void showOutput(job, file);
+            }});
     }
 
     /** Recover an unconfirmed request without automatically executing it.
@@ -450,7 +459,12 @@ export class ModelsController {
     /** Present state without allowing a disposed component to update the page.
      * @return {void}
      */
-    render() { if (!this.destroyed) this.view.render(this.state); }
+    render() {
+        if (this.destroyed) return;
+        const job = this.runSnapshots.get(this.state.selectedRun);
+        this.view.render({...this.state, outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
+            .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
+    }
 
     /** Release UI observation only; accepted jobs continue until explicit cancellation.
      * @return {void}

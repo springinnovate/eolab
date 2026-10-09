@@ -3,7 +3,6 @@
 import ast
 from pathlib import Path
 
-
 RENDERING_SOURCE = Path("src/eolab_app/rendering")
 WMS_PROXY_SOURCE = Path("src/eolab_app/routes/wms_proxy.py")
 COMPOSITE_MAP_SOURCE = Path("src/eolab_app/routes/composite_map.py")
@@ -36,14 +35,23 @@ def test_shared_rendering_has_no_dataset_feature_dependency() -> None:
     application_imports = {
         module
         for source_path in RENDERING_SOURCE.glob("*.py")
+        if source_path.name != "artifact_preview.py"
         for module in imported_modules(source_path)
         if module.startswith("eolab_app.")
     }
 
     assert all(
-        module.startswith("eolab_app.rendering.")
-        for module in application_imports
+        module.startswith("eolab_app.rendering.") for module in application_imports
     )
+
+
+def test_artifact_previews_use_only_authorized_delivery_and_neutral_reading() -> None:
+    """Keep private previews independent of Processing storage, workers and GeoServer."""
+    imports = imported_modules(RENDERING_SOURCE / "artifact_preview.py")
+    assert {name for name in imports if name.startswith("eolab_app.")} == {
+        "eolab_app.execution.bounded_process",
+        "eolab_app.raster.source_contract",
+    }
 
 
 def test_composite_map_route_depends_only_on_neutral_rendering() -> None:

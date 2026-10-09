@@ -51,6 +51,7 @@ from eolab_app.raster.sources import (
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.rendering.composite import CompositeMapRenderingService
+from eolab_app.rendering.artifact_preview import ArtifactPreviewService
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.composite_map import create_composite_map_router
@@ -346,6 +347,12 @@ def create_app(
     application.include_router(
         create_processing_router(
             processing_service,
+            preview_artifact=ArtifactPreviewService(
+                processing_service.download_model_artifact,
+                lambda lease: processing_service.transfer_heartbeat(
+                    lease, release=True
+                ),
+            ).read,
             session_ttl_seconds=max(
                 7 * 86_400,
                 processing_limits.result_ttl_seconds,

@@ -135,6 +135,48 @@ Existing `/result` and `/provenance` links continue to work, including historica
 runs without inventories. Storage still accepts historical primary-only result
 metadata, while newly executed jobs publish measured manifests.
 
+## Preview an immutable output
+
+`GET /api/processing/jobs/{jobId}/artifacts/{artifactId}/preview` reads a private
+display copy of a completed manifest file. The browser chooses individual files;
+models do not automatically put every intermediate on the map. GeoTIFF previews
+support one georeferenced numeric band, native NoData and internal validity masks.
+GeoJSON previews support a WGS84 `FeatureCollection` containing a single geometry
+family: point, line or polygon, including multipart variants. Other file types
+remain downloadable. Registered operations may declare `vector` additional
+outputs with `application/geo+json` and map presentation; no new native vector
+calculation is installed by this display capability.
+
+The response carries `jobId`, `artifactId`, `sha256`, `kind` and WGS84 `bounds`
+in west/south/east/north order. Raster responses add `width`, `height` and
+row-major `values`, with null cells for invalid data. Their grid is Web Mercator,
+using nearest-neighbor sampling and at most 512 × 512 cells. Vector responses add
+`geometryKind` and `geojson`; arbitrary properties are omitted from this geometry
+preview. Both are display data only, never reusable Processing selections.
+
+The delivery owner authorizes the browser session, run, file and expiry on every
+request and holds a transfer lease while native work is running. Rendering
+consumes that injected immutable-file contract without importing the Processing
+store or worker. It checks the file's published checksum and rechecks access
+before returning the preview. HTTP responses use `private, no-store`; there is
+no server preview cache. The private results volume is not mounted into GeoServer.
+Downloads and computations do not depend on preview availability.
+
+Preview generation admits at most two concurrent reads per API process and has
+no waiting queue. Native work is killed after 30 seconds or HTTP disconnection.
+Linux native processes have a 2 GiB address-space ceiling; GDAL's cache and warp
+buffer are 32 MiB each, decoded source blocks are limited to 64 MiB, and output
+JSON is limited to 8 MiB. GeoJSON input is also limited to 8 MiB, 5,000 features
+and 100,000 positions. Preview latitudes are limited to Web Mercator's supported
+range. These display limits do not change the original file or its download.
+
+The browser retains up to eight display copies in memory, grouped by run identity
+and labeled by run name. It revalidates their run/file identities and checksums
+every 30 seconds, removes expired displays, and removes displays whose access
+cannot be confirmed. Saved/shared map serialization omits private previews and
+explains that omission in the UI. It never exports a private artifact reference,
+preview bytes, browser credentials or a reusable starting-mask selection.
+
 ## Reuse an output type
 
 Model job responses carry `kind`, `name`, `label`, `role`, `presentation` and

@@ -278,13 +278,13 @@ export class ModelsView {
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
         const available = job?.status === "ready" && Date.parse(job.expiresAt) > Date.now();
-        const signature = JSON.stringify([available, job?.result, job?.artifacts]);
+        const signature = JSON.stringify([available, job?.result, job?.artifacts, state.outputPreviews]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
             if (available && job.result) {
                 const filesAvailable = job.artifacts?.availability === "available";
                 renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
-                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this));
+                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
             }
         }
         r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +

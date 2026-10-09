@@ -1,6 +1,7 @@
 """Model boundary tests: bounded YAML, immutable recipes and real input contracts."""
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,54 @@ from eolab_app.processing.model_yaml import (
 )
 from eolab_app.processing.models import ProcessingError
 from model_recipe_support import multiple_output_recipe
+from eolab_app.processing.model_operations import OperationOutput
+import eolab_app.processing.model_operations as operation_registry
+import eolab_app.processing.model_definitions as definitions
+
+
+def test_recipe_can_retain_a_registered_geojson_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registered vector file uses the ordinary YAML output binding and map presentation.
+
+    Args:
+        monkeypatch: Isolated trusted-operation registration.
+    """
+    original = operation_registry.get_model_operation("raster.clip.v1")
+    registry = {
+        **operation_registry.OPERATIONS,
+        original.id: replace(
+            original,
+            additional_outputs=(
+                OperationOutput(
+                    "area",
+                    "vector",
+                    "map",
+                    "application/geo+json",
+                    "Starting area",
+                    "intermediate",
+                ),
+            ),
+        ),
+    }
+    monkeypatch.setattr(operation_registry, "OPERATIONS", registry)
+    monkeypatch.setattr(definitions, "OPERATIONS", registry)
+    document = ModelRegistry.load_installed().get("raster-clip", "1.0.0").to_document()
+    document["outputs"]["starting_area"] = {
+        "source": "clip.area",
+        "type": "vector",
+        "role": "intermediate",
+        "presentation": "map",
+        "saveEligible": False,
+    }
+    model = ModelDefinition.model_validate(document)
+    assert (
+        ModelRegistry((model,))
+        .get(model.id, model.version)
+        .outputs["starting_area"]
+        .type
+        == "vector"
+    )
 
 
 def test_recipe_selects_registered_outputs_and_roles(

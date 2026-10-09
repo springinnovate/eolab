@@ -46,6 +46,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {{label:string,description:string}|null} [roleBadge] Analysis role supplied by the owner.
  * @property {string} [typeLabel] Owner-supplied type or origin label.
  * @property {string} [attribution] Shared-layer provenance.
+ * @property {{id:string,label:string}} [group] Owner-supplied grouping; headers follow contiguous drawing order.
  * @property {string} [stylePanelId] Owning style panel identifier.
  * @property {HTMLElement} [detailsControl] Retained owner action replacing Catalog Info.
  * @property {HTMLElement} [primaryControl] Retained owner main action.
@@ -266,6 +267,13 @@ export class MapLayerStackView {
             activeKey,
             focusTargets
         ));
+        layers.forEach((layer, index) => {
+            if (!layer.group || layers[index - 1]?.group?.id === layer.group.id) return;
+            const heading = this.documentContext.createElement("strong");
+            heading.className = "map-layer-group-heading"; heading.textContent = layer.group.label;
+            rows[index].classList.add("has-group-heading");
+            rows[index].prepend(heading);
+        });
         this.list.replaceChildren(...rows);
         this.#placeRemovalRow();
         if (preserveViewport) {
@@ -396,7 +404,7 @@ export class MapLayerStackView {
     ) {
         const typeLabel = layer.typeLabel ?? ({ raster: "Raster", vector: "Vector", annotation: "Shared layer" }[layer.datasetKind] ?? "Layer");
         const accessibleName = layer.item === null
-            ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}`
+            ? `${layer.label}; ${typeLabel.toLowerCase()}${typeLabel.toLowerCase().endsWith("layer") ? "" : " layer"}${layer.group ? ` from ${layer.group.label}` : ""}`
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
@@ -525,7 +533,7 @@ export class MapLayerStackView {
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
-            ...(layer.datasetKind === "raster" ? [this.#button(
+            ...(layer.item !== null && layer.datasetKind === "raster" ? [this.#button(
                 "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
@@ -542,7 +550,7 @@ export class MapLayerStackView {
             ...(!layer.detailsControl ? [info] : []),
             copyStyle,
             pasteStyle,
-            ...(layer.datasetKind === "raster" ? [this.#iconButton(
+            ...(layer.item !== null && layer.datasetKind === "raster" ? [this.#iconButton(
                 "download", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
             )] : [])

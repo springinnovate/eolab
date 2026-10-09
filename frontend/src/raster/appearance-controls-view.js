@@ -30,8 +30,8 @@ export class RasterAppearanceControlsView {
     /**
      * Resolve the required raster-appearance elements once at startup.
      *
-     * @param {Document} [documentContext=globalThis.document] Document that
-     * owns the controls.
+     * @param {Pick<Document,"querySelector"|"createElement">} [documentContext=globalThis.document]
+     * Document or scoped DOM adapter that owns this instance's controls.
      * @throws {Error} If any required appearance element is missing.
      */
     constructor(documentContext = globalThis.document) {
