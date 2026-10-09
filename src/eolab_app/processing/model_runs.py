@@ -33,8 +33,8 @@ from eolab_app.processing.model_run_contracts import (
     SummaryArea,
 )
 from eolab_app.processing.model_yaml import (
-    canonical_json,
-    definition_digest,
+    encode_canonical_json,
+    compute_document_checksum,
     export_yaml,
 )
 from eolab_app.processing.models import (
@@ -78,7 +78,7 @@ def compute_implementation_checksum() -> str:
     for dependency in ("numpy", "rasterio", "pyproj", "shapely", "fiona"):
         digest.update(f"{dependency}={version(dependency)}\n".encode())
     digest.update(
-        canonical_json(
+        encode_canonical_json(
             {
                 "rasterioGdal": rasterio.__gdal_version__,
                 "fionaGdal": fiona.__gdal_version__,
@@ -236,7 +236,7 @@ def build_model_job_submission(
                 definition.steps[0]
                 .inputs["raster"]
                 .input: {
-                    "sourceSignature": definition_digest(signature),
+                    "sourceSignature": compute_document_checksum(signature),
                     "band": 1,
                 }
             },
@@ -288,7 +288,7 @@ def record_model_preparation(
     """
     wrapper = ModelRunSpec.model_validate(row["spec"])
     spec = AggregateSpec.model_validate(prepared.specification)
-    metadata = json.loads(canonical_json(row["retained_metadata"]))
+    metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
     invocation = ModelInvocation.model_validate(metadata["invocation"])
     validate_operation(invocation.model.definition)
     raster_name = invocation.model.definition.steps[0].inputs["raster"].input
@@ -415,7 +415,7 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
             "This run's captured metadata is no longer available.",
             410,
         )
-    metadata = json.loads(canonical_json(row["retained_metadata"]))
+    metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
     invocation = ModelInvocation.model_validate(metadata["invocation"])
     if not run:
         return export_yaml(invocation.model.definition.to_document())
@@ -492,5 +492,7 @@ def encode_model_run_cursor(row: dict[str, Any]) -> str:
     """
     payload = {"createdAt": row["created_at"].isoformat(), "jobId": row["id"]}
     return (
-        base64.urlsafe_b64encode(canonical_json(payload)).rstrip(b"=").decode("ascii")
+        base64.urlsafe_b64encode(encode_canonical_json(payload))
+        .rstrip(b"=")
+        .decode("ascii")
     )

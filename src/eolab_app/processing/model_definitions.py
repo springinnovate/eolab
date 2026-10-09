@@ -15,7 +15,11 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.processing.model_yaml import definition_digest, export_yaml, parse_yaml
+from eolab_app.processing.model_yaml import (
+    compute_document_checksum,
+    export_yaml,
+    parse_yaml,
+)
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_expression import compile_expression, walk
 
@@ -293,7 +297,7 @@ class ModelDefinition(ModelSchema):
     @property
     def digest(self) -> str:
         """Return the recipe's SHA-256 checksum, independent of YAML formatting."""
-        return definition_digest(self.to_document())
+        return compute_document_checksum(self.to_document())
 
 
 @dataclass(frozen=True)

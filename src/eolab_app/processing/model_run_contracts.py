@@ -30,7 +30,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
-from eolab_app.processing.model_yaml import canonical_json
+from eolab_app.processing.model_yaml import encode_canonical_json
 
 MODEL_OPERATION = "model.run.v1"
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
@@ -75,7 +75,7 @@ class ModelRunRequest(ModelSchema):
         Raises:
             ValueError: If a supplied number is NaN or infinite.
         """
-        canonical_json(self.model_dump(mode="json"))
+        encode_canonical_json(self.model_dump(mode="json"))
         return self
 
 

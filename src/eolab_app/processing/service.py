@@ -44,7 +44,7 @@ from eolab_app.processing.model_runs import (
     serialize_model_job,
     build_model_calculation_request,
 )
-from eolab_app.processing.model_yaml import canonical_json, export_yaml
+from eolab_app.processing.model_yaml import encode_canonical_json, export_yaml
 
 
 def require_operation(row: dict[str, Any], operation: str) -> None:
@@ -204,7 +204,9 @@ class ProcessingService:
             RasterFeatureError: If the catalog cannot authorize the requested source.
         """
         request_hash = hashlib.sha256(
-            canonical_json(request.model_dump(mode="json", exclude={"requestId"}))
+            encode_canonical_json(
+                request.model_dump(mode="json", exclude={"requestId"})
+            )
         ).hexdigest()
         existing = await asyncio.to_thread(
             self.jobs.find_request, owner, request.requestId

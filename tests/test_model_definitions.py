@@ -10,7 +10,11 @@ from pydantic import ValidationError
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest, RunDocument
 from eolab_app.processing.model_runs import build_model_calculation_request
-from eolab_app.processing.model_yaml import canonical_json, export_yaml, parse_yaml
+from eolab_app.processing.model_yaml import (
+    encode_canonical_json,
+    export_yaml,
+    parse_yaml,
+)
 from eolab_app.processing.models import ProcessingError
 
 
@@ -84,7 +88,7 @@ def test_installed_summary_matches_approved_example_and_round_trips() -> None:
     reloaded = ModelDefinition.model_validate(
         parse_yaml(export_yaml(definition.to_document()))
     )
-    assert canonical_json(reloaded.to_document()) == canonical_json(
+    assert encode_canonical_json(reloaded.to_document()) == encode_canonical_json(
         definition.to_document()
     )
     assert definition.digest == summary_request()["model"]["definitionSha256"]
