@@ -1,0 +1,65 @@
+# Contract example; the numerical adapter is implemented and verified in #700.
+schema: eolab.model/v1
+id: downstream-beneficiaries
+version: "1.0.0"
+title: Downstream ecosystem beneficiaries
+description: >-
+  Trace downstream from one combined starting mask, buffer the reached area,
+  and summarize a values raster within the resulting coverage.
+inputs:
+  starting_mask:
+    type: mask_source
+    label: Starting mask
+  hydrology:
+    type: prepared_hydrology
+    label: Prepared hydrology
+  values:
+    type: catalog_raster
+    label: Values to summarize
+parameters:
+  buffer_m:
+    type: number
+    label: Buffer radius
+    unit: m
+    minimum: 0
+    default: 5000
+  cutoff_m:
+    type: optional_number
+    label: Maximum straight-line distance
+    unit: m
+    exclusiveMinimum: 0
+    default: null
+  summary:
+    type: summary_expression
+    label: Summary formula
+    alias: a
+    grammar: eolab.scalar/v1
+    default: "sum(a)"
+steps:
+  - id: analysis
+    operation: hydrology.downstream_beneficiaries.v1
+    inputs:
+      starting_mask: {input: starting_mask}
+      hydrology: {input: hydrology}
+      values: {input: values}
+    parameters:
+      buffer_m: {parameter: buffer_m}
+      cutoff_m: {parameter: cutoff_m}
+      summary: {parameter: summary}
+outputs:
+  coverage:
+    source: analysis.coverage
+    role: result
+    presentation: map
+    saveEligible: true
+  statistics:
+    source: analysis.statistics
+    role: result
+    presentation: table
+    saveEligible: true
+  starting_mask:
+    source: analysis.starting_mask
+    role: intermediate
+    presentation: map
+    saveEligible: false
+executionProfile: downstream-small-region

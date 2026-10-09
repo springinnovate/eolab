@@ -1,0 +1,32 @@
+{
+  "requestId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "model": {
+    "id": "downstream-beneficiaries",
+    "version": "1.0.0",
+    "definitionSha256": "7d7a3a3f98a2628babcb37ba7b2db92a6c635a9396eb34914974cf46180cef7f"
+  },
+  "inputs": {
+    "starting_mask": {
+      "kind": "catalogSelection",
+      "selection": {
+        "collectionId": "eolab-mounted-vectors",
+        "itemId": "vector-222222222222222222222222",
+        "assetKey": "data",
+        "layerName": "project_areas",
+        "sourceSignature": "2222222222222222222222222222222222222222222222222222222222222222",
+        "filter": {
+          "enabled": true,
+          "match": "all",
+          "rules": [{"field": "status", "operator": "eq", "value": "active"}]
+        }
+      }
+    },
+    "hydrology": {"presetId": "example-region", "version": "1.0.0"},
+    "values": {
+      "collectionId": "eolab-mounted-geotiffs",
+      "itemId": "geotiff-111111111111111111111111"
+    }
+  },
+  "parameters": {"buffer_m": 5000, "cutoff_m": null, "summary": "sum(a)"},
+  "label": "Example combined project areas"
+}
