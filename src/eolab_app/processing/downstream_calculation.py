@@ -826,9 +826,13 @@ def calculate_downstream(
             422,
         )
     write_progress(directory, "buffering_downstream_coverage", 0, 0)
-    coverage = within_geodesic_distance(lon, lat, reached, request.buffer_m) & domain
+    # True cells form the area used to summarize the values raster: downstream
+    # cells plus their buffer, restricted to the watershed domain and cutoff.
+    summary_coverage = (
+        within_geodesic_distance(lon, lat, reached, request.buffer_m) & domain
+    )
     if request.cutoff_m is not None:
-        coverage &= within_geodesic_distance(lon, lat, seeds, request.cutoff_m)
+        summary_coverage &= within_geodesic_distance(lon, lat, seeds, request.cutoff_m)
     write_progress(directory, "summarizing_values", 0, 0)
     root = compile_expression(request.summary, "a")
     calculation = Calculation(root)
@@ -862,7 +866,7 @@ def calculate_downstream(
             dc, dr = np.floor(dc).astype(np.int64), np.floor(dr).astype(np.int64)
             valid = (dc >= 0) & (dr >= 0) & (dc < grid.width) & (dr < grid.height)
             covered = np.zeros(values.shape, dtype=bool)
-            covered[valid] = coverage[dr[valid], dc[valid]]
+            covered[valid] = summary_coverage[dr[valid], dc[valid]]
             valid = covered & ~np.ma.getmaskarray(values)
             hectares = (
                 area_calculator.calculate_hectares(tile) if area_calculator else None
@@ -887,7 +891,7 @@ def calculate_downstream(
     result.write_bytes(statistics_csv(rows))
     outputs = []
     write_progress(directory, "writing_results", 0, 0)
-    for name, data in (("coverage", coverage), ("starting_mask", seeds)):
+    for name, data in (("coverage", summary_coverage), ("starting_mask", seeds)):
         stage, final = directory / (name + "-stage.tif"), directory / (name + ".tif")
         write_grid(stage, np.where(domain, data, 255).astype(np.uint8), grid, 255)
         copy_raster(
@@ -934,7 +938,7 @@ def calculate_downstream(
                 "numericalPolicy": policy.model_dump(),
                 "startingCells": int(seeds.sum()),
                 "reachedCells": int(reached.sum()),
-                "coverageCells": int(coverage.sum()),
+                "coverageCells": int(summary_coverage.sum()),
                 "statistics": rows,
             },
             allow_nan=False,
