@@ -12,8 +12,8 @@ import rasterio
 from rasterio.transform import from_origin, Affine
 from rasterio.warp import transform
 
-from eolab_app.rendering import raster_window as map_window
-from eolab_app.rendering.raster_window import (
+from eolab_app.raster import map_rendering as map_window
+from eolab_app.raster.map_rendering import (
     RasterMapGrid,
     RasterMapWindowRequest,
     RasterMapWindows,

@@ -18,7 +18,7 @@ from eolab_app.routes.processing import (
 )
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.raster.source_access import RasterSourceAccess
-from eolab_app.rendering.raster_window import RasterMapWindows
+from eolab_app.raster.map_rendering import RasterMapWindows
 from eolab_app.routes.raster_map import create_raster_map_router
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService

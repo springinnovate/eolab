@@ -56,7 +56,7 @@ def read_raster_preview(path: Path) -> dict[str, Any]:
 
     import rasterio
     from rasterio.warp import transform_bounds
-    from eolab_app.rendering.raster_window import RasterMapGrid, read_raster_map_window
+    from eolab_app.raster.map_rendering import RasterMapGrid, read_raster_map_window
 
     with rasterio.open(path, driver="GTiff") as source:
         require_signed_raster_dependencies(source, path)

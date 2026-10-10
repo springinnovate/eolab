@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from eolab_app.raster.errors import RasterFeatureError
-from eolab_app.rendering.raster_window import RasterMapWindowRequest, RasterMapWindows
+from eolab_app.raster.map_rendering import RasterMapWindowRequest, RasterMapWindows
 from eolab_app.raster.source_models import RunArtifactReference
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,

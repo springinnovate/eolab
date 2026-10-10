@@ -63,7 +63,7 @@ from eolab_app.routes.processing import (
     get_processing_session_owner_hash,
 )
 from eolab_app.raster.source_access import RasterSourceAccess
-from eolab_app.rendering.raster_window import RasterMapWindows
+from eolab_app.raster.map_rendering import RasterMapWindows
 from eolab_app.routes.raster_map import create_raster_map_router
 from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
