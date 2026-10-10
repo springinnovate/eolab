@@ -4684,6 +4684,7 @@ test("private sources use the same style, histogram, percentile, pixel and paire
     assert.ok(pixels.some(value => value.source?.jobId === source.jobId));
     editCategoricalAppearance(h, record.entry.key); await flushPromises();
     assert.ok(record.state.layer.wmsParams.raster_style);
+    assert.equal(record.state.layer.wmsParams.env, undefined);
     assert.equal(record.state.layer.wmsParams.layers, `eolab:model_${source.jobId}_${source.artifactId}`);
     assert.ok(reads.some(read => read.codes?.includes(0)));
     assert.equal(h.mapLayers.snapshots()[0].legend.kind, "categories");
@@ -4691,10 +4692,13 @@ test("private sources use the same style, histogram, percentile, pixel and paire
     h.controlsView.handlers.onApplyPercentiles();
     assert.ok(record.state.layer.wmsParams.env);
     assert.equal(record.state.layer.wmsParams.raster_style, undefined);
+    const continuousEnvironment = record.state.layer.wmsParams.env;
     await h.viewer.show(createRasterItem("private-pair")); await flushPromises();
     h.controlsView.handlers.onBivariateModeChange("bivariate"); await flushPromises();
     assert.ok(paired.some(pair => pair.some(item => item.source?.jobId === source.jobId)));
     h.controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(record.state.layer.wmsParams.env, continuousEnvironment);
+    assert.equal(record.state.layer.wmsParams.raster_style, undefined);
     const appearance = record.adapter.exportSavedState(record);
     const copy = record.adapter.copyLayerForUndo(record);
     assert.deepEqual(copy.appearance, appearance);

@@ -29,7 +29,7 @@ import {
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
     setRasterLayerAdditiveBlend,
-    setRasterLayerAppearance,
+    setRasterWmsStyle,
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
@@ -66,7 +66,7 @@ import {
     RASTER_COLOR_PALETTES,
     buildRasterLegend,
 } from "./style.js";
-import { buildRasterStyleEnvironment } from "./wms.js";
+import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } from "./wms.js";
 import { normalizeRasterAppearanceState } from "./appearance-state.js";
 import {
     buildCategoricalRasterLegend,
@@ -1806,8 +1806,7 @@ export function initializeRasterViewer(
                 layer === null ||
                 !mapLayers.isAttached(candidate.key)
             ) continue;
-            setRasterLayerAppearance(layer, {kind: "raster", appearanceVersion: 1, mode: "continuous",
-                continuous: {definition: style, paletteName: "custom", styleWasEdited: true}, categorical: null});
+            setRasterWmsStyle(layer, { env: buildRasterStyleEnvironment(style) });
             layer.setOpacity(1);
             setRasterLayerAdditiveBlend(layer, false);
             renderedRecords.push(record);
@@ -1853,7 +1852,7 @@ export function initializeRasterViewer(
             const record = mapLayers.getRecord(key);
             const layer = mapLayers.getLeafletLayer(key);
             if (record === null || layer === null) continue;
-            setRasterLayerAppearance(layer, rasterSessionAppearance(record.state));
+            setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
             layer.setOpacity(record.entry.opacity);
             if (mapLayers.isAttached(key)) {
                 setRasterLayerAdditiveBlend(layer, false);
@@ -2035,7 +2034,7 @@ export function initializeRasterViewer(
             const layer = createRasterLayer(record.publication, record.state.rasterStyle, reportTileError);
             record.state.layer = layer;
             if (record.state.appearanceMode === "categorical") {
-                setRasterLayerAppearance(layer, rasterSessionAppearance(record.state));
+                setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
             }
             return layer;
         },
@@ -2747,15 +2746,15 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Build the shared appearance passed to any raster display adapter.
+     * Build mutually exclusive WMS parameters for the session's active style.
      * @param {Object} session Layer-owned style state.
-     * @return {Object} Validated ordinary raster appearance.
-     * @throws {Error} If the committed appearance is invalid.
+     * @return {{env?:string,raster_style?:string}} Validated WMS parameters.
+     * @throws {Error} If the active style is invalid.
      */
-    function rasterSessionAppearance(session) {
-        return normalizeRasterAppearanceState({kind: "raster", appearanceVersion: 1, mode: session.appearanceMode ?? "continuous",
-            continuous: {definition: session.rasterStyle, paletteName: session.paletteName, styleWasEdited: session.rasterStyleWasEdited},
-            categorical: session.categoricalStyle ?? null});
+    function rasterSessionStyleParameters(session) {
+        return session.appearanceMode === "categorical"
+            ? { raster_style: buildCategoricalRasterStyleParameter(session.categoricalStyle) }
+            : { env: buildRasterStyleEnvironment(session.rasterStyle) };
     }
 
     /**
@@ -2922,8 +2921,10 @@ export function initializeRasterViewer(
      * @throws {Error} If style validation or the renderer update fails.
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
-        const appearance = rasterSessionAppearance({...session, rasterStyle: style, paletteName, rasterStyleWasEdited: wasEdited});
-        if (session.layer) setRasterLayerAppearance(session.layer, appearance);
+        const environment = buildRasterStyleEnvironment(style);
+        if (session.layer) setRasterWmsStyle(session.layer,
+            session.appearanceMode === "categorical"
+                ? rasterSessionStyleParameters(session) : { env: environment });
         session.rasterStyle = { ...style };
         session.paletteName = paletteName;
         session.rasterStyleWasEdited = wasEdited;
@@ -3934,8 +3935,8 @@ export function initializeRasterViewer(
             bivariateMode.contains(session.key)) return;
         try {
             const style = controlsView.readCategoricalStyle();
-            const appearance = rasterSessionAppearance({...session, categoricalStyle: style, appearanceMode: "categorical"});
-            if (session.layer) setRasterLayerAppearance(session.layer, appearance);
+            const parameters = { raster_style: buildCategoricalRasterStyleParameter(style) };
+            if (session.layer) setRasterWmsStyle(session.layer, parameters);
             session.categoricalStyle = style;
             session.appearanceMode = "categorical";
             controlsView.renderCategoricalError?.();
