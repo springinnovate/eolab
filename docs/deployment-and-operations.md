@@ -581,7 +581,7 @@ The application image targets Linux amd64 and Python 3.12. Pinned runtime wheels
 and their hashes are in `deployment/application-runtime-requirements.txt`; build
 tools are in `deployment/application-build-requirements.txt`.
 
-The OGR Python bindings are the explicit source-build exception:
+The OGR Python bindings are built from reviewed source:
 `deployment/application-gdal-requirements.txt` pins the GDAL 3.10.3 source archive
 and SHA-256. A separate Docker stage builds it with the pinned Python/NumPy build
 inputs and Debian `libgdal-dev=3.10.3+dfsg-1`; runtime uses the matching
@@ -589,8 +589,19 @@ inputs and Debian `libgdal-dev=3.10.3+dfsg-1`; runtime uses the matching
 The build inventory records OGR's loaded GDAL version and the builder's compiler
 and Debian package inventory. No PyArrow dependency is needed.
 
+The downstream model also builds the hash-pinned EcoShard archive in
+`deployment/application-ecoshard-requirements.txt`. It uses the same native builder,
+NumPy headers and tested Cython 3.0.12 compiler. Its legacy setup needs these build
+dependencies installed before wheel generation; both the application and disposable
+PostgreSQL test images build it without an isolated backend. The distribution
+version is fixed by `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d`.
+
 For local development, install GDAL 3.10.x with NumPy support using your native
-package manager (for example, conda-forge), then install `.[dev]`. The batch
+package manager (for example, conda-forge). Install NumPy, Cython 3.0.12,
+setuptools-scm 8.3.1 and packaging first, set the EcoShard version variable above,
+then run `python -m pip install --no-build-isolation '.[dev]'`. A C++ compiler is
+required for EcoShard. The reviewed Linux wheel hashes are specific to the image;
+use packages for your own platform when building locally. The batch
 reader uses OGR's NumPy stream for selected attributes only; it excludes geometry,
 holds at most one 4,096-row batch, and preserves the existing default styling.
 The visited-row limit remains unchanged; the native stream may prefetch the

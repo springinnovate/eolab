@@ -5,6 +5,7 @@ setuptools==84.0.0 --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d13
 wheel==0.45.1 --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248
 
 # Pinned dependencies for the downstream MFD routing operation.
-cython==3.3.0 --hash=sha256:428fafed98ea26927000a287b4dfc9ef07339f56656a5329a34eaa593f79a4f8
+# EcoShard's reviewed legacy sources require the tested Cython 3.0 compiler.
+cython==3.0.12 --hash=sha256:0faa5e39e5c8cdf6f9c3b1c3f24972826e45911e7f5b99cf99453fca5432f45e
 packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
 setuptools_scm==8.3.1 --hash=sha256:332ca0d43791b818b841213e76b1971b7711a960761c5bea5fc5cdb5196fbce3
