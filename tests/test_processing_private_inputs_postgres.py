@@ -721,6 +721,69 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
     assert input_counts(store) == (0, 0)
 
 
+def test_retained_inputs_cannot_make_queued_jobs_wait_for_each_other(
+    model_boundary: Any, store: Any
+) -> None:
+    """Reject dependent work when collectively retained inputs would block its space.
+
+    Args:
+        model_boundary: Actual Models routes, publication and cleanup worker.
+        store: Disposable PostgreSQL store used for reservation admission.
+    """
+    client, worker, _ = model_boundary
+    parents = [publish_input(model_boundary) for _ in range(2)]
+    with psycopg.connect(store.conninfo) as connection:
+        largest_parent = connection.execute(
+            "SELECT max(reserved_bytes) FROM processing.jobs"
+        ).fetchone()[0]
+    children = [
+        submit(
+            client,
+            model_request(
+                client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
+            ),
+        )
+        for _, source, _ in parents
+    ]
+    required = store.limits.max_stored_bytes - largest_parent
+    claimed = store.claim_next_job()
+    prepared = PreparedJobPlan(
+        specification=claimed["spec"],
+        summary=claimed["summary"],
+        operation=claimed["operation"],
+        reserved_bytes=required,
+    )
+    assert claimed["id"] == children[0]["jobId"]
+    with pytest.raises(ProcessingError) as denied:
+        store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
+    assert denied.value.code == "storage_full"
+    assert store.finish(
+        claimed["id"],
+        claimed["attempt_id"],
+        None,
+        {"code": "storage_full", "detail": "Storage unavailable"},
+    )
+    client.delete(f"/api/processing/jobs/{parents[0][0]['jobId']}", headers=HEADERS)
+    client.portal.call(worker.cleanup)
+    assert not parents[0][2].exists() and parents[1][2].exists()
+    assert input_counts(store) == (1, 0)
+    claimed = store.claim_next_job()
+    assert claimed["id"] == children[1]["jobId"]
+    prepared = replace(
+        prepared, specification=claimed["spec"], summary=claimed["summary"]
+    )
+    admitted = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
+    assert admitted["status"] == "running"
+    assert admitted["reserved_bytes"] == required
+    assert store.finish(
+        claimed["id"],
+        claimed["attempt_id"],
+        None,
+        {"code": "test_complete", "detail": "Reservation verified"},
+    )
+    assert input_counts(store) == (0, 0)
+
+
 def test_published_scientific_intermediate_is_a_reusable_raster(
     multiple_boundary: Any, store: Any
 ) -> None:

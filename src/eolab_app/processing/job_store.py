@@ -697,10 +697,12 @@ class PostgresJobStore:
         Returns:
             Updated job with prepared inputs. Temporary disk contention returns
             it to queued without an attempt; preparation created no attempt files.
+            Dependent jobs must fit beside all currently retained input files so
+            queued jobs cannot keep one another's required storage occupied.
 
         Raises:
             ProcessingError: If ownership was lost, cancellation won, or this job
-                and its retained inputs cannot fit the disk budget together.
+                and currently retained inputs cannot fit the disk budget together.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -719,14 +721,16 @@ class PostgresJobStore:
             )
             used = cursor.fetchone()
             cursor.execute(
-                "SELECT coalesce(sum(reserved_bytes),0) AS bytes FROM processing.jobs WHERE id IN (SELECT parent_id FROM processing.input_files WHERE job_id=%s)",
+                "SELECT coalesce(sum(reserved_bytes),0) AS bytes FROM processing.jobs "
+                "WHERE id IN (SELECT parent_id FROM processing.input_files) "
+                "AND EXISTS (SELECT 1 FROM processing.input_files WHERE job_id=%s)",
                 (identifier,),
             )
             retained = cursor.fetchone()["bytes"]
             if prepared.reserved_bytes + retained > self.limits.max_stored_bytes:
                 raise ProcessingError(
                     "storage_full",
-                    "This calculation and its retained inputs need more temporary storage than the configured limit.",
+                    "There is not enough temporary storage for this calculation and the results being used as inputs. Try a smaller area, or retry after other jobs finish.",
                     422,
                 )
             waiting = (

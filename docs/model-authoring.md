@@ -81,9 +81,12 @@ separate from short download leases. Expiry and explicit parent deletion reject
 new uses immediately; accepted children keep their original inputs. Cleanup waits
 for all children to stop, and the parent's full existing reservation accounts for
 its files once regardless of child count. Each job can retain at most 16 files
-(current operations use one); job-record and disk limits also apply. A child whose
-working reservation plus retained parents cannot fit the disk budget fails rather
-than waiting forever for its own inputs to disappear.
+(current operations use one); job-record and disk limits also apply. A dependent
+job must fit beside all currently retained input files, counted once per parent.
+Otherwise it fails with `storage_full`, rather than allowing queued jobs to hold
+one another's required space indefinitely. This check is conservative: even if
+another running job will release an input soon, retry the rejected job after that
+work finishes. Catalog jobs keep their existing queue behavior.
 
 Success, failure, queued cancellation and acknowledged running cancellation release
 grants transactionally. Lost workers retain grants until the existing hard deadline

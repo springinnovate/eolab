@@ -92,6 +92,8 @@ run immediately removes access for new jobs and downloads. Already accepted jobs
 continue; the server keeps the original files until those jobs finish or are
 cancelled. Cancel dependent jobs explicitly if you also want to stop their work.
 Retained files count toward the server's existing storage limit until cleanup.
+If inputs being used by other jobs leave too little room, the new run reports a
+storage-limit error. Retry after those jobs finish or choose a smaller area.
 
 ## Inspect or download
 
