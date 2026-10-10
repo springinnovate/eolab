@@ -63,7 +63,10 @@ from eolab_app.processing.raster_input import (
 )
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.raster.bounded_window import project_wgs84_polygons
-from eolab_app.raster.source_contract import read_native_raster_window
+from eolab_app.raster.source_contract import (
+    read_native_raster_window,
+    source_block_indexes_for_window,
+)
 
 
 @dataclass(frozen=True)
@@ -854,41 +857,39 @@ def calculate_downstream(
         to_dem = Transformer.from_crs(
             dataset.crs, grid.crs, always_xy=True, allow_ballpark=False
         )
-        for row in range(0, grid_values.height, 128):
-            for col in range(0, grid_values.width, 128):
-                tile = Window(
-                    grid_values.window[0] + col,
-                    grid_values.window[1] + row,
-                    min(128, grid_values.width - col),
-                    min(128, grid_values.height - row),
-                )
-                values = read_native_raster_window(dataset, tile)
-                rr, cc = np.indices(values.shape, dtype=np.float64)
-                x, y = dataset.window_transform(tile) * (cc + 0.5, rr + 0.5)
-                x, y = to_dem.transform(x, y, errcheck=True)
-                dc, dr = (~Affine(*grid.transform)) * (x, y)
-                dc, dr = np.floor(dc).astype(np.int64), np.floor(dr).astype(np.int64)
-                valid = (dc >= 0) & (dr >= 0) & (dc < grid.width) & (dr < grid.height)
-                covered = np.zeros(values.shape, dtype=bool)
-                covered[valid] = coverage[dr[valid], dc[valid]]
-                valid = covered & ~np.ma.getmaskarray(values)
-                hectares = (
-                    area_calculator.calculate_hectares(tile)
-                    if area_calculator
-                    else None
-                )
-                calculation.process_tile(
-                    values.data,
-                    valid,
-                    hectares,
-                    valid if hectares is not None else None,
-                )
+        selected_window = Window(*grid_values.window)
+        blocks = source_block_indexes_for_window(
+            selected_window, dataset.block_shapes[0]
+        )
+        for completed, (block_row, block_col) in enumerate(blocks, start=1):
+            tile = dataset.block_window(1, block_row, block_col).intersection(
+                selected_window
+            )
+            values = read_native_raster_window(dataset, tile)
+            rr, cc = np.indices(values.shape, dtype=np.float64)
+            x, y = dataset.window_transform(tile) * (cc + 0.5, rr + 0.5)
+            x, y = to_dem.transform(x, y, errcheck=True)
+            dc, dr = (~Affine(*grid.transform)) * (x, y)
+            dc, dr = np.floor(dc).astype(np.int64), np.floor(dr).astype(np.int64)
+            valid = (dc >= 0) & (dr >= 0) & (dc < grid.width) & (dr < grid.height)
+            covered = np.zeros(values.shape, dtype=bool)
+            covered[valid] = coverage[dr[valid], dc[valid]]
+            valid = covered & ~np.ma.getmaskarray(values)
+            hectares = (
+                area_calculator.calculate_hectares(tile) if area_calculator else None
+            )
+            calculation.process_tile(
+                values.data,
+                valid,
+                hectares,
+                valid if hectares is not None else None,
+            )
             write_progress(
                 directory,
                 "summarizing_values",
-                min(row + 128, grid_values.height),
-                grid_values.height,
-                unit="rows",
+                completed,
+                len(blocks),
+                unit="blocks",
             )
     rows = [
         {"label": request.label, "expression": request.summary, **calculation.result()}

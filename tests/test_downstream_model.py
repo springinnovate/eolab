@@ -142,6 +142,68 @@ def downstream_fixture(
     return sources, request, RasterClipLimits(free_space_floor=0)
 
 
+@pytest.mark.parametrize("tiled", [True, False])
+def test_summary_reads_native_blocks_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiled: bool
+) -> None:
+    """Summaries clip native tiles or strips to an unaligned selection without rereads.
+
+    Args:
+        tmp_path: Original sources and isolated run outputs.
+        monkeypatch: Records actual values-raster reads.
+        tiled: Exercise both tiled and striped GeoTIFF storage.
+    """
+    from eolab_app.processing import downstream_calculation as calculation
+
+    sources, request, limits = downstream_fixture(tmp_path / "sources")
+    with rasterio.open(
+        sources.rasters["values"],
+        "w",
+        driver="GTiff",
+        width=128,
+        height=96,
+        count=1,
+        dtype="int16",
+        crs="EPSG:4326",
+        transform=from_origin(-1, 5, 1 / 16, 1 / 16),
+        tiled=tiled,
+        **({"blockxsize": 64} if tiled else {}),
+        blockysize=32,
+    ) as target:
+        target.write(np.ones((96, 128), dtype="int16"), 1)
+    spec = plan_downstream(sources, request, limits)
+    reads = []
+    original = calculation.read_native_raster_window
+
+    def record_read(dataset: Any, window: rasterio.windows.Window) -> Any:
+        """Record values windows while preserving the ordinary raster reader.
+
+        Args:
+            dataset: Open original source.
+            window: Window requested by the calculation.
+
+        Returns:
+            Original masked values.
+        """
+        if Path(dataset.name) == sources.rasters["values"]:
+            reads.append(window)
+        return original(dataset, window)
+
+    monkeypatch.setattr(calculation, "read_native_raster_window", record_read)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    artifact = calculate_downstream(sources, spec, directory, limits)
+    assert float(artifact.rows[0]["value"]) == 96 * 64
+    with rasterio.open(sources.rasters["values"]) as dataset:
+        selection = rasterio.windows.Window(*spec.grid.window)
+        expected = [
+            window.intersection(selection)
+            for _, window in dataset.block_windows(1)
+            if rasterio.windows.intersect(window, selection)
+        ]
+    assert reads == expected
+
+
 def test_field_comparison_stops_virtual_downstream_links() -> None:
     """NEXT_SINK equals HYBAS_ID identifies a real sink even with NEXT_DOWN present."""
     rule = NetworkTermination(field="NEXT_SINK", equalsField="HYBAS_ID")
