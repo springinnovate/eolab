@@ -254,6 +254,15 @@ def test_outputs_reuse_tiles_with_owner_expiry_and_retryable_cleanup(
         upstream,
     )
     with TestClient(app) as client:
+        unchanged = client.get(
+            "/geoserver/eolab/wms",
+            params={"service": "WMS", "request": "GetCapabilities"},
+        )
+        assert (
+            unchanged.content
+            == b"<WMS_Capabilities><Capability><Layer><Layer><Name>eolab:catalog</Name></Layer></Layer></Capability></WMS_Capabilities>"
+        )
+        assert unchanged.headers["x-content-type-options"] == "nosniff"
         published = client.post("/api/rendering/layers", json={"source": PRIVATE})
         assert published.status_code == 200, published.text
         layer = published.json()["layerName"]
@@ -274,6 +283,8 @@ def test_outputs_reuse_tiles_with_owner_expiry_and_retryable_cleanup(
             params={"service": "WMS", "request": "GetCapabilities"},
         )
         assert "eolab:catalog" in capabilities.text and layer not in capabilities.text
+        assert capabilities.headers["x-content-type-options"] == "nosniff"
+        assert capabilities.headers["cache-control"] == "no-store"
         direct = client.get("/geoserver/eolab/wms", params=map_query(layer))
         assert (
             direct.content == b"tile"

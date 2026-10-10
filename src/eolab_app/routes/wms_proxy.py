@@ -406,6 +406,7 @@ def create_wms_proxy_router(
         ):
             try:
                 document = ElementTree.fromstring(geoserver_response.content)
+                removed_private_layer = False
                 for parent in document.iter():
                     for child in list(parent):
                         if child.tag.rsplit("}", 1)[-1] != "Layer":
@@ -417,11 +418,16 @@ def create_wms_proxy_router(
                         )
                         if any(name and hidden_layer(name) for name in names):
                             parent.remove(child)
-                return Response(
-                    ElementTree.tostring(document, encoding="utf-8"),
-                    media_type="application/xml",
-                    headers={"Cache-Control": "no-store"},
-                )
+                            removed_private_layer = True
+                if removed_private_layer:
+                    geoserver_response = httpx2.Response(
+                        200,
+                        content=ElementTree.tostring(document, encoding="utf-8"),
+                        headers={
+                            "Content-Type": "application/xml",
+                            "Cache-Control": "no-store",
+                        },
+                    )
             except ElementTree.ParseError as error:
                 raise HTTPException(
                     502, "The rendering service returned invalid capabilities."
