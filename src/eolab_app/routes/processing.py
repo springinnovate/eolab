@@ -54,6 +54,11 @@ from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.http_disconnect import wait_for_http_disconnect
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
+)
+from eolab_app.rendering.artifact_preview import ArtifactPreviewError
 
 SupportedJobResponse = Annotated[
     ClipJobResponse | AggregateJobResponse | ModelJobResponse,
@@ -338,7 +343,12 @@ class JobDownloadResponse(FileResponse):
 
 
 def create_processing_router(
-    service: ProcessingService, *, session_ttl_seconds: int = 7 * 86_400
+    service: ProcessingService,
+    *,
+    session_ttl_seconds: int = 7 * 86_400,
+    preview_artifact: (
+        Callable[[str, str, str], Awaitable[dict[str, Any]]] | None
+    ) = None,
 ) -> APIRouter:
     """Create endpoints for model discovery, job execution and result downloads.
 
@@ -346,6 +356,8 @@ def create_processing_router(
         service: The Processing service handling requests and checking job ownership.
         session_ttl_seconds: Browser cookie lifetime, chosen by application settings
             to cover retained results and metadata; defaults to seven days.
+        preview_artifact: Optional display-only delivery callback, composed independently
+            from Processing computation and downloads.
 
     Returns:
         The /api/processing router, usable independently of the map viewer.
@@ -950,6 +962,49 @@ def create_processing_router(
                 job_id,
             )
         )
+
+    @router.get("/jobs/{job_id}/artifacts/{artifact_id}/preview")
+    async def preview_model_artifact(
+        job_id: JobId, artifact_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Read a small private map preview while its requesting browser is connected.
+
+        Args:
+            job_id: Opaque model-run identity.
+            artifact_id: Opaque file identity within the run.
+            request: Browser-session credentials and disconnect observer.
+            response: Response receiving private, no-store headers.
+
+        Returns:
+            Bounded raster cells or vector geometry for display only.
+
+        Raises:
+            HTTPException: If unauthorized, expired, unsupported, busy or disconnected.
+        """
+        owner = _get_session_owner_hash(request, response, session_ttl_seconds)
+        if preview_artifact is None:
+            raise HTTPException(
+                503,
+                "Map previews are unavailable. Downloads still work.",
+                headers={"Cache-Control": "private, no-store"},
+            )
+        try:
+            return await run_until_http_disconnect(
+                request,
+                _await_service_result(preview_artifact(owner, job_id, artifact_id)),
+            )
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Map preview cancelled") from error
+        except ArtifactPreviewError as error:
+            raise HTTPException(
+                error.status, str(error), headers={"Cache-Control": "private, no-store"}
+            ) from error
+        except HTTPException as error:
+            error.headers = {
+                **(error.headers or {}),
+                "Cache-Control": "private, no-store",
+            }
+            raise
 
     @router.get("/jobs/{job_id}/artifacts/{artifact_id}")
     @router.head("/jobs/{job_id}/artifacts/{artifact_id}")

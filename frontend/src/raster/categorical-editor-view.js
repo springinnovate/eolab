@@ -33,7 +33,8 @@ import {
 export class CategoricalRasterEditorView {
     /**
      * Resolve the editor controls and display an initially empty category draft.
-     * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {Pick<Document,"querySelector"|"createElement">} [documentContext=globalThis.document]
+     * Owning document or scoped DOM adapter for an independent appearance form.
      * @throws {Error} If required editor markup is absent.
      */
     constructor(documentContext = globalThis.document) {

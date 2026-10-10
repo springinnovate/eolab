@@ -221,7 +221,7 @@ class ModelOutput(ModelSchema):
     role: Literal["result", "intermediate"]
     presentation: Literal["map", "table"]
     saveEligible: bool = Field(strict=True)
-    type: Literal["statistics", "raster"] | None = None
+    type: Literal["statistics", "raster", "vector"] | None = None
     label: Label | None = None
 
 

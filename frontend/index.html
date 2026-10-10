@@ -446,6 +446,7 @@
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
+                    <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Saved and shared maps omit them. Reopen them from Models → Runs.</p>
                     <details class="annotation-layer-tools">
                       <summary>Shared layers</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
@@ -1763,6 +1764,7 @@
     >
       <form method="dialog">
         <h2 id="saved-map-view-dialog-title">Open shared map view?</h2>
+        <p class="models-help" data-private-result-notice hidden>Private result previews are omitted from this link. Reopen them from Models → Runs in the browser that created them.</p>
         <p id="saved-map-view-dialog-summary"></p>
         <textarea
           id="saved-map-view-dialog-url"
@@ -1788,6 +1790,7 @@
     <dialog id="publish-map-dialog" class="saved-map-view-dialog" aria-labelledby="publish-map-heading">
       <form id="publish-map-form">
         <h2 id="publish-map-heading">Publish map</h2>
+        <p class="models-help" data-private-result-notice hidden>Private result previews will not be published. The shared map includes only its other saved layers.</p>
         <p>Create a named map with your selected layers, styling, and starting view. Viewers can explore it without the catalog.</p>
         <fieldset id="publish-map-fields">
           <label>Map title<input id="publish-map-title" required maxlength="160" autocomplete="off"></label>

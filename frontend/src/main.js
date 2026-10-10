@@ -101,6 +101,9 @@ import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ModelsController } from "./models/controller.js";
+import { ModelOutputPreviews } from "./model-output-preview/controller.js";
+import { createArtifactPreviewLayer } from "./model-output-preview/leaflet.js";
+import { ArtifactRasterStyleControls } from "./model-output-preview/raster-style-controls.js";
 import { ModelsView } from "./models/view.js";
 import "./models/style.css";
 import { ProcessingApiClient } from "./processing/api.js";
@@ -778,6 +781,7 @@ async function initializeCatalog(
         rasterSeries?.setArea(area, label);
     };
     let layerStyleEditor = null;
+    let outputPreviews = null;
     let savedMapViewController = null;
     let calculations = null;
     let vectorFeatureInspector = null;
@@ -819,7 +823,7 @@ async function initializeCatalog(
             mapLegend.update(layers);
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
-            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.datasetKind === "raster"));
+            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.item !== null && layer.datasetKind === "raster"));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -830,7 +834,7 @@ async function initializeCatalog(
             calculations?.refreshSourceNames();
             models?.refreshMapLayers();
             if (!layers.some((layer) =>
-                layer.visible && layer.datasetKind === "raster"
+                layer.item !== null && layer.visible && layer.datasetKind === "raster"
             )) {
                 rasterClickSelected = false;
                 mapInspection.setClickResult("histogram", null);
@@ -841,12 +845,26 @@ async function initializeCatalog(
         onOrderChange: layers => { annotations?.observeLayerOrder(layers, true); mapFeatureHover?.hide(); },
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
-        restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
-            ? annotations.restoreRemovedLayer(snapshot, isCurrent)
+        restoreRemovedLayer: async (snapshot, isCurrent) => snapshot.local?.kind === "model-output-preview"
+            ? outputPreviews.restore(snapshot, isCurrent).then(() => {
+                if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+            }) : snapshot.item === null ? annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
     const processingApi = new ProcessingApiClient();
     const processingJobs = new ProcessingJobs(processingApi);
+    outputPreviews = new ModelOutputPreviews({
+        api: processingApi,
+        addLayer: (source, adapter) => mapLayerController.addLocal(source, adapter),
+        removeLayer: key => mapLayerController.removeKey(key),
+        refreshLayers: () => mapLayerController.render(),
+        createLayer: (key, data, appearance) => createArtifactPreviewLayer(L, leafletMap, key, data, appearance, document),
+        openRun: id => { models.open(); void models.showRun(id); },
+        onChange: () => {
+            models?.render();
+            for (const notice of document.querySelectorAll("[data-private-result-notice]")) notice.hidden = !outputPreviews?.layers.size;
+        },
+    });
     /** Choose enabled Catalog raster candidates for one query without consulting renderers.
      * Catalog extents are a conservative screen; missing/unknown extents remain candidates.
      * Non-box areas keep all enabled candidates for the authoritative source reader.
@@ -858,7 +876,7 @@ async function initializeCatalog(
         return mapLayerController.snapshots().filter(
             /** @param {Object} layer Catalog-backed map choice. @return {boolean} Enabled candidate. */
             layer => {
-                if (layer.datasetKind !== "raster" || !layer.visible) return false;
+                if (layer.item === null || layer.datasetKind !== "raster" || !layer.visible) return false;
                 if (!bounds) return true;
                 const bbox = layer.item.bbox;
                 const extent = Array.isArray(bbox) && bbox.length === 6 ? [bbox[0], bbox[1], bbox[3], bbox[4]] : bbox;
@@ -876,7 +894,7 @@ async function initializeCatalog(
      * @return {{sources:Object[],area:Object|null,pixelPoint:{longitude:number,latitude:number}|null}} Current Processing context.
      */
     const processingContext = () => ({
-        sources: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+        sources: mapLayerController.snapshots().filter(layer => layer.item !== null && layer.datasetKind === "raster")
             .map(layer => clipSource(layer.item, layer.label)),
         area: rasterVisualization?.getSelectedArea() ?? null,
         pixelPoint,
@@ -989,13 +1007,15 @@ async function initializeCatalog(
             filter: record.adapter.exportFilterState(record) }));
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        showOutput: (job, file) => outputPreviews.show(job, file),
+        outputState: (jobId, artifactId, file) => outputPreviews.state(jobId, artifactId, file),
         /** Supply catalog choices and current map areas independently of rendering.
          * @return {Object} Independent raster, vector, selected area and visible map bounds.
          */
         getContext: () => {
             const viewport = leafletMap.getBounds();
             return {
-                rasters: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+                rasters: mapLayerController.snapshots().filter(layer => layer.item !== null && layer.datasetKind === "raster")
                     .map(layer => ({...clipSource(layer.item, layer.label), visible: layer.visible})),
                 vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
                 area: modelArea, areaDescription: modelAreaDescription,
@@ -1119,12 +1139,28 @@ async function initializeCatalog(
         },
     });
     const vectorStyleControls = new VectorStyleControls();
+    const artifactRasterStyles = new ArtifactRasterStyleControls({documentContext: document,
+        getTarget: key => outputPreviews.layers.get(key) ?? null,
+        apply: (key, appearance) => outputPreviews.applyAppearance(key, appearance)});
     layerStyleEditor = new MapLayerStyleEditor({
-        mapLayers: mapLayerController, rasterViewer: rasterVisualization,
+        mapLayers: mapLayerController, rasterViewer: {
+            openStyle: key => {
+                rasterVisualization.closeStyle(); artifactRasterStyles.close();
+                if (artifactRasterStyles.open(key)) { document.querySelector("#raster-appearance-controls").hidden = true; return true; }
+                return rasterVisualization.openStyle(key);
+            },
+            closeStyle: () => { rasterVisualization.closeStyle(); artifactRasterStyles.close(); },
+            refreshStyle: () => { rasterVisualization.refreshStyle(); artifactRasterStyles.refresh(); },
+            openPairedStyle: key => rasterVisualization.openPairedStyle(key),
+        },
         inspection: mapInspection,
         vectorStyleControls,
         onFilterRequested: (key) => vectorFilterControls.open(key),
         getVectorStyleTarget: (key) => {
+            const preview = outputPreviews.layers.get(key);
+            if (preview?.kind === "vector") return {key, style: preview.appearance, fields: [], canFilter: false,
+                notice: "Style this result preview. The downloaded file stays unchanged.",
+                apply: async style => outputPreviews.applyAppearance(key, style)};
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) {
                 return null;
@@ -1183,6 +1219,7 @@ async function initializeCatalog(
         },
         beforeRestore: clearCatalogSelection,
         exportAnnotation: record => {
+            if (record.entry.key.startsWith("local:artifact:")) return null;
             const sharedAnnotation = annotationSessions?.getMapReference(record.state.id);
             if (!sharedAnnotation) return null;
             const { outline, weight, fillOpacity, labels } = record.adapter.exportSavedState(record).style;
@@ -1211,7 +1248,7 @@ async function initializeCatalog(
     rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
     void rasterAreaSeries.recoverAndCancelPreviousSeriesCalculations();
     void calculations.start();
-    rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
+    rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.item !== null && layer.datasetKind === "raster"));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram", "open-raster-series-summary"]) {
         document.querySelector(`#${id}`).addEventListener("click",

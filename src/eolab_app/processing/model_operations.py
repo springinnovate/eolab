@@ -41,7 +41,7 @@ class OperationOutput:
     """
 
     name: str
-    kind: Literal["statistics", "raster"]
+    kind: Literal["statistics", "raster", "vector"]
     presentation: Literal["table", "map"]
     media_type: str
     label: str

@@ -80,11 +80,34 @@ that session's cookies loses access; these are not permanent account records.
 
 ## Inspect or download
 
-Completed summaries offer **Download CSV**. Completed clips show the raster
-dimensions, valid-pixel count and file size, with **Download GeoTIFF**. Both
-offer **Download provenance**. Downloads require the session that owns the run.
-A clip remains a temporary run result; it is not added to the catalog or map.
-Map previews and permanent saved results are not yet available.
+Completed summaries show their values. Completed clips show the raster dimensions,
+valid-pixel count and file size. **Files from this run** lists individual downloads
+for results, retained intermediates and **Calculation details**. Downloads require
+the browser session that owns the run.
+
+Choose **Show on map** beside a GeoTIFF or supported GeoJSON output to inspect it.
+Nothing is added automatically. Its button changes to **On map**, and Map layers
+groups the chosen outputs under their run names. Use the usual visibility,
+opacity, Style, legend, zoom and remove controls. The layer's information action
+reopens its run. Removing a layer leaves its file available to download or show
+again; Undo requests a fresh authorized preview.
+
+Raster previews are small display samples, at most 512 pixels on either side,
+reprojected to the map with nearest-neighbor sampling. They preserve NoData and
+internal validity masks. The initial color range comes from this display sample;
+the existing continuous palettes and categorical tables change only the preview.
+Download the GeoTIFF for full resolution. Small WGS84 GeoJSON outputs support
+solid point, line or polygon styling. A file that exceeds preview limits remains
+downloadable. Up to eight result previews can be displayed at once.
+
+Previews remain private and temporary. Expiry removes their display; deletion and
+loss of access are checked at least every 30 seconds, even with Models closed.
+If availability cannot be confirmed, the preview is removed and can be reopened
+from its run. They are omitted from saved maps, published maps and remembered
+browser views. Reopen them from **Models → Runs** in the browser that owns them.
+They do not become catalog layers, model inputs or analysis selections. Permanent
+saving and cross-user sharing are not yet available.
+
 Under **Recipe & downloads**, **View Model YAML** shows the reusable recipe as
 text; **Download Model YAML** saves it. An accepted run also offers **Download
 Run YAML**, containing its captured recipe, inputs, effective parameters and

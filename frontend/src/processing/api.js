@@ -246,16 +246,17 @@ export class ProcessingApiClient {
     /** Read every requested job without relying on the recent-history limit.
      * Larger sets use batches of 100 IDs; no per-job HTTP lookups are needed.
      * @param {string[]} jobIds Public job IDs belonging to this browser session.
+     * @param {AbortSignal} [signal] Optional caller deadline or cancellation.
      * @return {Promise<{jobs:Object[], unavailableJobIds:string[]}>} Snapshots and unavailable IDs.
      * @throws {Error} If an ID, request, or response is invalid or incomplete.
      */
-    async readJobStatuses(jobIds) {
+    async readJobStatuses(jobIds, signal) {
         const requested = [...new Set(jobIds.map(opaqueId))];
         const result = {jobs: [], unavailableJobIds: []};
         await this.ensureSession();
         for (let offset = 0; offset < requested.length; offset += 100) {
             const batch = requested.slice(offset, offset + 100);
-            const response = await this.request("/jobs/status", "POST", {jobIds: batch});
+            const response = await this.request("/jobs/status", "POST", {jobIds: batch}, signal);
             if (!Array.isArray(response.jobs) || !Array.isArray(response.unavailableJobIds))
                 throw new Error("Invalid processing status response.");
             const jobs = response.jobs.map(validateJob);

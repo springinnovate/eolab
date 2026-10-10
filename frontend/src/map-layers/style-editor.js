@@ -102,7 +102,7 @@ export class MapLayerStyleEditor {
                 : layer.visible ? "Changes apply immediately." : "This layer is hidden. Styling it will not make it visible.";
         const vectorTarget = this.isRaster
             ? null : this.getVectorStyleTarget(this.key);
-        if (this.filterButton) this.filterButton.hidden = vectorTarget === null;
+        if (this.filterButton) this.filterButton.hidden = vectorTarget === null || vectorTarget.canFilter === false;
         if (vectorTarget === null) this.vectorStyleControls.hide();
         else this.vectorStyleControls.show(vectorTarget);
         this.rasterControls.hidden = !this.isRaster || locked;
