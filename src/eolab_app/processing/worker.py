@@ -255,6 +255,9 @@ class ProcessingWorker:
         )
         spec = handler.prepared_type.model_validate(calculation_spec)
         source = handler.source(spec)
+        target, action, limits = handler.execution(
+            spec, self._operation_context(model is None), row["reserved_bytes"]
+        )
         resolved_area = None
         if spec.area.kind == "catalogSelection":
             if self.areas is None:
@@ -280,7 +283,6 @@ class ProcessingWorker:
                 409,
             )
         context = self._operation_context(model is None, checksum)
-        target, action, limits = handler.execution(spec, context, row["reserved_bytes"])
         if (
             model is not None
             and model.sourceSignature is not None
