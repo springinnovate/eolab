@@ -6,6 +6,22 @@
  * and drawing order. It does not fetch publication or statistics data.
  */
 import { validateRasterSelectedBounds } from "./geometry.js";
+import { normalizeRasterAppearanceState } from "./appearance-state.js";
+import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } from "./wms.js";
+
+/** Apply one appearance through the layer's delivery adapter.
+ * @param {Object} layer Raster viewport or WMS layer.
+ * @param {Object} appearance Ordinary raster appearance contract.
+ * @return {void}
+ * @throws {Error} If appearance validation fails.
+ */
+export function setRasterLayerAppearance(layer, appearance) {
+    const checked = normalizeRasterAppearanceState(appearance);
+    if (layer.setAppearance) layer.setAppearance(checked);
+    else setRasterWmsStyle(layer, checked.mode === "categorical"
+        ? {raster_style: buildCategoricalRasterStyleParameter(checked.categorical)}
+        : {env: buildRasterStyleEnvironment(checked.continuous.definition)});
+}
 
 export const RASTER_SAMPLE_WINDOW_PANE = "rasterSampleWindowPane";
 const RASTER_SAMPLE_WINDOW_PANE_Z_INDEX = "450";

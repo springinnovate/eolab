@@ -81,7 +81,7 @@ export function renderModelFiles(root, manifest, element, previews = {}, showOut
         card.append(link, element("span", `${role} · ${formatDownloadBytes(file.bytes)}`), element("span", file.filename));
         const state = previews[file.artifactId] ?? {};
         if (state.canShow) {
-            const button = element("button", state.onMap ? "On map" : state.busy ? "Loading preview…" : "Show on map", "secondary-button");
+            const button = element("button", state.onMap ? "On map" : state.busy ? "Adding to map…" : "Show on map", "secondary-button");
             button.type = "button"; button.disabled = Boolean(state.onMap || state.busy);
             button.setAttribute("aria-label", `${button.textContent}: ${label}`);
             button.addEventListener("click", () => showOutput(file.artifactId)); card.append(button);

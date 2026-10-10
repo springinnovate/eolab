@@ -281,7 +281,10 @@ export class ModelsController {
      */
     inputContext(model) {
         const context = this.getContext();
-        return {...context, rasters: [...(context.rasters ?? []), ...(Object.values(model.inputs).some(input => input.type === "raster") ? modelResultSources([...this.runSnapshots.values()]) : [])]};
+        const acceptsResults = Object.values(model.inputs).some(input => input.type === "raster");
+        const choices = [...(context.rasters ?? []).filter(source => acceptsResults || source.kind !== "runArtifact"),
+            ...(acceptsResults ? modelResultSources([...this.runSnapshots.values()]) : [])];
+        return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
     }
 
     /** Refresh map and result choices without changing accepted runs or chosen filters.

@@ -1,4 +1,5 @@
 /** Editable fixed-raster cards and composed multi-raster queries over Processing. */
+import { rasterSourceKey } from "../raster-source.js";
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { catalogSelectionsEqual } from "../selected-area.js";
@@ -21,7 +22,10 @@ export const STATISTIC_PRESETS = Object.freeze({
     range: { label: "Range", expression: "max(a) - min(a)" }, custom: { label: "", expression: "" },
 });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const sourceKey = source => source ? `${source.collectionId}\n${source.itemId}` : "";
+/** Compare original sources independently of labels or renderer state.
+ * @param {Object|null} source Original raster reference. @return {string} Stable identity or empty for no selection.
+ */
+const sourceKey = source => source ? rasterSourceKey(source) : "";
 
 /** Own statistic templates, validation and fixed or composed-query execution intent. */
 export class SummaryStatisticsController {
@@ -731,7 +735,7 @@ export class SummaryStatisticsController {
         }));
         if (this.queryManual && this.manualInputKey !== this.queryKey()) this.queryManual = false;
         work.updateCalculationInputs(this.state.querySources.map(source => ({ key: sourceKey(source), label: source.label,
-            item: { collection: source.collectionId, id: source.itemId } })),
+            source })),
         this.state.area, "Current statistics area", formulas, this.state.pixelPoint);
         const active = this.isActive && !!this.state.area && !!formulas.length && !!this.state.querySources.length
             && ((this.state.automatic && this.queryRequested) || this.queryManual || explicit);

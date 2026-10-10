@@ -533,7 +533,7 @@ export class MapLayerStackView {
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
-            ...(layer.item !== null && layer.datasetKind === "raster" ? [this.#button(
+            ...(layer.capabilities?.calculations ? [this.#button(
                 "Raster statistics", "Calculate statistics for " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
@@ -550,7 +550,7 @@ export class MapLayerStackView {
             ...(!layer.detailsControl ? [info] : []),
             copyStyle,
             pasteStyle,
-            ...(layer.item !== null && layer.datasetKind === "raster" ? [this.#iconButton(
+            ...(layer.capabilities?.calculations ? [this.#iconButton(
                 "download", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
             )] : [])

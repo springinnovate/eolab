@@ -1,13 +1,14 @@
 /** Raster clips own immutable submissions, recovery, and clip lifecycle presentation. */
+import { labeledRasterSource, rasterSourceKey } from "../raster-source.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { ProcessingRequestError } from "./api.js";
 
 import { ProcessingJobs } from "./jobs.js";
 export { ACTIVE_JOB_STATES } from "./jobs.js";
 
-/** Copy catalog identity without retaining a mutable Item. @param {Object} source Catalog source plus label. @return {Readonly<Object>} Snapshot. */
+/** Copy original raster identity and its label. @param {Object} source Labeled raster source. @return {Readonly<Object>} Snapshot. @throws {TypeError} If identity or label is invalid. */
 function snapshotSource(source) {
-    return Object.freeze({ collectionId: source.collectionId, itemId: source.itemId, label: source.label });
+    return labeledRasterSource(source, source.label);
 }
 
 /** Omit whole-raster areas from the download contract. @param {Object|null} area Sampling selection. @return {Readonly<Object>|null} Explicit area. */
@@ -90,7 +91,7 @@ export class RasterClipsController {
                 const fixed = source ?? (this.editingArea && this.sourceWasChosen ? this.state.source : null);
                 const chosen = fixed ?? (this.getQuerySources ? this.getQuerySources(this.state.area)[0] : this.state.sources[0]) ?? null;
                 this.sourceWasChosen = !!fixed;
-                if (chosen && !this.state.sources.some(item => item.collectionId === chosen.collectionId && item.itemId === chosen.itemId)) {
+                if (chosen && !this.state.sources.some(item => rasterSourceKey(item) === rasterSourceKey(chosen))) {
                     this.state.sources.unshift(snapshotSource(chosen));
                 }
                 this.state.source = chosen ? snapshotSource(chosen) : null;

@@ -63,6 +63,8 @@ from eolab_app.routes.processing import (
     get_processing_session_owner_hash,
 )
 from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.rendering.raster_window import RasterMapWindows
+from eolab_app.routes.raster_map import create_raster_map_router
 from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
@@ -353,6 +355,14 @@ def create_app(
             raster_statistics_service,
             source_access=raster_sources,
             session_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
+        )
+    )
+    application.include_router(
+        create_raster_map_router(
+            RasterMapWindows(raster_sources),
+            lambda request, response: get_processing_session_owner_hash(
                 request, response, processing_session_ttl
             ),
         )

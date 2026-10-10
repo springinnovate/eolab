@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  loadCatalogRasterPairedStatistics,
+  loadRasterPairedStatistics,
 } from "../../src/raster/analysis-api.js";
 
 const X_ITEM = { collection: "rasters", id: "temperature" };
@@ -43,7 +43,7 @@ function pairedResponse() {
 test("paired statistics request sends only two catalog identities and area", async () => {
   let request = null;
   const signal = new AbortController().signal;
-  const result = await loadCatalogRasterPairedStatistics(
+  const result = await loadRasterPairedStatistics(
     X_ITEM,
     Y_ITEM,
     { kind: "wholeOverlap" },

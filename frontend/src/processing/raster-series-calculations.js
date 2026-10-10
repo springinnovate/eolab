@@ -1,4 +1,5 @@
 /** Calculate area formulas independently for each raster in a composed query or stack. */
+import { labeledRasterSource, rasterSourceKey } from "../raster-source.js";
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { describeJobProgress } from "./presentation.js";
@@ -97,7 +98,7 @@ export class RasterSeriesCalculations {
         const formulaKey = formulas.map(({id,expression}) => [id,expression.trim()]);
         const formulasChanged = JSON.stringify(formulaKey) !==
             JSON.stringify(this.formulas.map(({id,expression}) => [id,expression.trim()]));
-        const key = JSON.stringify([sources.map(source => [source.key, source.item.collection, source.item.id]).sort(),
+        const key = JSON.stringify([sources.map(source => [source.key, rasterSourceKey(source)]).sort(),
             normalized, formulaKey, point]);
         this.formulas = formulas.map(formula => ({ ...formula }));
         this.sources = sources.map(source => ({ ...source }));
@@ -221,13 +222,14 @@ export class RasterSeriesCalculations {
         }
     }
 
-    /** Read the catalog IDs and display name used to request one raster calculation.
+    /** Capture the original raster reference and label for one calculation.
      * Called while building calculation requests.
-     * @param {{label:string,item:{collection:string,id:string}}} source Selected catalog raster.
-     * @return {{collectionId:string,itemId:string,label:string}} Raster reference accepted by Processing.
+     * @param {Object} source Selected raster snapshot with its original reference.
+     * @return {Readonly<Object>} Labeled raster reference accepted by Processing.
+     * @throws {TypeError} If the source identity or label is invalid.
      */
     getRasterReference(source) {
-        return { collectionId: source.item.collection, itemId: source.item.id, label: source.label };
+        return labeledRasterSource(source, source.label);
     }
 
     /** Apply progress only to this executor's current immutable raster request.

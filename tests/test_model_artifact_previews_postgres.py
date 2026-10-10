@@ -18,6 +18,8 @@ from eolab_app.routes.processing import (
 )
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.rendering.raster_window import RasterMapWindows
+from eolab_app.routes.raster_map import create_raster_map_router
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from test_model_runs_postgres import model_boundary, model_request, submit
@@ -46,6 +48,14 @@ def preview_boundary(model_boundary: Any) -> Iterator[Any]:
             RasterStatisticsService(sources, 2, 8),
             source_access=sources,
             session_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, 7 * 86_400
+            ),
+        )
+    )
+    app.include_router(
+        create_raster_map_router(
+            RasterMapWindows(sources),
+            lambda request, response: get_processing_session_owner_hash(
                 request, response, 7 * 86_400
             ),
         )
@@ -103,6 +113,29 @@ def test_private_preview_and_download_lifetimes(
         "jobId": job["jobId"],
         "artifactId": file["artifactId"],
     }
+    window_request = {"source": reference, "bounds": AREA, "width": 8, "height": 8}
+    window = client.post(
+        "/api/rendering/raster-window", json=window_request, headers=HEADERS
+    )
+    assert window.status_code == 200, window.text
+    assert (
+        window.json()["source"] == reference
+        and window.json()["version"] == file["sha256"]
+    )
+    assert "no-store" in window.headers["cache-control"]
+    assert str(worker.artifacts.root) not in window.text
+    assert (
+        client.post("/api/rendering/raster-window", json=window_request).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/rendering/raster-window",
+            json=window_request,
+            headers={**HEADERS, "Origin": "https://foreign.test"},
+        ).status_code
+        == 403
+    )
     pixel_request = {"source": reference, "longitude": 0.5, "latitude": 9.5}
     pixel = client.post(
         "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
@@ -138,6 +171,11 @@ def test_private_preview_and_download_lifetimes(
         == 403
     )
     with TestClient(client.app, base_url="https://testserver") as foreign:
+        denied_window = foreign.post(
+            "/api/rendering/raster-window", json=window_request, headers=HEADERS
+        )
+        assert denied_window.status_code == 404
+        assert "no-store" in denied_window.headers["cache-control"]
         denied = foreign.get(url)
         assert denied.status_code == 404
         assert denied.json()["detail"]["code"] == "job_not_found"
@@ -170,6 +208,12 @@ def test_private_preview_and_download_lifetimes(
                 (job["jobId"],),
             )
     assert client.get(url).status_code == 409
+    assert (
+        client.post(
+            "/api/rendering/raster-window", json=window_request, headers=HEADERS
+        ).status_code
+        == 409
+    )
     assert (
         client.post(
             "/api/raster-analysis/statistics", json=statistics_request, headers=HEADERS

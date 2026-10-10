@@ -17,6 +17,7 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
     run_bounded_process,
 )
+from eolab_app.raster.geographic_bounds import transform_bounds_to_wgs84
 from eolab_app.raster.errors import RasterAssetError, RasterConflictError
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -112,6 +113,8 @@ def describe_raster_file(path: Path) -> dict[str, Any]:
 
     Returns:
         Path-free grid metadata and pixel/statistics capability explanations.
+        Geographic bounds are null when extent projection is unavailable;
+        this does not change the independent numerical capabilities.
 
     Raises:
         ValueError: If georeferencing or signed file dependencies are unsupported.
@@ -134,7 +137,14 @@ def describe_raster_file(path: Path) -> dict[str, Any]:
         except ValueError as error:
             statistics_reason = str(error)
         nodata = dataset.nodata
+        try:
+            bounds = transform_bounds_to_wgs84(dataset.crs, tuple(dataset.bounds))
+            if not all(math.isfinite(value) for value in bounds):
+                bounds = None
+        except (ValueError, rasterio.errors.RasterioError):
+            bounds = None
         return {
+            "bounds": bounds,
             "width": dataset.width,
             "height": dataset.height,
             "bands": dataset.count,

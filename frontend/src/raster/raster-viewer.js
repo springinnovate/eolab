@@ -1,19 +1,20 @@
 /**
- * Application coordinator for one interactive Catalog raster viewer.
+ * Coordinate ordinary raster styling, analysis presentation and map interactions.
  *
  * This module connects publication, Leaflet layers, raster controls,
  * statistics, selected-area sampling, styling, and exact point values. It owns
  * their shared lifecycle and stale-work rules while delegating domain logic,
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
-import { getCatalogItemKey } from "../catalog-item-identity.js";
+import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
+import { createRasterWindowLayer } from "./window-layer.js";
 import { publishCatalogRaster } from "./api.js";
 import {
-    loadCatalogRasterStatistics,
-    loadCatalogRasterPairedStatistics,
+    loadRasterStatistics,
+    loadRasterPairedStatistics,
     RasterAnalysisRequestError,
     isRasterStatisticsCapacityError,
-    sampleCatalogRasterPixel,
+    sampleRasterPixel,
 } from "./analysis-api.js";
 import {
     BivariateRasterMode,
@@ -29,7 +30,7 @@ import {
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
     setRasterLayerAdditiveBlend,
-    setRasterWmsStyle,
+    setRasterLayerAppearance,
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
@@ -37,8 +38,8 @@ import { RasterCursorSamplesController } from "./cursor-samples.js";
 import { RasterPointSamplesController } from "./point-samples.js";
 import {
     formatRasterPixelValue,
-    getCatalogRasterBasename,
-    getCatalogRasterStem,
+    getRasterDisplayName,
+    getRasterDisplayStem,
 } from "./value-format.js";
 import { RasterSampleWindowController } from "./sample-window-controller.js";
 import {
@@ -66,7 +67,7 @@ import {
     RASTER_COLOR_PALETTES,
     buildRasterLegend,
 } from "./style.js";
-import { buildRasterStyleEnvironment, buildCategoricalRasterStyleParameter } from "./wms.js";
+import { buildRasterStyleEnvironment } from "./wms.js";
 import { normalizeRasterAppearanceState } from "./appearance-state.js";
 import {
     buildCategoricalRasterLegend,
@@ -127,6 +128,8 @@ function canRetryRasterStatistics(error) {
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
  * one selected raster Item.
+ * @property {(raster:import('../raster-source.js').RasterDescriptor,lifecycle:Object,presentation?:Object)=>Object}
+ * showSource Retain an authorized original raster through the same controls.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
  * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void}) => boolean} exploreAt Select
@@ -186,10 +189,10 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object) => Promise<Object>}
  * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
  * @property {(item: Object, samplingArea:Object, signal:AbortSignal)
- * => Promise<Object>} [loadStatistics=loadCatalogRasterStatistics] Loads whole
+ * => Promise<Object>} [loadStatistics=loadRasterStatistics] Loads whole
  * or selected statistics.
  * @property {(item: Object, point: Object, signal: AbortSignal)
- * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
+ * => Promise<Object>} [samplePixel=sampleRasterPixel] Samples one raster
  * pixel.
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [sampleCursorPixel=samplePixel] Samples one transient
@@ -199,8 +202,9 @@ function canRetryRasterStatistics(error) {
  * refreshPresentation?:(projectSnapshot:(snapshot:Object)=>Object)=>void}|null}
  * [cursorValuesView=null] Transient pixel-picker presentation adapter.
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
- * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
+ * =>Promise<Object>} [loadPairedStatistics=loadRasterPairedStatistics]
  * Loads paired X-reference statistics.
+ * @property {Function} [createWindowLayer=createRasterWindowLayer] Authorized viewport renderer factory.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
@@ -257,12 +261,13 @@ export function initializeRasterViewer(
         layerStackView = null,
         mapLayerController = null,
         publishRaster = publishCatalogRaster,
-        loadStatistics = loadCatalogRasterStatistics,
-        samplePixel = sampleCatalogRasterPixel,
+        loadStatistics = loadRasterStatistics,
+        samplePixel = sampleRasterPixel,
         sampleCursorPixel = samplePixel,
-        loadPairedStatistics = loadCatalogRasterPairedStatistics,
+        loadPairedStatistics = loadRasterPairedStatistics,
         cursorValuesView = null,
         clock = globalThis,
+        createWindowLayer = createRasterWindowLayer,
     } = {}
 ) {
     if (typeof onHistogramRequested !== "function") {
@@ -290,7 +295,7 @@ export function initializeRasterViewer(
      * @return {Promise<Object>} Statistics or the final read/abort failure.
      */
     function loadStatisticsWithRetry(item, area, signal) {
-        const session = mapLayers.getRecord(getCatalogItemKey(item))?.state;
+        const session = mapLayers.getRecord(rasterSourceKey(item))?.state;
         const codes = sessionCategoryValues(session);
         if (session) session.statisticsCategoryIdentity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
         return requestRasterStatistics(() => loadStatistics(item, area, signal, undefined, codes), signal, clock);
@@ -363,10 +368,10 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Create retained interaction state for one successfully published layer.
+     * Create interaction state shared by catalog and private raster layers.
      *
      * @param {Object} entry Pure stack entry.
-     * @param {Object} publishedRaster GeoServer publication response.
+     * @param {Object} publishedRaster Display metadata, including original geographic bounds.
      * @return {Object} Per-layer state restored on activation.
      */
     function createLayerSession(entry, publishedRaster) {
@@ -410,9 +415,9 @@ export function initializeRasterViewer(
      */
     function createAnalysisSession(item) {
         return {
-            key: `analysis:${getCatalogItemKey(item)}`,
+            key: `analysis:${rasterSourceKey(item)}`,
             item,
-            label: getCatalogRasterBasename(item),
+            label: getRasterDisplayName(item),
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
@@ -488,7 +493,7 @@ export function initializeRasterViewer(
      * @return {Object|null} Matching analysis session or null.
      */
     function matchingAnalysisSession(item) {
-        const expectedKey = `analysis:${getCatalogItemKey(item)}`;
+        const expectedKey = `analysis:${rasterSourceKey(item)}`;
         return analysisRasterSession?.key === expectedKey
             ? analysisRasterSession
             : null;
@@ -511,7 +516,7 @@ export function initializeRasterViewer(
         const session = analysisRasterSession;
         if (
             session !== null &&
-            (getCatalogItemKey(session.item) === key || session.key === key)
+            (rasterSourceKey(session.item) === key || session.key === key)
         ) {
             return session;
         }
@@ -539,7 +544,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function syncBivariateCandidate(session) {
-        const key = getCatalogItemKey(session.item);
+        const key = rasterSourceKey(session.item);
         const candidate = bivariateCandidates.find(
             /**
              * Match a paired candidate by catalog or renderer-session identity.
@@ -581,7 +586,7 @@ export function initializeRasterViewer(
      */
     function rememberBivariateCandidate(item) {
         if (followsVisibleLayers) return;
-        const key = getCatalogItemKey(item);
+        const key = rasterSourceKey(item);
         const existing = bivariateCandidates.find(
             /**
              * Locate prior paired-analysis state for this catalog selection.
@@ -605,7 +610,7 @@ export function initializeRasterViewer(
         const candidate = {
             key,
             item,
-            label: liveSession?.label ?? getCatalogRasterBasename(item),
+            label: liveSession?.label ?? getRasterDisplayName(item),
             appearanceMode: liveSession?.appearanceMode ?? "continuous",
             rasterStyle: {
                 ...(styleSource?.rasterStyle ?? DEFAULT_RASTER_STYLE),
@@ -971,9 +976,9 @@ export function initializeRasterViewer(
     function allVisibleRasterRecords() {
         const records = mapLayers.retainedRecords.filter(
             /**
-             * Exclude hidden layers and layers owned by another renderer.
+             * Select visible layers owned by the ordinary raster controls.
              * @param {{adapter:Object,entry:Object}} record Retained layer record.
-             * @return {boolean} Whether this is a visible WMS raster.
+             * @return {boolean} Whether this is a visible raster layer.
              */
             ({ adapter, entry }) => adapter === rasterMapLayerAdapter && entry.visible
         );
@@ -1006,11 +1011,11 @@ export function initializeRasterViewer(
      * @return {Object[]} Catalog identities and custom names, falling back to filename stems.
      */
     function rasterCursorSampleParticipants() {
-        return allVisibleRasterRecords()
-            .map(({ entry }) => ({
+        return allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.pixels !== false)
+            .map(({ entry, state }) => ({
                 key: entry.key,
-                label: entry.customName ?? getCatalogRasterStem(entry.item),
-                item: entry.item,
+                label: entry.customName ?? getRasterDisplayStem(state.item),
+                item: state.item,
             }));
     }
 
@@ -1023,7 +1028,7 @@ export function initializeRasterViewer(
      * @return {Object[]} At most 16 ordinary or two 2D raster records.
      */
     function visibleRasterRecords() {
-        return allVisibleRasterRecords().slice(0, bivariateMode.active ? 2 : MAXIMUM_VISIBLE_RASTER_HISTOGRAMS);
+        return allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.statistics !== false).slice(0, bivariateMode.active ? 2 : MAXIMUM_VISIBLE_RASTER_HISTOGRAMS);
     }
 
     /**
@@ -1048,10 +1053,10 @@ export function initializeRasterViewer(
             ];
         }
         if (followsVisibleLayers) {
-            return visibleRasterRecords().slice(0, 2).map(({ entry }) => ({
+            return allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.pixels !== false).slice(0, 2).map(({ entry, state }) => ({
                 key: entry.key,
                 label: entry.label,
-                item: entry.item,
+                item: state.item,
                 axis: null,
             }));
         }
@@ -1060,7 +1065,7 @@ export function initializeRasterViewer(
         }
         return [{
             key: activeLayerKey,
-            label: mapLayers.getRecord(activeLayerKey)?.entry.label ?? getCatalogRasterBasename(activeRasterItem),
+            label: mapLayers.getRecord(activeLayerKey)?.entry.label ?? getRasterDisplayName(activeRasterItem),
             item: activeRasterItem,
             axis: null,
         }];
@@ -1079,7 +1084,7 @@ export function initializeRasterViewer(
      */
     function shouldOpenRasterHistogram(participants, position) {
         const coverageParticipants = followsVisibleLayers && !bivariateMode.active
-            ? allVisibleRasterRecords().map(({ entry }) => entry)
+            ? allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.statistics !== false).map(({ entry }) => entry)
             : participants;
         return coverageParticipants.some(({ key }) => {
             const record = mapLayers.getRecord(key);
@@ -1205,7 +1210,7 @@ export function initializeRasterViewer(
              * a rasterRangeResolved flag indicating a non-placeholder range.
              */
             ({ entry, state }) => ({
-                key: entry.key, item: entry.item, label: entry.label,
+                key: entry.key, item: state.item, label: entry.label,
                 appearanceMode: state.appearanceMode ?? "continuous",
                 rasterStyle: { ...state.rasterStyle },
                 rasterRangeResolved: !hasDefaultRasterRange(
@@ -1238,7 +1243,7 @@ export function initializeRasterViewer(
                 if (getLayerHistogramPresentation(state).state === "idle") {
                     const area = currentRasterSamplingArea();
                     setSessionSamplingArea(state, area);
-                    void requireLayerHistogramController(state).activate(entry.item, area);
+                    void requireLayerHistogramController(state).activate(state.item, area);
                 }
             }
         }
@@ -1804,10 +1809,8 @@ export function initializeRasterViewer(
                 layer === null ||
                 !mapLayers.isAttached(candidate.key)
             ) continue;
-            layer.setParams({
-                styles: "dynamic-raster",
-                env: buildRasterStyleEnvironment(style),
-            });
+            setRasterLayerAppearance(layer, {kind: "raster", appearanceVersion: 1, mode: "continuous",
+                continuous: {definition: style, paletteName: "custom", styleWasEdited: true}, categorical: null});
             layer.setOpacity(1);
             setRasterLayerAdditiveBlend(layer, false);
             renderedRecords.push(record);
@@ -1853,7 +1856,7 @@ export function initializeRasterViewer(
             const record = mapLayers.getRecord(key);
             const layer = mapLayers.getLeafletLayer(key);
             if (record === null || layer === null) continue;
-            setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
+            setRasterLayerAppearance(layer, rasterSessionAppearance(record.state));
             layer.setOpacity(record.entry.opacity);
             if (mapLayers.isAttached(key)) {
                 setRasterLayerAdditiveBlend(layer, false);
@@ -1980,45 +1983,68 @@ export function initializeRasterViewer(
 
     /** Feature-owned adapter consumed by the neutral map-layer controller. */
     const rasterMapLayerAdapter = {
+        /** Fit a non-catalog raster to its source extent. @param {Object} record Raster record. @return {void} */
+        zoom(record) {
+            const [west, south, east, north] = record.state.item.bbox;
+            leafletMap.fitBounds([[south, west], [north, east]], {maxZoom: 15});
+        },
+        /** Open source details through composition. @param {Object} record Raster record. @return {void} */
+        info: record => record.state.lifecycle?.info(),
+        /** Copy source lifetime identity and shared appearance for authorized Undo.
+         * @param {Object} record Raster record. @return {Object} Source owner's restoration descriptor.
+         */
+        copyLayerForUndo: record => record.state.lifecycle.copy(rasterMapLayerAdapter.exportSavedState(record)),
         tileErrorMessage: "Map tiles could not be rendered.",
-        label: getCatalogRasterBasename,
+        label: getRasterDisplayName,
         publish: publishRaster,
         /**
-         * Create a published layer's state, preserving matching analysis data.
+         * Create raster control state, preserving matching original-source analysis.
          *
          * @param {Object} context Neutral controller's publication context.
          * @param {Object} context.entry Stable stack entry and display label.
-         * @param {Object} context.publication GeoServer publication response.
-         * @param {Object} context.item Catalog raster Item being retained.
+         * @param {Object} [context.publication] Catalog GeoServer publication response.
+         * @param {Object} [context.item] Catalog raster Item being retained.
+         * @param {Object} [context.source] Non-catalog raster descriptor, lifecycle callbacks and optional appearance.
          * @return {Object} New raster session with any prior interaction state.
          */
-        createState({ entry, publication, item }) {
+        createState({ entry, publication, item, source }) {
+            item ??= source.raster;
             const analysisSession = matchingAnalysisSession(item);
             if (analysisSession !== null) {
                 saveActiveLayerSession();
             }
-            const session = createLayerSession(entry, publication);
+            const session = createLayerSession(entry, publication ?? {bbox: item.bbox});
+            session.item = item;
+            session.lifecycle = source?.lifecycle ?? null;
+            if (source?.appearance) {
+                const appearance = normalizeRasterAppearanceState(source.appearance);
+                session.appearanceMode = appearance.mode; session.categoricalStyle = appearance.categorical;
+                session.rasterStyle = appearance.continuous.definition; session.paletteName = appearance.continuous.paletteName;
+                session.rasterStyleWasEdited = appearance.continuous.styleWasEdited;
+            }
             if (analysisSession !== null) {
                 copyRasterInteractionState(session, analysisSession);
             }
             return session;
         },
         /**
-         * Construct the retained raster's WMS layer with its current style.
+         * Construct the raster through its WMS or authorized viewport delivery adapter.
          *
          * @param {Object} record Record containing publication and raster state.
          * @param {() => void} reportTileError Controller-owned failure callback.
-         * @return {Object} Leaflet-compatible WMS layer, not yet attached.
+         * @return {Object} Leaflet-compatible raster layer, not yet attached.
          */
         createLayer(record, reportTileError) {
-            const layer = createRasterLayer(
-                record.publication,
-                record.state.rasterStyle,
-                reportTileError
-            );
+            const layer = record.state.item.source
+                ? createWindowLayer(leaflet, leafletMap, {...record.state.item, key: record.entry.key},
+                    rasterSessionAppearance(record.state), message => {
+                        if (mapLayers.getRecord(record.entry.key) !== record) return;
+                        mapLayers.updateRenderingError(record.entry.key, message);
+                    })
+                : createRasterLayer(record.publication, record.state.rasterStyle, reportTileError);
             record.state.layer = layer;
             if (record.state.appearanceMode === "categorical") {
-                setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
+                setRasterLayerAppearance(layer, rasterSessionAppearance(record.state));
             }
             return layer;
         },
@@ -2053,10 +2079,14 @@ export function initializeRasterViewer(
             if (activeLayerKey === record.entry.key) {
                 saveActiveLayerSession();
             }
+            const source = rasterSourceReference(record.state.item);
+            const metadata = {source, bounds: record.state.item.bbox,
+                group: record.state.item.group,
+                capabilities: record.state.item.capabilities ?? {pixels: true, statistics: true, calculations: true, modelInput: true}};
             let presentationStyle = record.state.rasterStyle;
             if (record.state.appearanceMode === "categorical") {
                 return {
-                    datasetKind: "raster", opacityLocked: false,
+                    ...metadata, datasetKind: "raster", opacityLocked: false,
                     effectiveOpacity: record.entry.opacity,
                     roleBadge: null,
                     legend: buildCategoricalRasterLegend(record.state.categoricalStyle),
@@ -2071,7 +2101,7 @@ export function initializeRasterViewer(
             }
             const definition = buildRasterLegend(presentationStyle);
             return {
-                datasetKind: "raster",
+                ...metadata, datasetKind: "raster",
                 opacityLocked,
                 effectiveOpacity: opacityLocked ? 1 : record.entry.opacity,
                 roleBadge: opacityLocked ? {
@@ -2156,7 +2186,7 @@ export function initializeRasterViewer(
          * @return {void}
          */
         prepare(record) {
-            const analysisSession = matchingAnalysisSession(record.entry.item);
+            const analysisSession = matchingAnalysisSession(record.state.item);
             if (analysisSession !== null) {
                 saveActiveLayerSession();
                 copyRasterInteractionState(record.state, analysisSession);
@@ -2215,6 +2245,8 @@ export function initializeRasterViewer(
          */
         removed(record, { wasActive }) {
             record.state.layerHistogramController?.clear();
+            record.state.layer?.release?.();
+            record.state.lifecycle?.removed();
             if (wasActive && analysisRasterSession !== null) {
                 activateDetachedSession(analysisRasterSession);
             } else if (bivariateMode.active) {
@@ -2532,7 +2564,7 @@ export function initializeRasterViewer(
             syncVisibleLayers();
             return;
         }
-        const catalogKey = getCatalogItemKey(item);
+        const catalogKey = rasterSourceKey(item);
         if (bivariateMode.active && !bivariateMode.contains(catalogKey)) {
             leaveBivariateMode(
                 "A different raster analysis was selected; bivariate mode ended."
@@ -2724,15 +2756,15 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Build mutually exclusive direct WMS parameters for committed appearance.
+     * Build the shared appearance passed to any raster display adapter.
      * @param {Object} session Layer-owned style state.
-     * @return {{env?:string,raster_style?:string}} Validated WMS parameters.
+     * @return {Object} Validated ordinary raster appearance.
      * @throws {Error} If the committed appearance is invalid.
      */
-    function rasterSessionStyleParameters(session) {
-        return session.appearanceMode === "categorical"
-            ? { raster_style: buildCategoricalRasterStyleParameter(session.categoricalStyle) }
-            : { env: buildRasterStyleEnvironment(session.rasterStyle) };
+    function rasterSessionAppearance(session) {
+        return normalizeRasterAppearanceState({kind: "raster", appearanceVersion: 1, mode: session.appearanceMode ?? "continuous",
+            continuous: {definition: session.rasterStyle, paletteName: session.paletteName, styleWasEdited: session.rasterStyleWasEdited},
+            categorical: session.categoricalStyle ?? null});
     }
 
     /**
@@ -2899,10 +2931,8 @@ export function initializeRasterViewer(
      * @throws {Error} If style validation or the renderer update fails.
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
-        const environment = buildRasterStyleEnvironment(style);
-        if (session.layer) setRasterWmsStyle(session.layer,
-            session.appearanceMode === "categorical"
-                ? rasterSessionStyleParameters(session) : { env: environment });
+        const appearance = rasterSessionAppearance({...session, rasterStyle: style, paletteName, rasterStyleWasEdited: wasEdited});
+        if (session.layer) setRasterLayerAppearance(session.layer, appearance);
         session.rasterStyle = { ...style };
         session.paletteName = paletteName;
         session.rasterStyleWasEdited = wasEdited;
@@ -3544,7 +3574,7 @@ export function initializeRasterViewer(
      * relevant, including guidance when the requested box cannot be selected.
      */
     function exploreAt(position, { onSelected = () => {} } = {}) {
-        if (!canUseRasterMapInteractions()) {
+        if (!canUseRasterMapInteractions() && rasterPointSampleParticipants().length === 0) {
             return false;
         }
         if (vectorSelection && (bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection)?.id === vectorSelection.id) {
@@ -3913,8 +3943,8 @@ export function initializeRasterViewer(
             bivariateMode.contains(session.key)) return;
         try {
             const style = controlsView.readCategoricalStyle();
-            const parameters = { raster_style: buildCategoricalRasterStyleParameter(style) };
-            if (session.layer) setRasterWmsStyle(session.layer, parameters);
+            const appearance = rasterSessionAppearance({...session, categoricalStyle: style, appearanceMode: "categorical"});
+            if (session.layer) setRasterLayerAppearance(session.layer, appearance);
             session.categoricalStyle = style;
             session.appearanceMode = "categorical";
             controlsView.renderCategoricalError?.();
@@ -4339,6 +4369,20 @@ export function initializeRasterViewer(
         return publication;
     }
 
+    /** Attach a source descriptor to the ordinary raster style and analysis owner.
+     * @param {Object} raster Original source, metadata, label, group and capabilities.
+     * @param {Object} lifecycle Composition-supplied info, Undo and removal callbacks.
+     * @param {Object} [presentation={}] Visibility, opacity and optional restored appearance.
+     * @return {Object} Retained raster record; no catalog item is created.
+     * @throws {Error} If identity, appearance or layer construction fails.
+     */
+    function showSource(raster, lifecycle, presentation = {}) {
+        const key = rasterSourceKey(raster);
+        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation}, rasterMapLayerAdapter);
+        renderLayerHistogramSummaries();
+        return record;
+    }
+
     /**
      * Publish and construct one raster layer without retaining or attaching it.
      *
@@ -4529,6 +4573,7 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        showSource,
         stage,
         syncVisibleLayers,
         setPointerInspectionEnabled,

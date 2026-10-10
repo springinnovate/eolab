@@ -107,24 +107,30 @@ Nothing is added automatically. Its button changes to **On map**, and Map layers
 groups the chosen outputs under their run names. Use the usual visibility,
 opacity, Style, legend, zoom and remove controls. The layer's information action
 reopens its run. Removing a layer leaves its file available to download or show
-again; Undo requests a fresh authorized preview.
+again; Undo checks the original file again before restoring its style and display.
 
-Raster previews are small display samples, at most 512 pixels on either side,
-reprojected to the map with nearest-neighbor sampling. They preserve NoData and
-internal validity masks. The initial color range comes from this display sample;
-the existing continuous palettes and categorical tables change only the preview.
-Download the GeoTIFF for full resolution. Small WGS84 GeoJSON outputs support
-solid point, line or polygon styling. A file that exceeds preview limits remains
-downloadable. Up to eight result previews can be displayed at once.
+Raster outputs use the same **Style** controls as catalog rasters, including
+continuous palettes, percentile ranges, manual categories, uploaded CSV tables
+and legends. They also participate in pixel picking, **Distributions**,
+**Statistics**, **Raster stack**, raster clips and model input selection.
+These tools read the original GeoTIFF; changing colors or making a category
+transparent does not change its numeric values or exclude it from calculations.
 
-Previews remain private and temporary. Expiry removes their display; deletion and
-loss of access are checked at least every 30 seconds, even with Models closed.
-If availability cannot be confirmed, the preview is removed and can be reopened
-from its run. They are omitted from saved maps, published maps and remembered
-browser views. Reopen them from **Models → Runs** in the browser that owns them.
-They do not become catalog layers or map analysis selections. Model setup can
-independently select their original raster files as described above. Permanent
-saving and cross-user sharing are not yet available.
+The map loads a bounded grid for the visible area and requests finer detail when
+you zoom. Very broad views that exceed reading limits ask you to zoom in. Moving,
+hiding or removing the layer cancels its outstanding display request. Download
+the GeoTIFF to keep the full-resolution file. Small WGS84 GeoJSON outputs still
+use solid point, line or polygon previews. Up to eight result layers can be on
+the map at once, grouped by the run that produced each file.
+
+Result layers remain private and temporary. Expiry removes their display;
+deletion and loss of access are checked at least every 30 seconds, even with
+Models closed. If availability cannot be confirmed, the layer is removed and
+can be reopened from its run. They are omitted from saved maps, published maps
+and remembered browser views. Reopen them from **Models → Runs** in the browser
+that owns them. Removing or hiding a layer does not stop an accepted calculation
+or prevent selecting its original file under **Completed runs**. Permanent saving
+and cross-user sharing are not yet available.
 
 Under **Recipe & downloads**, **View Model YAML** shows the reusable recipe as
 text; **Download Model YAML** saves it. An accepted run also offers **Download

@@ -1,4 +1,5 @@
 /** Bounded per-tab recovery records for independent calculations. */
+import { labeledRasterSource } from "../raster-source.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const LEGACY_KEY = "eolab.processing.calculation.v1";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
@@ -33,10 +34,7 @@ export function calculationPixelPoint(calculations, point) {
  * @throws {TypeError|Error} If the source, formulas, area, chunk budget or point is invalid.
  */
 export function calculationIntent(value) {
-    const { collectionId, itemId, label } = value.source;
-    if (![collectionId, itemId, label].every(text => typeof text === "string" && text.length > 0 && text.length <= 512)) {
-        throw new TypeError("Choose a Catalog raster.");
-    }
+    const source = labeledRasterSource(value.source, value.source.label);
     if (!Array.isArray(value.calculations) || value.calculations.length < 1 || value.calculations.length > 5) {
         throw new TypeError("Use one to five calculations.");
     }
@@ -48,7 +46,7 @@ export function calculationIntent(value) {
         return Object.freeze({ label, expression });
     });
     const pixelPoint = calculationPixelPoint(calculations, value.pixelPoint);
-    return Object.freeze({ source: Object.freeze({ collectionId, itemId, label }),
+    return Object.freeze({ source,
         ...(chunkPixels(value.targetChunkPixels) === null ? {} : { targetChunkPixels: value.targetChunkPixels }),
         ...(pixelPoint ? { pixelPoint } : {}),
         area: normalizeCalculationArea(value.area), calculations: Object.freeze(calculations) });

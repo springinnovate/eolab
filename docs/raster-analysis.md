@@ -9,9 +9,10 @@ still count as data.
 
 The analysis API can read a catalog raster or an immutable GeoTIFF from a model
 run through the same pixel and distribution services. It reads the original
-file, never the map preview's 512-pixel display grid. The browser's model-output
-controls are unchanged; shared map controls and using outputs as model inputs
-are separate follow-ups.
+file, never a rendered display grid. After **Show on map**, raster outputs use
+the same style, pixel, distribution, Statistics and Raster stack controls as
+catalog rasters. Models can also select completed raster files without displaying
+them. Removing a display does not delete its original file or accepted jobs.
 
 Existing flat catalog requests remain supported. An explicit `source` can also
 identify a catalog item:
@@ -35,7 +36,7 @@ These distribution APIs are distinct from Processing's native raster formulas.
 
 `POST /api/raster-analysis/sources` takes `{"source": ...}` and returns its
 path-free reference, immutable `version`, original width/height, band count,
-datatype, CRS, six-coefficient affine `transform`, NoData and
+datatype, CRS, six-coefficient affine `transform`, WGS84 `bounds`, NoData and
 `capabilities.pixels` / `capabilities.statistics`.
 Each capability has `supported` and `reason`. A non-finite NoData marker is
 represented as `null`; numerical readers still use the original file metadata.
@@ -253,3 +254,35 @@ Payloads are limited to 32 KiB each; expired entries and oldest entries beyond
 capacity are removed when results are added. Deleting an owned job removes its
 download, not the independently cached numerical values. Cache entries contain
 no user titles, raster pixels, polygon geometry, source paths or download links.
+
+## Private raster map delivery
+
+`POST /api/rendering/raster-window` accepts `{source, bounds, width, height}`.
+`source` uses the same original-file reference as analysis; `bounds` has WGS84
+`west`, `south`, `east` and `north` fields within Web Mercator latitudes. Integer
+width and height are each 1–512. The response contains the original reference,
+immutable version, bounds in west/south/east/north order, dimensions and row-major
+values (`null` for invalid/outside cells). No filesystem paths or download URLs
+are returned. This display response is never an input to analysis or Processing.
+
+The delivery adapter uses neutral source access and the existing supervised
+native process reader. Private requests require the same owner cookie,
+same-origin header, checksum verification and renewable lease as analysis;
+responses are `private, no-store`. At most two windows run per API process, with
+no waiting queue, a 30-second native deadline and the existing Linux 2 GiB
+process ceiling. The browser retries capacity responses with bounded backoff
+and cancels superseded requests. Every request reauthorizes the source.
+
+Display centers are projected into the native grid and sampled by nearest cell.
+The reader checks at most 4,096 data/mask blocks and 512 MiB of decoded work
+before reading pixels, alongside the neutral per-block limits. Embedded masks,
+NoData and nonfinite values retain ordinary native validity; overviews do not
+replace original values. Requests exceeding the budget explain that the user
+should zoom in. Zooming requests a new visible window instead of enlarging a
+single whole-raster thumbnail. Styling reuses the ordinary palette/category
+functions and recolors only the current bounded browser grid.
+
+Catalog display continues through its existing WMS/composite path. Private
+files are never published to GeoServer or shared tile caches. The historical
+run-file `/preview` endpoint remains available to existing clients and delegates
+raster sampling to the same bounded reader; vector previews are unchanged.

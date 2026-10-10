@@ -190,7 +190,7 @@ export class MapLayerController {
         try {
             this.stack.setVisible(entry.key, source.visible ?? true);
             this.stack.setOpacity(entry.key, source.opacity ?? 1);
-            record.state = adapter.createState({ entry });
+            record.state = adapter.createState({ entry, source });
             this.records.set(entry.key, record);
             this.leafletLayers.add(entry.key, adapter.createLayer(record), entry);
             this.#applyLeafletOrder();
@@ -1013,6 +1013,18 @@ export class MapLayerController {
             : null;
         if (record.error === error) return;
         record.error = error;
+        this.view.render(this.snapshots(), this.presentationActiveKey);
+    }
+
+    /** Report an adapter's display failure without restarting rendering or analysis.
+     * @param {string} key Retained layer identity; removed layers are ignored.
+     * @param {string|null} message Readable failure, or null after recovery.
+     * @return {void}
+     */
+    updateRenderingError(key, message) {
+        const record = this.records.get(key);
+        if (!record || this.destroyed || record.error === message) return;
+        record.error = message;
         this.view.render(this.snapshots(), this.presentationActiveKey);
     }
 

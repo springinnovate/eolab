@@ -35,7 +35,7 @@ def test_shared_rendering_has_no_dataset_feature_dependency() -> None:
     application_imports = {
         module
         for source_path in RENDERING_SOURCE.glob("*.py")
-        if source_path.name != "artifact_preview.py"
+        if source_path.name not in {"artifact_preview.py", "raster_window.py"}
         for module in imported_modules(source_path)
         if module.startswith("eolab_app.")
     }
@@ -51,6 +51,7 @@ def test_artifact_previews_use_only_authorized_delivery_and_neutral_reading() ->
     assert {name for name in imports if name.startswith("eolab_app.")} == {
         "eolab_app.execution.bounded_process",
         "eolab_app.raster.source_contract",
+        "eolab_app.rendering.raster_window",
         "eolab_app.source_files",
     }
 
@@ -126,3 +127,30 @@ def test_raster_preflight_and_approximate_view_edges_are_removed() -> None:
     assert not any(source.exists() for source in removed_sources)
     assert "eolab_app.raster.assessment" not in composition_imports
     assert "eolab_app.raster.eligibility" not in composition_imports
+
+
+def test_raster_window_adapter_uses_only_neutral_original_source_contracts() -> None:
+    """Private map delivery cannot call analysis, Processing or GeoServer implementations."""
+    assert {
+        name
+        for name in imported_modules(RENDERING_SOURCE / "raster_window.py")
+        if name.startswith("eolab_app.")
+    } == {
+        "eolab_app.raster.models",
+        "eolab_app.raster.source_models",
+        "eolab_app.raster.source_access",
+        "eolab_app.raster.source_contract",
+        "eolab_app.source_files",
+    }
+    assert {
+        name
+        for name in imported_modules(Path("src/eolab_app/routes/raster_map.py"))
+        if name.startswith("eolab_app.")
+    } == {
+        "eolab_app.raster.errors",
+        "eolab_app.rendering.raster_window",
+        "eolab_app.raster.source_models",
+        "eolab_app.routes.http_disconnect",
+        "eolab_app.routes.raster_http",
+        "eolab_app.source_files",
+    }

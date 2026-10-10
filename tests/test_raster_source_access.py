@@ -46,6 +46,35 @@ CATALOG = {
 PRIVATE = {"kind": "runArtifact", "jobId": "a" * 32, "artifactId": "b" * 32}
 
 
+def test_missing_geographic_extent_does_not_disable_numerical_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An extent projection failure leaves original-grid analysis metadata available.
+
+    Args:
+        tmp_path: Isolated original-raster directory.
+        monkeypatch: Replace only the optional extent conversion.
+    """
+    from eolab_app.raster import source_access
+
+    def unavailable(*args: Any) -> None:
+        """Represent an unsupported geographic extent.
+
+        Args:
+            args: Source CRS and original bounds.
+
+        Raises:
+            ValueError: Always, to model failed extent conversion.
+        """
+        raise ValueError("No geographic extent")
+
+    monkeypatch.setattr(source_access, "transform_bounds_to_wgs84", unavailable)
+    result = source_access.describe_raster_file(write_source(tmp_path / "source.tif"))
+    assert result["bounds"] is None
+    assert result["capabilities"]["pixels"]["supported"]
+    assert result["capabilities"]["statistics"]["supported"]
+
+
 def write_source(path: Path, masked: bool = False) -> Path:
     """Write a small original-resolution raster with optional internal validity.
 

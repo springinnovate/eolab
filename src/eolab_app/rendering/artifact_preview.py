@@ -12,7 +12,6 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
 )
 from eolab_app.raster.source_contract import (
-    mask_invalid_raster_values,
     require_pixel_source_structure,
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
@@ -42,7 +41,7 @@ class ArtifactPreviewError(Exception):
 
 
 def read_raster_preview(path: Path) -> dict[str, Any]:
-    """Sample a GeoTIFF into a masked Web Mercator grid of at most 512 × 512 cells.
+    """Serve the historical whole-file preview through the bounded viewport reader.
 
     Args:
         path: Confined, checksum-verified file held under a delivery lease.
@@ -54,47 +53,29 @@ def read_raster_preview(path: Path) -> dict[str, Any]:
         ValueError: If the raster cannot safely provide this display preview.
         RasterioError: If the native reader cannot open or project the file.
     """
-    import numpy as np
-    import rasterio
-    from rasterio.enums import MaskFlags, Resampling
-    from rasterio.transform import from_bounds
-    from rasterio.vrt import WarpedVRT
-    from rasterio.warp import transform_bounds
 
-    with (
-        rasterio.Env(GDAL_CACHEMAX=32 * 1024 * 1024, GDAL_NUM_THREADS="1"),
-        rasterio.open(path, driver="GTiff") as source,
-    ):
+    import rasterio
+    from rasterio.warp import transform_bounds
+    from eolab_app.rendering.raster_window import RasterMapGrid, read_raster_map_window
+
+    with rasterio.open(path, driver="GTiff") as source:
         require_signed_raster_dependencies(source, path)
-        if (
-            source.count != 1
-            or source.crs is None
-            or source.dtypes[0]
-            not in {"uint8", "uint16", "int16", "uint32", "int32", "float32", "float64"}
-        ):
-            raise ValueError(
-                "Preview requires a georeferenced, single-band numeric GeoTIFF."
-            )
         require_raster_analysis_georeferencing(source)
         require_pixel_source_structure(source)
         west, south, east, north = transform_bounds(
             source.crs, "EPSG:4326", *source.bounds, densify_pts=21
         )
+        west, east = max(-180, west), min(180, east)
+        south, north = max(-85.05112878, south), min(85.05112878, north)
         if (
             not all(math.isfinite(value) for value in (west, south, east, north))
             or west >= east
+            or south >= north
         ):
             raise ValueError(
                 "This raster crosses unsupported map bounds. Download the file instead."
             )
-        west, east = max(-180, west), min(180, east)
-        south, north = max(-85.05112878, south), min(85.05112878, north)
-        if west >= east or south >= north:
-            raise ValueError(
-                "This raster is outside the map's supported latitude range."
-            )
-        bounds = (west, south, east, north)
-        projected = transform_bounds("EPSG:4326", "EPSG:3857", *bounds)
+        projected = transform_bounds("EPSG:4326", "EPSG:3857", west, south, east, north)
         x_span, y_span = projected[2] - projected[0], projected[3] - projected[1]
         scale = min(MAX_PREVIEW_SIDE, max(source.width, source.height)) / max(
             x_span, y_span
@@ -102,35 +83,12 @@ def read_raster_preview(path: Path) -> dict[str, Any]:
         width, height = min(512, max(1, math.ceil(x_span * scale))), min(
             512, max(1, math.ceil(y_span * scale))
         )
-        with WarpedVRT(
-            source,
-            crs="EPSG:3857",
-            transform=from_bounds(*projected, width, height),
-            width=width,
-            height=height,
-            resampling=Resampling.nearest,
-            dtype="float64",
-            src_nodata=(
-                None
-                if MaskFlags.per_dataset in source.mask_flag_enums[0]
-                else source.nodata
-            ),
-            add_alpha=True,
-            init_dest_nodata=False,
-            warp_mem_limit=32,
-        ) as preview:
-            values = mask_invalid_raster_values(
-                preview.read(1), source.nodata, preview.read(preview.count)
-            )
-            cells = values.data.astype(object)
-            cells[np.ma.getmaskarray(values)] = None
-            return {
-                "kind": "raster",
-                "bounds": list(bounds),
-                "width": width,
-                "height": height,
-                "values": cells.ravel().tolist(),
-            }
+    request = RasterMapGrid(
+        bounds={"west": west, "south": south, "east": east, "north": north},
+        width=width,
+        height=height,
+    )
+    return {"kind": "raster", **read_raster_map_window(path, request)}
 
 
 def read_vector_preview(path: Path) -> dict[str, Any]:

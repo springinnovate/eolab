@@ -1,3 +1,4 @@
+import { rasterSourceKey } from "../raster-source.js";
 /** Compact, accessible statistic cards. No expression evaluation happens in the view. */
 import { calculationValue } from "./calculation-result-view.js";
 import { processingDownloadUrl } from "./api.js";
@@ -158,7 +159,7 @@ export class SummaryStatisticsView {
     render(state) {
         this.latestState = state;
         const sources = [...new Map(state.statistics.filter(card => card.source).map(card =>
-            [JSON.stringify([card.source.collectionId, card.source.itemId]), card.source.label])).values()];
+            [rasterSourceKey(card.source), card.source.label])).values()];
         this.onContextChange({ source: state.sourceMode === "query" ? `${state.querySources.length} enabled rasters in this area` : sources.length === 1 ? sources[0]
             : sources.length ? `${sources.length} rasters in statistic cards` : "No raster selected",
             scope: this.areaDescription(state) });
@@ -222,10 +223,10 @@ export class SummaryStatisticsView {
                 const options = state.sources.map((source, index) => {
                     const option = this.element("option", source.label); option.value = String(index); return option;
                 });
-                if (!options.length) { const option = this.element("option", "Choose a Catalog raster"); option.value = ""; options.push(option); }
+                if (!options.length) { const option = this.element("option", "Choose a raster"); option.value = ""; options.push(option); }
                 row.source.replaceChildren(...options); row.sourceSignature = sourceSignature;
             }
-            row.source.value = String(state.sources.findIndex(source => source.collectionId === card.source?.collectionId && source.itemId === card.source?.itemId));
+            row.source.value = String(state.sources.findIndex(source => card.source && rasterSourceKey(source) === rasterSourceKey(card.source)));
             row.source.disabled = !state.sources.length;
             row.expression.setAttribute("aria-invalid", String(card.error && !card.valid));
             row.root.setAttribute("aria-busy", String(!!(card.pending || selecting)));

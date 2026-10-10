@@ -1,13 +1,14 @@
-/** Browser-safe display helpers for scanner-owned raster values and names. */
+/** Browser-safe display helpers for raster values and names. */
 
 /**
- * Read the display basename from a scanner-owned GeoTIFF Asset URL.
+ * Read the display name from a raster descriptor or catalog GeoTIFF asset.
  *
- * @param {Object} item Selected mounted GeoTIFF STAC Item.
- * @return {string} Decoded raster filename, including its extension.
+ * @param {Object} item Catalog Item or source descriptor.
+ * @return {string} Descriptor label or decoded catalog filename, including its extension.
  * @throws {TypeError} If the scanner-owned Asset URL is invalid.
  */
-export function getCatalogRasterBasename(item) {
+export function getRasterDisplayName(item) {
+    if (item.source) return item.label;
     const pathname = new URL(item.assets.data.href).pathname;
     return decodeURIComponent(pathname.slice(pathname.lastIndexOf("/") + 1));
 }
@@ -15,11 +16,11 @@ export function getCatalogRasterBasename(item) {
 /**
  * Return a concise filename stem for transient map-cursor presentation.
  *
- * @param {Object} item Mounted GeoTIFF Catalog Item.
+ * @param {Object} item Catalog Item or source descriptor.
  * @return {string} Decoded basename without its final extension.
  */
-export function getCatalogRasterStem(item) {
-    return getCatalogRasterBasename(item).replace(/\.[^.]+$/, "");
+export function getRasterDisplayStem(item) {
+    return getRasterDisplayName(item).replace(/\.[^.]+$/, "");
 }
 
 /**
