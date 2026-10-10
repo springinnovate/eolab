@@ -61,13 +61,14 @@ def preview_boundary(model_boundary: Any) -> Iterator[Any]:
 def test_private_preview_and_download_lifetimes(
     preview_boundary: Any, store: Any, terminal: str
 ) -> None:
-    """Deny foreign sessions and unavailable runs while releasing all preview leases.
+    """Authorize preview and masked statistics only while the owned run is available.
 
     Args:
         preview_boundary: Actual HTTP, rendering, worker and store composition.
         store: Disposable PostgreSQL authority.
-        terminal: Explicit deletion or expiry after a successful preview.
+        terminal: Explicit deletion or expiry after preview and statistics succeed.
     """
+
     client, worker, service = preview_boundary
     request = model_request(
         client,
@@ -115,8 +116,15 @@ def test_private_preview_and_download_lifetimes(
     assert description.status_code == 200, description.text
     assert description.json()["version"] == file["sha256"]
     assert description.json()["capabilities"]["pixels"]["supported"]
-    assert not description.json()["capabilities"]["statistics"]["supported"]
+    assert description.json()["capabilities"]["statistics"]["supported"]
     assert str(worker.artifacts.root) not in description.text
+    statistics_request = {"source": reference}
+    statistics = client.post(
+        "/api/raster-analysis/statistics", json=statistics_request, headers=HEADERS
+    )
+    assert statistics.status_code == 200, statistics.text
+    assert statistics.json()["validSampleCount"] == ready["result"]["validPixels"]
+    assert "no-store" in statistics.headers["cache-control"]
     assert (
         client.post("/api/raster-analysis/pixels", json=pixel_request).status_code
         == 403
@@ -139,6 +147,14 @@ def test_private_preview_and_download_lifetimes(
         )
         assert denied_pixel.status_code == 404
         assert "no-store" in denied_pixel.headers["cache-control"]
+        assert (
+            foreign.post(
+                "/api/raster-analysis/statistics",
+                json=statistics_request,
+                headers=HEADERS,
+            ).status_code
+            == 404
+        )
     assert client.get(base + "/artifacts/" + "0" * 32 + "/preview").status_code == 404
     provenance = next(
         file for file in ready["artifacts"]["files"] if file["role"] == "provenance"
@@ -154,6 +170,12 @@ def test_private_preview_and_download_lifetimes(
                 (job["jobId"],),
             )
     assert client.get(url).status_code == 409
+    assert (
+        client.post(
+            "/api/raster-analysis/statistics", json=statistics_request, headers=HEADERS
+        ).status_code
+        == 409
+    )
     assert (
         client.post(
             "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
