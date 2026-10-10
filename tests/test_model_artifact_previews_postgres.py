@@ -132,6 +132,7 @@ def test_private_preview_and_download_lifetimes(
     with TestClient(client.app, base_url="https://testserver") as foreign:
         denied = foreign.get(url)
         assert denied.status_code == 404
+        assert denied.json()["detail"]["code"] == "job_not_found"
         assert "no-store" in denied.headers["cache-control"]
         denied_pixel = foreign.post(
             "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS

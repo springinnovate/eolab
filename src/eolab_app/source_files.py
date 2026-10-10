@@ -26,15 +26,17 @@ class LeasedSourceFile(Protocol):
 class SourceFileError(Exception):
     """Authorized source access failed without exposing private storage details."""
 
-    def __init__(self, message: str, status: int = 409) -> None:
+    def __init__(self, message: str, status: int = 409, *, code: str | None = None) -> None:
         """Keep a public explanation and delivery status.
 
         Args:
             message: Path-free explanation of the failure.
             status: HTTP status used by delivery adapters.
+            code: Optional stable failure code supplied by the source authority.
         """
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def file_identity(path: Path) -> tuple[int, int, int, int, int]:

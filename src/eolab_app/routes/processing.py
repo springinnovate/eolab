@@ -1039,8 +1039,16 @@ def create_processing_router(
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Map preview cancelled") from error
         except (ArtifactPreviewError, SourceFileError) as error:
+            headers = {"Cache-Control": "private, no-store"}
+            detail: str | dict[str, str] = str(error)
+            if isinstance(error, SourceFileError) and error.code is not None:
+                # Preserve the existing Processing failure response through the
+                # neutral source-access port, including its retry guidance.
+                detail = {"code": error.code, "message": str(error)}
+                if error.status in {429, 503}:
+                    headers["Retry-After"] = "5"
             raise HTTPException(
-                error.status, str(error), headers={"Cache-Control": "private, no-store"}
+                error.status, detail, headers=headers
             ) from error
         except HTTPException as error:
             error.headers = {
