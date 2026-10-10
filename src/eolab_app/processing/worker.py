@@ -273,6 +273,12 @@ class ProcessingWorker:
             )
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
+        if spec.sourceChecksum != checksum:
+            raise ProcessingError(
+                "source_changed",
+                "The prepared input does not match the accepted raster file.",
+                409,
+            )
         context = self._operation_context(model is None, checksum)
         target, action, limits = handler.execution(spec, context, row["reserved_bytes"])
         if (

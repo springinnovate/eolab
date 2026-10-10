@@ -22,6 +22,7 @@ from eolab_app.processing.models import ProcessingError, PreparedJobPlan
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.routes.processing import COOKIE
 from test_model_runs_postgres import model_boundary, model_request, submit
+from test_model_artifacts_postgres import multiple_boundary
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from test_raster_clips import SOURCE
 from catalog_selection_support import write_geopackage_layer, register_selection
@@ -717,4 +718,102 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
     assert denied.value.code == "owner_queue_full"
     assert input_counts(store) == (1, 0)
     store.cancel(rows[0]["id"], owner)
+    assert input_counts(store) == (0, 0)
+
+
+def test_published_scientific_intermediate_is_a_reusable_raster(
+    multiple_boundary: Any, store: Any
+) -> None:
+    """Published coverage can be reused while calculation scratch remains private.
+
+    Args:
+        multiple_boundary: Existing registered multi-output operation fixture.
+        store: Disposable PostgreSQL store.
+    """
+    from eolab_app.processing.model_definitions import ModelRegistry
+
+    client, worker, service, body = multiple_boundary
+    parent = submit(client, body)
+    assert client.portal.call(worker.run_once)
+    parent = client.get(f"/api/processing/jobs/{parent['jobId']}").json()
+    coverage = next(
+        file
+        for file in parent["artifacts"]["files"]
+        if file["role"] == "intermediate" and file["mediaType"] == "image/tiff"
+    )
+    assert coverage["role"] == "intermediate"
+    assert all(
+        file["filename"] != "scratch.bin" for file in parent["artifacts"]["files"]
+    )
+    service.model_registry = ModelRegistry.load_installed()
+    source = {
+        "kind": "runArtifact",
+        "jobId": parent["jobId"],
+        "artifactId": coverage["artifactId"],
+    }
+    child = submit(
+        client,
+        model_request(
+            client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
+        ),
+    )
+    assert client.portal.call(worker.run_once)
+    result = client.get(f"/api/processing/jobs/{child['jobId']}").json()
+    assert result["status"] == "ready", result
+    assert (
+        Decimal(result["result"]["rows"][0]["value"]) == parent["result"]["validPixels"]
+    )
+    assert input_counts(store) == (0, 0)
+
+
+def test_prepared_checksum_must_match_the_accepted_input(
+    model_boundary: Any, store: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mismatched persisted checksum fails without publishing a misleading result.
+
+    Args:
+        model_boundary: Actual model HTTP and native worker.
+        store: Disposable PostgreSQL store.
+        monkeypatch: Alter the prepared specification at its persistence boundary.
+    """
+    client, worker, _ = model_boundary
+    _, source, _ = publish_input(model_boundary)
+    child = submit(
+        client,
+        model_request(
+            client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
+        ),
+    )
+    save_prepared_job = store.save_prepared_job
+
+    def save_changed_checksum(
+        identifier: str, attempt: str, prepared: PreparedJobPlan
+    ) -> dict[str, Any]:
+        """Persist a specification whose input checksum differs from its grant.
+
+        Args:
+            identifier: Claimed computation ID.
+            attempt: Current execution fencing token.
+            prepared: Validated calculation and reservation to persist.
+
+        Returns:
+            Updated job row containing the altered specification.
+        """
+        specification = {
+            **prepared.specification,
+            "calculation": {
+                **prepared.specification["calculation"],
+                "sourceChecksum": "0" * 64,
+            },
+        }
+        return save_prepared_job(
+            identifier, attempt, replace(prepared, specification=specification)
+        )
+
+    monkeypatch.setattr(store, "save_prepared_job", save_changed_checksum)
+    assert client.portal.call(worker.run_once)
+    result = client.get(f"/api/processing/jobs/{child['jobId']}").json()
+    assert result["status"] == "failed", result
+    assert result["error"]["code"] == "source_changed"
+    assert result["result"] is None
     assert input_counts(store) == (0, 0)
