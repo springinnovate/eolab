@@ -3,22 +3,12 @@
 from pathlib import Path
 
 import pytest
+import numpy
+from rasterio.enums import MaskFlags
 from rasterio.transform import Affine
 from rasterio.windows import Window
 
 from eolab_app.raster.pixel import read_raster_pixel
-
-
-class _Sample:
-    """Minimal one-value masked sample."""
-
-    def count(self) -> int:
-        """Report one valid value."""
-        return 1
-
-    def __getitem__(self, _: tuple[int, int]) -> float:
-        """Return the controlled sample value."""
-        return 42.5
 
 
 class _Dataset:
@@ -30,6 +20,8 @@ class _Dataset:
     count = 1
     dtypes = ("float32",)
     block_shapes = ((10, 10),)
+    mask_flag_enums = ([MaskFlags.all_valid],)
+    nodatavals = (None,)
     files = ("raster.tif",)
     transform = Affine.identity()
 
@@ -50,10 +42,19 @@ class _Dataset:
         assert (x, y) == (10, 20)
         return 2, 3
 
-    def read(self, band: int, *, window: Window, masked: bool) -> _Sample:
-        """Record and return one bounded source read."""
+    def read(self, band: int, *, window: Window, masked: bool) -> numpy.ndarray:
+        """Record and return one bounded source read.
+
+        Args:
+            band: One-based source band.
+            window: Requested source cell.
+            masked: Whether Rasterio should derive validity itself.
+
+        Returns:
+            Controlled original numeric value.
+        """
         self.read_arguments = (band, window, masked)
-        return _Sample()
+        return numpy.array([[42.5]], dtype="float32")
 
 
 def test_pixel_reader_reads_only_band_one_and_one_source_cell(
@@ -75,4 +76,4 @@ def test_pixel_reader_reads_only_band_one_and_one_source_cell(
     assert pixel.value == 42.5
     assert pixel.in_bounds is True
     assert (pixel.row, pixel.column) == (2, 3)
-    assert dataset.read_arguments == (1, Window(3, 2, 1, 1), True)
+    assert dataset.read_arguments == (1, Window(3, 2, 1, 1), False)

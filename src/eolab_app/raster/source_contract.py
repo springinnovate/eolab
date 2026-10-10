@@ -277,7 +277,7 @@ def require_bounded_source_structure(
         {MaskFlags.all_valid, MaskFlags.nodata, MaskFlags.per_dataset}
     ):
         raise ValueError(
-            "Bounded raster reads do not support alpha or unknown " "validity masks"
+            "Bounded raster reads do not support alpha or unknown validity masks"
         )
     _require_mask_block_memory(dataset, decoded_block_bytes)
 

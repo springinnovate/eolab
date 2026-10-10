@@ -579,11 +579,11 @@ def test_planners_reject_unsafe_structure_and_unbounded_exact_windows() -> None:
             Window(0, 0, 100, 100),
         )
 
-    external_validity = _NativeBlockDataset(values, block_shape=(32, 32))
-    external_validity.mask_flag_enums = ([MaskFlags.per_dataset],)
-    with pytest.raises(ValueError, match="alpha or per-dataset"):
+    alpha_validity = _NativeBlockDataset(values, block_shape=(32, 32))
+    alpha_validity.mask_flag_enums = ([MaskFlags.per_dataset, MaskFlags.alpha],)
+    with pytest.raises(ValueError, match="alpha or unknown"):
         plan_source_window_sample_grid(  # type: ignore[arg-type]
-            external_validity,
+            alpha_validity,
             Window(0, 0, 100, 100),
         )
 
