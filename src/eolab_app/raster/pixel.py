@@ -9,6 +9,7 @@ from rasterio.windows import Window
 
 from eolab_app.raster.models import RasterPixel
 from eolab_app.raster.source_contract import (
+    read_native_raster_window,
     require_pixel_source_structure,
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
@@ -71,11 +72,7 @@ def read_raster_pixel(
                 value=None,
             )
 
-        sample = dataset.read(
-            1,
-            window=Window(column, row, 1, 1),
-            masked=True,
-        )
+        sample = read_native_raster_window(dataset, Window(column, row, 1, 1))
         value = None if sample.count() == 0 else float(sample[0, 0])
         if value is not None and not math.isfinite(value):
             value = None

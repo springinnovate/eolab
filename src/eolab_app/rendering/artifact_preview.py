@@ -11,7 +11,12 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
     ProcessDeadlineError,
 )
-from eolab_app.raster.source_contract import require_signed_raster_dependencies
+from eolab_app.raster.source_contract import (
+    mask_invalid_raster_values,
+    require_pixel_source_structure,
+    require_raster_analysis_georeferencing,
+    require_signed_raster_dependencies,
+)
 from eolab_app.source_files import LeasedSourceFiles
 
 MAX_PREVIEW_BYTES = 8 * 1024 * 1024
@@ -70,13 +75,8 @@ def read_raster_preview(path: Path) -> dict[str, Any]:
             raise ValueError(
                 "Preview requires a georeferenced, single-band numeric GeoTIFF."
             )
-        if any(
-            height * width * (np.dtype(source.dtypes[0]).itemsize + 1) > 64 * 1024**2
-            for height, width in source.block_shapes
-        ):
-            raise ValueError(
-                "Raster blocks are too large for a map preview. Download the file instead."
-            )
+        require_raster_analysis_georeferencing(source)
+        require_pixel_source_structure(source)
         west, south, east, north = transform_bounds(
             source.crs, "EPSG:4326", *source.bounds, densify_pts=21
         )
@@ -119,12 +119,11 @@ def read_raster_preview(path: Path) -> dict[str, Any]:
             init_dest_nodata=False,
             warp_mem_limit=32,
         ) as preview:
-            values = preview.read(1, masked=True)
-            valid = (preview.read(preview.count) > 0) & np.isfinite(values.data)
-            if source.nodata is not None:
-                valid &= values.data != source.nodata
+            values = mask_invalid_raster_values(
+                preview.read(1), source.nodata, preview.read(preview.count)
+            )
             cells = values.data.astype(object)
-            cells[~valid] = None
+            cells[np.ma.getmaskarray(values)] = None
             return {
                 "kind": "raster",
                 "bounds": list(bounds),

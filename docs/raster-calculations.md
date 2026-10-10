@@ -248,7 +248,7 @@ overlaps. A sliver can have positive area without containing any pixel center.
 These are distinct from clipping's all-touched export mask. EPSG:3857 pixel
 dimensions are not ground hectares. See [ground-area methods and limits](ground-area-calculations.md).
 
-Source nodata, nonfinite values, and cells outside the selected area are missing,
+Embedded validity masks, source nodata, nonfinite values, and cells outside the selected area are missing,
 never zero. Arithmetic/domain errors invalidate the affected cell in that
 aggregate. All operands must be valid, including both operands of boolean OR;
 there is no short-circuit recovery from missing data. Partially valid calculations

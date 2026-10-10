@@ -55,7 +55,7 @@ from eolab_app.sampling_area import (
     WholeRasterSamplingArea,
 )
 
-RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v7"
+RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v8"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
 # Match the ESOS-C catalog selection contract: a resampled cell contributes when the
@@ -257,7 +257,8 @@ def read_raster_statistics(
     completely one native block at a time. Broader envelopes use the fixed
     127-longest-edge center grid, whose unique blocks and cumulative decoded
     work are proven before I/O. Broad grids prefer a suitable signed embedded
-    overview and otherwise retain exact native-block center sampling. Neither
+    overview for unmasked sources; masked sources retain original-cell validity
+    through native-block center sampling. Neither
     path relies on WMS publication or rendering state.
 
     Args:

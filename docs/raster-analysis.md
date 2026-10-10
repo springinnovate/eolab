@@ -41,8 +41,8 @@ Each capability has `supported` and `reason`. A non-finite NoData marker is
 represented as `null`; numerical readers still use the original file metadata.
 Capability descriptions report format support, not permission to bypass later
 authorization or a guarantee that every requested area fits work limits.
-Internal validity masks work for pixel reads but remain unsupported by the
-distribution readers; the capability response states that limitation.
+Embedded per-dataset validity masks work for pixels and distributions. The
+capability response includes the data and mask block memory checks.
 
 Private requests require the owning Processing session cookie, same-origin
 checks and `X-EOLab-Processing: 1`. The application composition injects that
@@ -167,7 +167,9 @@ which of these methods produced the histogram:
   decoded values plus validity need at most 64 MiB.
 - **Approximate sampled distribution:** uses one center observation per grid cell,
   with at most 127 cells along the longest edge. It prefers a suitable embedded
-  COG overview. Without one, reading is limited to 16,129 native blocks and 9 GiB
+  COG overview for sources without an embedded mask. Masked sources use original
+  cells, so coarse or stale overview masks cannot restore excluded cells.
+  Native sampling is limited to 16,129 data-plus-mask block reads and 9 GiB
   cumulative decoded source work; only a bounded block is retained at a time.
 
 These limits are fixed. A request that cannot fit them fails instead of starting
@@ -183,18 +185,34 @@ each bin's percentage of **valid sampled pixels**. Hover details give bin bounds
 and counts. Each chart has its own percentage scale, so equal bar heights on
 different charts do not necessarily represent equal percentages.
 
-NoData and non-finite values are excluded, not treated as zero. Units are shown
+Embedded mask exclusions, band NoData and non-finite values are combined: a cell
+must pass all three checks. An embedded mask cannot make a NoData value valid.
+Zero is valid unless it is declared NoData or excluded by the mask. This policy,
+`finite-unmasked-non-nodata-v1`, is shared by pixel reads, distributions,
+Processing and preview validity. Pixel reads previously let an internal mask
+override finite band NoData; they now agree with the other consumers.
+Units are shown
 only when provided by the raster's band metadata. Very large or small values may
 use scientific notation or a labeled axis offset. Suggested style ranges use
 the sampled 5th, 50th and 95th percentiles; styling does not alter source values.
 
 The distribution reader requires a supported single numeric band, valid CRS and
 affine georeferencing, and native blocks decoding to at most 64 MiB each.
-Georeferencing, nodata and overviews must be embedded in the GeoTIFF. External
-masks/overviews/auxiliary files, alpha masks and per-dataset input masks are not
-accepted. Prepare a self-contained source upstream if those checks fail.
+Georeferencing, NoData, masks and overviews must be embedded in the GeoTIFF.
+External masks/overviews/auxiliary files and alpha masks are not accepted.
+Prepare a self-contained source upstream if those checks fail.
 Pixel reads use the first numeric band and support embedded validity masks;
 they enforce the same signed-dependency, georeferencing and 64 MiB block limits.
+
+Mask blocks may differ from data blocks. Before reading values, the shared
+contract inspects their native dimensions with the already-required GDAL Python
+bindings. A data block plus its boolean validity buffer and the larger of the
+returned byte-mask window or one decoded mask block must fit the 64 MiB limit.
+Work admission counts every mask block
+intersecting each data read, including repeated mask reads across windows;
+it does not assume cache hits. Masked sources charge full decoded blocks at
+raster edges. Sources without masks retain their existing numerical and work
+policies. Display projection and sampling remain separate from analysis grids.
 
 ## Busy or unavailable results
 

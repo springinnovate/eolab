@@ -279,14 +279,14 @@ def test_catalog_and_private_sources_use_the_same_native_analysis(
 
 
 @pytest.mark.parametrize("masked", [False, True])
-def test_metadata_reports_reader_capabilities_without_promising_mask_support(
+def test_metadata_and_services_support_embedded_validity_masks(
     tmp_path: Path, masked: bool
 ) -> None:
-    """Describe original metadata and distinguish current pixel/statistics mask support.
+    """Read embedded validity consistently through private pixel/statistics services.
 
     Args:
         tmp_path: Isolated source directory.
-        masked: Include validity that the statistics reader currently rejects.
+        masked: Exclude the upper-left zero through an internal mask.
     """
     path = write_source(tmp_path / "source.tif", masked)
     authority = FileAuthority(path)
@@ -295,9 +295,8 @@ def test_metadata_reports_reader_capabilities_without_promising_mask_support(
     assert result["width"] == 4 and result["height"] == 4
     assert result["version"] == authority.sha256
     assert result["capabilities"]["pixels"]["supported"]
-    assert result["capabilities"]["statistics"]["supported"] is not masked
+    assert result["capabilities"]["statistics"]["supported"]
     if masked:
-        assert "validity masks" in result["capabilities"]["statistics"]["reason"]
         pixel = asyncio.run(
             RasterPixelService(sources, 1).get(
                 RasterPixelSourceRequest(source=PRIVATE, longitude=-1.5, latitude=1.5),
@@ -305,12 +304,12 @@ def test_metadata_reports_reader_capabilities_without_promising_mask_support(
             )
         )
         assert pixel.in_bounds and pixel.value is None
-        with pytest.raises(RasterConflictError, match="validity masks"):
-            asyncio.run(
-                RasterStatisticsService(sources, 1, 1).get(
-                    RasterStatisticsSourceRequest(source=PRIVATE), "owner"
-                )
+        statistics = asyncio.run(
+            RasterStatisticsService(sources, 1, 1).get(
+                RasterStatisticsSourceRequest(source=PRIVATE), "owner"
             )
+        )
+        assert statistics.valid_sample_count == 15
     assert str(path) not in str(result) and not authority.leases
 
 

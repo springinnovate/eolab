@@ -85,29 +85,6 @@ class _SourceAuthorizer:
         return self.authorizations[request.item_id]
 
 
-class _RasterSample:
-    """Minimal masked-array contract returned by a fake pixel dataset."""
-
-    def count(self) -> int:
-        """Return one valid sampled pixel.
-
-        Returns:
-            One valid value.
-        """
-        return 1
-
-    def __getitem__(self, _: tuple[int, int]) -> float:
-        """Return the controlled pixel value.
-
-        Args:
-            _: Ignored two-dimensional sample index.
-
-        Returns:
-            Controlled finite value.
-        """
-        return 42.5
-
-
 class _PixelDataset:
     """Record the exact band and window requested by the pixel reader."""
 
@@ -117,6 +94,8 @@ class _PixelDataset:
     count = 1
     dtypes = ("float32",)
     block_shapes = ((10, 10),)
+    mask_flag_enums = ([MaskFlags.all_valid],)
+    nodatavals = (None,)
     files = ("raster.tif",)
     transform = Affine.identity()
 
@@ -153,7 +132,7 @@ class _PixelDataset:
         assert (x, y) == (10, 20)
         return 2, 3
 
-    def read(self, band: int, *, window: Window, masked: bool) -> _RasterSample:
+    def read(self, band: int, *, window: Window, masked: bool) -> numpy.ndarray:
         """Record the bounded pixel read.
 
         Args:
@@ -165,7 +144,7 @@ class _PixelDataset:
             Controlled one-value sample.
         """
         self.read_arguments = (band, window, masked)
-        return _RasterSample()
+        return numpy.array([[42.5]], dtype="float32")
 
 
 class _NativeStatisticsDataset:
@@ -802,7 +781,7 @@ def test_pixel_reader_requests_only_band_one_and_its_source_cell(
         "inBounds": True,
         "value": 42.5,
     }
-    assert dataset.read_arguments == (1, Window(3, 2, 1, 1), True)
+    assert dataset.read_arguments == (1, Window(3, 2, 1, 1), False)
 
 
 @pytest.mark.parametrize("rejection", ["sidecar", "block"])

@@ -54,7 +54,7 @@ from eolab_app.raster.statistics import (
     RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
 )
 
-RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v4-catalog-selection"
+RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v5-internal-masks"
 
 
 def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:
@@ -290,8 +290,9 @@ def read_raster_paired_statistics(
     The X raster is asymmetric by design: its geographic overlap window owns
     the reference grid and sampling density. Swapping X and Y can therefore
     change sampled positions and counts when source grids differ. Each source
-    prefers one bounded signed internal-overview read and otherwise uses its
-    admitted native-block plan. At most 127 by 127 paired cells reach the
+    without an embedded validity mask prefers one bounded internal-overview
+    read. Masked sources use their admitted native-block plan. At most 127 by
+    127 paired cells reach the
     histogram.
 
     Args:

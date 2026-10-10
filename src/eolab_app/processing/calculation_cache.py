@@ -16,7 +16,7 @@ from eolab_app.processing.aggregate_models import (
 from eolab_app.processing.raster_expression import compile_expression, walk
 
 # Bump when numerical, nodata, mask or area-inclusion semantics change.
-CALCULATION_CACHE_VERSION = 2
+CALCULATION_CACHE_VERSION = 3
 
 
 def calculation_result_cache_keys(

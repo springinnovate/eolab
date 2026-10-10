@@ -18,7 +18,7 @@ from eolab_app.raster.bounded_window import (
 )
 from eolab_app.raster.models import SelectedRasterArea, CanonicalWgs84Bounds
 from eolab_app.raster.source_contract import (
-    decoded_source_bytes_for_blocks,
+    source_work_for_blocks,
     source_block_indexes_for_window,
     require_signed_raster_dependencies,
     require_raster_analysis_georeferencing,
@@ -114,17 +114,18 @@ def select_area(
 
 def native_work(
     dataset: Any, window: Any, max_blocks: int, max_decoded_bytes: int
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Bound block-index allocation and total decoded source work before reading.
 
     Args:
         dataset: Validated native dataset.
         window: Integral requested source window.
-        max_blocks: Maximum number of intersecting blocks.
-        max_decoded_bytes: Maximum decoded bytes across those blocks.
+        max_blocks: Maximum data and mask block reads, including repeated masks.
+        max_decoded_bytes: Maximum decoded values and validity across those reads.
 
     Returns:
-        Native block count and decoded byte count.
+        Data-block count for progress, combined data/mask read count for admission,
+        and combined decoded byte count.
 
     Raises:
         ProcessingError: If the conservative block estimate or decoded byte
@@ -146,7 +147,14 @@ def native_work(
             413,
         )
     blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
-    decoded = decoded_source_bytes_for_blocks(dataset, blocks)
+    block_reads, decoded = source_work_for_blocks(dataset, blocks)
+    if block_reads > max_blocks:
+        raise ProcessingError(
+            "source_work_too_large",
+            f"The selected area requires {block_reads:,} data and validity-mask "
+            f"block reads; the limit is {max_blocks:,}. Choose a smaller area.",
+            413,
+        )
     if decoded > max_decoded_bytes:
         raise ProcessingError(
             "source_work_too_large",
@@ -156,4 +164,4 @@ def native_work(
             f"requiring at most {max_decoded_bytes:,} decoded bytes.",
             413,
         )
-    return len(blocks), decoded
+    return len(blocks), block_reads, decoded
