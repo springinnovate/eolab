@@ -634,10 +634,14 @@ def sample_native_mask(
         return result
 
 
-def write_grid(
+def write_downstream_geotiff(
     path: Path, data: NDArray[Any], grid: ClipGrid, nodata: int | float
 ) -> None:
-    """Write a calculation-local native-grid GeoTIFF for routing or publication.
+    """Write one downstream array as a tiled, compressed GeoTIFF on the DEM grid.
+
+    Routing elevations, seed weights and both output masks share this file
+    creation policy. The helper sets alignment, NoData, compression and one
+    GDAL thread consistently at each call site; it does more than write pixels.
 
     Args:
         path: New file confined to the admitted attempt directory.
@@ -804,8 +808,8 @@ def calculate_downstream(
                     422,
                 )
             elevation = np.where(inside, dem.data, nodata).astype(np.float64)
-            write_grid(directory / "routing-dem.tif", elevation, grid, nodata)
-            write_grid(
+            write_downstream_geotiff(directory / "routing-dem.tif", elevation, grid, nodata)
+            write_downstream_geotiff(
                 directory / "routing-seeds.tif", weights.astype(np.uint8), grid, 255
             )
             routing.flow_dir_mfd(
@@ -898,7 +902,7 @@ def calculate_downstream(
     write_progress(directory, "writing_results", 0, 0)
     for name, data in (("coverage", summary_coverage), ("starting_mask", seeds)):
         stage, final = directory / (name + "-stage.tif"), directory / (name + ".tif")
-        write_grid(stage, np.where(domain, data, 255).astype(np.uint8), grid, 255)
+        write_downstream_geotiff(stage, np.where(domain, data, 255).astype(np.uint8), grid, 255)
         copy_raster(
             stage,
             final,
