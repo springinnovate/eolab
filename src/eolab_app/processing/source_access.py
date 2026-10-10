@@ -32,7 +32,9 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         try:
             return await service.download_model_artifact(owner, run_id, file_id)
         except ProcessingError as error:
-            raise SourceFileError(error.detail, error.status, code=error.code) from error
+            raise SourceFileError(
+                error.detail, error.status, code=error.code
+            ) from error
 
     async def check(owner: str, run_id: str, file_id: str) -> tuple[int, str, str]:
         """Reauthorize a file before its derived data is delivered.
@@ -51,7 +53,9 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         try:
             return await service.check_model_artifact(owner, run_id, file_id)
         except ProcessingError as error:
-            raise SourceFileError(error.detail, error.status, code=error.code) from error
+            raise SourceFileError(
+                error.detail, error.status, code=error.code
+            ) from error
 
     async def release(lease: str) -> bool:
         """Release a completed reader's file retention.
