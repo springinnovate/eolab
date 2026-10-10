@@ -42,8 +42,9 @@ the source.
 
 ## Required configuration
 
-Start from [`.env.example`](../.env.example), which is the authoritative list
-of settings and defaults. At minimum, set:
+Start from [`.env.example`](../.env.example) for deployment settings. Empty
+[downstream overrides](downstream-model.md#bounds-and-execution) use the defaults
+defined in Python. At minimum, set:
 
 ```text
 EOLAB_DATABASE_PASSWORD=<long random value>

@@ -71,6 +71,8 @@ def load_processing_limits() -> RasterClipLimits:
 def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
     """Load administrator downstream-work budgets while preserving Processing limits.
 
+    Unset or empty overrides use the defaults defined by DownstreamLimits.
+
     Args:
         limits: Validated job, source-read, memory and storage settings.
 
@@ -78,10 +80,9 @@ def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
         Downstream settings for the worker's preparation and native execution.
 
     Raises:
-        ValueError: If an override is blank, nonintegral, nonpositive or exceeds
+        ValueError: If a nonempty override is nonintegral, nonpositive or exceeds
             the signed 64-bit configuration range; names the offending variable.
     """
-    defaults = DownstreamLimits()
     values = asdict(limits)
     for attribute in (
         "max_routing_cells",
@@ -93,7 +94,9 @@ def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
         "max_distance_pairs",
     ):
         name = "PROCESSING_DOWNSTREAM_" + attribute.upper()
-        raw = os.environ.get(name, str(getattr(defaults, attribute)))
+        raw = os.environ.get(name)
+        if raw is None or raw == "":
+            continue
         try:
             value = int(raw)
         except ValueError as error:

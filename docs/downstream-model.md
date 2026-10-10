@@ -74,8 +74,15 @@ at 100 km and the optional cutoff at 1,000 km. Ambiguous exact-distance comparis
 have a four-million-pair ceiling.
 
 These are administrator settings, not fixed algorithmic maxima or browser model
-parameters. Set the following variables in Compose (omit `EOLAB_` for a direct
-worker deployment), then restart/redeploy the worker. No code changes are needed:
+parameters. `DownstreamLimits` in Python defines their defaults. Compose forwards
+optional overrides without setting its own numeric defaults; unset or empty
+values use the Python defaults. `.env.example` leaves these overrides empty.
+Nonempty values must be positive integers within the signed 64-bit range.
+
+Set the following variables in the deployment environment or Compose `.env`
+file (omit `EOLAB_` for a direct worker deployment), then recreate/redeploy the
+app and worker containers so they receive the changed environment. No code
+changes are needed:
 
 | Setting | Default | Work being limited |
 | --- | ---: | --- |
