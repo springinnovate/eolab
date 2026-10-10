@@ -100,9 +100,9 @@ def mask_invalid_raster_values(
     """
     valid = numpy.isfinite(values)
     if nodata is not None:
-        valid &= values != nodata
+        numpy.not_equal(values, nodata, out=valid, where=valid)
     if validity is not None:
-        valid &= validity != 0
+        numpy.logical_and(valid, validity, out=valid)
     numpy.logical_not(valid, out=valid)
     return numpy.ma.array(values, mask=valid, copy=False)
 
