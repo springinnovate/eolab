@@ -32,7 +32,11 @@ from eolab_app.raster.source_models import (
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
-from eolab_app.source_files import LeasedSourceFiles, SourceFileError
+from eolab_app.source_files import (
+    LeasedSourceFiles,
+    SourceFileError,
+    finish_source_task,
+)
 from test_raster_statistics_service import _statistics
 
 CATALOG = {
@@ -645,6 +649,47 @@ def test_lost_lease_stops_pixel_work_before_releasing_the_file(
                 10,
             )
         assert stopped.is_set() and not authority.leases
+
+    asyncio.run(exercise())
+
+
+def test_lost_lease_cannot_be_hidden_by_shielded_consumer_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Withhold results when final cleanup consumes a renewal-loss cancellation.
+
+    Args:
+        tmp_path: Isolated immutable source fixture.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+
+    async def exercise() -> None:
+        """Lose the lease while the consumer waits for cancellation-safe cleanup."""
+        reading = False
+
+        async def renew(lease: str) -> bool:
+            """Lose retention after source verification succeeds.
+
+            Args:
+                lease: Current file retention token.
+
+            Returns:
+                True until the consumer starts using its file.
+            """
+            return lease in authority.leases and not reading
+
+        files = LeasedSourceFiles(
+            authority.acquire,
+            authority.release,
+            authority.check,
+            renew,
+            renewal_seconds=0.02,
+        )
+        with pytest.raises(SourceFileError, match="no longer available"):
+            async with files.open("owner", PRIVATE["jobId"], PRIVATE["artifactId"]):
+                reading = True
+                await finish_source_task(asyncio.create_task(asyncio.sleep(0.1)))
+        assert not authority.leases
 
     asyncio.run(exercise())
 

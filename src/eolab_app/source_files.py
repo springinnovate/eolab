@@ -212,6 +212,11 @@ class LeasedSourceFiles:
                     "The source file changed and is no longer valid.", 422
                 )
             yield source
+            # A consumer may shield its final native cleanup from cancellation.
+            # Renewal loss still forbids delivery even if that cleanup consumed
+            # the cancellation raised by the heartbeat.
+            if lost:
+                raise SourceFileError("The source file is no longer available.")
             current = await self.check(owner, run_id, file_id)
             if (
                 current != (source.size, source.sha256, source.media_type)
