@@ -25,7 +25,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.raster_expression import FUNCTIONS, compile_expression, walk
 from eolab_app.raster.models import Wgs84Bounds
-from eolab_app.raster.source_models import RasterSourceReference
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 
 from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 
@@ -428,6 +428,7 @@ class AggregateSpec(BaseModel):
     grid contains the selected window's dimensions, pixel alignment and planned
     read sizes. It contains metadata, not raster pixel values.
     sourceSignature is source metadata retained in the stored job contract.
+    sourceChecksum records the published bytes when a private run file is used.
     cachedRows holds already-computed values when planning found a cache hit;
     that job writes result files without recalculating pixels.
     """
@@ -438,7 +439,9 @@ class AggregateSpec(BaseModel):
         dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
     ]
     sourceSignature: tuple[int, int, int, int]
-    sourceChecksum: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None)
+    sourceChecksum: str | None = Field(
+        default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None
+    )
     calculations: tuple[NamedCalculation, ...]
     pixelPoint: PixelPoint | None = None
     area: AggregateArea
@@ -467,14 +470,17 @@ class AggregateSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_cached_result_formulas(self) -> "AggregateSpec":
-        """Validate persisted formula context and any retained values.
+        """Validate the source identity, formula context and any retained values.
 
         Returns:
             This plan with matching cached rows, or an ordinary calculation plan.
 
         Raises:
-            ValueError: If a pixel location is missing or cached rows differ.
+            ValueError: If source identity is incomplete, a pixel location is missing or cached rows differ.
         """
+        private = isinstance(next(iter(self.sources.values())), RunArtifactReference)
+        if private != (self.sourceChecksum is not None):
+            raise ValueError("Private raster plans require their published checksum")
         if self.pixelPoint is None and any(
             node.op == "pixelValue"
             for item in self.calculations

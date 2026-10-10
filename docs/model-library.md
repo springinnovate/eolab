@@ -7,7 +7,15 @@ a downloadable GeoTIFF of a raster within the chosen area.
 
 ## Choose inputs
 
-Choose one raster from **Map layers**. Hidden layers remain available. To use
+Choose one raster from **Map layers** or **Completed runs** in the Raster menu.
+Completed runs lists this browser session's available raster results and retained
+scientific raster intermediates. They can be used directly without **Show on map**.
+Choose one explicitly; setup never guesses which previous result you intended.
+**Refresh results** checks recent runs, and **Load older results** loads another
+page when available. An expired or deleted selected result is marked unavailable
+and must be replaced before running.
+
+Hidden map layers remain available. To use
 another raster or vector, add it to Map layers first. Model setup has no separate
 catalog search. Removing an input layer clears that choice for a new run;
 accepted runs keep their original inputs. Duplicating a run whose original
@@ -78,6 +86,13 @@ Results are temporary and private to the browser's Processing session. The run
 shows separate expiry dates for result files and saved setup metadata. Clearing
 that session's cookies loses access; these are not permanent account records.
 
+Once a new job is accepted, its input files remain available to that job while
+it waits and runs, even if the original result expires. Deleting the original
+run immediately removes access for new jobs and downloads. Already accepted jobs
+continue; the server keeps the original files until those jobs finish or are
+cancelled. Cancel dependent jobs explicitly if you also want to stop their work.
+Retained files count toward the server's existing storage limit until cleanup.
+
 ## Inspect or download
 
 Completed summaries show their values. Completed clips show the raster dimensions,
@@ -105,7 +120,8 @@ loss of access are checked at least every 30 seconds, even with Models closed.
 If availability cannot be confirmed, the preview is removed and can be reopened
 from its run. They are omitted from saved maps, published maps and remembered
 browser views. Reopen them from **Models → Runs** in the browser that owns them.
-They do not become catalog layers, model inputs or analysis selections. Permanent
+They do not become catalog layers or map analysis selections. Model setup can
+independently select their original raster files as described above. Permanent
 saving and cross-user sharing are not yet available.
 
 Under **Recipe & downloads**, **View Model YAML** shows the reusable recipe as

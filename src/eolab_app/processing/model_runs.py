@@ -239,8 +239,19 @@ def build_model_job_submission(
                 definition.steps[0]
                 .inputs["raster"]
                 .input: {
-                    "sourceSignature": compute_document_checksum(signature if signature is not None else {"sha256": prepared.input_files[0].sha256}),
-                    **({"sha256": prepared.input_files[0].sha256, "bytes": prepared.input_files[0].size} if prepared.input_files else {}),
+                    "sourceSignature": compute_document_checksum(
+                        signature
+                        if signature is not None
+                        else {"sha256": prepared.input_files[0].sha256}
+                    ),
+                    **(
+                        {
+                            "sha256": prepared.input_files[0].sha256,
+                            "bytes": prepared.input_files[0].size,
+                        }
+                        if prepared.input_files
+                        else {}
+                    ),
                     "band": 1,
                 }
             },

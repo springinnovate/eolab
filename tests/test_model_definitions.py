@@ -132,7 +132,9 @@ def test_discovery_and_recipe_export_need_no_catalog_or_renderer(
             item.version: item.digest for item in definitions
         }
         model = models[0]
-        recipe = client.get(f"/api/processing/models/raster-summary/versions/{model['version']}/yaml")
+        recipe = client.get(
+            f"/api/processing/models/raster-summary/versions/{model['version']}/yaml"
+        )
         assert recipe.status_code == 200
         assert "no-store" in recipe.headers["cache-control"]
         assert int(recipe.headers["content-length"]) == len(recipe.content)
@@ -153,6 +155,33 @@ def summary_request() -> dict[str, Any]:
     return json.loads(
         Path("docs/model-examples/raster-summary.request.json").read_text()
     )
+
+
+def test_historical_catalog_recipe_still_executes_without_rewriting_identity() -> None:
+    """The original catalog-only recipe remains valid alongside the raster input type."""
+    saved = parse_yaml(
+        Path("docs/model-examples/raster-summary.run.yaml").read_bytes(), run=True
+    )["invocation"]
+    definition = ModelDefinition.model_validate(saved["model"]["definition"])
+    request = ModelRunRequest.model_validate(
+        {
+            "requestId": "legacy-catalog-request",
+            "model": {
+                name: saved["model"][name]
+                for name in ("id", "version", "definitionSha256")
+            },
+            "inputs": saved["inputs"],
+            "parameters": saved["parameters"],
+            "label": saved["label"],
+        }
+    )
+    calculation, invocation = build_model_calculation_request(
+        request, ModelRegistry((definition,))
+    )
+    assert (
+        calculation.sources["a"].model_dump(by_alias=True) == saved["inputs"]["raster"]
+    )
+    assert invocation.model.definition.digest == saved["model"]["definitionSha256"]
 
 
 def test_installed_summary_matches_approved_example_and_round_trips() -> None:

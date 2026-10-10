@@ -75,7 +75,9 @@ class ProcessingWorker:
         # from discovery or accepting work the worker cannot dispatch.
         ModelRegistry.load_installed()
 
-    def _operation_context(self, reuse_results: bool, source_checksum: str | None = None) -> RasterOperationContext:
+    def _operation_context(
+        self, reuse_results: bool, source_checksum: str | None = None
+    ) -> RasterOperationContext:
         """Supply existing execution capabilities to a registered raster operation.
 
         Args:
@@ -96,7 +98,9 @@ class ProcessingWorker:
             source_checksum,
         )
 
-    async def _resolve_source(self, row: dict[str, Any], source: RasterSourceReference) -> tuple[AuthorizedRaster, str | None]:
+    async def _resolve_source(
+        self, row: dict[str, Any], source: RasterSourceReference
+    ) -> tuple[AuthorizedRaster, str | None]:
         """Authorize catalog data or verify a file retained by this accepted job.
 
         Args:
@@ -114,14 +118,38 @@ class ProcessingWorker:
         """
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
-        parent_attempt, file = await asyncio.to_thread(self.jobs.read_retained_input, row["id"], row["attempt_id"], source.jobId, source.artifactId)
-        path = await asyncio.to_thread(self.artifacts.artifact_path, parent_attempt, file.storage_name)
-        identity = await run_process(verify_source_file, (path, file.size, file.sha256), min(30, self.limits.plan_timeout_seconds))
+        parent_attempt, file = await asyncio.to_thread(
+            self.jobs.read_retained_input,
+            row["id"],
+            row["attempt_id"],
+            source.job_id,
+            source.artifact_id,
+        )
+        path = await asyncio.to_thread(
+            self.artifacts.artifact_path, parent_attempt, file.storage_name
+        )
+        identity = await run_process(
+            verify_source_file,
+            (path, file.size, file.sha256),
+            min(30, self.limits.plan_timeout_seconds),
+            self.native,
+        )
         if identity is None:
-            raise ProcessingError("source_changed", "The retained raster is no longer intact. Run the parent model again.", 409)
-        return AuthorizedRaster(path, RasterSourceIdentity.from_catalog(list(identity[1:]))), file.sha256
+            raise ProcessingError(
+                "source_changed",
+                "The retained raster is no longer intact. Run the parent model again.",
+                409,
+            )
+        return (
+            AuthorizedRaster(
+                path, RasterSourceIdentity.from_catalog(list(identity[1:]))
+            ),
+            file.sha256,
+        )
 
-    async def _prepare_operation(self, row: dict[str, Any]) -> tuple[AuthorizedRaster, str | None]:
+    async def _prepare_operation(
+        self, row: dict[str, Any]
+    ) -> tuple[AuthorizedRaster, str | None]:
         """Prepare registered operation inputs within the current fenced attempt.
 
         Args:
@@ -153,7 +181,9 @@ class ProcessingWorker:
                 raise ProcessingError(
                     "job_cancelled", "Calculation stopped before preparation.", 409
                 )
-            authorized, checksum = await self._resolve_source(row, operation.source(queued))
+            authorized, checksum = await self._resolve_source(
+                row, operation.source(queued)
+            )
             if (
                 model is not None
                 and model.sourceSignature is not None
@@ -266,6 +296,16 @@ class ProcessingWorker:
             if value is not None:
                 if resolved_area is not None:
                     await self.areas.resolve_for_sampling(resolved_area.selection)
+                if (
+                    checksum is not None
+                    and RasterSourceIdentity.read(authorized.source_path)
+                    != authorized.source_signature
+                ):
+                    raise ProcessingError(
+                        "source_changed",
+                        "The retained raster changed during calculation.",
+                        409,
+                    )
                 return await self._publish_result(row, value)
         status, value = await run_process(
             target,
@@ -275,8 +315,14 @@ class ProcessingWorker:
         )
         if status != "ok":
             raise ProcessingError(*value)
-        if checksum is not None and RasterSourceIdentity.read(authorized.source_path) != authorized.source_signature:
-            raise ProcessingError("source_changed", "The retained raster changed during calculation.", 409)
+        if (
+            checksum is not None
+            and RasterSourceIdentity.read(authorized.source_path)
+            != authorized.source_signature
+        ):
+            raise ProcessingError(
+                "source_changed", "The retained raster changed during calculation.", 409
+            )
         if resolved_area is not None:
             await self.areas.resolve_for_sampling(resolved_area.selection)
         return await self._publish_result(row, value)

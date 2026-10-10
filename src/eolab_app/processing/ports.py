@@ -4,7 +4,11 @@ from typing import Protocol, Any
 from pathlib import Path
 from datetime import datetime
 from threading import Event
-from eolab_app.processing.artifact_manifest import ArtifactManifest, FileDeclaration, PublishedFile
+from eolab_app.processing.artifact_manifest import (
+    ArtifactManifest,
+    FileDeclaration,
+    PublishedFile,
+)
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -13,7 +17,6 @@ from eolab_app.processing.models import (
     ProcessingError,
     JobInputFile,
 )
-
 
 class JobSubscription(Protocol):
     """A bounded owner-specific change hint, never a result or authorization."""
@@ -75,23 +78,27 @@ class JobWakeup(Protocol):
 class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
-    def inspect_input_file(self, owner: str, run_id: str, artifact_id: str) -> JobInputFile:
-        """Check a published raster's ownership and availability before admission.
+    def inspect_input_file(
+        self, owner: str, run_id: str, artifact_id: str
+    ) -> JobInputFile:
+        """Check a published file's ownership and availability before admission.
 
         Args:
             owner: Current session hash.
             run_id: Public handle of a completed model run.
-            artifact_id: Published scientific raster file identity.
+            artifact_id: Published file identity; the operation checks its format and role.
 
         Returns:
             Immutable identity to recheck atomically when accepting work.
 
         Raises:
-            ProcessingError: If the file is foreign, expired, deleted or ineligible.
+            ProcessingError: If the file is foreign, expired, deleted or unpublished.
         """
         ...
 
-    def read_retained_input(self, identifier: str, attempt: str, run_id: str, artifact_id: str) -> tuple[str, PublishedFile]:
+    def read_retained_input(
+        self, identifier: str, attempt: str, run_id: str, artifact_id: str
+    ) -> tuple[str, PublishedFile]:
         """Resolve an accepted input for a live worker, including expired parents.
 
         Args:

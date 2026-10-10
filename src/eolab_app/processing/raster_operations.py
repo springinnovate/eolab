@@ -155,7 +155,11 @@ async def prepare_summary(
             calculation_result_cache_keys(request, signature, context.source_checksum),
         )
         spec = restore_cached_calculation_plan(
-            request, signature, cached_results, queued.polygonArea, context.source_checksum
+            request,
+            signature,
+            cached_results,
+            queued.polygonArea,
+            context.source_checksum,
         )
     # Cache reuse is selected by the caller; fresh runs measure their own grid.
     if spec is None:
@@ -320,7 +324,9 @@ def bind_clip(
         ValueError: If arguments violate the clip request contract.
     """
     return ClipJobRequest(
-        requestId=request_id, source=inputs["raster"], **bind_area_arguments(inputs["area"])
+        requestId=request_id,
+        source=inputs["raster"],
+        **bind_area_arguments(inputs["area"]),
     )
 
 

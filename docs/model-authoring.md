@@ -18,7 +18,7 @@ under a step's `inputs` and `parameters` belong to the operation:
 
 ```yaml
 inputs:
-  habitat: {type: catalog_raster, label: Habitat raster}
+  habitat: {type: raster, label: Habitat raster}
   region: {type: clip_area, label: Analysis area}
 parameters: {}
 steps:
@@ -48,18 +48,66 @@ into exported older recipes, preserving their checksums.
 
 | Operation | Required input types | Parameters | Output | Execution profile |
 | --- | --- | --- | --- | --- |
-| `raster.aggregate.v1` | `raster: catalog_raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
-| `raster.clip.v1` | `raster: catalog_raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
+| `raster.aggregate.v1` | `raster: raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
+| `raster.clip.v1` | `raster: raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
+
+The `raster` input accepts either the existing `{collectionId, itemId}` catalog
+reference or `{kind: runArtifact, jobId, artifactId}` for an owned published
+GeoTIFF. Historical `catalog_raster` declarations remain valid and continue to
+accept only catalog data; their saved recipes and checksums are not rewritten.
+Bundled recipes use version 1.1.0 for the expanded input contract.
 
 A summary recipe can rename its formula parameter and change its default, such
 as `mean(a)` or `stdev(a)`. Formula syntax and area support remain governed by
 the registered operation. Execution profiles select supported server policy;
 recipes cannot raise deployment resource limits. The current runner accepts
-one step and one catalog raster. Recipes can retain multiple outputs declared
+one step and one raster. Recipes can retain multiple outputs declared
 by that operation, plus provenance. The bundled summary and clip operations
 currently each produce one scientific result. `map` and
 `saveEligible` describe output capabilities; map previews and permanent saving
-are not implemented yet. YAML import from the browser is also not available.
+are separate capabilities. Temporary map previews are available; permanent saving
+and YAML import from the browser are not yet available.
+
+## Reuse a published raster
+
+Only immutable manifest entries declared as scientific `result` or `intermediate`
+with `image/tiff` format are eligible. Selection masks, filtered geometry, scratch
+files and provenance are not input sources. Admission rechecks ownership, ready
+status, expiry, file ID, checksum and byte count under the same database lock that
+accepts the job. A prior metadata lookup alone confers no access.
+
+Processing schema version 18 adds input grants tied to accepted computations,
+separate from short download leases. Expiry and explicit parent deletion reject
+new uses immediately; accepted children keep their original inputs. Cleanup waits
+for all children to stop, and the parent's full existing reservation accounts for
+its files once regardless of child count. Each job can retain at most 16 files
+(current operations use one); job-record and disk limits also apply. A child whose
+working reservation plus retained parents cannot fit the disk budget fails rather
+than waiting forever for its own inputs to disappear.
+
+Success, failure, queued cancellation and acknowledged running cancellation release
+grants transactionally. Lost workers retain grants until the existing hard deadline
+and exit grace; a lost heartbeat alone does not free files. Supported worker restart
+first stops old native processes, then interrupts unfinished jobs and releases grants.
+Ordinary physical cleanup releases disk accounting only after file removal.
+
+The worker resolves original files through the grant and confined artifact storage,
+checks their SHA-256 with the existing bounded process, then uses the same native
+planning and execution adapters as catalog rasters. Run YAML retains upstream
+run/file references, checksum and byte count; prepared calculation provenance adds
+the source checksum. Public and persisted specifications contain no filesystem paths.
+
+Private submissions do not join shared active computations. Ordinary summary cache
+keys include the run/file reference, verified checksum and source signature; each
+use requires a fresh accepted grant and integrity check, even on a cache hit.
+Identical bytes do not grant another session access. Catalog sharing and cache
+behavior remain unchanged, and Models still execute fresh. No renderer, preview,
+map visibility or GeoServer availability is involved.
+
+The ordinary aggregate API accepts the same reference in `sources`. The clip API
+accepts it in `source`, while preserving historical flat `collectionId`/`itemId`
+requests. This is explicit reuse of an already completed file, not automatic
+execution of dependent recipes or permanent storage.
 
 ## Add a new algorithm
 

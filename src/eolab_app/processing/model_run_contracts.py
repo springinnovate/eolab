@@ -260,7 +260,9 @@ class ModelRunSpec(ModelSchema):
         Raises:
             ValueError: If the signature is absent for catalog data or supplied for a run file.
         """
-        source = get_model_operation(self.calculation.operation).source(self.calculation)
+        source = get_model_operation(self.calculation.operation).source(
+            self.calculation
+        )
         if isinstance(source, RunArtifactReference) != (self.sourceSignature is None):
             raise ValueError("Source identity does not match the raster reference")
         return self
@@ -419,7 +421,9 @@ class RunDocument(ModelSchema):
             private = self.invocation.inputs[name].get("kind") == "runArtifact"
             recorded = self.execution.sources[name]
             if private != (recorded.sha256 is not None and recorded.bytes is not None):
-                raise ValueError("Private raster provenance requires its published checksum and size")
+                raise ValueError(
+                    "Private raster provenance requires its published checksum and size"
+                )
         return self
 
 

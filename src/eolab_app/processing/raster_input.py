@@ -26,6 +26,7 @@ from eolab_app.raster.source_contract import (
     require_bounded_source_structure,
 )
 
+
 def raster_source_filename_prefix(source: RasterSourceReference) -> str:
     """Name a derived file using its catalog item or published artifact identity.
 
@@ -35,7 +36,11 @@ def raster_source_filename_prefix(source: RasterSourceReference) -> str:
     Returns:
         A portable filename prefix containing no server path or user-supplied label.
     """
-    return source.artifactId if isinstance(source, RunArtifactReference) else source.item_id
+    return (
+        source.artifact_id
+        if isinstance(source, RunArtifactReference)
+        else source.item_id
+    )
 
 
 def validate_supported_raster(dataset: Any, path: Path) -> None:

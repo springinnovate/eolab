@@ -12,16 +12,9 @@
     },
     "area": {
       "kind": "selectedArea",
-      "selectedBounds": {
-        "west": -1.0,
-        "south": 0.0,
-        "east": 0.0,
-        "north": 1.0
-      }
+      "selectedBounds": {"west": -1.0, "south": 0.0, "east": 0.0, "north": 1.0}
     }
   },
-  "parameters": {
-    "summary": "sum(a)"
-  },
+  "parameters": {"summary": "sum(a)"},
   "label": "Example raster summary"
 }

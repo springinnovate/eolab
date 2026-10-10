@@ -298,7 +298,9 @@ class PostgresJobStore:
             )
             return cursor.fetchone()
 
-    def _inspect_input_file(self, cursor: Any, owner: str, run_id: str, artifact_id: str) -> tuple[dict[str, Any], JobInputFile]:
+    def _inspect_input_file(
+        self, cursor: Any, owner: str, run_id: str, artifact_id: str
+    ) -> tuple[dict[str, Any], JobInputFile]:
         """Read an owned, available manifest entry within a storage transaction.
 
         Args:
@@ -314,19 +316,45 @@ class PostgresJobStore:
             ProcessingError: If ownership, expiry or publication denies access.
             ValueError: If persisted manifest data is malformed.
         """
-        cursor.execute("SELECT *,expires_at>now() AS available FROM processing.subscribed_jobs WHERE id=%s AND owner=%s", (run_id, owner))
+        cursor.execute(
+            "SELECT *,expires_at>now() AS available FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+            (run_id, owner),
+        )
         row = cursor.fetchone()
         if row is None:
-            raise ProcessingError("job_not_found", "This input run is unavailable.", 404)
+            raise ProcessingError(
+                "job_not_found", "This input run is unavailable.", 404
+            )
         if row["status"] != "ready" or not row["available"]:
-            raise ProcessingError("input_unavailable", "This raster result expired or was deleted. Choose another input.", 409)
+            raise ProcessingError(
+                "input_unavailable",
+                "This raster result expired or was deleted. Choose another input.",
+                409,
+            )
         manifest = (row.get("artifact") or {}).get("manifest")
-        file = next((file for file in read_artifact_manifest(manifest).files if file.id == artifact_id), None) if manifest else None
+        file = (
+            next(
+                (
+                    file
+                    for file in read_artifact_manifest(manifest).files
+                    if file.id == artifact_id
+                ),
+                None,
+            )
+            if manifest
+            else None
+        )
         if file is None:
-            raise ProcessingError("artifact_not_found", "This input file is unavailable.", 404)
-        return row, JobInputFile(run_id, file.id, file.sha256, file.size, file.media_type, file.role)
+            raise ProcessingError(
+                "artifact_not_found", "This input file is unavailable.", 404
+            )
+        return row, JobInputFile(
+            run_id, file.id, file.sha256, file.size, file.media_type, file.role
+        )
 
-    def inspect_input_file(self, owner: str, run_id: str, artifact_id: str) -> JobInputFile:
+    def inspect_input_file(
+        self, owner: str, run_id: str, artifact_id: str
+    ) -> JobInputFile:
         """Read an owned file's identity for a later atomic admission check.
 
         Args:
@@ -343,7 +371,9 @@ class PostgresJobStore:
         with self._transaction() as cursor:
             return self._inspect_input_file(cursor, owner, run_id, artifact_id)[1]
 
-    def read_retained_input(self, identifier: str, attempt: str, run_id: str, artifact_id: str) -> tuple[str, PublishedFile]:
+    def read_retained_input(
+        self, identifier: str, attempt: str, run_id: str, artifact_id: str
+    ) -> tuple[str, PublishedFile]:
         """Read a file under an accepted job grant instead of its parent's expiry.
 
         Args:
@@ -364,14 +394,30 @@ class PostgresJobStore:
                 "SELECT p.attempt_id,p.artifact,i.sha256,i.bytes FROM processing.input_files i "
                 "JOIN processing.jobs j ON j.id=i.job_id JOIN processing.jobs p ON p.id=i.parent_id "
                 "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running' AND j.lease_until>now() AND j.deadline_at>now() "
-                "AND i.run_id=%s AND i.artifact_id=%s", (identifier, attempt, run_id, artifact_id))
+                "AND i.run_id=%s AND i.artifact_id=%s",
+                (identifier, attempt, run_id, artifact_id),
+            )
             row = cursor.fetchone()
             if row is None:
-                raise ProcessingError("input_unavailable", "This job no longer has access to its input file.", 409)
+                raise ProcessingError(
+                    "input_unavailable",
+                    "This job no longer has access to its input file.",
+                    409,
+                )
             manifest = read_artifact_manifest(row["artifact"]["manifest"])
-            file = next((file for file in manifest.files if file.id == artifact_id), None)
-            if file is None or file.sha256 != row["sha256"] or file.size != row["bytes"]:
-                raise ProcessingError("source_changed", "The retained input file changed. Run the parent model again.", 409)
+            file = next(
+                (file for file in manifest.files if file.id == artifact_id), None
+            )
+            if (
+                file is None
+                or file.sha256 != row["sha256"]
+                or file.size != row["bytes"]
+            ):
+                raise ProcessingError(
+                    "source_changed",
+                    "The retained input file changed. Run the parent model again.",
+                    409,
+                )
             return row["attempt_id"], file
 
     def submit(
@@ -426,7 +472,11 @@ class PostgresJobStore:
             raise ValueError("Submit between one and fifty jobs per transaction")
         if any(not item.request_hash for item in submissions):
             raise ValueError("Direct jobs require a request hash")
-        if any(isinstance(item.prepared, PreparedJobPlan) and len(item.prepared.input_files) > 16 for item in submissions):
+        if any(
+            isinstance(item.prepared, PreparedJobPlan)
+            and len(item.prepared.input_files) > 16
+            for item in submissions
+        ):
             raise ValueError("A job can retain at most sixteen input files")
         work_keys = list(
             {
@@ -497,9 +547,15 @@ class PostgresJobStore:
                 try:
                     inputs = []
                     for captured in expected.input_files:
-                        parent, current = self._inspect_input_file(cursor, owner, captured.run_id, captured.artifact_id)
+                        parent, current = self._inspect_input_file(
+                            cursor, owner, captured.run_id, captured.artifact_id
+                        )
                         if current != captured:
-                            raise ProcessingError("source_changed", "The input file changed before this job was accepted.", 409)
+                            raise ProcessingError(
+                                "source_changed",
+                                "The input file changed before this job was accepted.",
+                                409,
+                            )
                         inputs.append((parent["job_id"], current))
                 except ProcessingError as error:
                     outcomes.append(error)
@@ -545,7 +601,17 @@ class PostgresJobStore:
                 identifier = uuid4().hex
                 job_id = shared["id"] if shared else identifier
                 if not shared:
-                    new_inputs.extend((job_id, parent, file.run_id, file.artifact_id, file.sha256, file.size) for parent, file in inputs)
+                    new_inputs.extend(
+                        (
+                            job_id,
+                            parent,
+                            file.run_id,
+                            file.artifact_id,
+                            file.sha256,
+                            file.size,
+                        )
+                        for parent, file in inputs
+                    )
                     new_jobs.append(
                         (
                             job_id,
@@ -602,7 +668,10 @@ class PostgresJobStore:
                         new_subscribers,
                     )
                 if new_inputs:
-                    cursor.executemany("INSERT INTO processing.input_files(job_id,parent_id,run_id,artifact_id,sha256,bytes) VALUES (%s,%s,%s,%s,%s,%s)", new_inputs)
+                    cursor.executemany(
+                        "INSERT INTO processing.input_files(job_id,parent_id,run_id,artifact_id,sha256,bytes) VALUES (%s,%s,%s,%s,%s,%s)",
+                        new_inputs,
+                    )
                 if new_jobs:
                     cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
                 cursor.execute(
@@ -631,7 +700,7 @@ class PostgresJobStore:
 
         Raises:
             ProcessingError: If ownership was lost, cancellation won, or this job
-                alone exceeds the disk budget.
+                and its retained inputs cannot fit the disk budget together.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
@@ -649,7 +718,10 @@ class PostgresJobStore:
                 (identifier,),
             )
             used = cursor.fetchone()
-            cursor.execute("SELECT coalesce(sum(reserved_bytes),0) AS bytes FROM processing.jobs WHERE id IN (SELECT parent_id FROM processing.input_files WHERE job_id=%s)", (identifier,))
+            cursor.execute(
+                "SELECT coalesce(sum(reserved_bytes),0) AS bytes FROM processing.jobs WHERE id IN (SELECT parent_id FROM processing.input_files WHERE job_id=%s)",
+                (identifier,),
+            )
             retained = cursor.fetchone()["bytes"]
             if prepared.reserved_bytes + retained > self.limits.max_stored_bytes:
                 raise ProcessingError(
@@ -804,8 +876,9 @@ class PostgresJobStore:
     ) -> dict[str, Any]:
         """Cancel only this subscriber; stop computation when nobody needs it.
 
-        Deleting a completed handle removes only that caller's access. Shared
-            files remain until the last subscriber deletes them or results expire.
+        Deleting a completed handle immediately removes that caller's access.
+        Files remain while other subscribers, transfers or accepted dependent
+        jobs need them. Deletion does not cancel those dependent jobs.
 
         Args:
             identifier: Caller-owned public job handle.
@@ -1186,7 +1259,7 @@ class PostgresJobStore:
         cleanup acknowledgements do not prune.
 
         Returns:
-            At most 100 rows with no active transfer; budgets remain reserved
+            At most 100 rows with no active transfer or dependent job; budgets remain reserved
             until the worker confirms filesystem cleanup.
 
         Raises:

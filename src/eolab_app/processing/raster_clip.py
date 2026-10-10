@@ -197,7 +197,19 @@ def create_clip(
                         destination.update_tags(band, **tags)
                 destination.update_tags(
                     EOLAB_OPERATION=spec.operation,
-                    **({"EOLAB_ITEM": spec.source.item_id, "EOLAB_COLLECTION": spec.source.collection_id} if isinstance(spec.source, CatalogRasterRequest) else {"EOLAB_SOURCE": json.dumps(spec.source.model_dump()), "EOLAB_SOURCE_SHA256": spec.sourceChecksum}),
+                    **(
+                        {
+                            "EOLAB_ITEM": spec.source.item_id,
+                            "EOLAB_COLLECTION": spec.source.collection_id,
+                        }
+                        if isinstance(spec.source, CatalogRasterRequest)
+                        else {
+                            "EOLAB_SOURCE": json.dumps(
+                                spec.source.model_dump(by_alias=True)
+                            ),
+                            "EOLAB_SOURCE_SHA256": spec.sourceChecksum,
+                        }
+                    ),
                     EOLAB_MASK_RULE="all_touched",
                     EOLAB_SOURCE_SIGNATURE=json.dumps(spec.sourceSignature),
                     EOLAB_AREA_BOUNDS=json.dumps(spec.area.bounds),

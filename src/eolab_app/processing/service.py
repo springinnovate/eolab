@@ -231,14 +231,16 @@ class ProcessingService:
         calculation, invocation = build_model_calculation_request(
             request, self.model_registry
         )
-        if self.model_authorizer is None:
-            raise ProcessingError(
-                "models_unavailable", "Model source authorization is unavailable.", 503
-            )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation)
         signature = None
         if not isinstance(source, RunArtifactReference):
+            if self.model_authorizer is None:
+                raise ProcessingError(
+                    "models_unavailable",
+                    "Model source authorization is unavailable.",
+                    503,
+                )
             authorized = await self.model_authorizer.authorize(source)
             signature = tuple(authorized.source_signature.to_catalog())
         reference = operation.polygon(calculation)
@@ -255,7 +257,9 @@ class ProcessingService:
         )
         return public_job(row)
 
-    async def capture_input_file(self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan) -> PreparedJobPlan:
+    async def capture_input_file(
+        self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan
+    ) -> PreparedJobPlan:
         """Capture a published raster identity for atomic job-input admission.
 
         Args:
@@ -272,9 +276,19 @@ class ProcessingService:
         """
         if not isinstance(source, RunArtifactReference):
             return prepared
-        file = await asyncio.to_thread(self.jobs.inspect_input_file, owner, source.jobId, source.artifactId)
-        if file.media_type != "image/tiff" or file.role not in {"result", "intermediate"} or file.size <= 0:
-            raise ProcessingError("invalid_raster_input", "Choose a published raster result or scientific raster intermediate.", 422)
+        file = await asyncio.to_thread(
+            self.jobs.inspect_input_file, owner, source.job_id, source.artifact_id
+        )
+        if (
+            file.media_type != "image/tiff"
+            or file.role not in {"result", "intermediate"}
+            or file.size <= 0
+        ):
+            raise ProcessingError(
+                "invalid_raster_input",
+                "Choose a published raster result or scientific raster intermediate.",
+                422,
+            )
         return replace(prepared, input_files=(file,), work_key=None)
 
     async def list_models(self) -> dict[str, Any]:
@@ -460,7 +474,7 @@ class ProcessingService:
 
         Args:
             owner: Current browser-session hash.
-            request: Catalog raster, explicit area and stable submission key.
+            request: Catalog or private raster, explicit area and stable retry key.
 
         Returns:
             The caller's handle for shared/new work, or the same handle on retry.
@@ -479,12 +493,22 @@ class ProcessingService:
         operation = get_model_operation("raster.clip.v1")
         prepared = operation.queue(request, None)
         try:
-            prepared = await self.capture_input_file(owner, operation.source(request), prepared)
+            prepared = await self.capture_input_file(
+                owner, operation.source(request), prepared
+            )
         except ProcessingError:
-            existing = await asyncio.to_thread(self.jobs.find_request, owner, request.requestId)
-            if existing is None or existing["request_hash"] != request_hash:
+            existing = await asyncio.to_thread(
+                self.jobs.find_request, owner, request.requestId
+            )
+            if existing is None:
                 raise
             require_operation(existing, operation.id)
+            if existing["request_hash"] != request_hash:
+                raise ProcessingError(
+                    "request_conflict",
+                    "That request ID has different clip inputs.",
+                    409,
+                )
             return public_job(existing)
         row = await asyncio.to_thread(
             self.jobs.submit,
@@ -503,7 +527,7 @@ class ProcessingService:
 
         Args:
             owner: Current browser-session hash.
-            request: Validated catalog source, selected area, formulas and stable
+            request: Validated raster reference, selected area, formulas and stable
                 retry key. Direct callers must construct AggregateJobRequest
                 through its normal validation, just as the HTTP boundary does.
 
@@ -602,7 +626,9 @@ class ProcessingService:
         operation = get_model_operation("raster.aggregate.v1")
         prepared = operation.queue(request, polygons)
         try:
-            prepared = await self.capture_input_file(owner, operation.source(request), prepared)
+            prepared = await self.capture_input_file(
+                owner, operation.source(request), prepared
+            )
         except ProcessingError as error:
             return JobSubmission(request.requestId, request_hash, operation.id, error)
         return JobSubmission(request.requestId, request_hash, operation.id, prepared)
