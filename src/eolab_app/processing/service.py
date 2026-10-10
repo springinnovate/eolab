@@ -863,6 +863,41 @@ class ProcessingService:
             await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)
             raise
 
+    async def check_model_artifact(
+        self, owner: str, identifier: str, artifact_id: str
+    ) -> tuple[int, str, str]:
+        """Recheck a retained file's ownership, availability and immutable metadata.
+
+        This does not acquire another transfer slot or authorize a new filesystem
+        read. Callers already holding a lease use it before delivering a result.
+
+        Args:
+            owner: Server-derived session hash.
+            identifier: Opaque run identity.
+            artifact_id: Opaque published file identity.
+
+        Returns:
+            Current byte count, checksum and media type.
+
+        Raises:
+            ProcessingError: If the session, run or file is no longer available.
+            ValidationError: If persisted file metadata is malformed.
+        """
+        manifest = await self.list_model_artifacts(owner, identifier)
+        if manifest["availability"] != "available":
+            raise ProcessingError(
+                "result_unavailable", "This result is no longer available.", 409
+            )
+        file = next(
+            (file for file in manifest["files"] if file["artifactId"] == artifact_id),
+            None,
+        )
+        if file is None:
+            raise ProcessingError(
+                "artifact_not_found", "This result file is unavailable.", 404
+            )
+        return file["bytes"], file["sha256"], file["mediaType"]
+
     async def transfer_heartbeat(self, lease: str, release: bool = False) -> bool:
         """Renew or release a response-owned download lease.
 

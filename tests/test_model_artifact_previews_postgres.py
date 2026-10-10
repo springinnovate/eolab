@@ -10,7 +10,16 @@ import psycopg
 import pytest
 
 from eolab_app.rendering.artifact_preview import ArtifactPreviewService
-from eolab_app.routes.processing import COOKIE, create_processing_router
+from eolab_app.processing.source_access import create_model_source_files
+from eolab_app.routes.processing import (
+    COOKIE,
+    create_processing_router,
+    get_processing_session_owner_hash,
+)
+from eolab_app.routes.raster_analysis import create_raster_analysis_router
+from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.raster.pixel_service import RasterPixelService
+from eolab_app.raster.statistics_service import RasterStatisticsService
 from test_model_runs_postgres import model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from test_raster_clips import SOURCE
@@ -28,9 +37,18 @@ def preview_boundary(model_boundary: Any) -> Iterator[Any]:
     """
     _, worker, service = model_boundary
     app = FastAPI()
-    renderer = ArtifactPreviewService(
-        service.download_model_artifact,
-        lambda lease: service.transfer_heartbeat(lease, release=True),
+    files = create_model_source_files(service)
+    renderer = ArtifactPreviewService(files)
+    sources = RasterSourceAccess(worker.authorizer, files)
+    app.include_router(
+        create_raster_analysis_router(
+            RasterPixelService(sources, 2),
+            RasterStatisticsService(sources, 2, 8),
+            source_access=sources,
+            session_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, 7 * 86_400
+            ),
+        )
     )
     app.include_router(
         create_processing_router(service, preview_artifact=renderer.read)
@@ -79,10 +97,47 @@ def test_private_preview_and_download_lifetimes(
     assert len(preview["values"]) <= 512 * 512
     assert "no-store" in response.headers["cache-control"]
     assert str(worker.artifacts.root) not in response.text
+    reference = {
+        "kind": "runArtifact",
+        "jobId": job["jobId"],
+        "artifactId": file["artifactId"],
+    }
+    pixel_request = {"source": reference, "longitude": 0.5, "latitude": 9.5}
+    pixel = client.post(
+        "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
+    )
+    assert pixel.status_code == 200, pixel.text
+    assert pixel.json()["inBounds"] and pixel.json()["value"] is not None
+    assert "no-store" in pixel.headers["cache-control"]
+    description = client.post(
+        "/api/raster-analysis/sources", json={"source": reference}, headers=HEADERS
+    )
+    assert description.status_code == 200, description.text
+    assert description.json()["version"] == file["sha256"]
+    assert description.json()["capabilities"]["pixels"]["supported"]
+    assert not description.json()["capabilities"]["statistics"]["supported"]
+    assert str(worker.artifacts.root) not in description.text
+    assert (
+        client.post("/api/raster-analysis/pixels", json=pixel_request).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/raster-analysis/pixels",
+            json=pixel_request,
+            headers={**HEADERS, "Origin": "https://foreign.test"},
+        ).status_code
+        == 403
+    )
     with TestClient(client.app, base_url="https://testserver") as foreign:
         denied = foreign.get(url)
         assert denied.status_code == 404
         assert "no-store" in denied.headers["cache-control"]
+        denied_pixel = foreign.post(
+            "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
+        )
+        assert denied_pixel.status_code == 404
+        assert "no-store" in denied_pixel.headers["cache-control"]
     assert client.get(base + "/artifacts/" + "0" * 32 + "/preview").status_code == 404
     provenance = next(
         file for file in ready["artifacts"]["files"] if file["role"] == "provenance"
@@ -98,6 +153,18 @@ def test_private_preview_and_download_lifetimes(
                 (job["jobId"],),
             )
     assert client.get(url).status_code == 409
+    assert (
+        client.post(
+            "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/api/raster-analysis/sources", json={"source": reference}, headers=HEADERS
+        ).status_code
+        == 409
+    )
     with psycopg.connect(store.conninfo) as connection:
         assert (
             connection.execute("SELECT count(*) FROM processing.transfers").fetchone()[
@@ -147,6 +214,20 @@ def test_preview_rejects_same_size_storage_change(
     client.portal.call(service.transfer_heartbeat, source.lease_id, True)
     response = client.get(file["url"] + "/preview")
     assert response.status_code == 422 and "changed" in response.text
+    pixel = client.post(
+        "/api/raster-analysis/pixels",
+        json={
+            "source": {
+                "kind": "runArtifact",
+                "jobId": job["jobId"],
+                "artifactId": file["artifactId"],
+            },
+            "longitude": 0.5,
+            "latitude": 9.5,
+        },
+        headers=HEADERS,
+    )
+    assert pixel.status_code == 422 and "changed" in pixel.text
     with psycopg.connect(store.conninfo) as connection:
         assert (
             connection.execute("SELECT count(*) FROM processing.transfers").fetchone()[

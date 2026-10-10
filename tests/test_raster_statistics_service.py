@@ -21,6 +21,7 @@ from eolab_app.raster.models import (
 )
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.raster.source_access import RasterSourceAccess
 from eolab_app.sampling_area import RasterSamplingArea
 
 
@@ -170,7 +171,7 @@ def test_statistics_service_caches_by_approved_source_signature(
         return _statistics(float(read_count))
 
     service = RasterStatisticsService(
-        source_authorizer,
+        RasterSourceAccess(source_authorizer),
         read_concurrency=1,
         cache_entries=32,
         statistics_reader=reader,
@@ -236,7 +237,7 @@ def test_statistics_service_keys_pairs_by_ordered_identities_and_signatures(
         return _paired_statistics(float(read_count))
 
     service = RasterStatisticsService(
-        source_authorizer,
+        RasterSourceAccess(source_authorizer),
         read_concurrency=1,
         cache_entries=32,
         paired_statistics_reader=reader,
@@ -326,7 +327,7 @@ def test_paired_statistics_cancellation_preserves_a_coalesced_waiter(
         return _paired_statistics(1)
 
     service = RasterStatisticsService(
-        source_authorizer,
+        RasterSourceAccess(source_authorizer),
         read_concurrency=1,
         cache_entries=4,
         paired_statistics_reader=reader,
@@ -424,7 +425,7 @@ def test_paired_last_waiter_cancellation_retains_shared_capacity(
         return _statistics(1)
 
     service = RasterStatisticsService(
-        source_authorizer,
+        RasterSourceAccess(source_authorizer),
         read_concurrency=1,
         cache_entries=4,
         queue_capacity=0,
@@ -528,7 +529,7 @@ def test_statistics_service_shares_one_completed_cache_budget(
         return _paired_statistics(float(paired_read_count))
 
     service = RasterStatisticsService(
-        source_authorizer,
+        RasterSourceAccess(source_authorizer),
         read_concurrency=1,
         cache_entries=1,
         statistics_reader=ordinary_reader,
@@ -616,7 +617,7 @@ def test_categorical_statistics_share_admission_and_cache_by_codes_and_source(
             None after verifying independent classification identities.
         """
         service = RasterStatisticsService(
-            authorizer,
+            RasterSourceAccess(authorizer),
             1,
             8,
             categorical_statistics_reader=categorical_reader,

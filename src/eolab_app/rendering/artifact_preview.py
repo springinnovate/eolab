@@ -1,19 +1,18 @@
 """Read small map previews from leased, immutable model-run files."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
-import hashlib
 import json
 import math
 from pathlib import Path
 import sys
-from typing import Any, Protocol
+from typing import Any
 
 from eolab_app.execution.bounded_process import (
     run_bounded_process,
     ProcessDeadlineError,
 )
 from eolab_app.raster.source_contract import require_signed_raster_dependencies
+from eolab_app.source_files import LeasedSourceFiles
 
 MAX_PREVIEW_BYTES = 8 * 1024 * 1024
 MAX_PREVIEW_SIDE = 512
@@ -21,16 +20,6 @@ MAX_VECTOR_FEATURES = 5000
 MAX_VECTOR_POSITIONS = 100_000
 PREVIEW_SECONDS = 30
 PREVIEW_MEDIA_TYPES = frozenset({"image/tiff", "application/geo+json"})
-
-
-class LeasedPreviewFile(Protocol):
-    """A confined immutable file held available by its delivery owner's lease."""
-
-    path: Path
-    size: int
-    sha256: str
-    media_type: str
-    lease_id: str
 
 
 class ArtifactPreviewError(Exception):
@@ -255,17 +244,13 @@ def read_vector_preview(path: Path) -> dict[str, Any]:
     }
 
 
-def artifact_preview_process(
-    writer: Any, path: Path, media_type: str, size: int, sha256: str
-) -> None:
-    """Verify an immutable file and return one preview from a killable native process.
+def artifact_preview_process(writer: Any, path: Path, media_type: str) -> None:
+    """Read an authorized immutable file into one bounded display preview.
 
     Args:
         writer: Supervisor's one-result pipe writer.
         path: Delivery-authorized confined path, never accepted from HTTP input.
         media_type: Manifest format, restricted by the preview delivery service.
-        size: Published file size.
-        sha256: Published file checksum.
 
     The parent bounds runtime and concurrency. Linux additionally limits address
     space to 2 GiB; decoded blocks and preview bytes have platform-independent caps.
@@ -276,32 +261,11 @@ def artifact_preview_process(
             import resource
 
             resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-        before = path.stat()
-        if before.st_size != size:
-            raise ValueError("The result file changed. Run the model again.")
-        if media_type == "application/geo+json" and size > MAX_PREVIEW_BYTES:
-            raise ValueError(
-                "This vector file is too large for a preview. Download it instead."
-            )
-        checksum = hashlib.sha256()
-        with path.open("rb") as stream:
-            while block := stream.read(1024 * 1024):
-                checksum.update(block)
-        if checksum.hexdigest() != sha256:
-            raise ValueError("The result file changed. Run the model again.")
         reader = {
             "image/tiff": read_raster_preview,
             "application/geo+json": read_vector_preview,
         }[media_type]
         preview = reader(path)
-        after = path.stat()
-        if any(
-            getattr(after, field) != getattr(before, field)
-            for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        ):
-            raise ValueError(
-                "The result file changed while its preview was being read."
-            )
         encoded = json.dumps(preview, allow_nan=False, separators=(",", ":")).encode()
         if len(encoded) > MAX_PREVIEW_BYTES:
             raise ValueError("This preview is too large. Download the file instead.")
@@ -333,52 +297,14 @@ def artifact_preview_process(
 class ArtifactPreviewService:
     """Deliver bounded previews using injected file authorization and lifetime contracts."""
 
-    def __init__(
-        self,
-        acquire: Callable[[str, str, str], Awaitable[LeasedPreviewFile]],
-        release: Callable[[str], Awaitable[bool]],
-    ) -> None:
-        """Connect delivery-owned file leases without importing Processing implementation.
+    def __init__(self, files: LeasedSourceFiles) -> None:
+        """Connect the common immutable-file source access boundary.
 
         Args:
-            acquire: Authorize session, run and file on every call and retain its files.
-            release: Release a file lease once native work has completely stopped.
+            files: Owner-authorized source access shared with raster analysis.
         """
-        self.acquire = acquire
-        self.release = release
+        self.files = files
         self._slots = asyncio.Semaphore(2)
-
-    async def _acquire_file(
-        self, owner: str, run_id: str, artifact_id: str
-    ) -> LeasedPreviewFile:
-        """Finish acquisition before releasing a lease when HTTP cancellation races a database read.
-
-        Args:
-            owner: Current session hash.
-            run_id: Requested run identity.
-            artifact_id: Requested file identity.
-
-        Returns:
-            The acquired immutable file lease.
-
-        Raises:
-            Exception: Authorization failure from the file-delivery owner.
-            asyncio.CancelledError: After releasing a lease acquired during cancellation.
-        """
-        task = asyncio.create_task(self.acquire(owner, run_id, artifact_id))
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-            if not task.cancelled() and task.exception() is None:
-                await self.release(task.result().lease_id)
-            raise
 
     async def read(self, owner: str, run_id: str, artifact_id: str) -> dict[str, Any]:
         """Authorize, generate and reauthorize a preview without retaining a server cache.
@@ -398,43 +324,26 @@ class ArtifactPreviewService:
         """
         if self._slots.locked():
             raise ArtifactPreviewError("Map previews are busy. Try again shortly.", 429)
-        async with self._slots:
-            source = await self._acquire_file(owner, run_id, artifact_id)
+        async with self._slots, self.files.open(owner, run_id, artifact_id) as source:
+            if source.media_type not in PREVIEW_MEDIA_TYPES:
+                raise ArtifactPreviewError(
+                    "This file has no map preview. Download it instead."
+                )
             try:
-                if source.media_type not in PREVIEW_MEDIA_TYPES:
-                    raise ArtifactPreviewError(
-                        "This file has no map preview. Download it instead."
-                    )
-                try:
-                    result = await run_bounded_process(
-                        artifact_preview_process,
-                        (source.path, source.media_type, source.size, source.sha256),
-                        PREVIEW_SECONDS,
-                    )
-                except ProcessDeadlineError as error:
-                    raise ArtifactPreviewError(
-                        "The preview took too long. Download the file instead.", 504
-                    ) from error
-                if "error" in result:
-                    raise ArtifactPreviewError(result["error"])
-                # Deletion or expiry during native work must not deliver a new preview.
-                current = await self._acquire_file(owner, run_id, artifact_id)
-                try:
-                    if (current.path, current.size, current.sha256) != (
-                        source.path,
-                        source.size,
-                        source.sha256,
-                    ):
-                        raise ArtifactPreviewError(
-                            "The result file changed. Run the model again.", 410
-                        )
-                finally:
-                    await self.release(current.lease_id)
-                return {
-                    "jobId": run_id,
-                    "artifactId": artifact_id,
-                    "sha256": source.sha256,
-                    **result["data"],
-                }
-            finally:
-                await self.release(source.lease_id)
+                result = await run_bounded_process(
+                    artifact_preview_process,
+                    (source.path, source.media_type),
+                    PREVIEW_SECONDS,
+                )
+            except ProcessDeadlineError as error:
+                raise ArtifactPreviewError(
+                    "The preview took too long. Download the file instead.", 504
+                ) from error
+            if "error" in result:
+                raise ArtifactPreviewError(result["error"])
+            return {
+                "jobId": run_id,
+                "artifactId": artifact_id,
+                "sha256": source.sha256,
+                **result["data"],
+            }

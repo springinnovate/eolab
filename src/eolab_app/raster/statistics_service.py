@@ -1,4 +1,4 @@
-"""Catalog-authorized application service for bounded raster statistics."""
+"""Source-authorized application service for bounded raster statistics."""
 
 from eolab_app.catalog_selection import (
     CatalogSelectionReader,
@@ -11,7 +11,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Coroutine
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -31,7 +31,6 @@ from eolab_app.raster.errors import (
     RasterStatisticsQueueTimeoutError,
 )
 from eolab_app.raster.models import (
-    AuthorizedRaster,
     CatalogRasterPairRequest,
     CatalogRasterStatisticsRequest,
     CanonicalWgs84Bounds,
@@ -44,7 +43,17 @@ from eolab_app.raster.paired_statistics import (
     raster_paired_statistics_policy_parameters,
     read_raster_paired_statistics,
 )
-from eolab_app.raster.ports import RasterSourceAuthorizer
+from eolab_app.raster.source_access import (
+    RasterSourceAccess,
+    RasterReadSource,
+    read_private_raster,
+)
+from eolab_app.raster.source_models import (
+    RasterStatisticsSourceRequest,
+    RasterPairSourceRequest,
+    raster_source_reference,
+)
+from eolab_app.source_files import finish_source_task
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     RasterReadCancelled,
@@ -124,7 +133,7 @@ class RasterStatisticsService:
 
     def __init__(
         self,
-        source_authorizer: RasterSourceAuthorizer,
+        source_access: RasterSourceAccess,
         read_concurrency: int,
         cache_entries: int,
         catalog_selection_reader: CatalogSelectionReader | None = None,
@@ -147,10 +156,10 @@ class RasterStatisticsService:
         queue_wait_seconds: float = 30,
         max_waiters: int = 256,
     ) -> None:
-        """Create a bounded analysis workflow over current catalog sources.
+        """Create a bounded analysis workflow over authorized original rasters.
 
         Args:
-            source_authorizer: Catalog-owned mounted-source authorization.
+            source_access: Scoped catalog/private source authorization.
             read_concurrency: Maximum simultaneous Rasterio reads.
             cache_entries: Maximum completed ordinary and paired statistics
                 documents retained in one combined cache.
@@ -178,7 +187,7 @@ class RasterStatisticsService:
             )
         if not math.isfinite(queue_wait_seconds) or queue_wait_seconds <= 0:
             raise ValueError("Statistics queue wait must be finite and positive")
-        self._source_authorizer = source_authorizer
+        self._source_access = source_access
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
         self._maximum_inflight = read_concurrency + queue_capacity
         self._queue_wait_seconds = queue_wait_seconds
@@ -199,12 +208,37 @@ class RasterStatisticsService:
 
     async def get(
         self,
-        request: CatalogRasterStatisticsRequest,
+        request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
+        owner: str | None = None,
+    ) -> RasterStatistics:
+        """Summarize original raster data while retaining its authorized source.
+
+        Args:
+            request: Existing catalog request or explicit raster source and area.
+            owner: Server-derived session hash for a private source.
+
+        Returns:
+            The existing exact or sampled statistics response.
+
+        Raises:
+            RasterFeatureError: If source, area or bounded reading is unavailable.
+            SourceFileError: If private file access changes before delivery.
+        """
+        async with self._source_access.open(
+            raster_source_reference(request), owner
+        ) as source:
+            return await self._get(request, source)
+
+    async def _get(
+        self,
+        request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
+        authorized_raster: RasterReadSource,
     ) -> RasterStatistics:
         """Return current bounded statistics for one normalized sampling area.
 
         Args:
-            request: Validated catalog identity and strict sampling-area union.
+            request: Validated raster identity and strict sampling-area union.
+            authorized_raster: Source retained by the calling access scope.
 
         Returns:
             Cached or newly computed rendering-independent statistics.
@@ -215,7 +249,6 @@ class RasterStatisticsService:
             RasterStatisticsCapacityError: If the pending-read or caller limit is full.
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
         """
-        authorized_raster = await self._source_authorizer.authorize(request)
         try:
             sampling_area = await self._resolve_sampling_area(request)
         except SelectionUnavailableError as error:
@@ -226,9 +259,7 @@ class RasterStatisticsService:
             else None
         )
         cache_key: RasterStatisticsCacheKey = (
-            request.collection_id,
-            request.item_id,
-            authorized_raster.source_signature,
+            authorized_raster.cache_identity,
             (
                 CATEGORICAL_STATISTICS_ALGORITHM
                 if category_values is not None
@@ -303,20 +334,56 @@ class RasterStatisticsService:
                 "The selected raster statistics could not be read"
             ) from error
         finally:
-            await self._release_waiter(cache_key, work)
+            if authorized_raster.private:
+                await finish_source_task(
+                    asyncio.create_task(self._release_waiter(cache_key, work, True))
+                )
+            else:
+                await self._release_waiter(cache_key, work)
 
     async def get_paired(
         self,
-        request: CatalogRasterPairRequest,
+        request: CatalogRasterPairRequest | RasterPairSourceRequest,
+        owner: str | None = None,
     ) -> RasterPairedStatistics:
-        """Return bounded paired statistics for two current catalog sources.
+        """Compare original data while holding both source access scopes.
+
+        Args:
+            request: Ordered raster references and optional sampling area.
+            owner: Server-derived session hash for any private input.
+
+        Returns:
+            The existing paired-statistics response on the X reference grid.
+
+        Raises:
+            RasterFeatureError: If either source or the sampling area is unavailable.
+            SourceFileError: If private access changes before delivery.
+        """
+        async with AsyncExitStack() as stack:
+            x = await stack.enter_async_context(
+                self._source_access.open(request.x_raster, owner)
+            )
+            y = await stack.enter_async_context(
+                self._source_access.open(request.y_raster, owner)
+            )
+            return await self._get_paired(request, x, y)
+
+    async def _get_paired(
+        self,
+        request: CatalogRasterPairRequest | RasterPairSourceRequest,
+        authorized_x: RasterReadSource,
+        authorized_y: RasterReadSource,
+    ) -> RasterPairedStatistics:
+        """Return bounded paired statistics for two authorized original rasters.
 
         X and Y authorization is independent of rendering publication. The
         ordered identities, both source signatures, selected bounds, algorithm,
         and all fixed resource-policy parameters form one cache/coalescing key.
 
         Args:
-            request: Validated ordered catalog pair and optional WGS 84 bounds.
+            request: Validated ordered source pair and optional WGS 84 bounds.
+            authorized_x: Retained X reference-grid source.
+            authorized_y: Retained Y source for alignment.
 
         Returns:
             Cached or newly computed paired histogram on the X reference grid.
@@ -328,10 +395,6 @@ class RasterStatisticsService:
             RasterStatisticsCapacityError: If the pending-read or caller limit is full.
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
         """
-        authorized_x, authorized_y = await asyncio.gather(
-            self._source_authorizer.authorize(request.x_raster),
-            self._source_authorizer.authorize(request.y_raster),
-        )
         selected_bounds = (
             request.selected_bounds.canonical_tuple()
             if request.selected_bounds is not None
@@ -343,12 +406,8 @@ class RasterStatisticsService:
             raise RasterConflictError(error.detail) from error
         cache_key: tuple[object, ...] = (
             "paired",
-            request.x_raster.collection_id,
-            request.x_raster.item_id,
-            authorized_x.source_signature,
-            request.y_raster.collection_id,
-            request.y_raster.item_id,
-            authorized_y.source_signature,
+            authorized_x.cache_identity,
+            authorized_y.cache_identity,
             RASTER_PAIRED_STATISTICS_ALGORITHM,
             sampling_area.cache_identity(),
             raster_paired_statistics_policy_parameters(),
@@ -404,7 +463,12 @@ class RasterStatisticsService:
                 "The selected paired raster statistics could not be read"
             ) from error
         finally:
-            await self._release_waiter(cache_key, work)
+            if authorized_x.private or authorized_y.private:
+                await finish_source_task(
+                    asyncio.create_task(self._release_waiter(cache_key, work, True))
+                )
+            else:
+                await self._release_waiter(cache_key, work)
 
     def _join_or_queue_read(
         self,
@@ -492,8 +556,8 @@ class RasterStatisticsService:
 
     async def _compute_paired(
         self,
-        authorized_x: AuthorizedRaster,
-        authorized_y: AuthorizedRaster,
+        authorized_x: RasterReadSource,
+        authorized_y: RasterReadSource,
         selected_bounds: CanonicalWgs84Bounds | None,
         cache_key: tuple[object, ...],
         cancellation_requested: threading.Event,
@@ -502,8 +566,8 @@ class RasterStatisticsService:
         """Compute one ordered source pair within shared bounded capacity.
 
         Args:
-            authorized_x: Catalog source authorized as the X reference.
-            authorized_y: Catalog source authorized for nearest alignment.
+            authorized_x: Retained original source used as the X reference.
+            authorized_y: Retained original source for nearest alignment.
             selected_bounds: Optional canonical WGS 84 sampling rectangle.
             cache_key: Ordered identities, signatures, bounds, and policy.
             cancellation_requested: Thread-safe last-waiter signal.
@@ -530,13 +594,14 @@ class RasterStatisticsService:
                     if isinstance(sampling_area, CatalogSelectionSamplingArea)
                     else {}
                 )
-                statistics = await asyncio.to_thread(
-                    self._paired_statistics_reader,
+                private = authorized_x.private or authorized_y.private
+                execute = read_private_raster if private else asyncio.to_thread
+                statistics = await execute(
+                    partial(self._paired_statistics_reader, **options),
                     authorized_x.source_path,
                     authorized_y.source_path,
                     selected_bounds,
-                    cancellation_requested.is_set,
-                    **options,
+                    None if private else cancellation_requested.is_set,
                 )
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
@@ -563,12 +628,14 @@ class RasterStatisticsService:
         self,
         cache_key: tuple[object, ...],
         work: _InflightStatistics,
+        stop_native: bool = False,
     ) -> None:
         """Release a caller and stop work after its final waiter disconnects.
 
         Args:
             cache_key: Complete identity of the shared computation.
             work: Exact in-flight state joined by the caller.
+            stop_native: Stop supervised private reads before releasing the last file scope.
 
         Returns:
             None after detaching the caller and updating worker ownership.
@@ -585,13 +652,15 @@ class RasterStatisticsService:
             work.cancellation_requested.set()
             if self._inflight.get(cache_key) is work:
                 self._inflight.pop(cache_key)
-            if not work.started:
+            if not work.started or stop_native:
                 work.task.cancel()
                 self._tasks.discard(work.task)
+        if stop_native:
+            await finish_source_task(work.task)
 
     async def _compute(
         self,
-        authorized_raster: AuthorizedRaster,
+        authorized_raster: RasterReadSource,
         cache_key: RasterStatisticsCacheKey,
         sampling_area: RasterSamplingArea,
         cancellation_requested: threading.Event,
@@ -600,7 +669,7 @@ class RasterStatisticsService:
         """Compute one current source/area identity within bounded capacity.
 
         Args:
-            authorized_raster: Catalog source authorized at request start.
+            authorized_raster: Original source retained by its access scope.
             cache_key: Source, area, algorithm, and parameter cache identity.
             sampling_area: Resolved whole, rectangle, or catalog-selection area.
             cancellation_requested: Thread-safe last-waiter signal.
@@ -624,7 +693,12 @@ class RasterStatisticsService:
             async with self._wait_for_read_capacity(cache_key):
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
-                statistics = await asyncio.to_thread(
+                execute = (
+                    read_private_raster
+                    if authorized_raster.private
+                    else asyncio.to_thread
+                )
+                statistics = await execute(
                     (
                         partial(
                             self._categorical_statistics_reader,
@@ -635,7 +709,11 @@ class RasterStatisticsService:
                     ),
                     authorized_raster.source_path,
                     sampling_area,
-                    cancellation_requested.is_set,
+                    (
+                        None
+                        if authorized_raster.private
+                        else cancellation_requested.is_set
+                    ),
                 )
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
@@ -682,7 +760,12 @@ class RasterStatisticsService:
 
     async def _resolve_sampling_area(
         self,
-        request: CatalogRasterStatisticsRequest | CatalogRasterPairRequest,
+        request: (
+            CatalogRasterStatisticsRequest
+            | RasterStatisticsSourceRequest
+            | CatalogRasterPairRequest
+            | RasterPairSourceRequest
+        ),
     ) -> RasterSamplingArea:
         """Resolve the request's strict sampling-area union.
 

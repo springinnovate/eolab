@@ -90,6 +90,36 @@ def require_raster_analysis_georeferencing(
         )
 
 
+def require_pixel_source_structure(dataset: rasterio.io.DatasetReader) -> None:
+    """Require a numeric first band whose native blocks fit the pixel reader's limit.
+
+    Pixel reads use Rasterio's validity mask, including internal dataset masks.
+    Histogram validity remains governed by its separate structure contract.
+
+    Args:
+        dataset: Open GeoTIFF whose file dependencies and georeferencing are checked.
+
+    Raises:
+        ValueError: If band-one values or their decoded blocks are unsupported.
+    """
+    if dataset.count < 1 or dataset.dtypes[0] not in {
+        "uint8",
+        "uint16",
+        "int16",
+        "uint32",
+        "int32",
+        "float32",
+        "float64",
+    }:
+        raise ValueError("Pixel reading requires a numeric first raster band.")
+    height, width = dataset.block_shapes[0]
+    if (
+        height * width * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
+        > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
+    ):
+        raise ValueError("Raster blocks exceed the pixel reader's 64 MiB memory limit.")
+
+
 def require_bounded_source_structure(
     dataset: rasterio.io.DatasetReader,
 ) -> None:

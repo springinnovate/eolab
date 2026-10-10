@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 import hashlib
 import json
 from pathlib import Path
@@ -12,10 +13,15 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
+from eolab_app.source_files import (
+    LeasedSourceFiles,
+    SourceFileError,
+    verify_source_file,
+)
+
 from eolab_app.rendering.artifact_preview import (
     ArtifactPreviewError,
     ArtifactPreviewService,
-    artifact_preview_process,
     read_raster_preview,
     read_vector_preview,
 )
@@ -88,10 +94,8 @@ def test_native_preview_checks_checksum_before_read(tmp_path: Path) -> None:
     """
     path = write_preview_raster(tmp_path / "changed.tif")
     captured = Capture()
-    artifact_preview_process(
-        captured, path, "image/tiff", path.stat().st_size, "0" * 64
-    )
-    assert "changed" in captured.value["error"]
+    verify_source_file(captured, path, path.stat().st_size, "0" * 64)
+    assert captured.value is None
     assert str(path) not in json.dumps(captured.value)
 
 
@@ -173,6 +177,49 @@ class LeasedFile:
     lease_id: str = "lease"
 
 
+def preview_sources(
+    acquire: Callable[[str, str, str], Awaitable[LeasedFile]],
+    release: Callable[[str], Awaitable[bool]],
+) -> LeasedSourceFiles:
+    """Compose test ownership callbacks through the real shared file lifetime.
+
+    Args:
+        acquire: Controlled source authority.
+        release: Controlled lease release.
+
+    Returns:
+        Shared source access with a controlled metadata check and renewal.
+    """
+
+    async def check(owner: str, run: str, artifact: str) -> tuple[int, str, str]:
+        """Check the controlled authority again before delivery.
+
+        Args:
+            owner: Requesting owner.
+            run: Run identity.
+            artifact: File identity.
+
+        Returns:
+            Current published metadata.
+        """
+        current = await acquire(owner, run, artifact)
+        await release(current.lease_id)
+        return current.size, current.sha256, current.media_type
+
+    async def renew(lease: str) -> bool:
+        """Keep a controlled lease live.
+
+        Args:
+            lease: Existing transfer token.
+
+        Returns:
+            True for the test authority's live transfer.
+        """
+        return True
+
+    return LeasedSourceFiles(acquire, release, check, renew)
+
+
 def test_preview_rechecks_access_and_releases_lease(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -202,7 +249,11 @@ def test_preview_rechecks_access_and_releases_lease(
         acquired.append((owner, run, artifact))
         if len(acquired) > 1:
             raise PermissionError("deleted")
-        return LeasedFile(tmp_path / "file", 12, "0" * 64)
+        path = tmp_path / "file"
+        path.write_bytes(b"test bytes")
+        return LeasedFile(
+            path, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()
+        )
 
     async def release(lease: str) -> bool:
         """Record file-lifetime release.
@@ -230,9 +281,11 @@ def test_preview_rechecks_access_and_releases_lease(
     monkeypatch.setattr(
         "eolab_app.rendering.artifact_preview.run_bounded_process", native
     )
-    with pytest.raises(PermissionError):
+    with pytest.raises(SourceFileError):
         asyncio.run(
-            ArtifactPreviewService(acquire, release).read("owner", "run", "file")
+            ArtifactPreviewService(preview_sources(acquire, release)).read(
+                "owner", "run", "file"
+            )
         )
     assert len(acquired) == 2 and released == ["lease"]
 
@@ -275,7 +328,9 @@ def test_supervised_native_preview_runs_without_geoserver(tmp_path: Path) -> Non
         return True
 
     result = asyncio.run(
-        ArtifactPreviewService(acquire, release).read("owner", "run", "file")
+        ArtifactPreviewService(preview_sources(acquire, release)).read(
+            "owner", "run", "file"
+        )
     )
     assert result["kind"] == "raster" and result["sha256"] == file.sha256
     assert releases == ["lease", "lease"]
@@ -321,7 +376,9 @@ def test_cancelled_acquisition_releases_its_late_lease(tmp_path: Path) -> None:
             return True
 
         task = asyncio.create_task(
-            ArtifactPreviewService(acquire, release).read("owner", "run", "file")
+            ArtifactPreviewService(preview_sources(acquire, release)).read(
+                "owner", "run", "file"
+            )
         )
         await entered.wait()
         task.cancel()
@@ -362,7 +419,11 @@ def test_preview_concurrency_is_bounded_and_cancellation_releases_capacity(
             Returns:
                 Immutable file lease.
             """
-            return LeasedFile(tmp_path / "file", 1, "0" * 64, lease_id=artifact)
+            path = tmp_path / artifact
+            path.write_bytes(b"x")
+            return LeasedFile(
+                path, 1, hashlib.sha256(b"x").hexdigest(), lease_id=artifact
+            )
 
         async def release(lease: str) -> bool:
             """Record release only after supervised work exits.
@@ -391,7 +452,7 @@ def test_preview_concurrency_is_bounded_and_cancellation_releases_capacity(
         monkeypatch.setattr(
             "eolab_app.rendering.artifact_preview.run_bounded_process", native
         )
-        service = ArtifactPreviewService(acquire, release)
+        service = ArtifactPreviewService(preview_sources(acquire, release))
         tasks = [
             asyncio.create_task(service.read("owner", "run", str(index)))
             for index in range(2)

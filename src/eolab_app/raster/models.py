@@ -22,9 +22,7 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 
 CanonicalWgs84Bounds = tuple[float, float, float, float]
 RasterStatisticsCacheKey = tuple[
-    str,
-    str,
-    RasterSourceIdentity,
+    tuple[object, ...],
     str,
     tuple[object, ...],
     tuple[int, ...],
@@ -159,8 +157,8 @@ class Wgs84Bounds(BaseModel):
         return (self.west, self.south, self.east, self.north)
 
 
-class CatalogRasterStatisticsRequest(CatalogRasterRequest):
-    """Identify a catalog raster and at most one optional sampling area.
+class RasterStatisticsArea(BaseModel):
+    """Choose one sampling area and optional category codes for raster statistics.
 
     Attributes:
         selected_bounds: Optional canonical WGS 84 rectangle; absence selects
@@ -170,6 +168,8 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
         category_values: Optional distinct numeric classification codes. Labels,
             colors and opacity remain outside the analysis contract.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     selected_bounds: Wgs84Bounds | None = Field(
         default=None,
@@ -186,7 +186,7 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
     @model_validator(mode="after")
     def require_strict_sampling_area_union(
         self,
-    ) -> "CatalogRasterStatisticsRequest":
+    ) -> "RasterStatisticsArea":
         """Reject requests containing both rectangular and catalog selection sampling.
 
         Returns:
@@ -204,6 +204,10 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
         ):
             raise ValueError("categoryValues must contain distinct codes")
         return self
+
+
+class CatalogRasterStatisticsRequest(CatalogRasterRequest, RasterStatisticsArea):
+    """Identify a catalog raster and its whole, rectangular or vector sampling area."""
 
 
 class CatalogRasterPairRequest(BaseModel):
@@ -235,23 +239,20 @@ class CatalogRasterPairRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_distinct_rasters(self) -> "CatalogRasterPairRequest":
-        """Require two different catalog identities for bivariate analysis.
+        """Require two different source identities for bivariate analysis.
 
         Returns:
             Validated ordered pair request.
 
         Raises:
-            ValueError: If X and Y identify the same catalog Item.
+            ValueError: If X and Y identify the same source or specify two areas.
         """
         if self.selected_bounds is not None and self.catalog_selection is not None:
             raise ValueError(
                 "selectedBounds and catalogSelection are mutually exclusive"
             )
-        if (
-            self.x_raster.collection_id == self.y_raster.collection_id
-            and self.x_raster.item_id == self.y_raster.item_id
-        ):
-            raise ValueError("xRaster and yRaster must identify different Items")
+        if self.x_raster == self.y_raster:
+            raise ValueError("xRaster and yRaster must identify different sources")
         return self
 
 

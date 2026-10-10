@@ -58,7 +58,12 @@ from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
-from eolab_app.routes.processing import create_processing_router
+from eolab_app.routes.processing import (
+    create_processing_router,
+    get_processing_session_owner_hash,
+)
+from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
 from eolab_app.routes.stac_proxy import (
@@ -188,12 +193,31 @@ def create_app(
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
     )
+    processing_limits = load_processing_limits()
+    processing_events = PostgresJobEvents()
+    processing_store = PostgresJobStore(processing_limits)
+    processing_service = ProcessingService(
+        processing_store,
+        LocalJobArtifacts(
+            app_global_configuration.processing_data_path,
+            (Path.cwd(), app_global_configuration.scan_mount_path),
+        ),
+        changes=processing_events,
+        model_authorizer=raster_source_authorizer,
+    )
+    source_files = create_model_source_files(processing_service)
+    raster_sources = RasterSourceAccess(raster_source_authorizer, source_files)
+    processing_session_ttl = max(
+        7 * 86_400,
+        processing_limits.result_ttl_seconds,
+        processing_limits.metadata_ttl_seconds,
+    )
     raster_pixel_service = RasterPixelService(
-        raster_source_authorizer,
+        raster_sources,
         app_global_configuration.raster_pixel_read_concurrency,
     )
     raster_statistics_service = RasterStatisticsService(
-        raster_source_authorizer,
+        raster_sources,
         app_global_configuration.raster_statistics_read_concurrency,
         app_global_configuration.raster_statistics_cache_entries,
         catalog_selection_reader=vector_selection_reader,
@@ -327,37 +351,20 @@ def create_app(
         create_raster_analysis_router(
             raster_pixel_service,
             raster_statistics_service,
+            source_access=raster_sources,
+            session_owner=lambda request, response: get_processing_session_owner_hash(
+                request, response, processing_session_ttl
+            ),
         )
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
     application.include_router(create_vector_sampling_router(vector_selection_reader))
-    processing_limits = load_processing_limits()
-    processing_events = PostgresJobEvents()
-    processing_store = PostgresJobStore(processing_limits)
-    processing_service = ProcessingService(
-        processing_store,
-        LocalJobArtifacts(
-            app_global_configuration.processing_data_path,
-            (Path.cwd(), app_global_configuration.scan_mount_path),
-        ),
-        changes=processing_events,
-        model_authorizer=raster_source_authorizer,
-    )
     application.include_router(
         create_processing_router(
             processing_service,
-            preview_artifact=ArtifactPreviewService(
-                processing_service.download_model_artifact,
-                lambda lease: processing_service.transfer_heartbeat(
-                    lease, release=True
-                ),
-            ).read,
-            session_ttl_seconds=max(
-                7 * 86_400,
-                processing_limits.result_ttl_seconds,
-                processing_limits.metadata_ttl_seconds,
-            ),
+            preview_artifact=ArtifactPreviewService(source_files).read,
+            session_ttl_seconds=processing_session_ttl,
         )
     )
     scan_manager = ScanManager(
