@@ -1,11 +1,13 @@
-"""Configure the worker's native process for raster preparation and execution."""
+"""Configure the worker's native process for registered Processing calculations."""
 
 from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.bounded_vector import summary_process
 from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.raster_aggregate import aggregate_process_target
 from eolab_app.processing.raster_clip import clip_process_target
+from eolab_app.processing.downstream_calculation import downstream_process_target
 from eolab_app.source_files import verify_source_file
+
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
     """Prepare one lane for raster operations and immutable input verification.
@@ -26,6 +28,7 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
         (
             clip_process_target,
             aggregate_process_target,
+            downstream_process_target,
             summary_process,
             verify_source_file,
         ),

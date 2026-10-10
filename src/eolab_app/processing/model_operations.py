@@ -22,6 +22,14 @@ from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec, Unprepare
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing import raster_operations as raster
+from eolab_app.processing.operation_context import OperationContext
+from eolab_app.processing import downstream_operation as downstream
+from eolab_app.processing.downstream_models import (
+    DownstreamRequest,
+    QueuedDownstream,
+    DownstreamPlan,
+    DownstreamNumericalPolicy,
+)
 
 Request = TypeVar("Request", bound=BaseModel)
 Queued = TypeVar("Queued", bound=BaseModel)
@@ -75,6 +83,10 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         outcome: Describe retained scientific metadata in Run YAML.
         cached: Restore an ordinary operation result when its cache is complete.
         reusable: Extract newly computed values eligible for existing cache storage.
+        primary_input: Argument bound to the main raster source and its grid metadata.
+        extra_sources: Additional catalog rasters to capture and check with the run.
+        execution_inputs: Resolve ephemeral native arguments from the stored plan.
+        check_execution: Recheck vector access and identity before result publication.
     """
 
     id: str
@@ -91,21 +103,29 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     polygon: Callable[[Request], PolygonAreaReference | None]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
-        [raster.RasterOperationContext, Queued, AuthorizedRaster],
+        [OperationContext, Queued, AuthorizedRaster],
         Awaitable[PreparedJobPlan],
     ]
     execution: Callable[
-        [Prepared, raster.RasterOperationContext, int],
+        [Prepared, OperationContext, int],
         tuple[Callable[..., None], str, Any],
     ]
     policy: Callable[[Prepared], BaseModel]
     result: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
     outcome: Callable[[dict[str, Any]], dict[str, Any]]
-    cached: Callable[
-        [raster.RasterOperationContext, Prepared, Path], Awaitable[Artifact | None]
-    ]
+    cached: Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]]
     reusable: Callable[[Prepared, Artifact], dict[str, dict[str, object]] | None]
     additional_outputs: tuple[OperationOutput, ...] = ()
+    primary_input: str = "raster"
+    extra_sources: (
+        Callable[[Request | Queued | Prepared], dict[str, RasterSourceReference]] | None
+    ) = None
+    execution_inputs: Callable[
+        [OperationContext, Prepared, AuthorizedRaster], Awaitable[tuple[Any, Prepared]]
+    ] = raster.prepare_raster_execution
+    check_execution: Callable[[OperationContext, Prepared], Awaitable[None]] = (
+        raster.check_raster_execution
+    )
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
@@ -135,6 +155,59 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[DownstreamRequest, QueuedDownstream, DownstreamPlan](
+                id="hydrology.downstream_beneficiaries.v1",
+                inputs=(
+                    ("starting_mask", "mask_source"),
+                    ("hydrology", "prepared_hydrology"),
+                    ("values", "raster"),
+                ),
+                parameters=(
+                    ("buffer_m", "number"),
+                    ("cutoff_m", "optional_number"),
+                    ("summary", "summary_expression"),
+                ),
+                output=OperationOutput(
+                    "statistics",
+                    "statistics",
+                    "table",
+                    "text/csv",
+                    "Downstream statistics",
+                ),
+                additional_outputs=(
+                    OperationOutput(
+                        "coverage", "raster", "map", "image/tiff", "Downstream coverage"
+                    ),
+                    OperationOutput(
+                        "starting_mask",
+                        "raster",
+                        "map",
+                        "image/tiff",
+                        "Starting mask",
+                        "intermediate",
+                    ),
+                ),
+                execution_profile="downstream-small-region",
+                reuse_prepared_source=False,
+                queued_type=QueuedDownstream,
+                prepared_type=DownstreamPlan,
+                policy_type=DownstreamNumericalPolicy,
+                bind=downstream.bind_downstream,
+                source=downstream.get_values_source,
+                polygon=downstream.get_uploaded_polygon,
+                queue=downstream.queue_downstream,
+                prepare=downstream.prepare_downstream,
+                execution=downstream.select_downstream_execution,
+                policy=downstream.describe_downstream_policy,
+                result=downstream.describe_downstream_result,
+                outcome=downstream.describe_downstream_outcome,
+                cached=downstream.skip_downstream_cache,
+                reusable=downstream.skip_downstream_cache_values,
+                primary_input="values",
+                extra_sources=downstream.get_additional_sources,
+                execution_inputs=downstream.prepare_downstream_execution,
+                check_execution=downstream.check_downstream_execution,
+            ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",
                 inputs=(("raster", "raster"), ("area", "summary_area")),

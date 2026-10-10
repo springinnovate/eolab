@@ -3,7 +3,7 @@
   "model": {
     "id": "downstream-beneficiaries",
     "version": "1.0.0",
-    "definitionSha256": "7d7a3a3f98a2628babcb37ba7b2db92a6c635a9396eb34914974cf46180cef7f"
+    "definitionSha256": "3069376cbcde7c031337c600c623d08cfd3235a51d839f0274a9c6d79225ff14"
   },
   "inputs": {
     "starting_mask": {
@@ -17,16 +17,30 @@
         "filter": {
           "enabled": true,
           "match": "all",
-          "rules": [{"field": "status", "operator": "eq", "value": "active"}]
+          "rules": [
+            {
+              "field": "status",
+              "operator": "eq",
+              "value": "active"
+            }
+          ]
         }
       }
     },
-    "hydrology": {"presetId": "example-region", "version": "1.0.0", "effectiveSha256": "3333333333333333333333333333333333333333333333333333333333333333"},
+    "hydrology": {
+      "presetId": "example-region",
+      "version": "1.0.0",
+      "effectiveSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
     "values": {
       "collectionId": "eolab-mounted-geotiffs",
       "itemId": "geotiff-111111111111111111111111"
     }
   },
-  "parameters": {"buffer_m": 5000, "cutoff_m": null, "summary": "sum(a)"},
+  "parameters": {
+    "buffer_m": 5000,
+    "cutoff_m": null,
+    "summary": "sum(a)"
+  },
   "label": "Example combined project areas"
 }

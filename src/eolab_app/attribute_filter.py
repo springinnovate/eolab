@@ -202,3 +202,44 @@ def _matches_rule(rule: VectorFilterRule, value: Any) -> bool:
         return value <= target
     except TypeError:
         return False
+
+
+def ogr_predicate(candidate: VectorFilter) -> str | None:
+    """Compile a conservative native predicate from schema-validated rules.
+
+    String comparisons retain exact Python post-filtering because driver
+    collations differ. An OR with such a rule requires all native candidates.
+
+    Args:
+        candidate: Schema-validated immutable predicate.
+
+    Returns:
+        Quoted OGR WHERE text, or no native restriction.
+    """
+    if not candidate.active:
+        return None
+    clauses = []
+    for rule in candidate.rules:
+        if rule.operator == "contains" or isinstance(rule.value, str):
+            if candidate.match == "any":
+                return None
+            continue
+        field = '"' + rule.field.replace('"', '""') + '"'
+        if rule.operator in {"missing", "present"}:
+            clauses.append(
+                f"{field} IS {'NOT ' if rule.operator == 'present' else ''}NULL"
+            )
+            continue
+        literal = (
+            str(int(rule.value)) if isinstance(rule.value, bool) else str(rule.value)
+        )
+        operator = {
+            "eq": "=",
+            "ne": "<>",
+            "gt": ">",
+            "ge": ">=",
+            "lt": "<",
+            "le": "<=",
+        }[rule.operator]
+        clauses.append(f"({field} IS NOT NULL AND {field} {operator} {literal})")
+    return (" AND " if candidate.match == "all" else " OR ").join(clauses) or None

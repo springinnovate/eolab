@@ -1,0 +1,32 @@
+# Administrator configuration for https://resilience.wwfus.science/.
+# Validate against the original mounted files before installing its report.
+# This is not a prevalidated report; northern coverage may require a regional network.
+schema: eolab.hydrology/v1
+id: resilience-aster-hydrobasins
+version: "1.0.0"
+title: Resilience prepared ASTER drainage
+description: >-
+  Prepared ASTER elevation and repaired level-06 watershed partitions from the
+  Resilience catalog. Connections stop at the next real sink, including inland
+  sinks whose NEXT_DOWN field contains a virtual link.
+dem:
+  collectionId: eolab-mounted-geotiffs
+  itemId: geotiff-ee81a7caa68b3a9a23c7540a
+watersheds:
+  collectionId: eolab-mounted-vectors
+  itemId: geopackage-86eb43d6b974d6a05d8cc30d
+topology:
+  idField: HYBAS_ID
+  downstreamField: NEXT_DOWN
+  idType: integer
+  terminal:
+    field: NEXT_SINK
+    equalsField: HYBAS_ID
+  terminalIdField: NEXT_SINK
+terrain:
+  routing: mfd
+  elevationUnit: metre
+  conditioning: >-
+    Administrator confirmed astgtm_compressed.tif is already prepared for flow
+    routing. The model uses those elevations directly without repeating pit filling.
+  datasetVersion: astgtm_compressed-and-merged_lev06_repaired-2026-10

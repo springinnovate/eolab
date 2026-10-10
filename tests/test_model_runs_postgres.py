@@ -38,6 +38,156 @@ from eolab_app.raster.models import AuthorizedRaster
 
 
 @pytest.fixture
+def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
+    """Compose downstream HTTP, real source readers, PostgreSQL and the native worker.
+
+    Args:
+        tmp_path: Isolated mounted inputs and private output storage.
+        store: Disposable real Processing database.
+
+    Yields:
+        Client, worker, captured numerical request, catalog metadata and source paths.
+    """
+    import httpx2
+    from app_support import mounted_geotiff_item
+    from catalog_selection_support import FixtureCatalog
+    from test_downstream_model import downstream_fixture
+    from eolab_app.processing.artifacts import LocalJobArtifacts
+    from eolab_app.processing.native_processes import create_native_process
+    from eolab_app.processing.prepared_hydrology import PreparedHydrologyRegistry
+    from eolab_app.raster.catalog import StacRasterCatalog
+    from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
+    from eolab_app.raster.sources import MountedRasterResolver
+    from eolab_app.vector.models import ResolvedVectorSource
+    from eolab_app.vector.sampling import VectorSamplingService
+
+    pytest.importorskip("ecoshard.geoprocessing.routing")
+    sources, request, _ = downstream_fixture(tmp_path / "sources")
+    references = {
+        "values": request.values,
+        "dem": request.hydrology.definition.dem,
+        "starting_mask": request.starting_mask.source,
+    }
+    items = {
+        reference.item_id: {
+            **mounted_geotiff_item(sources.rasters[name].as_uri()),
+            "id": reference.item_id,
+        }
+        for name, reference in references.items()
+    }
+
+    def catalog_request(request: httpx2.Request) -> httpx2.Response:
+        """Return authoritative fixture metadata at the ordinary STAC boundary.
+
+        Args:
+            request: Catalog Item read issued by source authorization.
+
+        Returns:
+            The selected signed source Item, without any renderer state.
+        """
+        return httpx2.Response(200, json=items[request.url.path.rsplit("/", 1)[-1]])
+
+    catalog = httpx2.AsyncClient(transport=httpx2.MockTransport(catalog_request))
+    authorizer = CatalogRasterSourceAuthorizer(
+        StacRasterCatalog(catalog, "http://catalog"), MountedRasterResolver(tmp_path)
+    )
+    vectors = FixtureCatalog(
+        ResolvedVectorSource(
+            "mounted", "geopackage", sources.network.path, "data", "watersheds"
+        )
+    )
+    reader = VectorSamplingService(vectors, vectors)
+    artifacts = LocalJobArtifacts(tmp_path / "artifacts")
+    artifacts.initialize()
+    native = create_native_process(store.limits)
+    worker = worker_module.ProcessingWorker(
+        authorizer, store, artifacts, store.limits, areas=reader, native=native
+    )
+    service = ProcessingService(
+        store,
+        artifacts,
+        model_authorizer=authorizer,
+        hydrology_registry=PreparedHydrologyRegistry((request.hydrology,)),
+        hydrology_selections=reader,
+    )
+    app = FastAPI()
+    app.include_router(create_processing_router(service))
+    with TestClient(app, base_url="https://testserver") as client:
+        try:
+            yield client, worker, request, items, sources
+        finally:
+            client.portal.call(native.close)
+            client.portal.call(catalog.aclose)
+
+
+@pytest.mark.parametrize("change_source", [None, "dem", "starting_mask"])
+def test_downstream_http_captures_sources_and_publishes_owned_files(
+    downstream_boundary: Any, change_source: str | None
+) -> None:
+    """A model run owns its output files and refuses sources changed after submission.
+
+    Args:
+        downstream_boundary: Real API, database, source and native worker composition.
+        change_source: Optional source whose catalog identity changes after admission.
+    """
+    client, worker, request, items, sources = downstream_boundary
+    body = model_request(
+        client,
+        "downstream-beneficiaries",
+        inputs={
+            "starting_mask": request.starting_mask.model_dump(
+                mode="json", by_alias=True
+            ),
+            "hydrology": request.hydrology.reference.model_dump(),
+            "values": request.values.model_dump(by_alias=True),
+        },
+        parameters={"buffer_m": 0},
+    )
+    job = submit(client, body)
+    identifier = job["jobId"]
+    pending = parse_yaml(
+        client.get(f"/api/processing/jobs/{identifier}/run-yaml").content, run=True
+    )
+    assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
+    if change_source:
+        reference = (
+            request.hydrology.definition.dem
+            if change_source == "dem"
+            else request.starting_mask.source
+        )
+        with rasterio.open(sources.rasters[change_source], "r+") as dataset:
+            dataset.update_tags(changed="after submission")
+        from app_support import mounted_geotiff_item
+
+        items[reference.item_id] = {
+            **mounted_geotiff_item(sources.rasters[change_source].as_uri()),
+            "id": reference.item_id,
+        }
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{identifier}").json()
+    if change_source:
+        assert ready["status"] == "failed", ready
+        assert ready["error"]["code"] == "source_changed", ready
+        assert ready.get("result") is None
+        return
+    assert ready["status"] == "ready", ready
+    assert float(ready["result"]["rows"][0]["value"]) == 24
+    assert {item["name"] for item in ready["artifacts"]["files"]} == {
+        "statistics",
+        "coverage",
+        "starting_mask",
+        "provenance",
+    }
+    exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
+    RunDocument.model_validate(parse_yaml(exported.content, run=True))
+    assert str(sources.rasters["dem"]) not in exported.text
+    url = ready["result"]["url"]
+    assert client.get(url).status_code == 200
+    client.cookies.clear()
+    assert client.get(url).status_code == 404
+
+
+@pytest.fixture
 def model_boundary(boundary: Any, store: Any) -> Iterator[Any]:
     """Compose model routes over the real existing raster and worker fixture.
 

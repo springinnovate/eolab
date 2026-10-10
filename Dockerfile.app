@@ -55,6 +55,9 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
     && test "$(gdal-config --version)" = "3.10.3" \
     && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --require-hashes --wheel-dir /wheels -r application-gdal-requirements.txt \
+    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d \
+        python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
+        --require-hashes --wheel-dir /wheels -r application-ecoshard-requirements.txt \
     && (g++ --version; dpkg-query -W) > /gdal-build-packages.txt
 
 
@@ -62,6 +65,9 @@ FROM python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
     GDAL_DISABLE_READDIR_ON_OPEN=TRUE
 
 WORKDIR /app
@@ -100,7 +106,7 @@ RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
         --check-build-dependencies --no-deps . \
     && python -m pip check \
     && cd /tmp && python -c "from eolab_app.processing.model_definitions import ModelRegistry; assert ModelRegistry.load_installed().list_models()" && cd /app \
-    && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy')" \
+    && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy'); from ecoshard.geoprocessing import routing; assert callable(routing.flow_dir_mfd)" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
     && mkdir -p /processing-data \
     && chown -R eolab:eolab /app /processing-data

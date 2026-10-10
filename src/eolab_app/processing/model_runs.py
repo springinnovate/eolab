@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
-from importlib.metadata import version
+from importlib.metadata import version, PackageNotFoundError
 from importlib.resources import files
 import json
 from pathlib import Path
@@ -82,6 +82,12 @@ def compute_implementation_checksum() -> str:
                 digest.update(path.read_bytes())
     for dependency in ("numpy", "rasterio", "pyproj", "shapely", "fiona"):
         digest.update(f"{dependency}={version(dependency)}\n".encode())
+    for dependency in ("ecoshard", "scipy"):
+        try:
+            installed = version(dependency)
+        except PackageNotFoundError:
+            installed = "unavailable"
+        digest.update(f"{dependency}={installed}\n".encode())
     digest.update(
         encode_canonical_json(
             {
@@ -174,7 +180,11 @@ def build_model_calculation_request(
         )
         calculation = operation.bind(
             {
-                name: invocation.inputs[binding.input]
+                name: (
+                    invocation.hydrology[binding.input]
+                    if binding.input in invocation.hydrology
+                    else invocation.inputs[binding.input]
+                )
                 for name, binding in step.inputs.items()
             },
             {
@@ -196,6 +206,7 @@ def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
     signature: tuple[int, int, int, int] | None,
+    additional_signatures: dict[str, tuple[int, int, int, int]] | None = None,
 ) -> PreparedJobPlan:
     """Create a model job submission and save its recipe, inputs and software identity.
 
@@ -203,6 +214,7 @@ def build_model_job_submission(
         prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
         signature: Catalog source identity, or None for a retained published file.
+        additional_signatures: Catalog identities for additional operation inputs.
 
     Returns:
         A model job ready to queue, with the information needed for later Run YAML
@@ -242,7 +254,7 @@ def build_model_job_submission(
             },
             "sources": {
                 definition.steps[0]
-                .inputs["raster"]
+                .inputs[operation.primary_input]
                 .input: {
                     "sourceSignature": compute_document_checksum(
                         signature
@@ -262,10 +274,16 @@ def build_model_job_submission(
             },
         },
     }
+    if additional_signatures:
+        metadata["execution"]["additionalSources"] = {
+            name: compute_document_checksum(identity)
+            for name, identity in additional_signatures.items()
+        }
     export_yaml(metadata, run=True)
     spec = ModelRunSpec(
         calculation=prepared.specification,
         sourceSignature=signature,
+        additionalSourceSignatures=additional_signatures or {},
         implementationRevision=revision,
         applicationBuild=build,
     )
@@ -396,7 +414,9 @@ def record_model_preparation(
     validate_operation(invocation.model.definition)
     if invocation.model.definition.steps[0].operation != spec.operation:
         raise ValueError("Prepared operation does not match the saved recipe")
-    raster_name = invocation.model.definition.steps[0].inputs["raster"].input
+    raster_name = (
+        invocation.model.definition.steps[0].inputs[operation.primary_input].input
+    )
     execution = metadata["execution"]
     execution.update(
         {
@@ -443,6 +463,12 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     progress = row["progress"]
     # Both existing operations report native blocks within the current phase.
     measured = {"phase": progress.get("phase")}
+    if "completed" in progress and progress.get("total", 0) > 0:
+        measured.update(
+            completed=progress["completed"],
+            total=progress["total"],
+            unit=progress["unit"],
+        )
     if "completedBlocks" in progress and progress.get("totalBlocks", 0) > 0:
         measured.update(
             completed=progress["completedBlocks"],

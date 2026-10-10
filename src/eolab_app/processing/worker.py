@@ -25,7 +25,7 @@ from eolab_app.raster.source_models import RasterSourceReference, RunArtifactRef
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.source_files import verify_source_file
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.raster_operations import RasterOperationContext
+from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -77,7 +77,7 @@ class ProcessingWorker:
 
     def _operation_context(
         self, reuse_results: bool, source_checksum: str | None = None
-    ) -> RasterOperationContext:
+    ) -> OperationContext:
         """Supply existing execution capabilities to a registered raster operation.
 
         Args:
@@ -87,7 +87,7 @@ class ProcessingWorker:
         Returns:
             Operation context without browser, recipe or rendering state.
         """
-        return RasterOperationContext(
+        return OperationContext(
             self.jobs,
             self.areas,
             self.limits,
@@ -147,6 +147,44 @@ class ProcessingWorker:
             file.sha256,
         )
 
+    async def _resolve_additional_sources(
+        self,
+        row: dict[str, Any],
+        model: ModelRunSpec | None,
+        spec: Any,
+        operation: Any,
+    ) -> dict[str, AuthorizedRaster]:
+        """Authorize every additional raster against its accepted catalog identity.
+
+        Args:
+            row: Current fenced attempt.
+            model: Captured model identities, absent for ordinary raster operations.
+            spec: Queued or prepared operation specification.
+            operation: Registered adapter declaring the additional raster references.
+
+        Returns:
+            Authorized native sources for this preparation or execution phase.
+
+        Raises:
+            ProcessingError: If a source changed since admission.
+            RasterFeatureError: If catalog authorization fails.
+        """
+        result = {}
+        for name, reference in (
+            operation.extra_sources(spec) if operation.extra_sources else {}
+        ).items():
+            source = await self.authorizer.authorize(reference)
+            if model is None or tuple(
+                source.source_signature.to_catalog()
+            ) != model.additionalSourceSignatures.get(name):
+                raise ProcessingError(
+                    "source_changed",
+                    "A model input changed after this run was accepted.",
+                    409,
+                )
+            result[name] = source
+        return result
+
     async def _prepare_operation(
         self, row: dict[str, Any]
     ) -> tuple[AuthorizedRaster, str | None]:
@@ -195,9 +233,11 @@ class ProcessingWorker:
                     "The raster changed after this model run was accepted.",
                     409,
                 )
-            prepared = await operation.prepare(
-                self._operation_context(model is None, checksum), queued, authorized
+            context = self._operation_context(model is None, checksum)
+            context.rasters.update(
+                await self._resolve_additional_sources(row, model, queued, operation)
             )
+            prepared = await operation.prepare(context, queued, authorized)
             if model is not None:
                 prepared = record_model_preparation(row, prepared, self.limits)
             row.update(
@@ -258,31 +298,13 @@ class ProcessingWorker:
         target, action, limits = handler.execution(
             spec, self._operation_context(model is None), row["reserved_bytes"]
         )
-        resolved_area = None
-        if spec.area.kind == "catalogSelection":
-            if self.areas is None:
-                raise ProcessingError(
-                    "selection_unavailable",
-                    "Catalog selection reader is unavailable.",
-                    409,
-                )
-            resolved_area = await self.areas.resolve_for_sampling(
-                spec.area.catalogSelection
-            )
-            spec = spec.model_copy(
-                update={
-                    "area": spec.area.model_copy(update={"resolved": resolved_area})
-                }
-            )
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
-        if spec.sourceChecksum != checksum:
-            raise ProcessingError(
-                "source_changed",
-                "The prepared input does not match the accepted raster file.",
-                409,
-            )
         context = self._operation_context(model is None, checksum)
+        context.rasters.update(
+            await self._resolve_additional_sources(row, model, spec, handler)
+        )
+        native_sources, spec = await handler.execution_inputs(context, spec, authorized)
         if (
             model is not None
             and model.sourceSignature is not None
@@ -302,8 +324,7 @@ class ProcessingWorker:
         if model is None:
             value = await handler.cached(context, spec, directory)
             if value is not None:
-                if resolved_area is not None:
-                    await self.areas.resolve_for_sampling(resolved_area.selection)
+                await handler.check_execution(context, spec)
                 if (
                     checksum is not None
                     and RasterSourceIdentity.read(authorized.source_path)
@@ -317,22 +338,28 @@ class ProcessingWorker:
                 return await self._publish_result(row, value)
         status, value = await run_process(
             target,
-            (action, (authorized.source_path, spec, directory, limits)),
+            (action, (native_sources, spec, directory, limits)),
             self.limits.runtime_seconds,
             self.native,
         )
         if status != "ok":
             raise ProcessingError(*value)
         if (
-            checksum is not None
-            and RasterSourceIdentity.read(authorized.source_path)
+            RasterSourceIdentity.read(authorized.source_path)
             != authorized.source_signature
         ):
             raise ProcessingError(
-                "source_changed", "The retained raster changed during calculation.", 409
+                "source_changed", "The raster changed during calculation.", 409
             )
-        if resolved_area is not None:
-            await self.areas.resolve_for_sampling(resolved_area.selection)
+        for additional in context.rasters.values():
+            if (
+                RasterSourceIdentity.read(additional.source_path)
+                != additional.source_signature
+            ):
+                raise ProcessingError(
+                    "source_changed", "A model input changed during calculation.", 409
+                )
+        await handler.check_execution(context, spec)
         return await self._publish_result(row, value)
 
     async def _publish_result(

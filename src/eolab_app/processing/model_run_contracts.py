@@ -40,6 +40,7 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing.downstream_models import StartingMask
 from eolab_app.processing.prepared_hydrology import (
     HydrologyReference,
     PreparedHydrologySnapshot,
@@ -207,6 +208,7 @@ class ModelInvocation(ModelSchema):
             "clip_area": ClipModelArea,
             "summary_area": SummaryArea,
             "prepared_hydrology": HydrologyReference,
+            "mask_source": StartingMask,
         }
         hydrology_roles = {
             name
@@ -240,14 +242,18 @@ class ModelInvocation(ModelSchema):
 class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
-    The calculation starts as submitted inputs and becomes a prepared raster
-    summary or clip plan. Source and implementation checksums let the worker reject
-    changes between submission and execution.
+    The calculation starts as submitted inputs and becomes the registered
+    operation's prepared plan. Primary and additional raster signatures let the
+    worker reject source changes between submission and execution; the
+    implementation checksum detects changes to the numerical code and packages.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
     calculation: SerializeAsAny[BaseModel]
     sourceSignature: tuple[int, int, int, int] | None
+    additionalSourceSignatures: dict[Name, tuple[int, int, int, int]] = Field(
+        default_factory=dict, max_length=16, exclude_if=lambda value: not value
+    )
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
 
@@ -292,6 +298,12 @@ class ModelRunSpec(ModelSchema):
         )
         if isinstance(source, RunArtifactReference) != (self.sourceSignature is None):
             raise ValueError("Source identity does not match the raster reference")
+        operation = get_model_operation(self.calculation.operation)
+        additional = (
+            operation.extra_sources(self.calculation) if operation.extra_sources else {}
+        )
+        if set(additional) != set(self.additionalSourceSignatures):
+            raise ValueError("Capture every additional raster source identity")
         return self
 
 
@@ -524,6 +536,9 @@ class ModelExecution(ModelSchema):
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
     operations: dict[Name, OperationImplementation] = Field(min_length=1, max_length=1)
     sources: dict[Name, ResolvedModelSource] = Field(min_length=1, max_length=1)
+    additionalSources: dict[Name, Digest] = Field(
+        default_factory=dict, max_length=16, exclude_if=lambda value: not value
+    )
     limits: ModelExecutionLimits | None = None
     numericalPolicy: SerializeAsAny[BaseModel] | None = None
     outcome: ModelOutcome | None = None

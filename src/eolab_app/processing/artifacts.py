@@ -25,7 +25,9 @@ from eolab_app.processing.artifact_manifest import (
 from eolab_app.processing.models import ProcessingError, ProcessingLimits
 
 
-def write_progress(directory: Path, phase: str, complete: int, total: int) -> None:
+def write_progress(
+    directory: Path, phase: str, complete: int, total: int, *, unit: str = "blocks"
+) -> None:
     """Atomically expose bounded native-kernel progress to its supervisor.
 
     Args:
@@ -33,10 +35,15 @@ def write_progress(directory: Path, phase: str, complete: int, total: int) -> No
         phase: Operation-owned named phase.
         complete: Processed native block count.
         total: Admitted native block count.
+        unit: Work unit for this stage; existing raster operations count blocks.
     """
     temporary = directory / "progress.tmp"
     temporary.write_text(
-        json.dumps({"phase": phase, "completedBlocks": complete, "totalBlocks": total})
+        json.dumps(
+            {"phase": phase, "completedBlocks": complete, "totalBlocks": total}
+            if unit == "blocks"
+            else {"phase": phase, "completed": complete, "total": total, "unit": unit}
+        )
     )
     temporary.replace(directory / "progress.json")
 

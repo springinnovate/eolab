@@ -12,6 +12,7 @@ import hashlib
 import json
 
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.attribute_filter import ogr_predicate
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
@@ -21,47 +22,6 @@ from eolab_app.vector.filters import (
 from eolab_app.vector.metadata import catalog_vector_fields
 from eolab_app.vector.ports import VectorCatalog
 from eolab_app.vector.sources import MountedVectorResolver, vector_source_signature
-
-
-def ogr_predicate(candidate: VectorFilter) -> str | None:
-    """Compile a conservative native predicate from schema-validated rules.
-
-    String comparisons retain exact Python post-filtering because driver
-    collations differ. An OR with such a rule requires all native candidates.
-
-    Args:
-        candidate: Schema-validated immutable predicate.
-
-    Returns:
-        Quoted OGR WHERE text, or no native restriction.
-    """
-    if not candidate.active:
-        return None
-    clauses = []
-    for rule in candidate.rules:
-        if rule.operator == "contains" or isinstance(rule.value, str):
-            if candidate.match == "any":
-                return None
-            continue
-        field = '"' + rule.field.replace('"', '""') + '"'
-        if rule.operator in {"missing", "present"}:
-            clauses.append(
-                f"{field} IS {'NOT ' if rule.operator == 'present' else ''}NULL"
-            )
-            continue
-        literal = (
-            str(int(rule.value)) if isinstance(rule.value, bool) else str(rule.value)
-        )
-        operator = {
-            "eq": "=",
-            "ne": "<>",
-            "gt": ">",
-            "ge": ">=",
-            "lt": "<",
-            "le": "<=",
-        }[rule.operator]
-        clauses.append(f"({field} IS NOT NULL AND {field} {operator} {literal})")
-    return (" AND " if candidate.match == "all" else " OR ").join(clauses) or None
 
 
 async def resolve_selection(

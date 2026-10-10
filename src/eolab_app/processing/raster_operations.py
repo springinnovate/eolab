@@ -6,12 +6,10 @@ The worker supplies source authorization, admission, cancellation and file publi
 
 import asyncio
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from eolab_app.catalog_selection import CatalogSelectionReader
 from eolab_app.bounded_vector import summary_process, READ_SECONDS
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
@@ -31,7 +29,6 @@ from eolab_app.processing.clip_models import (
     RasterClipLimits,
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError, Artifact
-from eolab_app.processing.ports import JobStore
 from eolab_app.processing.shared_calculations import identify_shared_calculation
 from eolab_app.processing.raster_aggregate import (
     aggregate_process_target,
@@ -49,33 +46,59 @@ from eolab_app.processing.calculation_cache import (
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
-from eolab_app.execution.reusable_process import ReusableProcess
-from typing import Literal
+from eolab_app.processing.operation_context import OperationContext
 
 
-@dataclass(frozen=True)
-class RasterOperationContext:
-    """Worker capabilities needed to prepare one authorized raster operation.
+async def prepare_raster_execution(
+    context: OperationContext,
+    spec: AggregateSpec | ClipSpec,
+    authorized: AuthorizedRaster,
+) -> tuple[Path, AggregateSpec | ClipSpec]:
+    """Resolve the exact analysis area before running a summary or clip.
 
-    Attributes:
-        jobs: Existing result-cache and lifecycle storage interface.
-        areas: Reader for immutable catalog vector selections.
-        limits: Deployment clip and lifecycle limits.
-        aggregate_limits: Summary computation and mask limits.
-        native: Supervised native execution lane.
-        run_native: Bounded execution function supplied by the worker.
-        reuse_results: Whether this job may use the scalar-results cache.
-        source_checksum: Verified published checksum for a private raster input.
+    Args:
+        context: Worker source, selection and lifecycle capabilities.
+        spec: Stored summary or clip plan.
+        authorized: Raster authorized for this attempt.
+
+    Returns:
+        Native source path and plan with an ephemeral resolved vector selection.
+
+    Raises:
+        ProcessingError: If the source checksum or selection is unavailable.
     """
+    if spec.sourceChecksum != context.source_checksum:
+        raise ProcessingError(
+            "source_changed",
+            "The prepared input does not match the accepted raster file.",
+            409,
+        )
+    if spec.area.kind == "catalogSelection":
+        if context.areas is None:
+            raise ProcessingError(
+                "selection_unavailable", "Catalog selection reader is unavailable.", 409
+            )
+        resolved = await context.areas.resolve_for_sampling(spec.area.catalogSelection)
+        spec = spec.model_copy(
+            update={"area": spec.area.model_copy(update={"resolved": resolved})}
+        )
+    return authorized.source_path, spec
 
-    jobs: JobStore
-    areas: CatalogSelectionReader | None
-    limits: RasterClipLimits
-    aggregate_limits: RasterAggregateLimits
-    native: ReusableProcess | None
-    run_native: Callable[..., Awaitable[Any]]
-    reuse_results: bool
-    source_checksum: str | None = None
+
+async def check_raster_execution(
+    context: OperationContext, spec: AggregateSpec | ClipSpec
+) -> None:
+    """Recheck vector selection identity after a summary or clip finishes.
+
+    Args:
+        context: Worker capabilities used to resolve the selection.
+        spec: Executed plan with its ephemeral resolved selection.
+
+    Raises:
+        SelectionUnavailableError: If the selected source changed or lost access.
+    """
+    if spec.area.kind == "catalogSelection":
+        await context.areas.resolve_for_sampling(spec.area.catalogSelection)
 
 
 class SummaryNumericalPolicy(BaseModel):
@@ -119,7 +142,7 @@ class ClipNumericalPolicy(BaseModel):
 
 
 async def prepare_summary(
-    context: RasterOperationContext,
+    context: OperationContext,
     queued: UnpreparedCalculation,
     authorized: AuthorizedRaster,
 ) -> PreparedJobPlan:
@@ -220,7 +243,7 @@ async def prepare_summary(
 
 
 async def prepare_clip(
-    context: RasterOperationContext,
+    context: OperationContext,
     queued: UnpreparedClip,
     authorized: AuthorizedRaster,
 ) -> PreparedJobPlan:
@@ -536,7 +559,7 @@ def describe_clip_policy(spec: ClipSpec) -> ClipNumericalPolicy:
 
 
 def select_summary_execution(
-    spec: AggregateSpec, context: RasterOperationContext, reserved_bytes: int
+    spec: AggregateSpec, context: OperationContext, reserved_bytes: int
 ) -> tuple[Callable[..., None], str, RasterAggregateLimits]:
     """Select native summary execution after checking its disk reservation.
 
@@ -561,7 +584,7 @@ def select_summary_execution(
 
 
 def select_clip_execution(
-    spec: ClipSpec, context: RasterOperationContext, reserved_bytes: int
+    spec: ClipSpec, context: OperationContext, reserved_bytes: int
 ) -> tuple[Callable[..., None], str, RasterClipLimits]:
     """Select the existing native clip target and deployment limits.
 
@@ -639,7 +662,7 @@ def describe_clip_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
 
 
 async def restore_summary_result(
-    context: RasterOperationContext, spec: AggregateSpec, directory: Path
+    context: OperationContext, spec: AggregateSpec, directory: Path
 ) -> Artifact | None:
     """Write a summary result from complete cached values when available.
 
@@ -668,7 +691,7 @@ async def restore_summary_result(
 
 
 async def skip_clip_cache(
-    context: RasterOperationContext, spec: ClipSpec, directory: Path
+    context: OperationContext, spec: ClipSpec, directory: Path
 ) -> None:
     """Require native clip execution; scalar cached values cannot supply raster pixels.
 

@@ -245,6 +245,7 @@ def validate_hydrology_sources(
                 topology.idField,
                 topology.downstreamField,
                 topology.terminal.field,
+                topology.terminal.equalsField,
                 topology.terminalIdField,
             )
             if name is not None
@@ -282,13 +283,8 @@ def validate_hydrology_sources(
                     topology.idType,
                     topology.downstreamField,
                 )
-                terminal_value = properties[topology.terminal.field]
-                if type(terminal_value) is not type(topology.terminal.value):
-                    raise ValueError(
-                        "The terminal field and configured terminal value must have the same type"
-                    )
-                terminal = terminal_value == topology.terminal.value
-                if terminal:
+                terminal = topology.terminal.matches(properties)
+                if terminal and topology.terminal.equalsField is None:
                     terminal_links[identifier] = next_id
                 terminal_id = (
                     None

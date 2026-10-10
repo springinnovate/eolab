@@ -10,6 +10,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
+    "ecoshard @ https://github.com/springinnovate/ecoshard/archive/f7e2adba2a4d41128aea941bb747470418d2dce9.tar.gz#sha256=a2439488aec725acf3ff69a4ce491643212a604cf0e47c13b61077fb09cfdb40",
+    "scipy>=1.14,<2",
+    "numexpr>=2.10,<3",
+    "psutil>=7,<8",
+    "retrying>=1.3,<2",
+    "Rtree>=1.4,<2",
+    "requests>=2.32,<3",
     "fastapi>=0.115,<1",
     "fiona>=1.10,<2",
     "gdal[numpy]>=3.10,<3.11",
