@@ -53,7 +53,6 @@ from eolab_app.processing.downstream_models import (
     FLOW_THRESHOLD,
 )
 from eolab_app.processing.ground_area import PixelAreaCalculator
-from eolab_app.processing.hydrology_validation import require_network_id
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_expression import Calculation, compile_expression, walk
 from eolab_app.processing.raster_input import (
@@ -100,6 +99,11 @@ def read_network(
 ) -> dict[int | str, Watershed]:
     """Read only starting partitions and their downstream connections from original data.
 
+    ID types, uniqueness, links and acyclicity are guaranteed by the installed
+    hydrology report. The authorized reader checks that the source still matches
+    that report before and after reading. Native queries must return every
+    requested ID; this boundary also enforces per-run geometry/work limits.
+
     Uses the ordinary spatial and attribute predicates. The full-network source
     authorization remains unchanged; temporary restrictions only reduce its scope.
 
@@ -114,7 +118,6 @@ def read_network(
 
     Raises:
         ProcessingError: If coverage, identifiers or retained geometry exceed limits.
-        ValueError: If identifiers or terminal properties are invalid.
         SelectionUnavailableError: If the original vector changed.
     """
     topology = request.hydrology.definition.topology
@@ -150,7 +153,6 @@ def read_network(
             ProcessingError: If duplicate identities or geometry limits are encountered.
         """
         nonlocal coordinates
-        batch_ids: set[int | str] = set()
         with polygon_records(resolved, fields, bbox) as records:
             for geometry, properties in records:
                 polygon = shape(geometry)
@@ -159,16 +161,7 @@ def read_network(
                     or polygon.intersection(starting).area == 0
                 ):
                     continue
-                identifier = require_network_id(
-                    properties[topology.idField], topology.idType, topology.idField
-                )
-                if identifier in batch_ids:
-                    raise ProcessingError(
-                        "hydrology_changed",
-                        "The watershed network has duplicate identifiers. Validate it again.",
-                        409,
-                    )
-                batch_ids.add(identifier)
+                identifier = properties[topology.idField]
                 if identifier in result:
                     continue
                 coordinates += int(get_num_coordinates(polygon))
@@ -178,11 +171,7 @@ def read_network(
                         "The selected drainage exceeds this worker's feature or geometry limit.",
                         413,
                     )
-                downstream = require_network_id(
-                    properties[topology.downstreamField],
-                    topology.idType,
-                    topology.downstreamField,
-                )
+                downstream = properties[topology.downstreamField]
                 result[identifier] = Watershed(
                     polygon,
                     None if topology.terminal.matches(properties) else downstream,
@@ -220,11 +209,13 @@ def read_network(
             sources.network, selection=selection, where=ogr_predicate(predicate)
         )
         read_batch(restricted, None, False)
+        # Native query completeness is an external-reader contract, not a second
+        # validation of the prepared network. Avoid retrying an empty batch forever.
         if set(batch) - result.keys():
             raise ProcessingError(
-                "hydrology_changed",
-                "The watershed network has missing downstream partitions. Validate it again.",
-                409,
+                "source_read_failed",
+                "The watershed source did not return all requested records. Retry the run or check the source dataset.",
+                422,
             )
         pending.difference_update(batch)
         pending.update(
@@ -324,7 +315,7 @@ def select_downstream_watersheds(
         Stable ordered watershed IDs, with no geometry added to the starting mask.
 
     Raises:
-        ProcessingError: If the mask is outside coverage or a link is broken or cyclic.
+        ProcessingError: If the mask is outside the prepared network coverage.
     """
     selected: set[int | str] = set()
     for identifier, watershed in network.items():
@@ -333,12 +324,6 @@ def select_downstream_watersheds(
         current = identifier
         path: set[int | str] = set()
         while current not in selected:
-            if current in path or current not in network:
-                raise ProcessingError(
-                    "hydrology_changed",
-                    "The watershed network is cyclic or incomplete. Validate it again.",
-                    409,
-                )
             path.add(current)
             downstream = network[current].downstream
             if downstream is None:
@@ -676,20 +661,12 @@ def watershed_groups(
         Process-local polygon groups, one for each real terminal drainage.
 
     Raises:
-        ProcessingError: If the terminal count or network is invalid.
+        ProcessingError: If the terminal count exceeds the per-run budget.
     """
     groups: dict[int | str, list[BaseGeometry]] = {}
     for identifier in selected:
         current = identifier
-        visited: set[int | str] = set()
         while network[current].downstream is not None:
-            if current in visited or network[current].downstream not in network:
-                raise ProcessingError(
-                    "hydrology_changed",
-                    "The watershed connections changed. Validate the configuration again.",
-                    409,
-                )
-            visited.add(current)
             current = network[current].downstream
         groups.setdefault(current, []).append(network[identifier].geometry)
     if len(groups) > MAX_TERMINALS:
