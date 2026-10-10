@@ -24,7 +24,7 @@ from shapely.geometry import box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from eolab_app.bounded_vector import polygon_records, native_bbox_for_grid
+from eolab_app.bounded_vector import polygon_records, native_bbox_for_wgs84_bounds
 from eolab_app.attribute_filter import VectorFilter, ogr_predicate
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
@@ -189,11 +189,7 @@ def read_network(
                 )
 
     if selected is None:
-        west, south, east, north = starting.bounds
-        affine = Affine(
-            (east - west) / 1024, 0, west, 0, -(north - south) / 1024, north
-        )
-        bbox = native_bbox_for_grid(sources.network, "EPSG:4326", affine, (1024, 1024))
+        bbox = native_bbox_for_wgs84_bounds(sources.network, starting.bounds)
         read_batch(sources.network, bbox, True)
         if not result:
             raise ProcessingError(
