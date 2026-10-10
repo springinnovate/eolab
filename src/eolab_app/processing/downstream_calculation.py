@@ -72,6 +72,11 @@ from eolab_app.raster.source_contract import (
 # interpreter/native-library overhead and overlapping routing/distance arrays.
 ESTIMATED_MEMORY_BYTES_PER_CELL = 192
 NATIVE_PROCESS_BASE_MEMORY_BYTES = 256 * 1024**2
+# Reserve uncompressed routing DEM/direction/accumulation, seed/mask rasters,
+# EcoShard scratch and both staged/final outputs with creation/overview headroom.
+# Compression savings in the synthetic reference are deliberately not assumed.
+ESTIMATED_SCRATCH_BYTES_PER_CELL = 128
+SCRATCH_FILE_OVERHEAD_BYTES = 64 * 1024**2
 
 
 @dataclass(frozen=True)
@@ -394,7 +399,8 @@ def plan_native_grid(
         nativeBlocks=blocks,
         decodedBytes=decoded,
         estimatedRawBytes=raw,
-        reservedBytes=cells * 128 + 64 * 1024**2,
+        reservedBytes=cells * ESTIMATED_SCRATCH_BYTES_PER_CELL
+        + SCRATCH_FILE_OVERHEAD_BYTES,
     )
 
 
