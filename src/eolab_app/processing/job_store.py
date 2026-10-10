@@ -730,7 +730,11 @@ class PostgresJobStore:
             if prepared.reserved_bytes + retained > self.limits.max_stored_bytes:
                 raise ProcessingError(
                     "storage_full",
-                    "There is not enough temporary storage for this calculation and the results being used as inputs. Try a smaller area, or retry after other jobs finish.",
+                    (
+                        "This calculation and the results being used as inputs exceed the configured limit for temporary storage. Try a smaller area, or retry after other jobs finish."
+                        if retained
+                        else "This calculation needs more temporary storage than the configured limit."
+                    ),
                     422,
                 )
             waiting = (
