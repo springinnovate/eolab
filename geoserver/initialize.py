@@ -33,7 +33,10 @@ VECTOR_STYLE_PATHS = {
     for style_name in VECTOR_STYLE_NAMES
 }
 SCAN_SOURCE_URL_CHECK_NAME = "eolab-scan-source"
-SCAN_SOURCE_URL_PATTERN = r"^file:///scan-source/.*$"
+MOUNTED_SOURCE_URL_PATTERN = (
+    r"^file:///(?:scan-source/.*|processing-data/results/[a-f0-9]{32}/"
+    r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(?i:tif|tiff))$"
+)
 ADMIN_PASSWORD_PATTERN = re.compile(r"[A-Za-z0-9._-]{16,}")
 GEOWEBCACHE_CONFIGURATION_PATH = Path(__file__).with_name("gwc-gs.xml")
 WEB_MERCATOR_HALF_WORLD_METERS = 20037508.342789244
@@ -209,10 +212,10 @@ def initialize_geoserver(
                 "name": SCAN_SOURCE_URL_CHECK_NAME,
                 "description": (
                     "Allow GeoServer to publish files from EOLab's "
-                    "read-only scan mount"
+                    "read-only scan mount and published result rasters"
                 ),
                 "enabled": True,
-                "regex": SCAN_SOURCE_URL_PATTERN,
+                "regex": MOUNTED_SOURCE_URL_PATTERN,
             }
         }
     ).encode()

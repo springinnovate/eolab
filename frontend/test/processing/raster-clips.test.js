@@ -88,6 +88,15 @@ test("submission freezes the selected source and box independently of later map 
     assert.deepEqual(h.view.state.jobs[0].area.bounds, [77,22,78,23]);
 });
 
+test("clip choices distinguish two files from the same run and preserve the chosen original source", async () => {
+    const first={kind:"runArtifact",jobId:"a".repeat(32),artifactId:"b".repeat(32),label:"First output"};
+    const second={...first,artifactId:"c".repeat(32),label:"Second output"};
+    const h=fixture({},new Map(),true);h.setContext({sources:[first,second],area:box});h.controller.open(second);
+    assert.equal(h.view.elements.source.value,"1");assert.equal(h.view.sourceName({...job,source:second},[first,second]),"Second output");
+    await h.controller.submit();assert.deepEqual(h.requests[0].source,second);
+    h.controller.destroy();
+});
+
 test("generic clip review uses query candidates while explicit hidden raster choices remain available", async () => {
     const hidden = { ...source, itemId: "hidden" }, enabled = { ...source, itemId: "enabled" };
     let candidates = [enabled];

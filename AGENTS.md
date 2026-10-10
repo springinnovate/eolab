@@ -308,6 +308,20 @@ affect layout, visibility, focus, or interaction.
 
 ## Implementation discipline
 
+- Reuse the established pipeline for an existing capability. Before adding a
+  renderer, pixel reader, analysis path, publication workflow, or other parallel
+  implementation, trace the existing owner and extend its source or lifecycle
+  contract. A model output or temporary source is not a reason to create a
+  second implementation of behavior the application already provides.
+- Temporary rasters use the ordinary GeoServer rendering, raster styling and
+  original-source analysis pipelines. Their run/session ownership and automatic
+  expiry belong at source-access and lifecycle boundaries, not in replacement
+  renderers or pixel-picking implementations. Preserve the independence of
+  numerical analysis from rendering.
+- If an existing pipeline cannot support a new source, explain the concrete
+  contract gap and propose an extension before building an alternative. Obtain
+  explicit approval for a separate pipeline; implementation convenience alone
+  is not sufficient justification.
 - Make the smallest coherent change in the owning component.
 - Keep one independently reviewable root cause per issue and pull request.
 - Do not add unrelated responsibilities to coordinator, composition, route,

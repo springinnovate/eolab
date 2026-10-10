@@ -4,7 +4,7 @@ import test from "node:test";
 import { RasterPointSamplesController } from "../../src/raster/point-samples.js";
 import {
   formatRasterPixelValue,
-  getCatalogRasterBasename,
+  getRasterDisplayName,
 } from "../../src/raster/value-format.js";
 import { MOUNTED_GEOTIFF_ITEM } from "../../test-support/raster/fixtures.js";
 
@@ -202,7 +202,7 @@ test("point-value helpers format values and decode the Catalog basename", () => 
   assert.equal(formatRasterPixelValue(0), "0");
   assert.throws(() => formatRasterPixelValue(Number.NaN), /must be finite/);
   assert.equal(
-    getCatalogRasterBasename(MOUNTED_GEOTIFF_ITEM),
+    getRasterDisplayName(MOUNTED_GEOTIFF_ITEM),
     "annual temperature.tif",
   );
 });

@@ -4662,3 +4662,68 @@ test("category code changes cancel stale statistics while label, color and opaci
     assert.equal(h.controlsView.layerHistograms[0].categorical.rows.find(row => row.code === 42).label, "Final forest");
     h.destroy();
 });
+
+
+test("private sources use the same style, histogram, percentile, pixel and paired controls as catalog rasters", async () => {
+    const reads = [], pixels = [], paired = [];
+    let removed = 0;
+    const h = visibleLayerFixture(async (source, area, _signal, _fetch, codes) => {
+        reads.push({source, area, codes});
+        return createCategoryStatistics(source, selectedBoundsFromArea(area), codes);
+    }, {publishRaster: async item => ({layerName: item.source ? `eolab:model_${item.source.jobId}_${item.source.artifactId}` : "eolab:catalog", bbox: item.bbox ?? [77,20,79,24]}), samplePixel: async source => {pixels.push(source); return {inBounds: true, value: 0};},
+        loadPairedStatistics: async (x, y) => {paired.push([x,y]); return pairedStatistics();}});
+    const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32)};
+    const raster = {source, label: "Clipped habitat", bbox: [77,20,79,24], version: "c".repeat(64),
+        group: {id: source.jobId, label: "My clip"}, capabilities: {pixels: true, statistics: true, calculations: true, modelInput: true}};
+    const record = await h.viewer.showSource(raster, {removed() {removed++;}, info() {}, copy: appearance => ({kind: "test", source, appearance})});
+    await flushPromises();
+    assert.equal(record.entry.item, null); assert.deepEqual(h.mapLayers.snapshots()[0].source, source);
+    assert.equal(h.viewer.openStyle(record.entry.key), true);
+    h.viewer.exploreAt({lng: 78, lat: 22}); await flushPromises();
+    assert.ok(reads.some(read => read.source.source?.jobId === source.jobId));
+    assert.ok(pixels.some(value => value.source?.jobId === source.jobId));
+    editCategoricalAppearance(h, record.entry.key); await flushPromises();
+    assert.ok(record.state.layer.wmsParams.raster_style);
+    assert.equal(record.state.layer.wmsParams.env, undefined);
+    assert.equal(record.state.layer.wmsParams.layers, `eolab:model_${source.jobId}_${source.artifactId}`);
+    assert.ok(reads.some(read => read.codes?.includes(0)));
+    assert.equal(h.mapLayers.snapshots()[0].legend.kind, "categories");
+    h.controlsView.handlers.onAppearanceModeChange("continuous"); await flushPromises();
+    h.controlsView.handlers.onApplyPercentiles();
+    assert.ok(record.state.layer.wmsParams.env);
+    assert.equal(record.state.layer.wmsParams.raster_style, undefined);
+    const continuousEnvironment = record.state.layer.wmsParams.env;
+    await h.viewer.show(createRasterItem("private-pair")); await flushPromises();
+    h.controlsView.handlers.onBivariateModeChange("bivariate"); await flushPromises();
+    assert.ok(paired.some(pair => pair.some(item => item.source?.jobId === source.jobId)));
+    h.controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(record.state.layer.wmsParams.env, continuousEnvironment);
+    assert.equal(record.state.layer.wmsParams.raster_style, undefined);
+    const appearance = record.adapter.exportSavedState(record);
+    const copy = record.adapter.copyLayerForUndo(record);
+    assert.deepEqual(copy.appearance, appearance);
+    h.mapLayers.removeKey(record.entry.key);
+    assert.equal(removed, 1); h.destroy();
+});
+
+test("pixel-capable outputs remain pickable when their format cannot provide distributions", async () => {
+    const pixels=[];
+    const h=visibleLayerFixture(async () => {throw new Error("Distributions are unsupported");}, {
+        publishRaster: async item => ({layerName: "eolab:output", bbox: item.bbox}), samplePixel: async item => {pixels.push(item);return {inBounds:true,value:0};}});
+    const raster={source:{kind:"runArtifact",jobId:"a".repeat(32),artifactId:"b".repeat(32)},label:"Pixel-only raster",
+        version:"c".repeat(64),bbox:[77,20,79,24],capabilities:{pixels:true,statistics:false,calculations:true,modelInput:true}};
+    await h.viewer.showSource(raster,{removed(){},copy(){},info(){}});
+    h.viewer.exploreAt({lng:78,lat:22});await flushPromises();
+    assert.ok(pixels.some(item=>item.source?.artifactId===raster.source.artifactId));h.destroy();
+});
+
+
+test("an obsolete output publication never attaches a WMS layer", async () => {
+    let complete;
+    const h=visibleLayerFixture(async () => RASTER_STATISTICS, {publishRaster: () => new Promise(resolve => {complete=resolve;})});
+    const raster={source:{kind:"runArtifact",jobId:"a".repeat(32),artifactId:"b".repeat(32)},label:"Output",bbox:[77,20,79,24]};
+    const abort=new AbortController();
+    const pending=h.viewer.showSource(raster,{}, {signal:abort.signal});
+    abort.abort(); complete({layerName:"eolab:output",bbox:raster.bbox});
+    assert.equal(await pending,null); assert.equal(h.mapLayers.snapshots().length,0); h.destroy();
+});

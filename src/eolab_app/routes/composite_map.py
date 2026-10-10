@@ -372,6 +372,10 @@ def create_composite_map_router(
     get_map_request_tracker: GetMapRequestTracker,
     render_queue: MapRenderQueue,
     maximum_tile_cache_bytes: int = DEFAULT_COMPOSITE_TILE_CACHE_BYTES,
+    *,
+    authorize_layers: (
+        Callable[[tuple[str, ...], Request], Awaitable[bool]] | None
+    ) = None,
 ) -> APIRouter:
     """Create the plan-registration and composite tile delivery boundary.
 
@@ -382,6 +386,7 @@ def create_composite_map_router(
         get_map_request_tracker: Bounded GetMap request observer.
         render_queue: GetMap capacity shared with the direct WMS route.
         maximum_tile_cache_bytes: Maximum process-local composite response bytes.
+        authorize_layers: Current-session authorization before plan or tile delivery.
 
     Returns:
         Router serving safe render plans and their GeoServer-composed PNGs.
@@ -393,11 +398,15 @@ def create_composite_map_router(
     @router.post("/plans", response_model=PublishedCompositeMapPlan)
     async def create_plan(
         plan: CompositeMapPlanRequest,
+        request: Request,
+        response: Response,
     ) -> PublishedCompositeMapPlan:
         """Authorize and retain one complete visible map presentation.
 
         Args:
             plan: Bounded top-first published layers and appearances.
+            request: Browser session making this request.
+            response: Receives private cache policy for temporary sources.
 
         Returns:
             Content-addressed identity and browser WMS URL.
@@ -406,6 +415,10 @@ def create_composite_map_router(
             HTTPException: If any layer, source, or style is not current.
         """
         try:
+            if authorize_layers and await authorize_layers(
+                tuple(layer.layer_name for layer in plan.layers), request
+            ):
+                response.headers["Cache-Control"] = "private, no-store"
             return await rendering_service.create_plan(plan)
         except PublishedLayerChangedError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
@@ -457,6 +470,12 @@ def create_composite_map_router(
             height,
             spatial_reference,
         )
+        private = bool(
+            authorize_layers
+            and await authorize_layers(
+                tuple(layer.layer_name for layer in plan.request.layers), request
+            )
+        )
 
         async def load_tile() -> httpx2.Response:
             """Render this cache miss through the existing GeoServer boundary.
@@ -493,10 +512,13 @@ def create_composite_map_router(
                 ),
             )
 
-        return await forward_geoserver_get_map(
+        result = await forward_geoserver_get_map(
             request,
             tile_cache.get(tile_key, lambda: render_queue.run(load_tile)),
             get_map_request_tracker,
         )
+        if private:
+            result.headers["Cache-Control"] = "private, no-store"
+        return result
 
     return router

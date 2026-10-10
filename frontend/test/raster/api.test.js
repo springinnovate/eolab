@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  publishCatalogRaster,
+  publishRasterSource,
   RenderingRequestError,
 } from "../../src/raster/api.js";
 import {
-  loadCatalogRasterStatistics,
+  loadRasterStatistics,
   RasterAnalysisRequestError,
   isRasterStatisticsCapacityError,
-  sampleCatalogRasterPixel,
+  sampleRasterPixel,
 } from "../../src/raster/analysis-api.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
@@ -20,9 +20,9 @@ import {
   CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
-test("publishCatalogRaster sends only the STAC Item identity", async () => {
+test("publishRasterSource sends only the STAC Item identity", async () => {
   const requests = [];
-  const publishedRaster = await publishCatalogRaster(
+  const publishedRaster = await publishRasterSource(
     MOUNTED_GEOTIFF_ITEM,
     async (url, options) => {
       requests.push({ url, options });
@@ -44,10 +44,11 @@ test("publishCatalogRaster sends only the STAC Item identity", async () => {
     {
       url: "/api/rendering/layers",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
         },
         body: JSON.stringify({
           collectionId: "eolab-mounted-geotiffs",
@@ -58,9 +59,9 @@ test("publishCatalogRaster sends only the STAC Item identity", async () => {
   ]);
 });
 
-test("publishCatalogRaster reports the backend detail", async () => {
+test("publishRasterSource reports the backend detail", async () => {
   await assert.rejects(
-    publishCatalogRaster(
+    publishRasterSource(
       MOUNTED_GEOTIFF_ITEM,
       async () => new Response(
         JSON.stringify({ detail: "Catalog Item not found" }),
@@ -71,8 +72,8 @@ test("publishCatalogRaster reports the backend detail", async () => {
   );
 });
 
-test("publishCatalogRaster preserves an actionable failure category", async () => {
-  const publication = publishCatalogRaster(
+test("publishRasterSource preserves an actionable failure category", async () => {
+  const publication = publishRasterSource(
     MOUNTED_GEOTIFF_ITEM,
     async () => new Response(
       JSON.stringify({
@@ -94,12 +95,12 @@ test("publishCatalogRaster preserves an actionable failure category", async () =
   });
 });
 
-test("loadCatalogRasterStatistics sends only Item identity and validates data", async () => {
+test("loadRasterStatistics sends only Item identity and validates data", async () => {
   const requests = [];
   const abortController = new AbortController();
 
   assert.deepEqual(
-    await loadCatalogRasterStatistics(
+    await loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       { kind: "wholeRaster" },
       abortController.signal,
@@ -117,11 +118,14 @@ test("loadCatalogRasterStatistics sends only Item identity and validates data", 
     {
       url: "/api/raster-analysis/statistics",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
+          "X-EOLab-Processing": "1",
         },
+        credentials: "same-origin", cache: "no-store",
         body: JSON.stringify({
           collectionId: "eolab-mounted-geotiffs",
           itemId: "geotiff-0123456789abcdef01234567",
@@ -132,12 +136,12 @@ test("loadCatalogRasterStatistics sends only Item identity and validates data", 
   ]);
 });
 
-test("loadCatalogRasterStatistics adds only validated selected bounds", async () => {
+test("loadRasterStatistics adds only validated selected bounds", async () => {
   const requests = [];
   const abortController = new AbortController();
 
   assert.deepEqual(
-    await loadCatalogRasterStatistics(
+    await loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
       abortController.signal,
@@ -162,7 +166,7 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
   assert.equal(requests[0].options.signal, abortController.signal);
 
   await assert.rejects(
-    loadCatalogRasterStatistics(
+    loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
       abortController.signal,
@@ -178,11 +182,11 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
   );
 });
 
-test("loadCatalogRasterStatistics sends a path-free catalog selection without geometry", async () => {
+test("loadRasterStatistics sends a path-free catalog selection without geometry", async () => {
   const requests = [];
   const abortController = new AbortController();
 
-  const statistics = await loadCatalogRasterStatistics(
+  const statistics = await loadRasterStatistics(
     MOUNTED_GEOTIFF_ITEM,
     { kind: "catalogSelection", catalogSelection: CATALOG_SELECTION },
     abortController.signal,
@@ -203,7 +207,7 @@ test("loadCatalogRasterStatistics sends a path-free catalog selection without ge
   });
   assert.equal("geometry" in JSON.parse(requests[0].options.body), false);
   await assert.rejects(
-    loadCatalogRasterStatistics(
+    loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       {
         kind: "selectedArea",
@@ -219,7 +223,7 @@ test("loadCatalogRasterStatistics sends a path-free catalog selection without ge
 
 test("statistics capacity is classified without matching user-facing message text", async () => {
   for (const code of ["statistics_capacity_busy", "invalid_area", null]) {
-    await assert.rejects(loadCatalogRasterStatistics(
+    await assert.rejects(loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, new AbortController().signal,
       async () => new Response(JSON.stringify({ detail: { code, message: "Server guidance" } }),
         { status: 409, headers: { "Content-Type": "application/json" } }),
@@ -233,9 +237,9 @@ test("statistics capacity is classified without matching user-facing message tex
     "Raster statistics capacity is busy; retry after the current bounded read finishes.", 409)), false);
 });
 
-test("loadCatalogRasterStatistics reports backend and response errors", async () => {
+test("loadRasterStatistics reports backend and response errors", async () => {
   await assert.rejects(
-    loadCatalogRasterStatistics(
+    loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       { kind: "wholeRaster" },
       new AbortController().signal,
@@ -257,7 +261,7 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
     }),
   ]) {
     await assert.rejects(
-      loadCatalogRasterStatistics(
+      loadRasterStatistics(
         MOUNTED_GEOTIFF_ITEM,
         { kind: "wholeRaster" },
         new AbortController().signal,
@@ -269,7 +273,7 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
     );
   }
   await assert.rejects(
-    loadCatalogRasterStatistics(
+    loadRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
       { kind: "wholeRaster" },
       new AbortController().signal,
@@ -285,10 +289,10 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
   );
 });
 
-test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", async () => {
+test("sampleRasterPixel sends only Item identity and WGS 84 position", async () => {
   const requests = [];
   const abortController = new AbortController();
-  const pixel = await sampleCatalogRasterPixel(
+  const pixel = await sampleRasterPixel(
     MOUNTED_GEOTIFF_ITEM,
     { longitude: -122.25, latitude: 48.75 },
     abortController.signal,
@@ -313,11 +317,14 @@ test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", as
     {
       url: "/api/raster-analysis/pixels",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
+          "X-EOLab-Processing": "1",
         },
+        credentials: "same-origin", cache: "no-store",
         body: JSON.stringify({
           collectionId: "eolab-mounted-geotiffs",
           itemId: "geotiff-0123456789abcdef01234567",
@@ -331,7 +338,7 @@ test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", as
 });
 
 test("pixel analysis preserves catalog-source failures", async () => {
-  const request = sampleCatalogRasterPixel(
+  const request = sampleRasterPixel(
     MOUNTED_GEOTIFF_ITEM,
     { longitude: -122.25, latitude: 48.75 },
     new AbortController().signal,

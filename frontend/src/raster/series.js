@@ -1,4 +1,5 @@
-/** Plot Processing formulas across catalog rasters. */
+/** Plot Processing formulas across original raster sources. */
+import { rasterSourceReference } from "../raster-source.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 
 const SERIES_STATISTICS = Object.freeze({
@@ -47,7 +48,7 @@ export class RasterSeriesController {
         this.selectedAreaLabel = "";
         this.sources = [];
         this.selectedKeys = new Set();
-        /** @type {Map<string, boolean>} Explicit checklist choices for retained catalog rasters. */
+        /** @type {Map<string, boolean>} Explicit checklist choices for retained rasters. */
         this.selectionOverrides = new Map();
         this.position = null;
         this.active = false;
@@ -78,10 +79,10 @@ export class RasterSeriesController {
     }
 
     /**
-     * Update available catalog rasters and reconcile their default selections.
+     * Update available rasters and reconcile their default selections.
      * Untouched sources follow map visibility; explicit checklist choices override
      * that default until the source is removed. Hidden rasters remain selectable.
-     * @param {{key:string,label:string,item:Object,visible:boolean}[]} sources Ordered catalog sources.
+     * @param {Object[]} sources Ordered map snapshots with original-source references.
      * @return {void}
      */
     updateAvailableRasters(sources) {
@@ -152,7 +153,7 @@ export class RasterSeriesController {
         this.selectedArea = area; this.selectedAreaLabel = label; this.updateAreaInputs();
     }
 
-    /** Supply the area calculator with chosen catalog sources, independent of chart order. @return {void} */
+    /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
     updateAreaInputs() {
         this.areaStatistics.updateCalculationInputs(this.sources.filter(source => this.selectedKeys.has(source.key)),
             this.areaChoice === "whole" ? {kind:"wholeRaster"} : this.selectedArea, this.selectedAreaLabel, this.formulas, this.position);
@@ -282,18 +283,19 @@ export class RasterSeriesController {
     exportCsv() {
         const area = this.areaStatistics;
         if (area.busy || !area.results.size) return "";
-        const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point"]];
+        const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point", "source"]];
         for (const source of this.orderedSources()) {
             const result = area.results.get(source.key);
+            const reference = rasterSourceReference(source);
             for (const formula of this.formulas) {
                 const row = result?.job?.result?.rows.find(row => row.label === "stat-" + formula.id);
                 // Values are validated decimal strings from Processing, not user text.
                 const scalar = row?.value == null ? "" : { scalar: row.value };
-                lines.push([source.label, source.item.collection, source.item.id, formula.label, formula.expression,
+                lines.push([source.label, reference.collectionId ?? "", reference.itemId ?? "", formula.label, formula.expression,
                     scalar, row?.unit ?? "", row?.state ?? (result?.error ? "error" : "waiting"), result?.error ?? "",
                     JSON.stringify(result?.calculationInputs.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
                     result?.job?.jobId ?? "", result?.job?.result?.cacheHit ? "true" : "false",
-                    result?.calculationInputs.pixelPoint ? JSON.stringify(result.calculationInputs.pixelPoint) : ""]);
+                    result?.calculationInputs.pixelPoint ? JSON.stringify(result.calculationInputs.pixelPoint) : "", JSON.stringify(reference)]);
             }
         }
         return lines.map(line => line.map(value => typeof value === "object" && value !== null ? '"' + value.scalar + '"' : csvField(value)).join(",")).join("\r\n") + "\r\n";

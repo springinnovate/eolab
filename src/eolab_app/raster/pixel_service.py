@@ -15,13 +15,11 @@ from eolab_app.raster.pixel import read_raster_pixel
 from eolab_app.raster.source_access import (
     RasterSourceAccess,
     RasterReadSource,
-    read_private_raster,
 )
 from eolab_app.raster.source_models import (
     RasterPixelSourceRequest,
     raster_source_reference,
 )
-from eolab_app.source_files import finish_source_task
 
 class RasterPixelService:
     """Authorize and schedule rendering-independent pixel reads."""
@@ -48,26 +46,22 @@ class RasterPixelService:
         authorized_raster: RasterReadSource,
         request: CatalogPixelRequest | RasterPixelSourceRequest,
     ) -> RasterPixel:
-        """Sample one source while retaining read capacity and identity.
+        """Sample one authorized source through the ordinary original-grid reader.
 
         Args:
-            authorized_raster: Original source retained for the complete native read.
+            authorized_raster: Original source resolved for this interactive read.
             request: Validated source and WGS 84 position.
 
         Returns:
             The sampled band-one value and source cell.
 
         Raises:
-            RasterConflictError: If the source changes around the read.
             OSError: If the source cannot be read.
             rasterio.errors.RasterioError: If GDAL cannot sample it.
             ValueError: If its CRS cannot transform the position.
         """
 
-        execute = (
-            read_private_raster if authorized_raster.private else asyncio.to_thread
-        )
-        pixel = await execute(
+        pixel = await asyncio.to_thread(
             self._pixel_reader,
             authorized_raster.source_path,
             request.longitude,
@@ -80,7 +74,11 @@ class RasterPixelService:
         request: CatalogPixelRequest | RasterPixelSourceRequest,
         owner: str | None = None,
     ) -> RasterPixel:
-        """Read an original cell while its catalog or private source is authorized.
+        """Authorize an original raster and read one cell through the shared reader.
+
+        Short reads do not retain temporary files. If cleanup races the read,
+        the ordinary reader reports that the source is unavailable. Cancellation
+        discards the response while the read keeps its concurrency slot until done.
 
         Args:
             request: Existing catalog request or explicit source and coordinate.
@@ -91,12 +89,12 @@ class RasterPixelService:
 
         Raises:
             RasterFeatureError: If the source cannot be read.
-            SourceFileError: If private access changes before delivery.
+            SourceFileError: If private ownership, expiry or file resolution fails.
         """
-        async with self._source_access.open(
+        source = await self._source_access.resolve(
             raster_source_reference(request), owner
-        ) as source:
-            return await self._get(request, source)
+        )
+        return await self._get(request, source)
 
     async def _get(
         self,
@@ -107,7 +105,7 @@ class RasterPixelService:
 
         Args:
             request: Validated source identity and WGS 84 position.
-            authorized_raster: Original source retained by the caller's access scope.
+            authorized_raster: Original source resolved without requiring rendering or a transfer lease.
 
         Returns:
             The sampled band-one value and source cell.
@@ -137,9 +135,6 @@ class RasterPixelService:
         try:
             return await asyncio.shield(read_task)
         except asyncio.CancelledError:
-            if authorized_raster.private:
-                read_task.cancel()
-                await finish_source_task(read_task)
             raise
         except RasterConflictError:
             raise

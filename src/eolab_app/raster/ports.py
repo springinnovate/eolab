@@ -29,15 +29,40 @@ class RasterCatalog(Protocol):
 class RasterPublisher(Protocol):
     """Rendering adapter required by the publication use case."""
 
-    async def publish(self, resource_name: str, source_path: Path) -> None:
+    async def publish(
+        self, resource_name: str, source_path: Path, *, advertised: bool = True
+    ) -> None:
         """Publish and style one mounted GeoTIFF.
 
         Args:
             resource_name: Stable GeoServer resource name.
             source_path: Canonical mounted GeoTIFF path.
+            advertised: Whether public capabilities may list this layer.
 
         Raises:
             RasterUpstreamError: If publication or styling fails.
+        """
+        ...
+
+    async def temporary_layers(self) -> tuple[str, ...]:
+        """List server-owned temporary publication names for lifecycle reconciliation.
+
+        Returns:
+            Unqualified names reserved for temporary output publication.
+
+        Raises:
+            RasterUpstreamError: If GeoServer cannot list its resources.
+        """
+        ...
+
+    async def remove(self, resource_name: str) -> None:
+        """Remove a publication and its tiles without deleting its source file.
+
+        Args:
+            resource_name: Server-owned resource selected for cleanup.
+
+        Raises:
+            RasterUpstreamError: If unpublication fails and must be retried.
         """
         ...
 

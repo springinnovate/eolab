@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeCategoryValues, validateCategoricalDistribution } from "../../src/raster/categorical-statistics.js";
-import { loadCatalogRasterStatistics } from "../../src/raster/analysis-api.js";
+import { loadRasterStatistics } from "../../src/raster/analysis-api.js";
 import { presentCategoricalRasterDistribution } from "../../src/raster/categorical-presentation.js";
 import { createCategoricalRasterHistogram } from "../../src/raster/categorical-histogram-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
@@ -29,13 +29,13 @@ test("category API sends only sorted codes and rejects stale or missing classifi
     const requests = [];
     const signal = new AbortController().signal;
     const response = { ...RASTER_STATISTICS, categoricalDistribution: distribution };
-    const result = await loadCatalogRasterStatistics(MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, signal,
+    const result = await loadRasterStatistics(MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, signal,
         async (_url, options) => { requests.push(JSON.parse(options.body)); return new Response(JSON.stringify(response)); }, [41, 0]);
     assert.deepEqual(result.categoricalDistribution, distribution);
     assert.deepEqual(requests[0], { collectionId: MOUNTED_GEOTIFF_ITEM.collection, itemId: MOUNTED_GEOTIFF_ITEM.id, categoryValues: [0, 41] });
-    for (const codes of [[0, 42], null]) await assert.rejects(loadCatalogRasterStatistics(MOUNTED_GEOTIFF_ITEM,
+    for (const codes of [[0, 42], null]) await assert.rejects(loadRasterStatistics(MOUNTED_GEOTIFF_ITEM,
         { kind: "wholeRaster" }, signal, async () => new Response(JSON.stringify(response)), codes), /different category classification/);
-    await assert.rejects(loadCatalogRasterStatistics(MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, signal,
+    await assert.rejects(loadRasterStatistics(MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, signal,
         async () => new Response(JSON.stringify(RASTER_STATISTICS)), [0, 41]), /different category classification/);
 });
 

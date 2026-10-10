@@ -94,7 +94,7 @@ test("file cards show independent opt-in map actions and display loading and map
     assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
     h.state.outputPreviews[file.artifactId].busy = true; h.view.render(h.state);
     button = h.view.run.result.children[2].children[3];
-    assert.equal(button.textContent, "Loading preview…"); assert.equal(button.disabled, true);
+    assert.equal(button.textContent, "Adding to map…"); assert.equal(button.disabled, true);
     h.state.outputPreviews[file.artifactId] = {canShow: true, onMap: true}; h.view.render(h.state);
     assert.equal(h.view.run.result.children[2].children[3].textContent, "On map");
 });

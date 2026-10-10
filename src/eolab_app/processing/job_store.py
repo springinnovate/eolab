@@ -1258,6 +1258,27 @@ class PostgresJobStore:
                 )
             return cursor.fetchone() is not None
 
+    def available_result(self, identifier: str) -> dict[str, Any] | None:
+        """Read current result metadata for trusted lifecycle reconciliation.
+
+        This internal lookup does not authorize a user or grant file access.
+
+        Args:
+            identifier: Opaque result handle previously registered by the application.
+
+        Returns:
+            An unexpired ready result, or None after expiry, deletion or cleanup.
+
+        Raises:
+            ProcessingError: If the database is unavailable; callers must retry.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND status='ready' AND expires_at>now()",
+                (identifier,),
+            )
+            return cursor.fetchone()
+
     def cleanup_candidates(self) -> list[dict[str, Any]]:
         """Prune old job records, expire inputs/results, and find removable files.
 

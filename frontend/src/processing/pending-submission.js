@@ -1,4 +1,5 @@
 /** Reload recovery for one uncertain submission. No cookies, geometry, or result files are stored. */
+import { labeledRasterSource } from "../raster-source.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 const KEY = "eolab.processing.pending.v2";
 
@@ -13,12 +14,13 @@ export class PendingSubmissionStorage {
             const text = this.storage?.getItem(KEY);
             if (!text || text.length > 16384) return null;
             const value = JSON.parse(text);
-            if (![value.source?.collectionId, value.source?.itemId].every(id => typeof id === "string" && id.length > 0 && id.length <= 512) ||
+            const source = labeledRasterSource(value.source, value.source?.label);
+            if (
                 !/^[A-Za-z0-9_-]{16,80}$/.test(value.requestId) ||
                 typeof value.label !== "string" || value.label.length > 512) return null;
             const area = normalizeRasterSamplingArea(value.area);
             if (!["selectedArea", "catalogSelection"].includes(area.kind)) return null;
-            return { source: value.source, area, requestId: value.requestId, label: value.label };
+            return { source, area, requestId: value.requestId, label: value.label };
         } catch { return null; }
     }
 

@@ -1,5 +1,7 @@
 /** Same-origin adapters for rendering-independent raster analysis. */
 
+import { rasterSourceReference } from "../raster-source.js";
+
 import {
     normalizeRasterSamplingArea,
     validateRasterStatisticsForSelection,
@@ -74,9 +76,9 @@ async function analysisRequestError(response, action) {
 }
 
 /**
- * Read one band-one pixel from the selected Catalog raster.
+ * Read one band-one pixel from the selected raster source.
  *
- * @param {Object} item Selected STAC Item.
+ * @param {Object} item Catalog Item or original-source descriptor.
  * @param {{longitude: number, latitude: number}} position WGS 84 position.
  * @param {AbortSignal} signal Cancellation signal for a superseded position.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
@@ -84,7 +86,7 @@ async function analysisRequestError(response, action) {
  * @return {Promise<Object>} Source cell, bounds state, and value.
  * @throws {RasterAnalysisRequestError} If EOLab cannot sample the raster.
  */
-export async function sampleCatalogRasterPixel(
+export async function sampleRasterPixel(
     item,
     position,
     signal,
@@ -97,15 +99,15 @@ export async function sampleCatalogRasterPixel(
             method: "POST",
             headers: {
                 Accept: "application/json",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-EOLab-Processing": "1"
             },
             body: JSON.stringify({
-                collectionId: item.collection,
-                itemId: item.id,
+                ...analysisSourceBody(item),
                 longitude: position.longitude,
                 latitude: position.latitude
             }),
-            signal
+            signal, credentials: "same-origin", cache: "no-store"
         }
     );
     if (!response.ok) {
@@ -115,9 +117,9 @@ export async function sampleCatalogRasterPixel(
 }
 
 /**
- * Load bounded band-1 statistics for one catalog raster and sampling area.
+ * Load bounded band-1 statistics for one original raster and sampling area.
  *
- * @param {Object} item Selected scanner-owned STAC Item.
+ * @param {Object} item Catalog Item or original-source descriptor.
  * @param {Object} samplingArea Strict whole/bounds/polygon selection sampling-area union.
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
@@ -126,7 +128,7 @@ export async function sampleCatalogRasterPixel(
  * @return {Promise<Object>} Validated statistics and optional ground areas.
  * @throws {Error} If the area or response violates the analysis contract.
  */
-export async function loadCatalogRasterStatistics(
+export async function loadRasterStatistics(
     item,
     samplingArea,
     signal,
@@ -135,10 +137,7 @@ export async function loadCatalogRasterStatistics(
 ) {
     const normalizedArea = normalizeRasterSamplingArea(samplingArea);
     const codes = categoryValues === null ? null : normalizeCategoryValues(categoryValues);
-    const requestDocument = {
-        collectionId: item.collection,
-        itemId: item.id
-    };
+    const requestDocument = analysisSourceBody(item);
     if (normalizedArea.kind === "selectedArea") {
         requestDocument.selectedBounds = normalizedArea.selectedBounds;
     } else if (normalizedArea.kind === "catalogSelection") {
@@ -152,10 +151,11 @@ export async function loadCatalogRasterStatistics(
             method: "POST",
             headers: {
                 Accept: "application/json",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-EOLab-Processing": "1"
             },
             body: JSON.stringify(requestDocument),
-            signal
+            signal, credentials: "same-origin", cache: "no-store"
         }
     );
     if (!response.ok) {
@@ -172,10 +172,10 @@ export async function loadCatalogRasterStatistics(
 }
 
 /**
- * Load bounded paired statistics for two ordered catalog rasters.
+ * Load bounded paired statistics for two ordered original raster sources.
  *
- * @param {Object} xItem Catalog Item assigned to the X reference grid.
- * @param {Object} yItem Distinct Catalog Item aligned to X.
+ * @param {Object} xItem Raster source assigned to the X reference grid.
+ * @param {Object} yItem Distinct raster source aligned to X.
  * @param {Object} samplingArea Whole overlap or selected WGS 84 bounds.
  * @param {AbortSignal} signal Cancellation signal for stale pair intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
@@ -183,7 +183,7 @@ export async function loadCatalogRasterStatistics(
  * @return {Promise<Object>} Validated 2D histogram and marginals.
  * @throws {Error} If request or response violates the paired contract.
  */
-export async function loadCatalogRasterPairedStatistics(
+export async function loadRasterPairedStatistics(
     xItem,
     yItem,
     samplingArea,
@@ -192,14 +192,8 @@ export async function loadCatalogRasterPairedStatistics(
 ) {
     const normalizedArea = normalizeRasterPairedSamplingArea(samplingArea);
     const requestDocument = {
-        xRaster: {
-            collectionId: xItem.collection,
-            itemId: xItem.id,
-        },
-        yRaster: {
-            collectionId: yItem.collection,
-            itemId: yItem.id,
-        },
+        xRaster: rasterSourceReference(xItem),
+        yRaster: rasterSourceReference(yItem),
     };
     if (normalizedArea.kind === "selectedArea") {
         requestDocument.selectedBounds = normalizedArea.selectedBounds;
@@ -213,9 +207,10 @@ export async function loadCatalogRasterPairedStatistics(
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
+                "X-EOLab-Processing": "1",
             },
             body: JSON.stringify(requestDocument),
-            signal,
+            signal, credentials: "same-origin", cache: "no-store"
         }
     );
     if (!response.ok) {
@@ -228,4 +223,14 @@ export async function loadCatalogRasterPairedStatistics(
         await response.json(),
         normalizedArea
     );
+}
+
+/** Preserve the catalog wire form while using opaque references for other sources.
+ * @param {Object} value Catalog Item or source descriptor.
+ * @return {Object} Path-free analysis request fields.
+ * @throws {TypeError} If the source identity is invalid.
+ */
+function analysisSourceBody(value) {
+    const source = rasterSourceReference(value);
+    return source.kind === "runArtifact" ? {source} : {...source};
 }

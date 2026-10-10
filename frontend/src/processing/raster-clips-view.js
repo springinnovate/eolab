@@ -1,3 +1,4 @@
+import { rasterSourceKey } from "../raster-source.js";
 /** Accessible raster clip controls. No map, histogram, or vector implementation knowledge. */
 import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
@@ -93,7 +94,7 @@ export class RasterClipsView {
             }));
             this.sourceSignature = signature;
         }
-        e.source.value = String(state.sources.findIndex(item => item.collectionId === source?.collectionId && item.itemId === source?.itemId));
+        e.source.value = String(state.sources.findIndex(item => source && rasterSourceKey(item) === rasterSourceKey(source)));
         const locked = !!state.pending || state.submitting;
         e.source.disabled = locked || state.sources.length === 0;
         e["edit-area"].disabled = locked;
@@ -129,12 +130,12 @@ export class RasterClipsView {
 
     /** Describe a job's catalog identity without requiring a retained map layer.
      * @param {Object} job Validated owned clip job.
-     * @param {Object[]} sources Offered catalog identities and display labels.
-     * @return {string} Catalog label or saved filename/item identity.
+     * @param {Object[]} sources Offered original-source identities and display labels.
+     * @return {string} Source label or saved filename/item identity.
      */
     sourceName(job, sources) {
         const identity = job.source ?? Object.values(job.sources ?? {})[0];
-        return sources.find(item => item.collectionId === identity?.collectionId && item.itemId === identity?.itemId)?.label
+        return sources.find(item => identity && rasterSourceKey(item) === rasterSourceKey(identity))?.label
             ?? identity?.itemId ?? job.result?.filename ?? "Raster clip";
     }
 
@@ -201,7 +202,7 @@ export class RasterClipsView {
         const details = this.element("details", "");
         const summary = this.element("summary", "Download details"); summary.setAttribute("data-download-action", `${job.jobId}-details`); details.append(summary);
         const identity = job.source ?? Object.values(job.sources ?? {})[0];
-        if (identity) details.append(this.element("p", `Catalog source: ${identity.collectionId} / ${identity.itemId}`));
+        if (identity) details.append(this.element("p", identity.kind === "runArtifact" ? `Model result: run ${identity.jobId}, file ${identity.artifactId}` : `Catalog source: ${identity.collectionId} / ${identity.itemId}`));
         if (job.grid) details.append(this.element("p", `${job.grid.width} × ${job.grid.height} pixels · ${describeClipCrs(job.grid.crs)}`),
             this.element("p", `COG · native resolution · ${formatDownloadBytes(job.grid.estimatedRawBytes)} estimated uncompressed`));
         const actions = this.element("div", ""); actions.className = "downloads-actions";

@@ -126,3 +126,15 @@ def test_raster_preflight_and_approximate_view_edges_are_removed() -> None:
     assert not any(source.exists() for source in removed_sources)
     assert "eolab_app.raster.assessment" not in composition_imports
     assert "eolab_app.raster.eligibility" not in composition_imports
+
+
+def test_temporary_rasters_reuse_publication_without_processing_imports() -> None:
+    """Keep output rendering on WMS and ownership callbacks outside feature imports."""
+    assert not Path("src/eolab_app/raster/map_rendering.py").exists()
+    assert not Path("src/eolab_app/routes/raster_map.py").exists()
+    assert not Path("frontend/src/raster/window-layer.js").exists()
+    imports = imported_modules(Path("src/eolab_app/raster/publication.py"))
+    assert not any(name.startswith("eolab_app.processing") for name in imports)
+    assert "eolab_app.raster.source_access" in imports
+    compose = APPLICATION_COMPOSITION_SOURCE.read_text(encoding="utf-8")
+    assert "source_available=processing_service.model_artifact_is_available" in compose

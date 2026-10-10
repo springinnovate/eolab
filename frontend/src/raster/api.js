@@ -1,4 +1,5 @@
-/** Same-origin HTTP adapter for prepared-raster publication. */
+/** Same-origin HTTP adapter for original-raster publication. */
+import { rasterSourceReference } from "../raster-source.js";
 
 /** Stable publication categories exposed by the rendering API. */
 const RASTER_PUBLICATION_FAILURE_CATEGORIES = new Set([
@@ -66,31 +67,31 @@ async function renderingRequestError(response, action) {
 }
 
 /**
- * Publish one selected catalog GeoTIFF through its authoritative identity.
+ * Publish a catalog or temporary GeoTIFF through the ordinary tile renderer.
  *
- * @param {Object} item Selected STAC Item.
+ * @param {Object} item Catalog item or original-source descriptor.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
+ * @param {AbortSignal} [signal] Cancellation of an obsolete publication request.
  * @return {Promise<Object>} Published layer identity and bounds.
  * @throws {Error} If publication fails.
  */
-export async function publishCatalogRaster(
+export async function publishRasterSource(
     item,
-    fetchImplementation = globalThis.fetch
+    fetchImplementation = globalThis.fetch,
+    signal
 ) {
     const response = await fetchImplementation.call(
         globalThis,
         "/api/rendering/layers",
         {
-            method: "POST",
+            method: "POST", credentials: "same-origin", cache: "no-store", signal,
             headers: {
                 Accept: "application/json",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-EOLab-Processing": "1"
             },
-            body: JSON.stringify({
-                collectionId: item.collection,
-                itemId: item.id
-            })
+            body: JSON.stringify(item.source ? {source: rasterSourceReference(item)} : rasterSourceReference(item))
         }
     );
     if (!response.ok) {

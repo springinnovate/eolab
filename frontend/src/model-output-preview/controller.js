@@ -1,8 +1,6 @@
-/** Own temporary run-output displays without making them catalog or analysis sources. */
+/** Keep opt-in output displays tied to their originating run and file lifetime. */
 import { PREVIEW_MEDIA_TYPES, readArtifactPreview } from "./api.js";
-import { DEFAULT_RASTER_STYLE, buildRasterLegend } from "../raster/style.js";
-import { normalizeRasterAppearanceState } from "../raster/appearance-state.js";
-import { buildCategoricalRasterLegend } from "../raster/categorical-presentation.js";
+import { describeRasterSource } from "../raster/source-api.js";
 import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
 
 /** Return the map identity of one run's immutable file.
@@ -11,25 +9,18 @@ import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
  */
 export function artifactLayerKey(jobId, artifactId) { return `local:artifact:${jobId}:${artifactId}`; }
 
-/** Create an initial appearance from preview values, without claiming full-raster statistics.
+/** Choose the standard solid symbol for a vector result preview.
  * @param {Object} data Checked display data.
- * @return {Object} Existing normalized raster or vector appearance contract.
+ * @return {Object} Normalized solid vector appearance.
  */
 function initialAppearance(data) {
-    if (data.kind === "vector") return normalizeVectorStyle({geometryKind: data.geometryKind, fillColor: data.geometryKind === "line" ? null : "#3388ff",
+    return normalizeVectorStyle({geometryKind: data.geometryKind, fillColor: data.geometryKind === "line" ? null : "#3388ff",
         fillOpacity: data.geometryKind === "line" ? null : 0.35, strokeColor: "#0066aa", strokeOpacity: 1, strokeWidth: 2, pointSize: data.geometryKind === "point" ? 8 : null,
         label: null, categorical: null, graduated: null});
-    let minimum = Infinity, maximum = -Infinity;
-    for (const value of data.values) if (value !== null) { minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); }
-    if (!Number.isFinite(minimum)) { minimum = 0; maximum = 1; }
-    if (minimum === maximum) { const pad = Math.max(Math.abs(minimum) * 1e-6, 1e-12); minimum -= pad; maximum += pad; }
-    return normalizeRasterAppearanceState({kind: "raster", appearanceVersion: 1, mode: "continuous", categorical: null,
-        continuous: {definition: {...DEFAULT_RASTER_STYLE, minimum, midpoint: minimum / 2 + maximum / 2, maximum},
-            paletteName: "blue-yellow-red", styleWasEdited: false}});
 }
 
-/** Keep private previews, their display styles and availability tied to their originating runs. */
-export class ModelOutputPreviews {
+/** Keep private result layers tied to their originating run and file lifetime. */
+export class ModelOutputLayers {
     /** Connect authorized transport and explicit map presentation callbacks.
      * @param {Object} dependencies Composition-supplied interfaces.
      * @param {Object} dependencies.api Processing status API.
@@ -39,11 +30,13 @@ export class ModelOutputPreviews {
      * @param {(key:string,data:Object,appearance:Object)=>Object} dependencies.createLayer Create a Leaflet-compatible display.
      * @param {(jobId:string)=>void} dependencies.openRun Open the originating run's details.
      * @param {()=>void} dependencies.onChange Refresh output buttons and the private-map notice.
+     * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addRaster Attach through the common raster owner.
+     * @param {Function} [dependencies.describe=describeRasterSource] Original-source metadata reader.
      * @param {Function} [dependencies.read=readArtifactPreview] Bounded preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
      */
-    constructor({api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, read = readArtifactPreview, clock = globalThis}) {
-        Object.assign(this, {api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, read, clock});
+    constructor({api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, describe = describeRasterSource, read = readArtifactPreview, clock = globalThis}) {
+        Object.assign(this, {api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, describe, read, clock});
         this.layers = new Map(); this.pending = new Map(); this.messages = new Map(); this.timer = null; this.expiryTimer = null; this.destroyed = false;
     }
 
@@ -72,9 +65,36 @@ export class ModelOutputPreviews {
         const abort = new AbortController(); this.pending.set(key, abort); this.messages.delete(key); this.onChange();
         let layer;
         try {
-            if (this.layers.size + this.pending.size > 8) throw new Error("Remove a result preview before adding another. Up to eight can be on the map at once.");
+            if (this.layers.size + this.pending.size > 8) throw new Error("Remove a result layer before adding another. Up to eight results can be on the map at once.");
             if (!PREVIEW_MEDIA_TYPES.has(file.mediaType) || job.status !== "ready" || Date.parse(job.expiresAt) <= Date.now()) {
                 throw new Error("This result is no longer available. Run the model again.");
+            }
+            if (file.mediaType === "image/tiff") {
+                const source = {kind: "runArtifact", jobId: job.jobId, artifactId: file.artifactId};
+                const metadata = await this.describe(source, abort.signal);
+                if (this.destroyed || abort.signal.aborted || !isCurrent()) return;
+                if (metadata.version !== file.sha256) throw new Error("This raster result changed. Reopen the run and try again.");
+                if (Date.parse(job.expiresAt) <= Date.now()) throw new Error("This raster result expired. Run the model again.");
+                const bbox = metadata.bounds;
+                if (!bbox) throw new Error("This raster cannot be placed on the map. Download it or choose it directly as a model input.");
+                if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This raster crosses unsupported map bounds.");
+                const state = {key, jobId: job.jobId, runName: job.label, file, expiresAt: job.expiresAt, kind: "raster"};
+                const retained = await this.addRaster({source, version: metadata.version, bbox, label: file.label,
+                    group: {id: job.jobId, label: job.label},
+                    capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
+                        calculations: true, modelInput: true}}, {
+                    /** Reopen the source run without putting private identity into a catalog item. @return {void} */
+                    info: () => this.openRun(job.jobId),
+                    /** Retain only source identity and style for fresh authorized Undo.
+                     * @param {Object} appearance Shared raster appearance. @return {Object} Restoration data.
+                     */
+                    copy: appearance => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance}),
+                    /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
+                    removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
+                }, {visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                    isCurrent: () => !this.destroyed && isCurrent() && Date.parse(job.expiresAt) > Date.now()});
+                if (retained !== null) this.layers.set(key, state);
+                this.schedule(); return;
             }
             const data = await this.read(job.jobId, file, abort.signal);
             if (this.destroyed || abort.signal.aborted || !isCurrent()) return;
@@ -101,7 +121,6 @@ export class ModelOutputPreviews {
      * @throws {Error} If type, symbol kind or unsupported field-based vector styling differs.
      */
     normalizeAppearance(state, candidate) {
-        if (state.kind === "raster") return normalizeRasterAppearanceState(candidate);
         if (candidate.kind && candidate.kind !== "vector") throw new Error("Choose a vector style for this result.");
         const style = normalizeVectorStyle(candidate.definition ?? candidate);
         if (style.geometryKind !== state.initial.geometryKind || style.categorical || style.graduated || style.label) {
@@ -138,7 +157,7 @@ export class ModelOutputPreviews {
             /** Reopen the originating run. @return {void} */
             info: () => this.openRun(state.jobId),
             /** Copy appearance without exporting a private source. @return {Object} Existing clipboard contract. */
-            exportSavedState: () => state.kind === "raster" ? state.appearance : {kind: "vector", definition: state.appearance},
+            exportSavedState: () => ({kind: "vector", definition: state.appearance}),
             /** Check clipboard compatibility before offering Paste.
              * @param {Object} _record Neutral layer record. @param {Object} candidate Copied style.
              * @return {string|null} Explanation or null when compatible.
@@ -157,15 +176,12 @@ export class ModelOutputPreviews {
         };
     }
 
-    /** Project the committed appearance into the existing map legend contract.
+    /** Project the vector preview appearance into the existing map legend contract.
      * @param {Object} state Preview state.
      * @return {Object} Neutral legend presentation.
      */
     legend(state) {
-        if (state.kind === "vector") return vectorStyleLegend(state.appearance);
-        if (state.appearance.mode === "categorical") return buildCategoricalRasterLegend(state.appearance.categorical);
-        const style = state.appearance.continuous.definition; const legend = buildRasterLegend(style);
-        return {kind: "gradient", ...legend, label: "Preview values", labels: [style.minimum, style.midpoint, style.maximum]};
+        return vectorStyleLegend(state.appearance);
     }
 
     /** Reauthorize an Undo from the server, preserving style but never reusing stale display bytes.
@@ -199,7 +215,7 @@ export class ModelOutputPreviews {
     removeExpired() {
         for (const state of [...this.layers.values()]) {
             if (Date.parse(state.expiresAt) > Date.now()) continue;
-            this.messages.set(state.key, "This result expired and its preview was removed. Run the model again.");
+            this.messages.set(state.key, "This result expired and its map layer was removed. Run the model again.");
             this.removeLayer(state.key);
         }
     }
@@ -220,7 +236,7 @@ export class ModelOutputPreviews {
             const job = jobs.find(value => value.jobId === state.jobId);
             const file = job?.artifacts?.files.find(value => value.artifactId === state.file.artifactId);
             if (job?.status === "ready" && Date.parse(job.expiresAt) > Date.now() && file?.sha256 === state.file.sha256) continue;
-            this.messages.set(state.key, "Preview removed because the result is no longer available. Reopen the run to check it.");
+            this.messages.set(state.key, "Map layer removed because the result is no longer available. Reopen the run to check it.");
             this.removeLayer(state.key);
         }
         this.schedule(); this.onChange();

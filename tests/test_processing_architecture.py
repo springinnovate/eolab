@@ -134,6 +134,8 @@ def test_processing_deployment_is_separate_bounded_and_source_read_only() -> Non
     assert "read_only: true" in worker
     assert "processing-data:/processing-data" in worker
     assert "processing-data:/processing-data:ro" in app
+    geoserver = compose.split("  geoserver:\n", 1)[1].split("\n  geoserver-init:", 1)[0]
+    assert "processing-data:/processing-data:ro" in geoserver
     assert "GEOSERVER" not in worker
     sql = Path("src/eolab_app/processing/schema.sql").read_text()
     assert "pgstac." not in sql.lower()

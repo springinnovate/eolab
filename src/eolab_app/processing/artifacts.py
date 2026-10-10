@@ -298,7 +298,10 @@ class LocalJobArtifacts:
         return info
 
     def artifact_path(self, attempt: str, storage_name: str) -> Path:
-        """Locate one manifest file after ownership and a transfer lease are checked.
+        """Locate one manifest file after its owning operation authorizes access.
+
+        Downloads and calculations retain files separately. Interactive reads
+        may race cleanup and receive the ordinary unavailable-file error.
 
         Args:
             attempt: Published attempt ID from the owned job.
@@ -310,6 +313,7 @@ class LocalJobArtifacts:
         Raises:
             ProcessingError: If the name is unsafe or the file is unavailable.
         """
+
         try:
             TypeAdapter(FileName).validate_python(storage_name)
         except ValidationError as error:

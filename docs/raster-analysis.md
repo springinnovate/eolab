@@ -9,9 +9,10 @@ still count as data.
 
 The analysis API can read a catalog raster or an immutable GeoTIFF from a model
 run through the same pixel and distribution services. It reads the original
-file, never the map preview's 512-pixel display grid. The browser's model-output
-controls are unchanged; shared map controls and using outputs as model inputs
-are separate follow-ups.
+file, never a rendered display grid. After **Show on map**, raster outputs use
+the same style, pixel, distribution, Statistics and Raster stack controls as
+catalog rasters. Models can also select completed raster files without displaying
+them. Removing a display does not delete its original file or accepted jobs.
 
 Existing flat catalog requests remain supported. An explicit `source` can also
 identify a catalog item:
@@ -35,7 +36,7 @@ These distribution APIs are distinct from Processing's native raster formulas.
 
 `POST /api/raster-analysis/sources` takes `{"source": ...}` and returns its
 path-free reference, immutable `version`, original width/height, band count,
-datatype, CRS, six-coefficient affine `transform`, NoData and
+datatype, CRS, six-coefficient affine `transform`, WGS84 `bounds`, NoData and
 `capabilities.pixels` / `capabilities.statistics`.
 Each capability has `supported` and `reason`. A non-finite NoData marker is
 represented as `null`; numerical readers still use the original file metadata.
@@ -50,17 +51,19 @@ session authority; analysis and its source readers do not import Processing
 storage, workers, GeoServer or preview services. Requests cannot supply a path,
 download URL or owner identity. Responses use `Cache-Control: private, no-store`.
 
-The common private-file access scope acquires the existing renewable transfer
-lease, verifies the published checksum, then rechecks ownership, availability
-and file identity before delivering derived data. It renews every 10 seconds
-and retains the file until native work stops, including cancellation and lease
-loss. The owning transfer limits still apply. Checksum verification admits two
-concurrent checks per API process with a 30-second deadline and no waiting queue;
-it reads the full file on each request, including statistical cache hits.
-Private numerical reads use the existing native readers in supervised processes
-with a 30-second deadline and a Linux 2 GiB address-space ceiling. Catalog
-numerical reads retain their existing thread scheduling and immutable catalog
-source policy.
+Pixel picking resolves the owner and expiry once, then uses the same
+`read_raster_pixel` reader and bounded thread scheduling as catalog sources.
+It does not create a transfer lease, read the whole file for a checksum, or start
+a subprocess. Published files are immutable and mounted read-only in the API.
+A file removed between authorization and reading produces the ordinary source
+error. Cancellation discards the response but retains the concurrency slot until
+the native read finishes.
+
+Longer private statistics and metadata operations retain the existing renewable
+transfer lease, checksum verification, availability recheck and supervised native
+reader. They keep their transfer limits, 30-second native deadline and Linux
+2 GiB address-space ceiling; this change does not weaken queued model input
+retention or download integrity checks.
 
 Private statistics use the existing bounded cache and request coalescing, keyed
 by owner, run, file, checksum and byte count as well as area and numerical policy.
@@ -253,3 +256,40 @@ Payloads are limited to 32 KiB each; expired entries and oldest entries beyond
 capacity are removed when results are added. Deleting an owned job removes its
 download, not the independently cached numerical values. Cache entries contain
 no user titles, raster pixels, polygon geometry, source paths or download links.
+
+## Temporary raster map delivery
+
+`POST /api/rendering/layers` also accepts `{source: {kind: "runArtifact", jobId,
+artifactId}}`. The same publisher registers the original GeoTIFF under a stable
+opaque `model_<run>_<file>` coverage-store name and returns the ordinary
+`{layerName, bbox}` response. No client path is accepted or returned. The browser
+uses the same WMS factory, composite plans, tile recovery, styles and legends as
+catalog rasters. There is no private viewport renderer or raster-window endpoint.
+
+Application composition supplies current-session checks to publication, WMS and
+composite delivery. Every private request checks owner, expiry and file presence,
+including requests served from the existing bounded composite tile cache. Private
+HTTP responses use `Cache-Control: private, no-store`. Temporary layers are
+unadvertised in GeoServer and filtered from public WMS capabilities. GeoServer
+remains internal; the public proxy is the access boundary.
+
+The GeoServer service needs the existing `processing-data` volume mounted at
+`/processing-data:ro`, matching the API mount. Deploy the updated Compose
+configuration and rerun the existing GeoServer initializer to extend its file
+allowlist to published result TIFFs. Deploy the application image too. Processing workers do not need
+GeoServer credentials and can compute, retain inputs and delete files while
+GeoServer is unavailable.
+
+The API lifespan reconciles temporary GeoServer stores every 30 seconds against
+Processing's authoritative result lifetime. Unavailable runs are removed from
+GeoWebCache (including disk tiles), then their GeoServer store and process-local
+publication registry. Failed cleanup retries; discovery includes stores left by
+an earlier API process. Original-file deletion stays with Processing and respects
+accepted dependent jobs. Unpublication is eventual and may follow file deletion;
+per-request access checks reject expired/deleted outputs immediately even while
+cleanup is pending. The bounded in-memory composite cache may retain inaccessible
+bytes until normal eviction, but cannot deliver them without a fresh access check.
+
+The historical run-file `/preview` endpoint remains for existing clients; ordinary
+raster display no longer calls it. Existing vector previews are unchanged.
+Rendering availability does not authorize or gate any numerical operation.

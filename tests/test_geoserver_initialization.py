@@ -1,12 +1,14 @@
 """Test the idempotent EOLab GeoServer bootstrap contract."""
 
 import json
+import re
 from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
 
 from geoserver.initialize import (
+    MOUNTED_SOURCE_URL_PATTERN,
     geowebcache_disk_quota_document,
     geowebcache_layer_document,
     initialize_geoserver,
@@ -113,18 +115,14 @@ def test_initialization_creates_only_missing_eolab_resources() -> None:
             "name": "eolab-scan-source",
             "description": (
                 "Allow GeoServer to publish files from EOLab's "
-                "read-only scan mount"
+                "read-only scan mount and published result rasters"
             ),
             "enabled": True,
-            "regex": r"^file:///scan-source/.*$",
+            "regex": MOUNTED_SOURCE_URL_PATTERN,
         }
     }
-    assert json.loads(client.requests[5][2]) == {
-        "workspace": {"name": "eolab"}
-    }
-    assert client.requests[7][1] == (
-        "/workspaces/eolab/styles?name=dynamic-raster"
-    )
+    assert json.loads(client.requests[5][2]) == {"workspace": {"name": "eolab"}}
+    assert client.requests[7][1] == ("/workspaces/eolab/styles?name=dynamic-raster")
     assert client.requests[7][2] == b"<sld/>"
 
 
@@ -153,11 +151,9 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
     ]
     assert client.requests[2][1] == "/urlchecks/eolab-scan-source"
     assert json.loads(client.requests[2][2])["regexUrlCheck"]["regex"] == (
-        r"^file:///scan-source/.*$"
+        MOUNTED_SOURCE_URL_PATTERN
     )
-    assert client.requests[-1][1] == (
-        "/workspaces/eolab/styles/dynamic-raster"
-    )
+    assert client.requests[-1][1] == ("/workspaces/eolab/styles/dynamic-raster")
     assert client.requests[-1][2] == b"<current-style/>"
     assert all(request[0] != "DELETE" for request in client.requests)
 
@@ -342,3 +338,12 @@ def test_main_rejects_invalid_geowebcache_quota(
 
     with pytest.raises(ValueError, match="must be a positive integer"):
         main()
+
+
+def test_source_url_rule_allows_published_rasters_only_on_expected_mounts() -> None:
+    """Extend ordinary GeoServer publication without allowing scratch or other files."""
+    attempt = "a" * 32
+    for url in ("file:///scan-source/catalog.tif", f"file:///processing-data/results/{attempt}/coverage.tif", f"file:///processing-data/results/{attempt}/result.TIFF"):
+        assert re.fullmatch(MOUNTED_SOURCE_URL_PATTERN, url)
+    for url in (f"file:///processing-data/attempts/{attempt}/scratch.tif", f"file:///processing-data/results/{attempt}/../secret.tif", f"file:///processing-data/results/{attempt}/manifest.json", "file:///etc/passwd", "https://remote/raster.tif"):
+        assert not re.fullmatch(MOUNTED_SOURCE_URL_PATTERN, url)

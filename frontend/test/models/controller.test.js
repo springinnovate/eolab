@@ -66,10 +66,12 @@ test("published results are explicit model choices without previews or map layer
 test("legacy catalog recipes exclude results and late history loads preserve the chosen input", async () => {
     const artifacts = fileManifest(), parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
     const h = fixture({listModelRuns: async () => ({jobs: [parent], nextCursor: null})});
+    h.context.rasters.push({kind: "runArtifact", jobId: parent.jobId, artifactId: artifacts.files[0].artifactId, label: "Displayed result"});
     h.controller.chooseModel(model); await h.controller.loadRuns();
     assert.equal(h.controller.state.draft.sources.length, 1);
     h.controller.chooseModel({...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}});
     const draft = h.controller.state.draft;
+    assert.equal(draft.sources.length, 3, "Displayed results and run history refer to the same original source");
     h.controller.editDraft({raster: draft.sources[1]});
     await h.controller.loadRuns();
     assert.equal(draft.raster.artifactId, artifacts.files[0].artifactId);

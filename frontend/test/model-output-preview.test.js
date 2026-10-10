@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ModelOutputPreviews, artifactLayerKey } from "../src/model-output-preview/controller.js";
+import { ModelOutputLayers, artifactLayerKey } from "../src/model-output-preview/controller.js";
 import { readArtifactPreview, validateArtifactPreview } from "../src/model-output-preview/api.js";
 import { fileManifest, job } from "../test-support/models/fixtures.js";
 
@@ -10,11 +10,12 @@ import { fileManifest, job } from "../test-support/models/fixtures.js";
  */
 function fixture(overrides = {}) {
     const artifacts = fileManifest(), run = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    artifacts.files[0].mediaType = "application/geo+json";
     const data = {jobId: run.jobId, artifactId: artifacts.files[0].artifactId, sha256: artifacts.files[0].sha256,
-        kind: "raster", bounds: [0, 0, 1, 1], width: 2, height: 2, values: [null, 1, 2, 3]};
+        kind: "vector", bounds: [0, 0, 1, 1], geometryKind: "polygon", geojson: {type: "FeatureCollection", features: [{type: "Feature", properties: {}, geometry: {type: "Polygon", coordinates: [[[0,0],[1,0],[1,1],[0,0]]]}}]}};
     const records = new Map(); const calls = {reads: 0, releases: 0, changes: 0};
     const api = {getJob: async () => run, readJobStatuses: async () => ({jobs: [run], unavailableJobIds: []})};
-    const owner = new ModelOutputPreviews({api, clock: {setTimeout() {}, clearTimeout() {}},
+    const owner = new ModelOutputLayers({api, clock: {setTimeout() {}, clearTimeout() {}},
         addLayer: (source, adapter) => records.set(source.key, {entry: source, adapter, state: adapter.createState()}),
         removeLayer: key => { const record = records.get(key); records.delete(key); record.adapter.removed(); },
         refreshLayers: () => {}, createLayer: () => ({setAppearance() {}, zoom() {}, release() { calls.releases++; }}),
@@ -41,9 +42,8 @@ test("separate runs can show the same file identifier without sharing appearance
     const h = fixture(); const other = {...h.run, jobId: "2".repeat(32), label: "Another run"};
     await h.owner.show(h.run, h.file); await h.owner.show(other, h.file);
     const [first, second] = [...h.owner.layers.values()];
-    h.owner.applyAppearance(first.key, {...first.appearance, continuous: {...first.appearance.continuous,
-        definition: {...first.appearance.continuous.definition, minimumColor: "#112233"}}});
-    assert.notEqual(first.appearance.continuous.definition.minimumColor, second.appearance.continuous.definition.minimumColor);
+    h.owner.applyAppearance(first.key, {...first.appearance, fillColor: "#112233"});
+    assert.notEqual(first.appearance.fillColor, second.appearance.fillColor);
     assert.equal(h.records.size, 2);
 });
 
@@ -82,9 +82,9 @@ test("obsolete display requests never attach and preview failures leave download
     assert.ok(failed.file.url); assert.equal(failed.run.status, "ready");
 });
 
-test("browser preview boundary rejects substituted files, oversized grids and unsupported coordinates", () => {
+test("browser preview boundary rejects substituted files, unsupported geometries and coordinates", () => {
     const h = fixture(); assert.equal(validateArtifactPreview(h.data, h.run.jobId, h.file), h.data);
-    for (const changes of [{jobId: "2".repeat(32)}, {sha256: "b".repeat(64)}, {width: 513}, {values: [Infinity]}, {bounds: [-181, 0, 1, 1]}]) {
+    for (const changes of [{jobId: "2".repeat(32)}, {sha256: "b".repeat(64)}, {geometryKind: "point"}, {geojson: {}}, {bounds: [-181, 0, 1, 1]}]) {
         assert.throws(() => validateArtifactPreview({...h.data, ...changes}, h.run.jobId, h.file), /invalid/);
     }
 });
@@ -94,8 +94,40 @@ test("preview transport uses same-origin no-store requests and cancels oversized
     const data = await readArtifactPreview(h.run.jobId, h.file, new AbortController().signal, async (url, options) => {
         request = {url, options}; return new Response(JSON.stringify(h.data));
     });
-    assert.equal(data.kind, "raster"); assert.equal(request.options.cache, "no-store");
+    assert.equal(data.kind, "vector"); assert.equal(request.options.cache, "no-store");
     assert.equal(request.options.credentials, "same-origin"); assert.match(request.url, /\/artifacts\/[a-f0-9]{32}\/preview$/);
     await assert.rejects(readArtifactPreview(h.run.jobId, h.file, undefined,
         async () => new Response(" ".repeat(8 * 1024 * 1024 + 1025))), /too large/);
+});
+
+
+test("raster display delegates to the common raster owner using original identity and metadata", async () => {
+    let attachment, copy;
+    const h = fixture({read: () => { throw new Error("Raster previews must not be loaded"); },
+        describe: async source => ({source, version: "a".repeat(64), bounds: [0,0,1,1], capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+        addRaster: (raster, lifecycle, presentation) => { attachment = {raster, lifecycle, presentation}; copy = lifecycle.copy({kind: "raster"}); }});
+    h.file.mediaType = "image/tiff"; h.file.sha256 = "a".repeat(64);
+    await h.owner.show(h.run, h.file);
+    assert.deepEqual(attachment.raster.source, {kind: "runArtifact", jobId: h.run.jobId, artifactId: h.file.artifactId});
+    assert.deepEqual(attachment.raster.group, {id: h.run.jobId, label: h.run.label});
+    assert.equal(attachment.raster.capabilities.calculations, true);
+    assert.equal(attachment.raster.item, undefined);
+    assert.equal(copy.artifactId, h.file.artifactId); assert.equal(copy.appearance.kind, "raster");
+    attachment.lifecycle.removed(); assert.equal(h.owner.layers.size, 0);
+});
+
+
+test("closing during raster publication cancels attachment without removing an unattached layer", async () => {
+    let finish, presentation;
+    const h = fixture({describe: async source => ({source, version:"a".repeat(64), bounds:[0,0,1,1],
+        capabilities:{pixels:{supported:true},statistics:{supported:true}}}),
+        addRaster: async (_raster, _lifecycle, options) => {
+            presentation = options; await new Promise(resolve => {finish=resolve;});
+            assert.equal(options.signal.aborted, true); assert.equal(options.isCurrent(), false); return null;
+        }});
+    h.file.mediaType="image/tiff"; h.file.sha256="a".repeat(64);
+    const work=h.owner.show(h.run,h.file); await Promise.resolve();
+    assert.ok(presentation); assert.equal(h.owner.layers.size,0);
+    h.owner.destroy(); finish(); await work;
+    assert.equal(h.owner.layers.size,0); assert.equal(h.owner.pending.size,0);
 });

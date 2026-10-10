@@ -77,7 +77,9 @@ class GeoServerRasterPublisher:
         )
         self._tile_cache = GeoWebCacheLayerConfigurator(self._gateway)
 
-    async def publish(self, resource_name: str, source_path: Path) -> None:
+    async def publish(
+        self, resource_name: str, source_path: Path, *, advertised: bool = True
+    ) -> None:
         """Converge and style one mounted GeoTIFF publication.
 
         Clean resources are created, complete resources are preserved, and a
@@ -90,6 +92,7 @@ class GeoServerRasterPublisher:
         Args:
             resource_name: Stable GeoServer coverage and layer name.
             source_path: Canonical mounted GeoTIFF path.
+            advertised: Whether this layer may appear in public capabilities.
 
         Returns:
             None after the store, coverage, layer, and style are reconciled.
@@ -125,9 +128,64 @@ class GeoServerRasterPublisher:
             )
 
         await self._assign_style(resource_name)
+        if not advertised:
+            await self._request(
+                "hide temporary layer from capabilities",
+                "PUT",
+                f"/layers/{GEOSERVER_WORKSPACE_NAME}:{resource_name}.json",
+                accepted_statuses=frozenset({200}),
+                json={"layer": {"advertised": False}},
+            )
         await self._tile_cache.configure(
             resource_name,
             allow_style_environment=True,
+        )
+
+    async def temporary_layers(self) -> tuple[str, ...]:
+        """Read temporary coverage-store names, including interrupted publications.
+
+        Returns:
+            Names in the reserved model-output namespace; callers validate IDs.
+
+        Raises:
+            RasterPublicationError: If resource discovery fails.
+            ValueError: If GeoServer returns malformed store metadata.
+        """
+        response = await self._request(
+            "list temporary raster publications",
+            "GET",
+            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/coveragestores.json",
+            accepted_statuses=frozenset({200, 404}),
+        )
+        if response.status_code == 404:
+            return ()
+        stores = response.json().get("coverageStores", {}) or {}
+        names = stores.get("coverageStore", [])
+        if not isinstance(names, list) or any(
+            not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+            for entry in names
+        ):
+            raise ValueError("GeoServer returned invalid coverage-store metadata")
+        return tuple(
+            entry["name"] for entry in names if entry["name"].startswith("model_")
+        )
+
+    async def remove(self, resource_name: str) -> None:
+        """Remove one raster's cache and publication while preserving its original file.
+
+        Args:
+            resource_name: Exact publication owned by the raster lifecycle.
+
+        Raises:
+            RasterPublicationError: If cleanup fails; a later reconciliation retries.
+        """
+        await self._tile_cache.remove(resource_name)
+        await self._request(
+            "remove expired raster publication",
+            "DELETE",
+            self._coverage_store_url(resource_name),
+            accepted_statuses=frozenset({200, 404}),
+            params={"recurse": "true", "purge": "none"},
         )
 
     async def _inspect_publication_state(

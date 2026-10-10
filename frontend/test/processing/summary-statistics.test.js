@@ -479,19 +479,19 @@ test("query results arrive independently, keep exact values and preserve focused
     h.controller.calculateSelection(); await h.tick(0);
     const [first, second] = [...h.server.keys()];
     await finishQuery(h, second, "123456789.123456789");
-    const card = h.view.cards.get(1), row = card.queryRows.get("rasters\nresistance");
+    const card = h.view.cards.get(1), row = card.queryRows.get('["rasters","resistance"]' );
     row.details.open = true; row.copy.focus(); row.copy.dispatchEvent(new Event("click")); await flush();
     assert.deepEqual(copied, ["123456789.123456789"]);
-    assert.equal(card.queryRows.get("rasters\nhfp").value.textContent, "—");
+    assert.equal(card.queryRows.get('["rasters","hfp"]' ).value.textContent, "—");
     assert.equal(row.copy.disabled, false); assert.equal(h.controller.queryCalculations.busy, true);
     context.candidates = [{ ...source, label: "Renamed" }, { ...resistance, label: "Renamed" }];
     h.controller.refreshSourceNames();
-    assert.equal(card.queryRows.get("rasters\nresistance"), row);
+    assert.equal(card.queryRows.get('["rasters","resistance"]' ), row);
     assert.equal(h.document.activeElement, row.copy); assert.equal(row.details.open, true);
     assert.equal(h.submits(), 2, "names do not resubmit");
     assert.match(visibleText(row.detailsBody), /Resistance/);
     await finishQuery(h, first, null, "no_valid_data");
-    assert.match(card.queryRows.get("rasters\nhfp").status.textContent, /No valid cells/);
+    assert.match(card.queryRows.get('["rasters","hfp"]' ).status.textContent, /No valid cells/);
     assert.equal(h.controller.queryCalculations.complete, true);
     h.controller.calculateSelection(); await h.tick(0); assert.equal(h.submits(), 2);
     h.controller.destroy();
@@ -520,8 +520,8 @@ test("visibility and area changes replace query jobs and cannot paint a late obs
     assert.ok(h.requests.some(([kind, id]) => kind === "cancel" && id === oldFirst));
     await finishQuery(h, oldFirst, "999"); await h.tick(0);
     const card = h.view.cards.get(1);
-    assert.equal(card.queryRows.has("rasters\nhfp"), false);
-    const row = card.queryRows.get("rasters\nresistance");
+    assert.equal(card.queryRows.has('["rasters","hfp"]' ), false);
+    const row = card.queryRows.get('["rasters","resistance"]' );
     assert.match(row.status.textContent, /Previous result/); assert.equal(row.copy.disabled, true);
     const next = [...h.server.keys()].find(id => id !== oldFirst && id !== oldSecond);
     await finishQuery(h, next, "30");
@@ -538,7 +538,7 @@ test("a failed raster does not block peers and Calculate retries only that raste
         ? Promise.reject(new ProcessingRequestError("Source unavailable", 404)) : submit(value);
     await h.open(); h.controller.calculateSelection(); await h.tick(0);
     await finishQuery(h, [...h.server.keys()][0]);
-    assert.match(h.view.cards.get(1).queryRows.get("rasters\nresistance").status.textContent, /Source unavailable/);
+    assert.match(h.view.cards.get(1).queryRows.get('["rasters","resistance"]' ).status.textContent, /Source unavailable/);
     rejected = false; h.controller.request(1, "manual"); await flush();
     assert.equal(h.submits(), 2); assert.equal(h.requests.filter(([kind, intent]) => kind === "submit" && intent.source.itemId === source.itemId).length, 1);
     await finishQuery(h, [...h.server.keys()][1]);
@@ -573,7 +573,7 @@ test("a changed pixel query rejects obsolete work and keeps captured previous fo
     h.controller.setPixelPoint({ longitude: 78, latitude: 23 }); await flush(); await h.tick(0);
     const submitted = h.requests.filter(([kind]) => kind === "submit");
     assert.equal(submitted.length, 4); assert.deepEqual(submitted[2][1].pixelPoint, { longitude: 78, latitude: 23 });
-    const row = h.view.cards.get(1).queryRows.get("rasters\nhfp");
+    const row = h.view.cards.get(1).queryRows.get('["rasters","hfp"]' );
     assert.match(row.status.textContent, /Previous result/); assert.equal(row.copy.disabled, true);
     h.controller.editStatistic(1, { expression: "mean(a)" }); await h.tick(); await h.tick(0);
     assert.match(visibleText(row.detailsBody), /pixelValue\(a\)/);
@@ -640,13 +640,13 @@ test("composition screens hidden and non-overlapping defaults using Catalog exte
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
     const start = main.indexOf("function enabledRasterSources(area)");
     const end = main.indexOf("/** Read committed raster inputs", start);
-    const raster = (id, bbox, visible = true) => ({ datasetKind: "raster", visible, label: id, item: { collection: "catalog", id, bbox } });
+    const raster = (id, bbox, visible = true) => ({ datasetKind: "raster", visible, label: id, capabilities: {calculations: true}, bounds: bbox, source: {collectionId: "catalog", itemId: id}, item: { collection: "catalog", id, bbox } });
     const layers = [raster("hidden-top", [77, 22, 78, 23], false), raster("outside", [0, 0, 1, 1]),
         raster("inside", [77, 22, 78, 23]), raster("3d", [77, 22, -5, 78, 23, 8]),
         raster("unknown"), raster("invalid", [1, 5, 2, 4]), raster("wrapped", [170, 20, -170, 25]),
-        { ...raster("vector", [77, 22, 78, 23]), datasetKind: "vector" }];
+        { ...raster("vector", [77, 22, 78, 23]), datasetKind: "vector", capabilities: {} }];
     const policy = new Function("mapLayerController", "clipSource", `${main.slice(start, end)}; return enabledRasterSources;`)(
-        { snapshots: () => layers }, (item, label) => ({ collectionId: item.collection, itemId: item.id, label }));
+        { snapshots: () => layers }, (item, label) => ({ ...item, label }));
     assert.deepEqual(policy(box(77)).map(source => source.itemId), ["inside", "3d", "unknown", "invalid"]);
     assert.ok(policy(box(175)).some(source => source.itemId === "wrapped"));
     assert.ok(policy(box(-179)).some(source => source.itemId === "wrapped"));
@@ -1033,7 +1033,7 @@ test("histogram action opens and runs all valid configured cards without Calcula
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8").replaceAll("\r\n", "\n");
     const callback = main.slice(main.indexOf("onCalculateRequested: ") + "onCalculateRequested: ".length,
         main.indexOf(",\n        onSamplingAreaChange:"));
-    const action = new Function("calculations", "clipSource", "mapLayerController", "getCatalogItemKey", `return (${callback});`)(
+    const action = new Function("calculations", "clipSource", "mapLayerController", "rasterSourceKey", `return (${callback});`)(
         h.controller, item => item, { getRecord: () => null }, item => item.itemId);
     h.controller.setActive(false);
     action(source, box(80)); action(source, box(80));

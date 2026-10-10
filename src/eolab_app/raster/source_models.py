@@ -66,6 +66,7 @@ class RasterSourceDescription(RasterSourceRequest):
     """Original raster metadata and current format support without private storage details."""
 
     version: str
+    bounds: tuple[float, float, float, float] | None = None
     width: int
     height: int
     bands: int

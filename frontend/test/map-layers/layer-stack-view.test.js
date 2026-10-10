@@ -357,7 +357,7 @@ test("active filter summaries remain actionable in map and dock slots", () => {
 const LAYERS = [
   {
     key: "temperature",
-    datasetKind: "raster",
+    datasetKind: "raster", capabilities: {calculations: true},
     item: { collection: "climate", id: "temperature-annual" },
     label: "Global surface temperature anomaly (1981–2010 baseline)",
     visible: true,
@@ -380,7 +380,7 @@ const LAYERS = [
   },
   {
     key: "vegetation",
-    datasetKind: "raster",
+    datasetKind: "raster", capabilities: {calculations: true},
     item: { collection: "vegetation", id: "health-index" },
     label: "Vegetation health index",
     visible: true,
@@ -403,7 +403,7 @@ const LAYERS = [
   },
   {
     key: "moisture",
-    datasetKind: "raster",
+    datasetKind: "raster", capabilities: {calculations: true},
     item: { collection: "soil", id: "moisture-anomaly" },
     label: "Soil moisture anomaly",
     visible: false,
@@ -548,7 +548,7 @@ test("raster and vector rows use the same compact action layout", () => {
 test("utility icons stay directly accessible with tooltips and layer-specific names", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
-  const raster = { ...LAYERS[0], datasetKind: "raster", legend: { kind: "fixed", label: "Raster" } };
+  const raster = { ...LAYERS[0], datasetKind: "raster", capabilities: {calculations: true}, legend: { kind: "fixed", label: "Raster" } };
   const vector = { ...LAYERS[1], datasetKind: "vector", canFilter: true };
   view.render([raster, vector], null);
   for (const row of doc.querySelector("#raster-layer-list").children) {
