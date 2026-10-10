@@ -1,0 +1,3 @@
+# Reviewed EcoShard source: BSD-3-Clause and Apache-2.0; see docs/downstream-model.md.
+# Archive identity is the full commit; the builder supplies its matching local version.
+ecoshard @ https://github.com/springinnovate/ecoshard/archive/f7e2adba2a4d41128aea941bb747470418d2dce9.tar.gz --hash=sha256:a2439488aec725acf3ff69a4ce491643212a604cf0e47c13b61077fb09cfdb40

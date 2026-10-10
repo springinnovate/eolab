@@ -7,9 +7,9 @@ different regional datasets without changing its recipe.
 
 The administrator validates each configuration explicitly and installs the
 resulting report. Model setup can discover these reports through the Processing
-API. Opening setup does not scan a DEM or rebuild a network. Downstream execution
-and its form are delivered separately; this feature does not add an executable
-downstream model to the library yet.
+API. Opening setup does not scan a DEM or rebuild a network. The
+[downstream model](downstream-model.md) executes through Processing; its browser
+input controls are delivered separately.
 
 ## Administrator setup
 
@@ -61,12 +61,18 @@ validation result changes, even if an administrator accidentally reuses a versio
 `idField` and `downstreamField` name distinct fields. IDs must all use the declared
 `integer` or `string` type; numeric strings are never coerced and fractional IDs
 are never rounded. `terminal.field` and `terminal.value` define an exact stop rule.
-For example, a HydroBASINS-style network can map `HYBAS_ID`, `NEXT_DOWN`, a terminal
-rule of `NEXT_DOWN` equal to integer `0`, and optional `terminalIdField: NEXT_SINK`.
+Alternatively, `terminal.equalsField` compares two source fields. For real
+HydroBASINS sinks, use `field: NEXT_SINK` and `equalsField: HYBAS_ID`; virtual
+`NEXT_DOWN` links at these sinks are deliberately not followed.
+For a network without virtual sink links, a terminal rule of `NEXT_DOWN` equal
+to integer `0` is also valid. If `terminalIdField` is supplied, it must describe
+the terminal reached under the chosen rule.
 The configured display name, including HUC06, implies no schema.
 
 Validation rejects missing fields, wrong/null ID types, duplicate IDs, dangling
-links, cycles and a terminal that still links to another feature. When
+links, cycles and a constant-value terminal that still links to another feature.
+A field-to-field terminal rule permits virtual downstream links at the declared
+real sink. When
 `terminalIdField` is supplied, every value must name the terminal actually reached
 by following links. A network may contain several independent complete drainages.
 
@@ -131,7 +137,7 @@ Registered models declaring a `prepared_hydrology` input capture its complete
 server-resolved report in `invocation.hydrology`, keyed by the recipe's input name.
 Run YAML validates that the captured report matches the submitted reference and
 retains that snapshot independently of later installed configuration changes.
-The later downstream operation must use and reauthorize these captured sources;
+The downstream operation uses and reauthorizes these captured sources;
 the current summary and clip operations do not declare hydrology inputs.
 
 The deterministic test dataset uses a 6-by-4 eastward-sloping DEM and three

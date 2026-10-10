@@ -65,6 +65,7 @@ from eolab_app.processing.model_yaml import (
 )
 from eolab_app.source_files import ResolvedSourceFile
 
+
 def require_operation(row: dict[str, Any], operation: str) -> None:
     """Keep idempotent retries on their original operation.
 
@@ -338,10 +339,25 @@ class ProcessingService:
         polygons = await self.read_polygon_area(owner, reference) if reference else None
         operation_plan = operation.queue(calculation, polygons)
         operation_plan = await self.capture_input_file(owner, source, operation_plan)
+        additional_signatures = {}
+        if operation.extra_sources:
+            for name, additional_source in operation.extra_sources(calculation).items():
+                if isinstance(additional_source, RunArtifactReference):
+                    raise ProcessingError(
+                        "invalid_model_inputs",
+                        "Additional model inputs require catalog rasters.",
+                    )
+                authorized_input = await self.model_authorizer.authorize(
+                    additional_source
+                )
+                additional_signatures[name] = tuple(
+                    authorized_input.source_signature.to_catalog()
+                )
         prepared = build_model_job_submission(
             operation_plan,
             invocation,
             signature,
+            additional_signatures,
         )
         row = await asyncio.to_thread(
             self.jobs.submit, owner, request.requestId, prepared, request_hash

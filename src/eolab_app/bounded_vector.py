@@ -289,9 +289,6 @@ def native_bbox_for_grid(
     crs = CRS.from_user_input(crs)
     if crs.to_epsg() not in {4326, 3857, 6933}:
         return None
-    with _source_collection(resolved) as source:
-        if source.crs.to_epsg() != 4326:
-            return None
     h, w = out_shape
     points = [affine * p for p in ((-1, -1), (w + 1, -1), (w + 1, h + 1), (-1, h + 1))]
     xs, ys = transform(crs, "EPSG:4326", [p[0] for p in points], [p[1] for p in points])
@@ -307,11 +304,39 @@ def native_bbox_for_grid(
         or max(p[1] for p in points) > max(world_y)
     ):
         return None
+    return native_bbox_for_wgs84_bounds(resolved, (min(xs), min(ys), max(xs), max(ys)))
+
+
+def native_bbox_for_wgs84_bounds(
+    resolved: ResolvedCatalogSelection,
+    bounds: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    """Use a geographic query envelope to restrict reads of a WGS84 vector source.
+
+    Other source projections retain an unrestricted candidate stream because
+    transforming only the envelope corners can omit curved boundary extrema.
+
+    Args:
+        resolved: Authorized original vector source.
+        bounds: West, south, east and north in WGS84 degrees.
+
+    Returns:
+        Envelope padded by one floating-point step, or None for noncanonical
+        bounds or a source whose coordinate system needs transformation.
+    """
+    west, south, east, north = bounds
+    if not (
+        -180 <= west < east <= 180 and -90 <= south < north <= 90 and east - west < 180
+    ):
+        return None
+    with _source_collection(resolved) as source:
+        if source.crs.to_epsg() != 4326:
+            return None
     return (
-        math.nextafter(min(xs), -math.inf),
-        math.nextafter(min(ys), -math.inf),
-        math.nextafter(max(xs), math.inf),
-        math.nextafter(max(ys), math.inf),
+        math.nextafter(west, -math.inf),
+        math.nextafter(south, -math.inf),
+        math.nextafter(east, math.inf),
+        math.nextafter(north, math.inf),
     )
 
 

@@ -51,7 +51,12 @@ def test_processing_has_no_histogram_renderer_or_aoi_implementation_dependency()
 
 def test_hydrology_validation_uses_original_sources_without_sibling_services() -> None:
     """Hydrology contracts and native validation stay independent of renderer and catalog storage."""
-    for name in ("prepared_hydrology.py", "hydrology_validation.py"):
+    for name in (
+        "prepared_hydrology.py",
+        "hydrology_validation.py",
+        "downstream_calculation.py",
+        "downstream_operation.py",
+    ):
         dependencies = imports(Path("src/eolab_app/processing") / name)
         assert not {
             module
@@ -71,6 +76,11 @@ def test_hydrology_validation_uses_original_sources_without_sibling_services() -
     reader = imports(Path("src/eolab_app/bounded_vector.py"))
     assert not {
         module for module in reader if module.startswith("eolab_app.processing")
+    }
+    assert not {
+        module
+        for module in imports(Path("src/eolab_app/attribute_filter.py"))
+        if module.startswith(("eolab_app.processing", "eolab_app.vector"))
     }
 
 

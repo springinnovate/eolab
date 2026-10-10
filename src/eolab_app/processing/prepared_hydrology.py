@@ -46,14 +46,57 @@ class HydrologyWatersheds(CatalogVectorRequest):
 
 
 class NetworkTermination(HydrologySchema):
-    """Identify a terminal watershed by an exact field/value match.
+    """Identify a terminal watershed by matching a constant or another field.
 
     For HydroBASINS this is typically NEXT_DOWN equal to integer zero. String,
-    integer and Boolean terminal flags are supported without coercion.
+    integer and Boolean terminal flags are supported without coercion. Setting
+    ``equalsField: HYBAS_ID`` with ``field: NEXT_SINK`` instead stops at the next
+    real sink, including endorheic sinks with virtual downstream links.
     """
 
     field: FieldName
-    value: NetworkId | Annotated[bool, Field(strict=True)]
+    value: NetworkId | Annotated[bool, Field(strict=True)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    equalsField: FieldName | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def check_comparison(self) -> Self:
+        """Require exactly one comparison and reject self-comparison.
+
+        Returns:
+            This terminal rule with an unambiguous comparison.
+
+        Raises:
+            ValueError: If neither or both comparisons are supplied, or fields match.
+        """
+        if (self.value is None) == (self.equalsField is None):
+            raise ValueError("Choose a terminal value or equalsField")
+        if self.equalsField == self.field:
+            raise ValueError("Terminal comparison requires two different fields")
+        return self
+
+    def matches(self, properties: dict[str, object]) -> bool:
+        """Test a watershed's fields against the configured stopping rule.
+
+        Args:
+            properties: Original source properties containing the required fields.
+
+        Returns:
+            True when both values have the same type and value.
+
+        Raises:
+            ValueError: If comparison values are missing or have different types.
+        """
+        actual = properties[self.field]
+        expected = properties[self.equalsField] if self.equalsField else self.value
+        if actual is None or type(actual) is not type(expected):
+            raise ValueError(
+                "Terminal comparison values must have the same non-null type"
+            )
+        return actual == expected
 
 
 class WatershedTopology(HydrologySchema):

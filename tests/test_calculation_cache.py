@@ -363,6 +363,8 @@ def test_worker_reuses_results_after_authorization(
     from eolab_app.processing.models import ProcessingError
     from eolab_app.processing.job_preparation import prepare_aggregate_job
     from eolab_app.processing.worker import ProcessingWorker
+    from eolab_app.raster.models import AuthorizedRaster
+    from eolab_app.raster.source_identity import RasterSourceIdentity
     import eolab_app.processing.worker as worker_module
 
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
@@ -370,7 +372,10 @@ def test_worker_reuses_results_after_authorization(
     limits = RasterAggregateLimits(free_space_floor=0)
     authorizer = SimpleNamespace(
         authorize=AsyncMock(
-            return_value=SimpleNamespace(source_path=tmp_path / "source.tif")
+            return_value=AuthorizedRaster(
+                tmp_path / "source.tif",
+                RasterSourceIdentity.read(tmp_path / "source.tif"),
+            )
         )
     )
     store = Mock()

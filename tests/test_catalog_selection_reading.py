@@ -254,6 +254,29 @@ def test_dateline_candidates_fall_back_without_losing_polygons(
     assert native_bbox_for_grid(resolved, crs, affine, (2, 2)) is None
 
 
+def test_geographic_query_uses_its_bounds_without_an_artificial_grid(
+    tmp_path: Path,
+) -> None:
+    """A vector query retains boundary features with only floating-point padding.
+
+    Args:
+        tmp_path: Original WGS84 vector source.
+    """
+    from eolab_app.bounded_vector import native_bbox_for_wgs84_bounds
+
+    resolved = write_selection(tmp_path / "bounds.gpkg", [mapping(box(1, 2, 3, 4))])
+    bbox = native_bbox_for_wgs84_bounds(resolved, (1, 2, 3, 4))
+    assert bbox == (
+        math.nextafter(1, -math.inf),
+        math.nextafter(2, -math.inf),
+        math.nextafter(3, math.inf),
+        math.nextafter(4, math.inf),
+    )
+    with polygon_features(resolved, bbox) as features:
+        assert len(list(features)) == 1
+    assert native_bbox_for_wgs84_bounds(resolved, (-181, 2, -179, 4)) is None
+
+
 def test_cancelled_selection_stops_the_original_source_stream(tmp_path: Path) -> None:
     """A disconnected analysis cannot continue scanning selected source features.
 
