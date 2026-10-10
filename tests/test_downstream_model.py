@@ -509,7 +509,10 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
         )
         try:
             async with asyncio.timeout(45):
-                while artifacts.progress(attempt).get("phase") != "routing_downstream":
+                while (
+                    artifacts.progress(attempt).get("phase") != "routing_downstream"
+                    or not (directory / "flow.tif").exists()
+                ):
                     assert not task.done(), task.result() if task.done() else None
                     await asyncio.sleep(0.01)
             pids = {child.pid for child in active_children()}

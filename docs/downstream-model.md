@@ -87,7 +87,9 @@ eastward slope, three connected basins and a first-column seed mask. With the
 pinned EcoShard revision, Python 3.11.14 and GDAL 3.12.1 on Windows, the four-million-
 cell case measured 0.094 seconds of preparation, 6.297 seconds of execution
 including process startup, 568,475,648 bytes peak resident memory and 3,706,291
-bytes peak scratch storage. No descendant processes were observed. Its conservative
+bytes peak scratch storage. No descendant processes were observed in that sample;
+repeat Windows measurements identified a brief `cmd /c ver` system-version query
+during startup, rather than a nested routing worker. Its conservative
 disk reservation was 1,158,217,728 bytes. Sampling uses 20 ms intervals and the
 platform's peak working-set counter where available.
 

@@ -64,8 +64,9 @@ are never rounded. `terminal.field` and `terminal.value` define an exact stop ru
 Alternatively, `terminal.equalsField` compares two source fields. For real
 HydroBASINS sinks, use `field: NEXT_SINK` and `equalsField: HYBAS_ID`; virtual
 `NEXT_DOWN` links at these sinks are deliberately not followed.
-For example, a HydroBASINS-style network can map `HYBAS_ID`, `NEXT_DOWN`, a terminal
-rule of `NEXT_DOWN` equal to integer `0`, and optional `terminalIdField: NEXT_SINK`.
+For a network without virtual sink links, a terminal rule of `NEXT_DOWN` equal
+to integer `0` is also valid. If `terminalIdField` is supplied, it must describe
+the terminal reached under the chosen rule.
 The configured display name, including HUC06, implies no schema.
 
 Validation rejects missing fields, wrong/null ID types, duplicate IDs, dangling
