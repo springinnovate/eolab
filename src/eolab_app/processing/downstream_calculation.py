@@ -67,6 +67,12 @@ from eolab_app.raster.source_contract import (
     source_block_indexes_for_window,
 )
 
+# Planning allowances, not exact array sizes: the measured four-million-cell
+# reference peaks near 542 MiB. This estimate reserves about 988 MiB, including
+# interpreter/native-library overhead and overlapping routing/distance arrays.
+ESTIMATED_MEMORY_BYTES_PER_CELL = 192
+NATIVE_PROCESS_BASE_MEMORY_BYTES = 256 * 1024**2
+
 
 @dataclass(frozen=True)
 class DownstreamSources:
@@ -363,7 +369,11 @@ def plan_native_grid(
     width, height = int(window.width), int(window.height)
     cells = width * height
     # Terrain, routing scratch, distances, transformed centers and validity arrays.
-    if cells > limit or cells * 192 + 256 * 1024**2 > limits.process_memory_bytes:
+    if (
+        cells > limit
+        or cells * ESTIMATED_MEMORY_BYTES_PER_CELL + NATIVE_PROCESS_BASE_MEMORY_BYTES
+        > limits.process_memory_bytes
+    ):
         raise ProcessingError(
             "model_too_large",
             f"This downstream run needs {cells:,} native cells; choose a smaller starting area or prepared watershed network.",
