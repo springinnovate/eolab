@@ -190,14 +190,14 @@ def build_model_calculation_request(
 def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
-    signature: tuple[int, int, int, int],
+    signature: tuple[int, int, int, int] | None,
 ) -> PreparedJobPlan:
     """Create a model job submission and save its recipe, inputs and software identity.
 
     Args:
         prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
-        signature: The raster's catalog source signature at submission.
+        signature: Catalog source identity, or None for a retained published file.
 
     Returns:
         A model job ready to queue, with the information needed for later Run YAML
@@ -239,7 +239,19 @@ def build_model_job_submission(
                 definition.steps[0]
                 .inputs["raster"]
                 .input: {
-                    "sourceSignature": compute_document_checksum(signature),
+                    "sourceSignature": compute_document_checksum(
+                        signature
+                        if signature is not None
+                        else {"sha256": prepared.input_files[0].sha256}
+                    ),
+                    **(
+                        {
+                            "sha256": prepared.input_files[0].sha256,
+                            "bytes": prepared.input_files[0].size,
+                        }
+                        if prepared.input_files
+                        else {}
+                    ),
                     "band": 1,
                 }
             },

@@ -48,10 +48,11 @@ class ModelInput(ModelSchema):
 
     The type determines which inputs the model accepts, and the label names the
     input in model setup. A recipe describes the input here; each run supplies
-    the actual catalog dataset or area.
+    the actual catalog dataset, published raster result or area.
     """
 
     type: Literal[
+        "raster",
         "catalog_raster",
         "summary_area",
         "clip_area",
@@ -332,7 +333,11 @@ def validate_operation(definition: ModelDefinition) -> None:
         ]
         valid = (
             {
-                name: definition.inputs[item.input].type
+                name: (
+                    "raster"
+                    if definition.inputs[item.input].type == "catalog_raster"
+                    else definition.inputs[item.input].type
+                )
                 for name, item in step.inputs.items()
             }
             == dict(contract.inputs)

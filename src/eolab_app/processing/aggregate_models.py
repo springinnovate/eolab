@@ -24,7 +24,8 @@ from eolab_app.processing.models import (
     ProcessingError,
 )
 from eolab_app.processing.raster_expression import FUNCTIONS, compile_expression, walk
-from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
+from eolab_app.raster.models import Wgs84Bounds
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 
 from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 
@@ -96,11 +97,11 @@ class PixelPoint(BaseModel):
 
 
 class AggregatePlanRequest(BaseModel):
-    """Exactly one catalog binding, bounded expressions, and an explicit area."""
+    """One catalog or private raster, bounded expressions, and an explicit area."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     sources: Annotated[
-        dict[Alias, CatalogRasterRequest], Field(min_length=1, max_length=1)
+        dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
     ]
     calculations: Annotated[
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
@@ -420,13 +421,14 @@ class AggregateSpec(BaseModel):
     by plan_aggregate(), saves it on the job, then passes it to
     calculate_raster_statistics_for_area().
 
-    sources maps the formula alias (such as a) to a catalog raster.
+    sources maps the formula alias (such as a) to a catalog or private raster.
     calculations contains the named formulas. area describes the map box,
     uploaded polygons, filtered vector layer or whole-raster selection.
     pixelPoint supplies the independent clicked location for pixelValue formulas.
     grid contains the selected window's dimensions, pixel alignment and planned
     read sizes. It contains metadata, not raster pixel values.
     sourceSignature is source metadata retained in the stored job contract.
+    sourceChecksum records the published bytes when a private run file is used.
     cachedRows holds already-computed values when planning found a cache hit;
     that job writes result files without recalculating pixels.
     """
@@ -434,9 +436,12 @@ class AggregateSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["raster.aggregate.v1"] = OPERATION_VERSION
     sources: Annotated[
-        dict[Alias, CatalogRasterRequest], Field(min_length=1, max_length=1)
+        dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
     ]
     sourceSignature: tuple[int, int, int, int]
+    sourceChecksum: str | None = Field(
+        default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None
+    )
     calculations: tuple[NamedCalculation, ...]
     pixelPoint: PixelPoint | None = None
     area: AggregateArea
@@ -465,14 +470,17 @@ class AggregateSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_cached_result_formulas(self) -> "AggregateSpec":
-        """Validate persisted formula context and any retained values.
+        """Validate the source identity, formula context and any retained values.
 
         Returns:
             This plan with matching cached rows, or an ordinary calculation plan.
 
         Raises:
-            ValueError: If a pixel location is missing or cached rows differ.
+            ValueError: If source identity is incomplete, a pixel location is missing or cached rows differ.
         """
+        private = isinstance(next(iter(self.sources.values())), RunArtifactReference)
+        if private != (self.sourceChecksum is not None):
+            raise ValueError("Private raster plans require their published checksum")
         if self.pixelPoint is None and any(
             node.op == "pixelValue"
             for item in self.calculations
@@ -513,7 +521,7 @@ class AggregateJobResponse(JobResponse):
     """Calculation-specific details layered on the existing job lifecycle."""
 
     operation: Literal["raster.aggregate.v1"]
-    sources: dict[str, CatalogRasterRequest] | None
+    sources: dict[str, RasterSourceReference] | None
     calculations: tuple[NamedCalculation, ...] | None
     area: dict[str, object] | None
     grid: AggregateGrid | None

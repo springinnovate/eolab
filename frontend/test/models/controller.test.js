@@ -9,7 +9,7 @@ import { FakeRasterControlDocument } from "../../test-support/raster/fake-contro
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
 import { captureModelSubmission, createModelDraft, modelViewportArea } from "../../src/models/inputs.js";
-import { model, raster, area, invocation, selection, job, clipModel } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, selection, job, clipModel, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
@@ -40,6 +40,40 @@ function fixture(overrides = {}, viewOverride = null) {
         onClose: () => controller.setActive(false), newId: () => String(++sequence).padStart(32, "0")});
     return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers};
 }
+
+test("published results are explicit model choices without previews or map layers", async () => {
+    const artifacts = fileManifest(), parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const h = fixture({listModelRuns: async () => ({jobs: [parent], nextCursor: null})});
+    h.context.rasters = [];
+    await h.controller.loadRuns();
+    const recipe = {...model, inputs: {habitat: {type: "raster", label: "Habitat"}, area: model.inputs.area}};
+    h.controller.chooseModel(recipe);
+    const draft = h.controller.state.draft;
+    assert.equal(draft.raster, null);
+    assert.equal(draft.sources.length, 2);
+    assert.ok(draft.sources.every(source => source.kind === "runArtifact"));
+    h.controller.editDraft({raster: draft.sources[1]});
+    const request = captureModelSubmission(draft, "request-private-result");
+    assert.deepEqual(request.inputs.habitat, {kind: "runArtifact", jobId: parent.jobId, artifactId: artifacts.files[1].artifactId});
+    assert.deepEqual(request.inputs.area, area);
+    h.controller.rememberRun({...parent, status: "expired", artifacts: {...artifacts, availability: "unavailable", files: []}});
+    h.controller.refreshMapLayers();
+    assert.equal(draft.raster.available, false);
+    assert.match(draft.sourceReason, /no longer available/);
+    assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
+});
+
+test("legacy catalog recipes exclude results and late history loads preserve the chosen input", async () => {
+    const artifacts = fileManifest(), parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const h = fixture({listModelRuns: async () => ({jobs: [parent], nextCursor: null})});
+    h.controller.chooseModel(model); await h.controller.loadRuns();
+    assert.equal(h.controller.state.draft.sources.length, 1);
+    h.controller.chooseModel({...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}});
+    const draft = h.controller.state.draft;
+    h.controller.editDraft({raster: draft.sources[1]});
+    await h.controller.loadRuns();
+    assert.equal(draft.raster.artifactId, artifacts.files[0].artifactId);
+});
 
 test("multiple map rasters require a choice; catalog-only inputs cannot become suggestions", () => {
     const hidden = {...raster, itemId: "hidden", visible: false};

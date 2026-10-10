@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 SUITES = (
+    "test_processing_private_inputs_postgres.py",
     "test_model_artifact_previews_postgres.py",
     "test_model_artifacts_postgres.py",
     "test_model_runs_postgres.py",

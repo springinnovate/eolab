@@ -226,3 +226,29 @@ INSERT INTO processing.schema_version VALUES (14) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (15) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (16) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (17) ON CONFLICT DO NOTHING;
+
+-- Accepted inputs outlive ordinary parent expiry and deletion until the child
+-- stops. Parent reservations account for their bytes exactly once, even when
+-- several children retain the same files. These are not download leases.
+CREATE TABLE IF NOT EXISTS processing.input_files (
+    job_id text NOT NULL REFERENCES processing.jobs(id) ON DELETE CASCADE,
+    parent_id text NOT NULL REFERENCES processing.jobs(id),
+    run_id text NOT NULL,
+    artifact_id text NOT NULL,
+    sha256 text NOT NULL CHECK (sha256 ~ '^[a-f0-9]{64}$'),
+    bytes bigint NOT NULL CHECK (bytes > 0),
+    PRIMARY KEY(job_id,run_id,artifact_id),
+    CHECK (job_id <> parent_id)
+);
+CREATE INDEX IF NOT EXISTS input_files_parent ON processing.input_files(parent_id);
+CREATE OR REPLACE FUNCTION processing.release_finished_inputs() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.status NOT IN ('queued','running','cancelling') THEN
+        DELETE FROM processing.input_files WHERE job_id=NEW.id;
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS processing_release_inputs ON processing.jobs;
+CREATE TRIGGER processing_release_inputs AFTER UPDATE OF status ON processing.jobs
+FOR EACH ROW EXECUTE FUNCTION processing.release_finished_inputs();
+INSERT INTO processing.schema_version VALUES (18) ON CONFLICT DO NOTHING;

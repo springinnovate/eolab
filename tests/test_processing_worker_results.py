@@ -163,7 +163,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         )
     )
     registry = ModelRegistry.load_installed()
-    definition = registry.get(model_id, "1.0.0")
+    definition = registry.get(model_id, "1.1.0")
     if custom:
         definition = (
             multiple_output_recipe(monkeypatch)
@@ -179,7 +179,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     request = ModelRunRequest(
         model={
             "id": definition.id,
-            "version": "1.0.0",
+            "version": "1.1.0",
             "definitionSha256": definition.digest,
         },
         requestId="a" * 32,

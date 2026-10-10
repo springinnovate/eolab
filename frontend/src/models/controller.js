@@ -1,7 +1,7 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 
@@ -104,7 +104,7 @@ export class ModelsController {
     chooseModel(model) {
         this.closeVectorFilter();
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
-        this.state.draft = createModelDraft(model, this.getContext(), this.newId());
+        this.state.draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.area?.kind === "catalogSelection") {
@@ -123,6 +123,9 @@ export class ModelsController {
     editDraft(change) {
         if (!this.state.draft || this.state.submitting) return;
         Object.assign(this.state.draft, change);
+        this.refreshMapLayers();
+        for (const job of this.runSnapshots.values()) this.rememberRun(job);
+        this.jobs.schedule();
         this.state.error = ""; this.render();
     }
 
@@ -272,20 +275,35 @@ export class ModelsController {
         } finally { draft.filterOpening = false; this.render(); }
     }
 
-    /** Refresh choices from Map layers without changing accepted runs or chosen filters.
+    /** Combine map inputs with this session's published raster results.
+     * @param {Object} model Recipe whose input contract controls eligible choices.
+     * @return {Object} Existing map context with available completed-run inputs.
+     */
+    inputContext(model) {
+        const context = this.getContext();
+        return {...context, rasters: [...(context.rasters ?? []), ...(Object.values(model.inputs).some(input => input.type === "raster") ? modelResultSources([...this.runSnapshots.values()]) : [])]};
+    }
+
+    /** Refresh map and result choices without changing accepted runs or chosen filters.
      * Removed inputs must be added to the map again or replaced before a new run.
      * @return {void}
      */
     refreshMapLayers() {
         const draft = this.state.draft;
         if (!draft || this.destroyed || this.state.submitting || this.state.pending) return;
-        const context = this.getContext();
+        const context = this.inputContext(draft.model);
         draft.sources = structuredClone(context.rasters ?? []);
-        draft.raster = draft.sources.find(source => draft.raster && modelSourceKey(source) === modelSourceKey(draft.raster)) ?? null;
+        const selected = draft.raster;
+        draft.raster = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
+        if (!draft.raster && selected?.kind === "runArtifact") {
+            draft.raster = {...selected, available: false}; draft.sources.push(draft.raster);
+        }
         const previous = new Map(draft.vectors.map(source => [modelSourceKey(source), source]));
         draft.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
             filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
         draft.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
+        if (Object.values(draft.model.inputs).some(input => input.type === "raster")) draft.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
+        if (draft.raster?.available === false) draft.sourceReason = "This raster result is no longer available. Choose another input.";
         if (draft.vectorKey && !draft.vectors.some(source => modelSourceKey(source) === draft.vectorKey)) {
             this.closeVectorFilter();
             this.selectionAbort?.abort(); this.selectionRevision++;
@@ -335,7 +353,7 @@ export class ModelsController {
     rememberRun(job) {
         if (job.operation !== "model.run.v1") return;
         this.runSnapshots.set(job.jobId, job);
-        if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && this.state.page === "run" && this.state.selectedRun === job.jobId) {
+        if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" && this.state.draft?.raster?.jobId === job.jobId)) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
         this.state.runs = [...this.runSnapshots.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
@@ -346,6 +364,7 @@ export class ModelsController {
      */
     observeJobs() {
         for (const job of this.jobs.jobs) if (job.operation === "model.run.v1") this.rememberRun(job);
+        this.refreshMapLayers();
         this.state.observationError = this.jobs.error; this.render();
     }
 
@@ -366,7 +385,7 @@ export class ModelsController {
             }
             this.state.nextCursor = page.nextCursor; this.jobs.schedule();
         } catch (error) { this.state.error = `Model runs unavailable: ${error.message}`; }
-        finally { this.state.historyLoading = false; this.render(); }
+        finally { this.state.historyLoading = false; this.refreshMapLayers(); this.render(); }
     }
 
     /** Open one run and read its saved setup, discarding late navigation replies.
@@ -414,14 +433,14 @@ export class ModelsController {
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This exact model version is no longer installed. Its YAML remains available until metadata expires."; this.render(); return; }
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
-        const draft = createModelDraft(model, this.getContext(), this.newId());
+        const draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = saved.label; draft.parameters = structuredClone(saved.parameters);
         for (const [name, input] of Object.entries(model.inputs)) {
-            if (input.type === "catalog_raster") {
+            if (["raster", "catalog_raster"].includes(input.type)) {
                 const value = saved.inputs[name];
                 draft.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ?? {...value, label: value.itemId};
-                if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = null;
+                if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = value.kind === "runArtifact" ? {...value, label: "Raster from original run", available: false} : null;
                 draft.sourceReason = "Copied from the original run; choose another raster to change it.";
             } else if (["summary_area", "clip_area"].includes(input.type)) {
                 draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
@@ -441,6 +460,7 @@ export class ModelsController {
                 }
             }
         }
+        this.refreshMapLayers();
         this.render(); this.view.focusHeading();
     }
 

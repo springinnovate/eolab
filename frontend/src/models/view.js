@@ -96,14 +96,22 @@ export class ModelsView {
 
     /** Replace choice options only when their labels or values change.
      * @param {HTMLSelectElement} select Native select.
-     * @param {{value:string,label:string}[]} options Choices.
+     * @param {{value:string,label:string,group?:string,disabled?:boolean}[]} options Choices, optionally grouped by source.
      * @param {string} selected Selected value.
      * @return {void}
      */
     options(select, options, selected) {
         const signature = JSON.stringify(options);
         if (select.optionsSignature !== signature) {
-            select.replaceChildren(...options.map(choice => { const node = this.element("option", choice.label); node.value = choice.value; return node; }));
+            const children = [], groups = new Map();
+            for (const choice of options) {
+                const node = this.element("option", choice.label); node.value = choice.value; node.disabled = Boolean(choice.disabled);
+                if (choice.group) {
+                    if (!groups.has(choice.group)) { const group = this.element("optgroup"); group.label = choice.group; groups.set(choice.group, group); children.push(group); }
+                    groups.get(choice.group).append(node);
+                } else children.push(node);
+            }
+            select.replaceChildren(...children);
             select.optionsSignature = signature;
         }
         select.value = selected;
@@ -124,7 +132,11 @@ export class ModelsView {
         source.addEventListener("change", () => this.handlers.onEdit({raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
             sourceReason: "Choose a raster from Map layers."}));
         const reason = this.element("p", "", "models-help"); reason.id = "models-source-reason"; source.setAttribute("aria-describedby", reason.id);
-        fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => input.type === "catalog_raster")?.label ?? "Raster", source), reason);
+        fields.append(this.field("models-raster", Object.values(draft.model.inputs).find(input => ["raster", "catalog_raster"].includes(input.type))?.label ?? "Raster", source), reason);
+        const resultActions = this.element("div", "", "models-actions");
+        const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns);
+        const olderResults = this.button("Load older results", this.handlers.onMore);
+        resultActions.append(refreshResults, olderResults); fields.append(resultActions);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
         fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type))?.label ?? "Analysis area", areaMode));
@@ -165,7 +177,7 @@ export class ModelsView {
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus};
+            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus, resultActions, refreshResults, olderResults};
     }
 
     /** Provide an inline location for the independently owned vector filter editor.
@@ -197,9 +209,15 @@ export class ModelsView {
         const s = this.setup;
         s.fields.disabled = state.submitting;
         if (this.document.activeElement !== s.label) s.label.value = draft.label;
+        const acceptsResults = Object.values(draft.model.inputs).some(input => input.type === "raster");
         this.options(s.source, [{value: "", label: "Choose a raster…"}, ...draft.sources.map(source => ({value: modelSourceKey(source),
-            label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
+            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map layers" : undefined,
+            disabled: source.available === false,
+            label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
         s.reason.textContent = draft.sourceReason;
+        s.resultActions.hidden = !acceptsResults;
+        s.refreshResults.disabled = Boolean(state.historyLoading); s.refreshResults.textContent = state.historyLoading ? "Loading results…" : "Refresh results";
+        s.olderResults.hidden = !state.nextCursor; s.olderResults.disabled = Boolean(state.historyLoading);
         const areaChoices = [{value: "viewport", label: "Visible map area"},
             {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
         if (modelSupportsArea(draft.model, {kind: "wholeRaster"})) areaChoices.unshift({value: "whole", label: "Entire raster"});
@@ -234,8 +252,8 @@ export class ModelsView {
         s.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
             `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(s.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["catalog_raster", "summary_area", "clip_area"].includes(input.type));
-        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !draft.area || !draft.raster || !supported;
+        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area"].includes(input.type));
+        s.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !draft.area || !draft.raster || draft.raster.available === false || !supported;
         s.run.textContent = state.submitting ? "Submitting…" : "Run model";
         s.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         s.details.run.hidden = true;
@@ -295,7 +313,8 @@ export class ModelsView {
             const list = this.element("dl");
             for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
                 const value = invocation.inputs[name];
-                list.append(this.element("dt", input.label), this.element("dd", input.type === "catalog_raster" ? `${value.collectionId} / ${value.itemId}` : describeModelArea(value)));
+                const sourceLabel = value.kind === "runArtifact" ? `${state.runs.find(run => run.jobId === value.jobId)?.label ?? "Previous run"} · Raster result` : `${value.collectionId} / ${value.itemId}`;
+                list.append(this.element("dt", input.label), this.element("dd", ["raster", "catalog_raster"].includes(input.type) ? sourceLabel : describeModelArea(value)));
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) list.append(this.element("dt", parameter.label), this.element("dd", String(invocation.parameters[name])));
             r.inputsBody.replaceChildren(list);
