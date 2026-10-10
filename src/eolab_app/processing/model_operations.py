@@ -205,7 +205,7 @@ OPERATIONS = MappingProxyType(
                 reusable=downstream.skip_downstream_cache_values,
                 primary_input="values",
                 extra_sources=downstream.get_additional_sources,
-                execution_inputs=downstream.prepare_downstream_execution,
+                execution_inputs=downstream.resolve_downstream_execution_inputs,
                 check_execution=downstream.check_downstream_execution,
             ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](

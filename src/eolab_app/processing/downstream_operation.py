@@ -209,10 +209,16 @@ async def prepare_downstream(
     )
 
 
-async def prepare_downstream_execution(
+async def resolve_downstream_execution_inputs(
     context: OperationContext, spec: DownstreamPlan, authorized: AuthorizedRaster
 ) -> tuple[DownstreamSources, DownstreamPlan]:
-    """Resolve current native sources before executing the admitted downstream plan.
+    """Resolve an accepted downstream plan into the original sources the worker will read.
+
+    A queued plan contains catalog/owned-output identities, never live file
+    handles. This adapter resolves its vector inputs and binds its native
+    arguments at execution. The checksum comparison concerns a retained values
+    raster from a previous model run, not routine edits to the prepared DEM.
+    That persisted-file identity must agree with the source verified by the worker.
 
     Args:
         context: Worker capabilities and additional authorized rasters.
