@@ -39,6 +39,7 @@ from eolab_app.raster.statistics import (
     strict_raster_value_range,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.raster.source_access import RasterSourceAccess
 from catalog_selection_support import write_selection
 from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
 from eolab_app.sampling_area import (
@@ -113,6 +114,11 @@ class _PixelDataset:
     crs = "EPSG:3857"
     width = 10
     height = 10
+    count = 1
+    dtypes = ("float32",)
+    block_shapes = ((10, 10),)
+    files = ("raster.tif",)
+    transform = Affine.identity()
 
     def __init__(self) -> None:
         """Create an unread controlled pixel source."""
@@ -781,7 +787,9 @@ def test_pixel_reader_requests_only_band_one_and_its_source_cell(
 ) -> None:
     """Keep pixel probing independent and bounded to one source cell."""
     dataset = _PixelDataset()
-    monkeypatch.setattr("eolab_app.raster.pixel.rasterio.open", lambda _: dataset)
+    monkeypatch.setattr(
+        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+    )
     monkeypatch.setattr("eolab_app.raster.pixel.transform", lambda *_: ([10], [20]))
 
     pixel = read_raster_pixel(Path("raster.tif"), -123, 48)
@@ -797,12 +805,38 @@ def test_pixel_reader_requests_only_band_one_and_its_source_cell(
     assert dataset.read_arguments == (1, Window(3, 2, 1, 1), True)
 
 
+@pytest.mark.parametrize("rejection", ["sidecar", "block"])
+def test_pixel_reader_rejects_unsigned_dependencies_and_oversized_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    rejection: str,
+) -> None:
+    """Reject unsafe original sources before any native pixel allocation.
+
+    Args:
+        monkeypatch: Supply only the external Rasterio boundary.
+        rejection: Unsigned companion file or excessive decoded block size.
+    """
+    dataset = _PixelDataset()
+    if rejection == "sidecar":
+        dataset.files = ("raster.tif", "raster.tif.msk")
+    else:
+        dataset.block_shapes = ((10000, 10000),)
+    monkeypatch.setattr(
+        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+    )
+    with pytest.raises(ValueError, match="sidecars|memory limit"):
+        read_raster_pixel(Path("raster.tif"), 0, 0)
+    assert dataset.read_arguments is None
+
+
 def test_pixel_reader_treats_an_unprojectable_position_as_outside(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Do not pass non-finite projected coordinates to Rasterio indexing."""
     dataset = _PixelDataset()
-    monkeypatch.setattr("eolab_app.raster.pixel.rasterio.open", lambda _: dataset)
+    monkeypatch.setattr(
+        "eolab_app.raster.pixel.rasterio.open", lambda _, **kwargs: dataset
+    )
     monkeypatch.setattr(
         "eolab_app.raster.pixel.transform",
         lambda *_: ([float("inf")], [float("inf")]),
@@ -1482,7 +1516,7 @@ def test_statistics_service_returns_stable_selection_conflicts(
         raise read_error
 
     service = RasterStatisticsService(
-        _SourceAuthorizer(),
+        RasterSourceAccess(_SourceAuthorizer()),
         1,
         32,
         statistics_reader=reader,  # type: ignore[arg-type]
@@ -1561,7 +1595,7 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
             None.
         """
         authorizer = _SourceAuthorizer()
-        service = RasterPixelService(authorizer, read_concurrency=2)
+        service = RasterPixelService(RasterSourceAccess(authorizer), read_concurrency=2)
         requests = [
             CatalogPixelRequest.model_validate({
                 "collectionId": "eolab-mounted-geotiffs",
@@ -1630,7 +1664,9 @@ def test_cancelled_pixel_request_keeps_its_slot_until_reader_finishes(
         Returns:
             None.
         """
-        service = RasterPixelService(_SourceAuthorizer(), read_concurrency=1)
+        service = RasterPixelService(
+            RasterSourceAccess(_SourceAuthorizer()), read_concurrency=1
+        )
         request = CatalogPixelRequest.model_validate({
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": ITEM_ID,
@@ -1692,7 +1728,7 @@ def test_statistics_service_coalesces_caches_and_keys_normalized_areas(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(authorizer, 1, 32)
+    service = RasterStatisticsService(RasterSourceAccess(authorizer), 1, 32)
     whole_request = CatalogRasterStatisticsRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
@@ -1774,7 +1810,7 @@ def test_cancelled_coalesced_waiter_preserves_shared_work_and_cache(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(_SourceAuthorizer(), 1, 32)
+    service = RasterStatisticsService(RasterSourceAccess(_SourceAuthorizer()), 1, 32)
     request = CatalogRasterStatisticsRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
@@ -1847,7 +1883,7 @@ def test_statistics_service_invalidates_cache_by_source_signature(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(authorizer, 1, 32)
+    service = RasterStatisticsService(RasterSourceAccess(authorizer), 1, 32)
     request = CatalogRasterStatisticsRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
@@ -1906,7 +1942,7 @@ def test_statistics_service_keys_cache_by_fixed_policy_parameters(
         return _statistics_result(float(read_count), area)
 
     service = RasterStatisticsService(
-        _SourceAuthorizer(),
+        RasterSourceAccess(_SourceAuthorizer()),
         1,
         32,
         statistics_reader=statistics_reader,  # type: ignore[arg-type]
@@ -1977,7 +2013,7 @@ def test_final_waiter_cancelled_during_postcheck_is_not_cached() -> None:
         return _statistics_result(float(read_count), area)
 
     service = BlockingPostcheckService(
-        _SourceAuthorizer(),
+        RasterSourceAccess(_SourceAuthorizer()),
         1,
         32,
         statistics_reader=statistics_reader,  # type: ignore[arg-type]
@@ -2050,7 +2086,7 @@ def test_statistics_service_rechecks_catalog_selection(tmp_path: Path) -> None:
         return _statistics_result(float(len(calls)), area)
 
     service = RasterStatisticsService(
-        _SourceAuthorizer(),
+        RasterSourceAccess(_SourceAuthorizer()),
         1,
         32,
         catalog_selection_reader=reader,
@@ -2137,7 +2173,9 @@ def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 1, 32, queue_capacity=0)
+    service = RasterStatisticsService(
+        RasterSourceAccess(_SourceAuthorizer(authorizations)), 1, 32, queue_capacity=0
+    )
 
     async def cancel_during_read() -> None:
         """Cancel the first waiter while its fake worker remains active.
@@ -2222,7 +2260,9 @@ def test_statistics_service_caps_distinct_work_and_coalesces_at_capacity(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 2, 32, queue_capacity=0)
+    service = RasterStatisticsService(
+        RasterSourceAccess(_SourceAuthorizer(authorizations)), 2, 32, queue_capacity=0
+    )
 
     async def exercise_admission() -> None:
         """Fill admission, join existing work, and recover after completion.

@@ -66,6 +66,8 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         Path("src/eolab_app/processing/area_coverage.py"),
         Path("src/eolab_app/processing/aggregate_windows.py"),
         Path("src/eolab_app/raster/source_contract.py"),
+        Path("src/eolab_app/source_files.py"),
+        Path("src/eolab_app/raster/source_access.py"),
     ]
     for path in paths:
         assert not {
@@ -86,6 +88,37 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         module
         for module in imports(paths[1])
         if module.startswith(("eolab_app.processing", "eolab_app.temporary_aoi"))
+    }
+
+
+def test_shared_raster_access_has_no_private_storage_or_renderer_dependency() -> None:
+    """Source access consumes injected file ports without importing their feature owner."""
+    forbidden = (
+        "eolab_app.processing",
+        "eolab_app.rendering",
+        "eolab_app.routes.processing",
+        "eolab_app.raster.geoserver",
+        "eolab_app.raster.publication",
+    )
+    for name in (
+        "source_files.py",
+        "raster/source_access.py",
+        "raster/source_models.py",
+        "raster/pixel.py",
+        "raster/pixel_service.py",
+        "raster/statistics_service.py",
+        "routes/raster_analysis.py",
+    ):
+        path = Path("src/eolab_app") / name
+        assert not {
+            module for module in imports(path) if module.startswith(forbidden)
+        }, path
+    assert {
+        module
+        for module in imports(Path("src/eolab_app/source_files.py"))
+        if module.startswith("eolab_app.")
+    } == {
+        "eolab_app.execution.bounded_process",
     }
 
 

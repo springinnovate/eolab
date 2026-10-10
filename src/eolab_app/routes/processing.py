@@ -59,6 +59,7 @@ from eolab_app.routes.http_disconnect import (
     run_until_http_disconnect,
 )
 from eolab_app.rendering.artifact_preview import ArtifactPreviewError
+from eolab_app.source_files import SourceFileError
 
 SupportedJobResponse = Annotated[
     ClipJobResponse | AggregateJobResponse | ModelJobResponse,
@@ -144,7 +145,7 @@ class RequestSizeLimitedRoute(APIRoute):
         return check_request_size
 
 
-def _get_session_owner_hash(
+def get_processing_session_owner_hash(
     request: Request, response: Response, session_ttl_seconds: int
 ) -> str:
     """Identify the browser session allowed to access its processing jobs.
@@ -379,7 +380,7 @@ def create_processing_router(
         Returns:
             Every installed model version, including inputs, parameters and definition checksum.
         """
-        _get_session_owner_hash(request, response, session_ttl_seconds)
+        get_processing_session_owner_hash(request, response, session_ttl_seconds)
         return await _await_service_result(service.list_models())
 
     @router.get("/models/{model_id}/versions/{model_version}/yaml")
@@ -403,7 +404,7 @@ def create_processing_router(
         Raises:
             HTTPException: If the requested model version is unavailable.
         """
-        _get_session_owner_hash(request, response, session_ttl_seconds)
+        get_processing_session_owner_hash(request, response, session_ttl_seconds)
         data = await _await_service_result(
             service.export_installed_model_yaml(model_id, model_version)
         )
@@ -441,7 +442,10 @@ def create_processing_router(
         """
         job = await _await_service_result(
             service.submit_model_run(
-                _get_session_owner_hash(request, response, session_ttl_seconds), body
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                body,
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -470,7 +474,9 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.list_model_runs(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 limit,
                 cursor,
             )
@@ -498,7 +504,9 @@ def create_processing_router(
         """
         data = await _await_service_result(
             service.export_job_yaml(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 job_id,
                 run=document_kind == "run-yaml",
             )
@@ -532,7 +540,10 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.get_model_invocation(
-                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
             )
         )
 
@@ -593,7 +604,10 @@ def create_processing_router(
         """
         await _await_service_result(
             service.discard_polygon_area(
-                _get_session_owner_hash(request, response, session_ttl_seconds), area_id
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                area_id,
             )
         )
         return {"deleted": True}
@@ -621,7 +635,10 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.upload_polygon_area(
-                _get_session_owner_hash(request, response, session_ttl_seconds), body
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                body,
             )
         )
 
@@ -649,7 +666,10 @@ def create_processing_router(
         """
         job = await _await_service_result(
             service.submit_raster_clip(
-                _get_session_owner_hash(request, response, session_ttl_seconds), body
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                body,
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -672,7 +692,7 @@ def create_processing_router(
         Raises:
             HTTPException: If the request fails origin checks.
         """
-        _get_session_owner_hash(request, response, session_ttl_seconds)
+        get_processing_session_owner_hash(request, response, session_ttl_seconds)
         return {"valid": True}
 
     @router.post(
@@ -701,7 +721,10 @@ def create_processing_router(
         """
         job = await _await_service_result(
             service.submit_calculation_inputs(
-                _get_session_owner_hash(request, response, session_ttl_seconds), body
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                body,
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -728,7 +751,9 @@ def create_processing_router(
         Raises:
             HTTPException: If the session checks or shared database transaction fail.
         """
-        owner = _get_session_owner_hash(request, response, session_ttl_seconds)
+        owner = get_processing_session_owner_hash(
+            request, response, session_ttl_seconds
+        )
         results: list[dict[str, Any]] = []
         valid: list[AggregateJobRequest] = []
         indices: list[int] = []
@@ -794,7 +819,9 @@ def create_processing_router(
         return {
             "jobs": await _await_service_result(
                 service.list_owned(
-                    _get_session_owner_hash(request, response, session_ttl_seconds)
+                    get_processing_session_owner_hash(
+                        request, response, session_ttl_seconds
+                    )
                 )
             )
         }
@@ -822,7 +849,9 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.read_job_statuses(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 body.jobIds,
             )
         )
@@ -854,7 +883,9 @@ def create_processing_router(
             raise HTTPException(403, "Use same-origin job updates.")
         subscription = await _await_service_result(
             service.subscribe_jobs(
-                _get_session_owner_hash(request, response, session_ttl_seconds)
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                )
             )
         )
         return JobEventResponse(subscription, dict(response.headers))
@@ -878,7 +909,10 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.get(
-                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
             )
         )
 
@@ -906,7 +940,10 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.cancel(
-                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
             )
         )
 
@@ -933,7 +970,9 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.cancel(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 job_id,
                 delete=True,
             )
@@ -958,7 +997,9 @@ def create_processing_router(
         """
         return await _await_service_result(
             service.list_model_artifacts(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 job_id,
             )
         )
@@ -981,7 +1022,9 @@ def create_processing_router(
         Raises:
             HTTPException: If unauthorized, expired, unsupported, busy or disconnected.
         """
-        owner = _get_session_owner_hash(request, response, session_ttl_seconds)
+        owner = get_processing_session_owner_hash(
+            request, response, session_ttl_seconds
+        )
         if preview_artifact is None:
             raise HTTPException(
                 503,
@@ -995,9 +1038,17 @@ def create_processing_router(
             )
         except HttpClientDisconnectedError as error:
             raise HTTPException(499, "Map preview cancelled") from error
-        except ArtifactPreviewError as error:
+        except (ArtifactPreviewError, SourceFileError) as error:
+            headers = {"Cache-Control": "private, no-store"}
+            detail: str | dict[str, str] = str(error)
+            if isinstance(error, SourceFileError) and error.code is not None:
+                # Preserve the existing Processing failure response through the
+                # neutral source-access port, including its retry guidance.
+                detail = {"code": error.code, "message": str(error)}
+                if error.status in {429, 503}:
+                    headers["Retry-After"] = "5"
             raise HTTPException(
-                error.status, str(error), headers={"Cache-Control": "private, no-store"}
+                error.status, detail, headers=headers
             ) from error
         except HTTPException as error:
             error.headers = {
@@ -1030,7 +1081,9 @@ def create_processing_router(
             raise HTTPException(416, "Use one byte range per job download request.")
         artifact = await _await_service_result(
             service.download_model_artifact(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 job_id,
                 artifact_id,
             )
@@ -1059,7 +1112,10 @@ def create_processing_router(
             raise HTTPException(416, "Use one byte range per job download request.")
         artifact = await _await_service_result(
             service.download(
-                _get_session_owner_hash(request, response, session_ttl_seconds), job_id
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
             )
         )
         return JobDownloadResponse(artifact, service)
@@ -1083,7 +1139,9 @@ def create_processing_router(
         """
         artifact = await _await_service_result(
             service.download(
-                _get_session_owner_hash(request, response, session_ttl_seconds),
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
                 job_id,
                 provenance=True,
             )

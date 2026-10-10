@@ -155,15 +155,18 @@ using nearest-neighbor sampling and at most 512 × 512 cells. Vector responses a
 preview. Both are display data only, never reusable Processing selections.
 
 The delivery owner authorizes the browser session, run, file and expiry on every
-request and holds a transfer lease while native work is running. Rendering
-consumes that injected immutable-file contract without importing the Processing
-store or worker. It checks the file's published checksum and rechecks access
+request and holds a transfer lease while native work is running. Rendering and
+[original-raster analysis](raster-analysis.md#catalog-rasters-and-private-run-files)
+consume the same injected immutable-file access scope without importing the
+Processing store or worker. That scope checks the file's published checksum and rechecks access
 before returning the preview. HTTP responses use `private, no-store`; there is
 no server preview cache. The private results volume is not mounted into GeoServer.
 Downloads and computations do not depend on preview availability.
 
 Preview generation admits at most two concurrent reads per API process and has
-no waiting queue. Native work is killed after 30 seconds or HTTP disconnection.
+no waiting queue. Shared checksum verification separately admits two checks with
+a 30-second deadline. Native preview work is killed after 30 seconds or HTTP
+disconnection. The file lease renews every 10 seconds until reading stops.
 Linux native processes have a 2 GiB address-space ceiling; GDAL's cache and warp
 buffer are 32 MiB each, decoded source blocks are limited to 64 MiB, and output
 JSON is limited to 8 MiB. GeoJSON input is also limited to 8 MiB, 5,000 features

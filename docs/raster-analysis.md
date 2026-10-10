@@ -1,9 +1,73 @@
 # Raster pixels and histograms
 
 The pixel picker reads the raster value at a point. Histograms describe a
-distribution over the selected area. Both use Catalog source data, independently
+distribution over the selected area. Both read original raster data, independently
 of map colors or whether GeoServer can draw the raster. Transparent valid pixels
 still count as data.
+
+## Catalog rasters and private run files
+
+The analysis API can read a catalog raster or an immutable GeoTIFF from a model
+run through the same pixel and distribution services. It reads the original
+file, never the map preview's 512-pixel display grid. The browser's model-output
+controls are unchanged; shared map controls and using outputs as model inputs
+are separate follow-ups.
+
+Existing flat catalog requests remain supported. An explicit `source` can also
+identify a catalog item:
+
+```json
+{"source":{"collectionId":"eolab-mounted-geotiffs","itemId":"geotiff-0123456789abcdef01234567"},"longitude":0,"latitude":0}
+```
+
+A private source uses the run and file IDs returned by the run's file inventory:
+
+```json
+{"source":{"kind":"runArtifact","jobId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifactId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"longitude":0,"latitude":0}
+```
+
+Send either form to `POST /api/raster-analysis/pixels`. For `/statistics`, replace
+the coordinates with the existing optional `selectedBounds`, `catalogSelection`
+or `categoryValues` fields. `/paired-statistics` accepts either source reference
+in `xRaster` and `yRaster`, including a mixed catalog/private pair. Existing
+sampling, grid alignment, NoData, category and resource policies still apply.
+These distribution APIs are distinct from Processing's native raster formulas.
+
+`POST /api/raster-analysis/sources` takes `{"source": ...}` and returns its
+path-free reference, immutable `version`, original width/height, band count,
+datatype, CRS, six-coefficient affine `transform`, NoData and
+`capabilities.pixels` / `capabilities.statistics`.
+Each capability has `supported` and `reason`. A non-finite NoData marker is
+represented as `null`; numerical readers still use the original file metadata.
+Capability descriptions report format support, not permission to bypass later
+authorization or a guarantee that every requested area fits work limits.
+Internal validity masks work for pixel reads but remain unsupported by the
+distribution readers; the capability response states that limitation.
+
+Private requests require the owning Processing session cookie, same-origin
+checks and `X-EOLab-Processing: 1`. The application composition injects that
+session authority; analysis and its source readers do not import Processing
+storage, workers, GeoServer or preview services. Requests cannot supply a path,
+download URL or owner identity. Responses use `Cache-Control: private, no-store`.
+
+The common private-file access scope acquires the existing renewable transfer
+lease, verifies the published checksum, then rechecks ownership, availability
+and file identity before delivering derived data. It renews every 10 seconds
+and retains the file until native work stops, including cancellation and lease
+loss. The owning transfer limits still apply. Checksum verification admits two
+concurrent checks per API process with a 30-second deadline and no waiting queue;
+it reads the full file on each request, including statistical cache hits.
+Private numerical reads use the existing native readers in supervised processes
+with a 30-second deadline and a Linux 2 GiB address-space ceiling. Catalog
+numerical reads retain their existing thread scheduling and immutable catalog
+source policy.
+
+Private statistics use the existing bounded cache and request coalescing, keyed
+by owner, run, file, checksum and byte count as well as area and numerical policy.
+Every requester authorizes before cache lookup and rechecks availability before
+delivery. Deletion or expiry therefore prevents reuse of a cached value. This
+does not publish a catalog item, save a result permanently, or retain an output
+for a later queued model run.
 
 The right dock groups **Distributions**, **Statistics**, and **Raster stack** under
 **Raster analysis**. Distributions show the spread of values over an area;
@@ -124,11 +188,13 @@ only when provided by the raster's band metadata. Very large or small values may
 use scientific notation or a labeled axis offset. Suggested style ranges use
 the sampled 5th, 50th and 95th percentiles; styling does not alter source values.
 
-The analysis reader requires a supported single numeric band, valid CRS and
-affine georeferencing, and native block edges no larger than 1,024 pixels.
+The distribution reader requires a supported single numeric band, valid CRS and
+affine georeferencing, and native blocks decoding to at most 64 MiB each.
 Georeferencing, nodata and overviews must be embedded in the GeoTIFF. External
 masks/overviews/auxiliary files, alpha masks and per-dataset input masks are not
 accepted. Prepare a self-contained source upstream if those checks fail.
+Pixel reads use the first numeric band and support embedded validity masks;
+they enforce the same signed-dependency, georeferencing and 64 MiB block limits.
 
 ## Busy or unavailable results
 

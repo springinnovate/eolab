@@ -51,6 +51,7 @@ def test_artifact_previews_use_only_authorized_delivery_and_neutral_reading() ->
     assert {name for name in imports if name.startswith("eolab_app.")} == {
         "eolab_app.execution.bounded_process",
         "eolab_app.raster.source_contract",
+        "eolab_app.source_files",
     }
 
 

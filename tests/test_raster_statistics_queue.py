@@ -19,6 +19,7 @@ from eolab_app.raster.models import (
     CatalogRasterPairRequest,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.raster.source_access import RasterSourceAccess
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.settings import load_settings
@@ -100,7 +101,7 @@ class ControlledReaders:
             A service with one native reader and a combined statistics cache.
         """
         return RasterStatisticsService(
-            _PairSourceAuthorizer(Path(".")),
+            RasterSourceAccess(_PairSourceAuthorizer(Path("."))),
             1,
             8,
             statistics_reader=self.read,
@@ -393,7 +394,10 @@ def test_fifo_survives_a_failed_read_and_a_canceled_middle_request() -> None:
         return _statistics(1)
 
     service = RasterStatisticsService(
-        _PairSourceAuthorizer(Path(".")), 1, 8, statistics_reader=read
+        RasterSourceAccess(_PairSourceAuthorizer(Path("."))),
+        1,
+        8,
+        statistics_reader=read,
     )
 
     async def exercise() -> None:

@@ -8,7 +8,11 @@ from rasterio.warp import transform
 from rasterio.windows import Window
 
 from eolab_app.raster.models import RasterPixel
-
+from eolab_app.raster.source_contract import (
+    require_pixel_source_structure,
+    require_raster_analysis_georeferencing,
+    require_signed_raster_dependencies,
+)
 
 def read_raster_pixel(
     source_path: Path,
@@ -18,7 +22,7 @@ def read_raster_pixel(
     """Read one band-1 pixel at a WGS 84 position.
 
     Args:
-        source_path: Authorized mounted GeoTIFF.
+        source_path: Authorized original GeoTIFF, retained by the caller.
         longitude: WGS 84 longitude.
         latitude: WGS 84 latitude.
 
@@ -28,10 +32,16 @@ def read_raster_pixel(
     Raises:
         OSError: If the source cannot be read.
         rasterio.errors.RasterioError: If GDAL cannot open or sample it.
-        ValueError: If its coordinate reference system cannot transform the
-            requested position.
+        ValueError: If its structure, file dependencies or georeferencing cannot
+            support a bounded band-one pixel read.
     """
-    with rasterio.open(source_path) as dataset:
+    with (
+        rasterio.Env(GDAL_CACHEMAX=32 * 1024**2),
+        rasterio.open(source_path, driver="GTiff") as dataset,
+    ):
+        require_signed_raster_dependencies(dataset, source_path)
+        require_raster_analysis_georeferencing(dataset)
+        require_pixel_source_structure(dataset)
         x_coordinates, y_coordinates = transform(
             "EPSG:4326",
             dataset.crs,

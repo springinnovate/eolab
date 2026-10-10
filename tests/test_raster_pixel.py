@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from rasterio.transform import Affine
 from rasterio.windows import Window
 
 from eolab_app.raster.pixel import read_raster_pixel
@@ -26,6 +27,11 @@ class _Dataset:
     crs = "EPSG:3857"
     width = 10
     height = 10
+    count = 1
+    dtypes = ("float32",)
+    block_shapes = ((10, 10),)
+    files = ("raster.tif",)
+    transform = Affine.identity()
 
     def __init__(self) -> None:
         """Create an unread fake dataset."""
@@ -57,7 +63,7 @@ def test_pixel_reader_reads_only_band_one_and_one_source_cell(
     dataset = _Dataset()
     monkeypatch.setattr(
         "eolab_app.raster.pixel.rasterio.open",
-        lambda _: dataset,
+        lambda _, **kwargs: dataset,
     )
     monkeypatch.setattr(
         "eolab_app.raster.pixel.transform",
