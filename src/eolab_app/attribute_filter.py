@@ -205,7 +205,11 @@ def _matches_rule(rule: VectorFilterRule, value: Any) -> bool:
 
 
 def ogr_predicate(candidate: VectorFilter) -> str | None:
-    """Compile a conservative native predicate from schema-validated rules.
+    """Build an OGR WHERE clause that narrows reads before exact feature filtering.
+
+    This is the existing catalog-selection predicate compiler, shared here with
+    other original-source readers. It only reduces candidate records; callers
+    still use matches_filter for the established exact comparison semantics.
 
     String comparisons retain exact Python post-filtering because driver
     collations differ. An OR with such a rule requires all native candidates.
