@@ -17,7 +17,7 @@ from eolab_app.processing.downstream_calculation import (
     DownstreamSources,
     calculate_downstream,
     plan_downstream,
-    within_geodesic_distance,
+    buffer_cell_mask,
 )
 from eolab_app.processing.downstream_models import DownstreamRequest
 from eolab_app.processing.hydrology_validation import (
@@ -223,7 +223,7 @@ def test_buffers_measure_metres_on_geographic_grids(latitude: float) -> None:
     pytest.importorskip("scipy")
     lon = np.array([[0.0, 0.01, 0.02]])
     lat = np.full_like(lon, latitude)
-    selected = within_geodesic_distance(lon, lat, np.array([[True, False, False]]), 700)
+    selected = buffer_cell_mask(lon, lat, np.array([[True, False, False]]), 700)
     assert selected.tolist() == [[True, latitude == 60, False]]
 
 
@@ -688,7 +688,7 @@ def test_buffer_boundary_is_inclusive_in_metres() -> None:
     lon = np.array([[0.0, 0.01, 0.010001]])
     lat = np.full_like(lon, 60)
     distance = Geod(ellps="WGS84").inv(0, 60, 0.01, 60)[2]
-    assert within_geodesic_distance(
+    assert buffer_cell_mask(
         lon, lat, np.array([[True, False, False]]), distance
     ).tolist() == [[True, True, False]]
 

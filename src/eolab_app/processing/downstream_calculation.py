@@ -511,13 +511,16 @@ def grid_centers(grid: ClipGrid) -> tuple[NDArray[np.float64], NDArray[np.float6
     return lon, lat
 
 
-def within_geodesic_distance(
+def buffer_cell_mask(
     lon: NDArray[np.float64],
     lat: NDArray[np.float64],
     origins: NDArray[np.bool_],
     metres: float,
 ) -> NDArray[np.bool_]:
-    """Select centers within an exact ellipsoidal distance of any origin center.
+    """Expand a cell mask to include cell centers within the requested buffer distance.
+
+    Use reached downstream cells as origins to buffer a flow path. Use original
+    starting cells as origins to build the maximum-distance mask applied afterward.
 
     A Cartesian tree finds candidates using Earth-centered chord distances.
     Chords are lower bounds on surface distance; ambiguous candidates are checked
@@ -526,11 +529,12 @@ def within_geodesic_distance(
     Args:
         lon: Longitude of each admitted grid center.
         lat: Latitude of each admitted grid center.
-        origins: Centers from which to measure buffer or cutoff distance.
+        origins: Boolean mask of starting cells; True cells are always retained.
         metres: Inclusive nonnegative distance threshold.
 
     Returns:
-        Boolean center-in-buffer mask with the same grid shape.
+        Boolean mask with True at original cells and all cell centers within
+        the inclusive distance in metres, with the same shape as origins.
 
     Raises:
         ProcessingError: If ambiguous candidate checks exceed the work budget.
@@ -828,11 +832,9 @@ def calculate_downstream(
     write_progress(directory, "buffering_downstream_coverage", 0, 0)
     # True cells form the area used to summarize the values raster: downstream
     # cells plus their buffer, restricted to the watershed domain and cutoff.
-    summary_coverage = (
-        within_geodesic_distance(lon, lat, reached, request.buffer_m) & domain
-    )
+    summary_coverage = buffer_cell_mask(lon, lat, reached, request.buffer_m) & domain
     if request.cutoff_m is not None:
-        summary_coverage &= within_geodesic_distance(lon, lat, seeds, request.cutoff_m)
+        summary_coverage &= buffer_cell_mask(lon, lat, seeds, request.cutoff_m)
     write_progress(directory, "summarizing_values", 0, 0)
     root = compile_expression(request.summary, "a")
     calculation = Calculation(root)
