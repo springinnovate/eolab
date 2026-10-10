@@ -726,6 +726,9 @@ def calculate_downstream(
         ProcessingError: If coverage, staleness, native work or output limits fail.
         RasterioError: If a native read or output fails.
     """
+    # The model registry imports this module in the API process too. Load the
+    # compiled routing library only when the supervised native calculation runs;
+    # library initialization must not change API-process thread settings.
     from ecoshard.geoprocessing import routing
     import numexpr
 
