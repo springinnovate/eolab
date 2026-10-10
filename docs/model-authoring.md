@@ -114,6 +114,11 @@ execution of dependent recipes or permanent storage.
 
 ## Add a new algorithm
 
+Prepared terrain and watershed inputs have a separate administrator configuration
+and validation report. See [Prepared hydrology datasets](prepared-hydrology.md)
+for source identity, topology mappings, installation and the `prepared_hydrology`
+input contract. Existing summary and clip recipes remain unchanged.
+
 YAML selects trusted capabilities; it does not contain Python import paths or
 execute arbitrary code. A genuinely new algorithm needs a registered operation
 in `processing/model_operations.py`, with its adapters in the owning Processing

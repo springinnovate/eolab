@@ -163,6 +163,7 @@ class Settings:
         admin_password: Optional server-only password for /admin-eolab (user admin).
             Blank disables administration; never included in browser configuration.
         processing_data_path: Persistent private clip volume shared with the worker.
+        prepared_hydrology_directory: Optional read-only directory of administrator validation reports.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
@@ -202,6 +203,7 @@ class Settings:
     initial_longitude: float
     initial_zoom: float
     processing_data_path: Path = Path("/processing-data").absolute()
+    prepared_hydrology_directory: Path | None = None
     jobs_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
@@ -271,6 +273,11 @@ class Settings:
                 raise ValueError(f"{name} must be greater than zero")
         if not self.processing_data_path.is_absolute():
             raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
+        if (
+            self.prepared_hydrology_directory is not None
+            and not self.prepared_hydrology_directory.is_absolute()
+        ):
+            raise ValueError("PREPARED_HYDROLOGY_DIRECTORY must be an absolute path")
         if not -180 <= self.initial_longitude <= 180:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
@@ -567,4 +574,9 @@ def load_settings(
         initial_longitude=float(os.environ["INITIAL_LONGITUDE"]),
         initial_zoom=float(os.environ["INITIAL_ZOOM"]),
         processing_data_path=Path(os.environ.get("PROCESSING_DATA_PATH", str(Path("/processing-data").absolute()))),
+        prepared_hydrology_directory=(
+            Path(value)
+            if (value := os.environ.get("PREPARED_HYDROLOGY_DIRECTORY", "").strip())
+            else None
+        ),
     )

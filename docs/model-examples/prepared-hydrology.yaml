@@ -1,0 +1,24 @@
+schema: eolab.hydrology/v1
+id: example-network
+version: "1.0.0"
+title: Small eastward drainage
+description: Three connected watersheds over a sloping DEM.
+dem:
+  collectionId: eolab-mounted-geotiffs
+  itemId: geotiff-111111111111111111111111
+watersheds:
+  collectionId: eolab-mounted-vectors
+  itemId: watersheds
+topology:
+  idField: id
+  downstreamField: next
+  idType: integer
+  terminal:
+    field: next
+    value: 0
+  terminalIdField: sink
+terrain:
+  routing: mfd
+  elevationUnit: metre
+  conditioning: Synthetic eastward slope without pits
+  datasetVersion: fixture-v1

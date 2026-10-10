@@ -48,6 +48,7 @@ from eolab_app.processing.artifact_manifest import (
     read_artifact_manifest,
 )
 from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing.prepared_hydrology import PreparedHydrologySnapshot
 
 
 @lru_cache(maxsize=1)
@@ -118,6 +119,8 @@ def get_application_build_id() -> str:
 def build_model_calculation_request(
     request: ModelRunRequest,
     registry: ModelRegistry,
+    *,
+    hydrology: dict[str, PreparedHydrologySnapshot] | None = None,
 ) -> tuple[BaseModel, ModelInvocation]:
     """Bind a YAML recipe to its registered operation request.
 
@@ -127,6 +130,7 @@ def build_model_calculation_request(
     Args:
         request: The model, datasets, analysis area, parameters and label submitted by a user.
         registry: Installed model definitions available on this deployment.
+        hydrology: Server-authorized snapshots for any prepared-hydrology input roles.
 
     Returns:
         The operation request to execute and the recipe/input record to save with it.
@@ -165,6 +169,7 @@ def build_model_calculation_request(
                 "inputs": request.inputs,
                 "parameters": parameters,
                 "label": request.label,
+                "hydrology": hydrology or {},
             }
         )
         calculation = operation.bind(

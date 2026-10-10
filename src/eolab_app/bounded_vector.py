@@ -100,10 +100,44 @@ def polygon_features(
         GeometryValidationError: For invalid topology or actual read-work limits.
         SelectionUnavailableError: If a source component changed.
     """
+    with polygon_records(resolved, (), bbox, cancellation_requested) as records:
+        yield (geometry for geometry, _ in records)
+
+
+@contextmanager
+def polygon_records(
+    resolved: ResolvedCatalogSelection,
+    property_names: tuple[str, ...],
+    bbox: tuple[float, float, float, float] | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+) -> Iterator[Iterator[tuple[dict[str, Any], dict[str, Any]]]]:
+    """Stream validated WGS84 polygons and requested attributes from the original source.
+
+    Geometry-only readers and readers needing attributes share the same source,
+    filter, projection, cancellation and per-feature work limits. The caller
+    owns validation of the selected attributes' domain meaning.
+
+    Args:
+        resolved: Authorized source and compiled attribute predicate.
+        property_names: Source fields to include; absent fields are rejected.
+        bbox: Conservative native-CRS candidate envelope, or no spatial filter.
+        cancellation_requested: Optional request to stop between expensive steps.
+
+    Yields:
+        An iterator of polygon/attribute pairs, valid only inside this context.
+
+    Raises:
+        GeometryValidationError: If a requested field is missing or geometry/work limits fail.
+        SelectionUnavailableError: If a source component changed or cannot be read.
+    """
     resolved.require_current()
     deadline = monotonic() + READ_SECONDS
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with _source_collection(resolved) as dataset:
+            if set(property_names) - set(dataset.schema.get("properties", {})):
+                raise GeometryValidationError(
+                    "A requested attribute field is missing from the source"
+                )
             validate_filter(
                 resolved.selection.filter, dataset.schema.get("properties", {})
             )
@@ -112,8 +146,15 @@ def polygon_features(
                     "The catalog vector has no coordinate reference system"
                 )
 
-            def iterate() -> Iterator[dict[str, Any]]:
-                """Yield validated exact polygons within the source-read budget."""
+            def iterate() -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+                """Yield polygons and requested attributes within the source-read budget.
+
+                Yields:
+                    Validated WGS84 geometry and its original selected attribute values.
+
+                Raises:
+                    GeometryValidationError: If geometry or actual read work exceeds limits.
+                """
                 options = {}
                 if resolved.where:
                     options["where"] = resolved.where
@@ -158,7 +199,9 @@ def polygon_features(
                             raise GeometryValidationError(
                                 "A transformed feature exceeds the bounded coordinate buffer"
                             )
-                    yield geometry
+                    yield geometry, {
+                        name: feature.properties[name] for name in property_names
+                    }
 
             yield iterate()
     resolved.require_current()
