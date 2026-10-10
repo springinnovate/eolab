@@ -529,18 +529,26 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
     asyncio.run(cancel_during_routing())
 
 
+@pytest.mark.parametrize("include_other_sink", [False, True])
 def test_routing_stops_at_real_sink_with_virtual_downstream_connection(
     tmp_path: Path,
+    include_other_sink: bool,
 ) -> None:
     """NEXT_SINK-style termination excludes a virtual connection to another drainage.
 
     Args:
         tmp_path: Isolated prepared basin network and model outputs.
+        include_other_sink: Start flow independently in the second drainage as well.
     """
     from shapely.geometry import box, mapping
 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
+    if include_other_sink:
+        with rasterio.open(sources.rasters["starting_mask"], "r+") as dataset:
+            data = dataset.read(1)
+            data[:, 4] = 1
+            dataset.write(data, 1)
     topology = request.hydrology.definition.topology.model_dump(
         by_alias=True, exclude_none=True
     )
@@ -567,11 +575,11 @@ def test_routing_stops_at_real_sink_with_virtual_downstream_connection(
     )
     request = request.model_copy(update={"hydrology": report})
     spec = plan_downstream(sources, request, limits)
-    assert spec.watersheds == (1, 2)
+    assert spec.watersheds == ((1, 2, 3) if include_other_sink else (1, 2))
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == 16
+    assert float(artifact.rows[0]["value"]) == (24 if include_other_sink else 16)
 
 
 def test_overlapping_starting_features_count_each_value_once(tmp_path: Path) -> None:

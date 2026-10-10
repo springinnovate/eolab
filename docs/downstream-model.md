@@ -39,7 +39,9 @@ catalog source.
   Only intersecting starting partitions and their downstream connections are
   retained. Each real sink is routed separately, so virtual links cannot move
   flow past that sink. Accumulation weights are one at starting cells and zero
-  elsewhere. Coverage includes seeds and cells with accumulation above `1e-8`.
+  elsewhere. Coverage includes seeds and cells with accumulation above 100 times
+  float64 machine epsilon (the reference workflow's noise threshold). This binary
+  coverage is formed before applying the distance buffer.
 - The buffer includes DEM centers within the requested WGS84 ellipsoidal distance
   of reached centers. An optional straight-line cutoff measures distance from
   the original seed centers. Both thresholds are inclusive. Buffers remain inside

@@ -50,6 +50,7 @@ from eolab_app.processing.downstream_models import (
     MAX_COORDINATES,
     MAX_TERMINALS,
     MAX_DISTANCE_PAIRS,
+    FLOW_THRESHOLD,
 )
 from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.processing.hydrology_validation import require_network_id
@@ -821,7 +822,9 @@ def calculate_downstream(
             with rasterio.open(directory / "accumulation.tif") as accumulation:
                 values = accumulation.read(1, masked=True)
                 reached |= weights | (
-                    inside & ~np.ma.getmaskarray(values) & (values.data > 1e-8)
+                    inside
+                    & ~np.ma.getmaskarray(values)
+                    & (values.data > FLOW_THRESHOLD)
                 )
     seeds &= domain
     if not seeds.any():

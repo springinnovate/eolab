@@ -120,7 +120,9 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
             client.portal.call(catalog.aclose)
 
 
-@pytest.mark.parametrize("change_source", [None, "dem", "starting_mask"])
+@pytest.mark.parametrize(
+    "change_source", [None, "dem", "starting_mask", "private_values"]
+)
 def test_downstream_http_captures_sources_and_publishes_owned_files(
     downstream_boundary: Any, change_source: str | None
 ) -> None:
@@ -128,9 +130,43 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
 
     Args:
         downstream_boundary: Real API, database, source and native worker composition.
-        change_source: Optional source whose catalog identity changes after admission.
+        change_source: Changed catalog input, a private values raster, or unchanged inputs.
     """
     client, worker, request, items, sources = downstream_boundary
+    values = request.values.model_dump(by_alias=True)
+    if change_source == "private_values":
+        parent = submit(
+            client,
+            model_request(
+                client,
+                "raster-clip",
+                inputs={
+                    "raster": values,
+                    "area": {
+                        "kind": "selectedArea",
+                        "selectedBounds": {
+                            "west": 0,
+                            "south": 0,
+                            "east": 6,
+                            "north": 4,
+                        },
+                    },
+                },
+            ),
+        )
+        assert client.portal.call(worker.run_once)
+        parent = client.get(f"/api/processing/jobs/{parent['jobId']}").json()
+        assert parent["status"] == "ready", parent
+        file = next(
+            file
+            for file in parent["artifacts"]["files"]
+            if file["mediaType"] == "image/tiff"
+        )
+        values = {
+            "kind": "runArtifact",
+            "jobId": parent["jobId"],
+            "artifactId": file["artifactId"],
+        }
     body = model_request(
         client,
         "downstream-beneficiaries",
@@ -139,7 +175,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
                 mode="json", by_alias=True
             ),
             "hydrology": request.hydrology.reference.model_dump(),
-            "values": request.values.model_dump(by_alias=True),
+            "values": values,
         },
         parameters={"buffer_m": 0},
     )
@@ -149,7 +185,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         client.get(f"/api/processing/jobs/{identifier}/run-yaml").content, run=True
     )
     assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
-    if change_source:
+    if change_source in {"dem", "starting_mask"}:
         reference = (
             request.hydrology.definition.dem
             if change_source == "dem"
@@ -165,7 +201,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         }
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{identifier}").json()
-    if change_source:
+    if change_source in {"dem", "starting_mask"}:
         assert ready["status"] == "failed", ready
         assert ready["error"]["code"] == "source_changed", ready
         assert ready.get("result") is None

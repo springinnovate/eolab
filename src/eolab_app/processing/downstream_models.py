@@ -1,6 +1,7 @@
 """Describe one downstream calculation's inputs, native grids and numerical rules."""
 
 from typing import Annotated, Literal
+from sys import float_info
 
 from pydantic import Field, model_validator
 
@@ -24,6 +25,7 @@ MAX_WATERSHEDS = 100_000
 MAX_COORDINATES = 2_000_000
 MAX_TERMINALS = 64
 MAX_DISTANCE_PAIRS = 4_000_000
+FLOW_THRESHOLD = 100 * float_info.epsilon
 
 
 class RasterStartingMask(HydrologySchema):
@@ -128,6 +130,6 @@ class DownstreamNumericalPolicy(HydrologySchema):
         "finite-unmasked-non-nodata-v1"
     )
     signedAndZeroValues: Literal["included"] = "included"
-    flowThreshold: float = 1e-8
+    flowThreshold: float = FLOW_THRESHOLD
     bufferMetres: float
     cutoffMetres: float | None = None
