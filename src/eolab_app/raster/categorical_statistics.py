@@ -41,7 +41,7 @@ from eolab_app.sampling_area import (
     WholeRasterSamplingArea,
 )
 
-CATEGORICAL_STATISTICS_ALGORITHM = "native-categorical-ground-area-v1"
+CATEGORICAL_STATISTICS_ALGORITHM = "native-categorical-ground-area-v2"
 CATEGORICAL_AREA_SUBDIVISIONS = 4
 CATEGORICAL_AREA_MAX_COORDINATES = 500_000
 CATEGORICAL_EQUAL_AREA_CRS = (

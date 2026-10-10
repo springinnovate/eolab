@@ -76,7 +76,11 @@ class RasterOperationContext:
 
 
 class SummaryNumericalPolicy(BaseModel):
-    """Numerical rules actually used by the native raster-summary operation."""
+    """Numerical rules actually used by the native raster-summary operation.
+
+    ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
+    None preserves historical run documents written before that declaration.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: Literal["raster.aggregate.v1"]
@@ -88,10 +92,15 @@ class SummaryNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     groundArea: GroundAreaPlan | None = None
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
 
 
 class ClipNumericalPolicy(BaseModel):
-    """Numerical rules actually used by the native raster-clip operation."""
+    """Numerical rules actually used by the native raster-clip operation.
+
+    ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
+    None preserves historical run documents written before that declaration.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: Literal["raster.clip.v1"]
@@ -103,6 +112,7 @@ class ClipNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     overviewResampling: Literal["nearest"]
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
 
 
 async def prepare_summary(
@@ -489,6 +499,7 @@ def describe_summary_policy(spec: AggregateSpec) -> SummaryNumericalPolicy:
         resampling="none",
         numericInclusion="cell_center",
         nodata="exclude_source_nodata_and_nonfinite",
+        sourceValidity="finite-unmasked-non-nodata-v1",
         valueDomain="stored_native_values",
         groundArea=spec.grid.groundArea,
     )
@@ -509,6 +520,7 @@ def describe_clip_policy(spec: ClipSpec) -> ClipNumericalPolicy:
         resampling="none",
         numericInclusion="all_touched",
         nodata="preserve_source_nodata_and_mask_invalid",
+        sourceValidity="finite-unmasked-non-nodata-v1",
         valueDomain="stored_native_values",
         overviewResampling="nearest",
     )

@@ -5,12 +5,13 @@ from dataclasses import dataclass
 
 import numpy
 import rasterio
-from rasterio.enums import Resampling
+from rasterio.enums import MaskFlags, Resampling
 from rasterio.windows import Window
 
 from eolab_app.raster.source_contract import (
     SourceBlockIndex,
-    decoded_source_bytes_for_blocks,
+    source_work_for_blocks,
+    mask_invalid_raster_values,
     read_native_raster_block,
     require_bounded_source_structure,
 )
@@ -291,29 +292,6 @@ def _overview_read_shape(
     return None
 
 
-def _mask_overview_nodata(
-    dataset: rasterio.io.DatasetReader,
-    values: numpy.ndarray,
-) -> numpy.ma.MaskedArray:
-    """Apply only the signed band nodata value to one overview read.
-
-    Args:
-        dataset: Open source whose band-one nodata value is authoritative.
-        values: Two-dimensional decimated band values.
-
-    Returns:
-        Values masked only where they equal the declared nodata value.
-    """
-    nodata = dataset.nodatavals[0]
-    if nodata is None:
-        mask = numpy.zeros(values.shape, dtype=bool)
-    elif math.isnan(float(nodata)):
-        mask = numpy.isnan(values)
-    else:
-        mask = values == nodata
-    return numpy.ma.array(values, mask=mask)
-
-
 def _read_bounded_overview(
     dataset: rasterio.io.DatasetReader,
     source_window: Window,
@@ -321,6 +299,9 @@ def _read_bounded_overview(
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray | None:
     """Read one suitable embedded overview into a bounded masked array.
+
+    Dataset masks force native sampling: a coarse or stale overview cannot
+    establish validity at the original sample positions.
 
     Args:
         dataset: Open source used to build ``plan``.
@@ -330,13 +311,15 @@ def _read_bounded_overview(
 
     Returns:
         Bounded masked overview values, or ``None`` when the overview pyramid
-        has no suitable level.
+        has no suitable level or the source has an embedded dataset mask.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If the overview read fails.
         ValueError: If Rasterio returns a shape other than the bounded request.
     """
+    if MaskFlags.per_dataset in dataset.mask_flag_enums[0]:
+        return None
     read_shape = _overview_read_shape(
         dataset,
         source_window,
@@ -356,7 +339,7 @@ def _read_bounded_overview(
     require_active_raster_read(cancellation_requested)
     if values.shape != read_shape:
         raise ValueError("Raster overview read returned an unexpected shape")
-    return _mask_overview_nodata(dataset, values)
+    return mask_invalid_raster_values(values, dataset.nodatavals[0])
 
 
 def _read_overview_sample_grid(
@@ -650,11 +633,11 @@ def plan_sample_grid_for_source_positions(
         for cell in cell_positions
         for position in cell
     }))
-    decoded_source_bytes = decoded_source_bytes_for_blocks(
+    block_reads, decoded_source_bytes = source_work_for_blocks(
         dataset,
         block_indexes,
     )
-    if len(block_indexes) > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
+    if block_reads > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
         raise ValueError(
             "The raster analysis sample grid exceeds the native source-block "
             "limit"
@@ -747,8 +730,8 @@ def read_source_window_sample_grid(
     """Read a fixed center grid from one bounded source-pixel window.
 
     A suitable advertised overview is read at its own resolution and sampled
-    down in memory. Sources without a suitable overview retain the proven
-    native-block center sampler.
+    down in memory. Sources with embedded masks or without a suitable overview
+    use native-block center sampling with original-cell validity.
 
     Args:
         dataset: Open structurally authorized one-band raster.

@@ -50,6 +50,7 @@ from eolab_app.processing.raster_input import (
     select_area,
 )
 from eolab_app.raster.source_contract import (
+    RASTER_VALIDITY_POLICY,
     read_native_raster_block,
     read_native_raster_window,
 )
@@ -268,18 +269,19 @@ def grid(
     Raises:
         ProcessingError: If native reads or expression memory exceed limits.
     """
-    blocks, decoded = (
+    blocks, block_reads, decoded = (
         native_work(dataset, window, limits.max_native_blocks, limits.max_decoded_bytes)
         if window.width and window.height
-        else (0, 0)
+        else (0, 0, 0)
     )
     if pixel_window is not None and pixel_window.width:
-        extra_blocks, extra_decoded = native_work(
+        extra_blocks, extra_reads, extra_decoded = native_work(
             dataset, pixel_window, limits.max_native_blocks, limits.max_decoded_bytes
         )
         blocks += extra_blocks
+        block_reads += extra_reads
         decoded += extra_decoded
-        if blocks > limits.max_native_blocks or decoded > limits.max_decoded_bytes:
+        if block_reads > limits.max_native_blocks or decoded > limits.max_decoded_bytes:
             raise ProcessingError(
                 "source_work_too_large",
                 "The area and selected pixel together exceed the native read limit.",
@@ -724,6 +726,7 @@ def write_statistics_result(
         **calculation_plan.model_dump(mode="json", by_alias=True),
         "resolution": "native",
         "valueDomain": "stored",
+        "sourceValidity": RASTER_VALIDITY_POLICY,
         "inclusion": (
             "per_function"
             if calculation_plan.grid.groundArea or pixel_inclusion

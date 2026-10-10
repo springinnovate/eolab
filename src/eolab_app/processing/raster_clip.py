@@ -32,10 +32,10 @@ from eolab_app.processing.clip_models import (
 )
 from eolab_app.raster.models import SelectedRasterArea
 from eolab_app.raster.source_contract import (
+    RASTER_VALIDITY_POLICY,
     read_native_raster_block,
     source_block_indexes_for_window,
 )
-
 
 def _selection(
     dataset: Any, area: ClipArea, limits: RasterClipLimits
@@ -88,7 +88,7 @@ def _grid(
             "This clip exceeds the native-resolution size or block limit. Choose a smaller area.",
             413,
         )
-    block_count, decoded = native_work(
+    block_count, _, decoded = native_work(
         dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
     )
     return ClipGrid(
@@ -307,6 +307,7 @@ def create_clip(
         "area": spec.area.model_dump(),
         "grid": spec.grid.model_dump(),
         "allTouched": True,
+        "sourceValidity": RASTER_VALIDITY_POLICY,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         **asdict(artifact),
     }

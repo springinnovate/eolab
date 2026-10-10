@@ -14,7 +14,7 @@ are excluded. Different source grids can therefore give different positions and
 counts after swapping axes.
 
 The sampling grid has at most 127 cells on its longest edge. Each raster uses a
-suitable embedded overview where possible and otherwise a bounded native-block
+suitable embedded overview for sources without validity masks and otherwise a bounded native-block
 read, as described in [raster histograms](raster-analysis.md). This is a sampled
 comparison, not full-resolution raster arithmetic.
 

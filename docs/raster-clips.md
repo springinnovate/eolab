@@ -62,7 +62,7 @@ execution does not recheck file timestamps or rebuild the grid to detect changes
 The scanned source identity remains in saved plans and result provenance.
 Existing signed-source restrictions remain: one supported numeric band, bounded
 native blocks, embedded georeferencing and nodata, and no unsigned sidecars,
-alpha, or input dataset masks. Supported datatypes are uint8, uint16, int16,
+or alpha validity. Supported datatypes are uint8, uint16, int16,
 int32, float32, and float64, matching the neutral reader contract.
 
 Bounds edges and polygon selection polygon edges are densified and transformed to the source
@@ -72,6 +72,12 @@ native source block is decoded once, intersected with the window, masked, and
 written. Polygon components are unioned; holes are preserved unless another
 component covers them. The mask includes cells touched by the selected geometry; numeric summaries instead use cell centers.
 The export does not use histogram overviews, percentiles, or approximate grids.
+
+Inputs may contain an embedded per-dataset validity mask. A source cell is
+valid only when its mask permits it, its value differs from band NoData, and
+the value is finite. The area selection adds further exclusions. Data and mask
+block reads both count toward admission limits, even when their layouts differ.
+Unsigned external masks and alpha validity remain unsupported.
 
 The output preserves valid zero, signed nodata, scale, offset, units, band
 description, and supported descriptive metadata. Non-finite data and cells

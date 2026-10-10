@@ -13,12 +13,11 @@ from eolab_app.raster.read_cancellation import (
 )
 from eolab_app.raster.source_contract import (
     SourceBlockIndex,
-    decoded_source_bytes_for_blocks,
+    source_work_for_blocks,
     read_native_raster_block,
     require_bounded_source_structure,
     source_block_indexes_for_window,
 )
-
 
 EXACT_SOURCE_MAX_DIMENSION = 512
 EXACT_SOURCE_MAX_BLOCK_READS = 1_024
@@ -90,11 +89,14 @@ def plan_exact_source_window(
     block_indexes = source_block_indexes_for_window(source_window, block_shape)
     if len(block_indexes) > EXACT_SOURCE_MAX_BLOCK_READS:
         return None
-    decoded_source_bytes = decoded_source_bytes_for_blocks(
+    block_reads, decoded_source_bytes = source_work_for_blocks(
         dataset,
         block_indexes,
     )
-    if decoded_source_bytes > EXACT_SOURCE_MAX_DECODED_BYTES:
+    if (
+        block_reads > EXACT_SOURCE_MAX_BLOCK_READS
+        or decoded_source_bytes > EXACT_SOURCE_MAX_DECODED_BYTES
+    ):
         return None
     return ExactSourceWindowPlan(
         source_window=source_window,

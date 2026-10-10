@@ -104,6 +104,7 @@ def test_shared_raster_access_has_no_private_storage_or_renderer_dependency() ->
         "source_files.py",
         "raster/source_access.py",
         "raster/source_models.py",
+        "raster/source_contract.py",
         "raster/pixel.py",
         "raster/pixel_service.py",
         "raster/statistics_service.py",
