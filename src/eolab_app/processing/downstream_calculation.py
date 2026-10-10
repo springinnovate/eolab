@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from pyproj import CRS, Geod, Transformer
+from pyproj import Geod, Transformer
 import rasterio
 from rasterio.features import geometry_mask, shapes
 from rasterio.shutil import copy as copy_raster
@@ -451,16 +451,6 @@ def plan_downstream(
                 "Routing requires a north-up prepared elevation raster.",
                 422,
             )
-        if (
-            not CRS(dataset.crs)
-            .geodetic_crs.to_2d()
-            .equals(CRS(4326), ignore_axis_order=True)
-        ):
-            raise ProcessingError(
-                "unsupported_dem",
-                "Distance buffers require prepared WGS84 terrain.",
-                422,
-            )
     with rasterio.open(sources.rasters["values"]) as dataset:
         validate_supported_raster(dataset, sources.rasters["values"])
         values = plan_native_grid(dataset, region, MAX_VALUE_CELLS, limits)
@@ -811,7 +801,9 @@ def calculate_downstream(
                     422,
                 )
             elevation = np.where(inside, dem.data, nodata).astype(np.float64)
-            write_downstream_geotiff(directory / "routing-dem.tif", elevation, grid, nodata)
+            write_downstream_geotiff(
+                directory / "routing-dem.tif", elevation, grid, nodata
+            )
             write_downstream_geotiff(
                 directory / "routing-seeds.tif", weights.astype(np.uint8), grid, 255
             )
@@ -905,7 +897,9 @@ def calculate_downstream(
     write_progress(directory, "writing_results", 0, 0)
     for name, data in (("coverage", summary_coverage), ("starting_mask", seeds)):
         stage, final = directory / (name + "-stage.tif"), directory / (name + ".tif")
-        write_downstream_geotiff(stage, np.where(domain, data, 255).astype(np.uint8), grid, 255)
+        write_downstream_geotiff(
+            stage, np.where(domain, data, 255).astype(np.uint8), grid, 255
+        )
         copy_raster(
             stage,
             final,

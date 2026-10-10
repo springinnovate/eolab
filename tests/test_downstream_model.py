@@ -709,3 +709,44 @@ def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> N
     calculate_downstream(sources, spec, directory, limits)
     with rasterio.open(directory / "starting_mask.tif") as dataset:
         assert np.count_nonzero(dataset.read(1) == 1) == 4
+
+
+@pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:4269"])
+def test_routing_preserves_projected_and_non_wgs84_terrain(
+    tmp_path: Path, crs: str
+) -> None:
+    """Prepared terrain keeps its native CRS while distances use geographic centers.
+
+    Args:
+        tmp_path: Original sources and calculation outputs.
+        crs: Projected WGS84 or geographic NAD83 source coordinate system.
+    """
+    from pyproj import Transformer
+    from rasterio.transform import from_bounds
+    from eolab_app.processing.downstream_calculation import grid_centers
+
+    sources, request, limits = downstream_fixture(tmp_path / "sources")
+    with rasterio.open(sources.rasters["dem"], "r+") as dataset:
+        transform = Transformer.from_crs(
+            4326, crs, always_xy=True, allow_ballpark=False
+        )
+        west, south, east, north = transform.transform_bounds(0, 0, 6, 4)
+        dataset.crs = crs
+        dataset.transform = from_bounds(west, south, east, north, 6, 4)
+    dem = AuthorizedRaster(
+        sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
+    )
+    report = validate_hydrology_sources(
+        request.hydrology.definition, dem, sources.network, HydrologyValidationLimits()
+    )
+    request = request.model_copy(update={"hydrology": report})
+    spec = plan_downstream(sources, request, limits)
+    lon, lat = grid_centers(spec.routingGrid)
+    assert np.all(np.isfinite(lon) & np.isfinite(lat))
+    directory = tmp_path / "run"
+    directory.mkdir()
+    artifact = calculate_downstream(sources, spec, directory, limits)
+    assert float(artifact.rows[0]["value"]) == 24
+    with rasterio.open(directory / "coverage.tif") as dataset:
+        assert dataset.crs.to_epsg() == int(crs.split(":")[1])
+        assert tuple(dataset.transform)[:6] == spec.routingGrid.transform

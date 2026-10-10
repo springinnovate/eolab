@@ -29,8 +29,10 @@ catalog source.
 
 ## Numerical rules
 
-- Terrain uses the original north-up WGS84 DEM grid and stored elevations. The
-  model does not fill pits or reproject the DEM. The administrator is responsible
+- Terrain uses the original north-up DEM grid and stored elevations. The
+  model does not fill pits or reproject the DEM. Cell centers are transformed
+  to WGS84 for distance calculations using the existing coordinate-transform
+  contract; the terrain itself need not use a WGS84 datum. The administrator is responsible
   for preparing elevations suitable for MFD routing.
 - A raster starts flow only at positive, finite, valid cells sampled by native
   cell containment at DEM centers. Vector masks use centers inside the combined
