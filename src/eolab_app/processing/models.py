@@ -12,6 +12,27 @@ OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 
 
 @dataclass(frozen=True)
+class JobInputFile:
+    """A published file whose identity must match when dependent work is admitted.
+
+    Attributes:
+        run_id: Owner's public handle for the completed parent run.
+        artifact_id: Published file ID, never a scratch or selection-mask path.
+        sha256: Published checksum captured before admission.
+        size: Published byte count captured before admission.
+        media_type: Published format checked by the accepting operation.
+        role: Published scientific role, distinct from provenance and scratch.
+    """
+
+    run_id: str
+    artifact_id: str
+    sha256: str
+    size: int
+    media_type: str
+    role: str
+
+
+@dataclass(frozen=True)
 class PreparedJobPlan:
     """Validated operation data supplied to storage by its application owner.
 
@@ -24,6 +45,8 @@ class PreparedJobPlan:
         presentation: Small caller-specific labels, separate from shared execution.
         retained_metadata: Optional operation details kept after scratch files are
             removed, for the configured metadata lifetime after the job finishes.
+        input_files: Published files to authorize and retain atomically with admission.
+            Each input remains charged to its parent's existing disk reservation.
     """
 
     specification: dict[str, object]
@@ -33,6 +56,7 @@ class PreparedJobPlan:
     work_key: str | None = None
     presentation: dict[str, object] | None = None
     retained_metadata: dict[str, object] | None = None
+    input_files: tuple[JobInputFile, ...] = ()
 
 
 @dataclass(frozen=True)

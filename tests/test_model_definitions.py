@@ -50,7 +50,7 @@ def test_recipe_can_retain_a_registered_geojson_output(
     }
     monkeypatch.setattr(operation_registry, "OPERATIONS", registry)
     monkeypatch.setattr(definitions, "OPERATIONS", registry)
-    document = ModelRegistry.load_installed().get("raster-clip", "1.0.0").to_document()
+    document = ModelRegistry.load_installed().get("raster-clip", "1.1.0").to_document()
     document["outputs"]["starting_area"] = {
         "source": "clip.area",
         "type": "vector",
@@ -109,7 +109,7 @@ def test_discovery_and_recipe_export_need_no_catalog_or_renderer(
     from eolab_app.processing.service import ProcessingService
     from eolab_app.routes.processing import create_processing_router
 
-    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.1.0")
     definitions = tuple(
         ModelDefinition.model_validate(
             {**definition.to_document(), "version": f"1.0.{index}"}
@@ -132,7 +132,9 @@ def test_discovery_and_recipe_export_need_no_catalog_or_renderer(
             item.version: item.digest for item in definitions
         }
         model = models[0]
-        recipe = client.get("/api/processing/models/raster-summary/versions/1.0.0/yaml")
+        recipe = client.get(
+            f"/api/processing/models/raster-summary/versions/{model['version']}/yaml"
+        )
         assert recipe.status_code == 200
         assert "no-store" in recipe.headers["cache-control"]
         assert int(recipe.headers["content-length"]) == len(recipe.content)
@@ -155,9 +157,36 @@ def summary_request() -> dict[str, Any]:
     )
 
 
+def test_historical_catalog_recipe_still_executes_without_rewriting_identity() -> None:
+    """The original catalog-only recipe remains valid alongside the raster input type."""
+    saved = parse_yaml(
+        Path("docs/model-examples/raster-summary.run.yaml").read_bytes(), run=True
+    )["invocation"]
+    definition = ModelDefinition.model_validate(saved["model"]["definition"])
+    request = ModelRunRequest.model_validate(
+        {
+            "requestId": "legacy-catalog-request",
+            "model": {
+                name: saved["model"][name]
+                for name in ("id", "version", "definitionSha256")
+            },
+            "inputs": saved["inputs"],
+            "parameters": saved["parameters"],
+            "label": saved["label"],
+        }
+    )
+    calculation, invocation = build_model_calculation_request(
+        request, ModelRegistry((definition,))
+    )
+    assert (
+        calculation.sources["a"].model_dump(by_alias=True) == saved["inputs"]["raster"]
+    )
+    assert invocation.model.definition.digest == saved["model"]["definitionSha256"]
+
+
 def test_installed_summary_matches_approved_example_and_round_trips() -> None:
     """Installed package discovery and YAML round trips preserve definition identity."""
-    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.1.0")
     example = parse_yaml(
         Path("docs/model-examples/raster-summary.model.yaml").read_bytes()
     )
@@ -255,7 +284,7 @@ def test_definition_rejects_invalid_contract_fields(change: dict[str, Any]) -> N
     Args:
         change: Top-level invalid replacement fields.
     """
-    value = ModelRegistry.load_installed().get("raster-summary", "1.0.0").to_document()
+    value = ModelRegistry.load_installed().get("raster-summary", "1.1.0").to_document()
     with pytest.raises(ValidationError):
         ModelDefinition.model_validate({**value, **change})
 
@@ -269,7 +298,7 @@ def test_registry_rejects_definitions_that_cannot_execute(kind: str) -> None:
     Args:
         kind: ModelSchema mismatch introduced into a valid recipe.
     """
-    definition = ModelRegistry.load_installed().get("raster-summary", "1.0.0")
+    definition = ModelRegistry.load_installed().get("raster-summary", "1.1.0")
     value = copy.deepcopy(definition.to_document())
     if kind == "operation":
         value["steps"][0]["operation"] = "python.shell.v1"
@@ -404,7 +433,7 @@ def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
     from eolab_app.processing.model_run_contracts import ModelInvocation
 
     registry = ModelRegistry.load_installed()
-    definition = registry.get("raster-clip", "1.0.0")
+    definition = registry.get("raster-clip", "1.1.0")
     assert (
         ModelDefinition.model_validate(
             parse_yaml(export_yaml(definition.to_document()))
@@ -455,7 +484,7 @@ def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None
         area: An area supported by summaries but not by clip submission.
     """
     registry = ModelRegistry.load_installed()
-    definition = registry.get("raster-clip", "1.0.0")
+    definition = registry.get("raster-clip", "1.1.0")
     body = summary_request()
     body["parameters"] = {}
     body["model"] = {
@@ -471,7 +500,7 @@ def test_clip_model_rejects_unsupported_area_kinds(area: dict[str, Any]) -> None
 def test_clip_recipe_rejects_extra_parameters_and_mismatched_output_contract() -> None:
     """A clip model cannot accept formulas or declare a scalar table result."""
     registry = ModelRegistry.load_installed()
-    definition = registry.get("raster-clip", "1.0.0")
+    definition = registry.get("raster-clip", "1.1.0")
     body = summary_request()
     body["model"] = {
         "id": definition.id,
@@ -499,7 +528,7 @@ def test_recipe_cannot_mislabel_its_operation_output(
         model_id: Installed recipe to change.
         wrong_type: Type inconsistent with the registered operation.
     """
-    document = ModelRegistry.load_installed().get(model_id, "1.0.0").to_document()
+    document = ModelRegistry.load_installed().get(model_id, "1.1.0").to_document()
     next(iter(document["outputs"].values()))["type"] = wrong_type
     with pytest.raises(ProcessingError, match="operation contract"):
         ModelRegistry((ModelDefinition.model_validate(document),))

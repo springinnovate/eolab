@@ -4,6 +4,16 @@ import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
 
+/** Serialize one raster identity without carrying display state or file paths.
+ * @param {Object} source Catalog item or owned run-file source.
+ * @return {Object} Path-free source accepted by Processing operations.
+ * @throws {Error} If a private source has invalid opaque identifiers.
+ */
+function processingRasterReference(source) {
+    return source.kind === "runArtifact" ? {kind: "runArtifact", jobId: opaqueId(source.jobId), artifactId: opaqueId(source.artifactId)} :
+        {collectionId: source.collectionId, itemId: source.itemId};
+}
+
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */
 export class ProcessingRequestError extends Error {
     /** @param {string} message User-facing detail. @param {number} status HTTP status.
@@ -271,7 +281,7 @@ export class ProcessingApiClient {
     }
 
     /** Submit complete clip inputs with a stable retry key.
-     * @param {Object} submission Captured catalog source, explicit area and requestId.
+     * @param {Object} submission Captured raster source, explicit area and requestId.
      * @return {Promise<Object>} Owned queued job; the worker supplies its grid later.
      * @throws {Error} If inputs, admission or the returned job are invalid.
      */
@@ -281,7 +291,7 @@ export class ProcessingApiClient {
         if (!["selectedArea", "catalogSelection"].includes(selected.kind)) throw new Error("Select a box or catalog vector first.");
         await this.ensureSession();
         return validateJob(await this.request("/raster-clips", "POST", {
-            collectionId: source.collectionId, itemId: source.itemId, requestId,
+            ...(source.kind === "runArtifact" ? {source: processingRasterReference(source)} : processingRasterReference(source)), requestId,
             ...(selected.kind === "selectedArea" ? {selectedBounds: selected.selectedBounds}
                 : {catalogSelection: selected.catalogSelection}),
         }));
@@ -330,7 +340,7 @@ export class ProcessingApiClient {
         const pixelPoint = calculationPixelPoint(submission.calculations, submission.pixelPoint);
         const body = {
             requestId: submission.requestId,
-            sources: {a: {collectionId: submission.source.collectionId, itemId: submission.source.itemId}},
+            sources: {a: processingRasterReference(submission.source)},
             calculations: submission.calculations,
             ...(pixelPoint ? { pixelPoint } : {}),
             ...(chunkPixels(submission.targetChunkPixels) == null ? {} : {targetChunkPixels: submission.targetChunkPixels}),

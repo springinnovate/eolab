@@ -138,7 +138,7 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     assert submit(client, body)["jobId"] == identifier
     assert (
         client.get(
-            "/api/processing/models/raster-summary/versions/1.0.0/yaml"
+            "/api/processing/models/raster-summary/versions/1.1.0/yaml"
         ).status_code
         == 404
     )

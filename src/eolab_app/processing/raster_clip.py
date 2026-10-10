@@ -22,6 +22,7 @@ from eolab_app.processing.raster_input import (
     validate_supported_raster as _validate_supported_raster,
     select_area,
     native_work,
+    raster_source_filename_prefix,
 )
 from eolab_app.processing.clip_models import (
     ClipArtifact,
@@ -30,7 +31,7 @@ from eolab_app.processing.clip_models import (
     ClipSpec,
     RasterClipLimits,
 )
-from eolab_app.raster.models import SelectedRasterArea
+from eolab_app.raster.models import SelectedRasterArea, CatalogRasterRequest
 from eolab_app.raster.source_contract import (
     RASTER_VALIDITY_POLICY,
     read_native_raster_block,
@@ -196,8 +197,19 @@ def create_clip(
                         destination.update_tags(band, **tags)
                 destination.update_tags(
                     EOLAB_OPERATION=spec.operation,
-                    EOLAB_ITEM=spec.source.item_id,
-                    EOLAB_COLLECTION=spec.source.collection_id,
+                    **(
+                        {
+                            "EOLAB_ITEM": spec.source.item_id,
+                            "EOLAB_COLLECTION": spec.source.collection_id,
+                        }
+                        if isinstance(spec.source, CatalogRasterRequest)
+                        else {
+                            "EOLAB_SOURCE": json.dumps(
+                                spec.source.model_dump(by_alias=True)
+                            ),
+                            "EOLAB_SOURCE_SHA256": spec.sourceChecksum,
+                        }
+                    ),
                     EOLAB_MASK_RULE="all_touched",
                     EOLAB_SOURCE_SIGNATURE=json.dumps(spec.sourceSignature),
                     EOLAB_AREA_BOUNDS=json.dumps(spec.area.bounds),
@@ -297,13 +309,14 @@ def create_clip(
     artifact = ClipArtifact(
         size=result.stat().st_size,
         sha256=digest,
-        filename=f"{spec.source.item_id}-clip.tif",
+        filename=f"{raster_source_filename_prefix(spec.source)}-clip.tif",
         valid_pixels=valid_count,
     )
     provenance = {
         "operation": spec.operation,
         "source": spec.source.model_dump(by_alias=True),
         "sourceSignature": spec.sourceSignature,
+        **({"sourceChecksum": spec.sourceChecksum} if spec.sourceChecksum else {}),
         "area": spec.area.model_dump(),
         "grid": spec.grid.model_dump(),
         "allTouched": True,

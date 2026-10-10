@@ -19,6 +19,22 @@ function fixture() {
     view.render(state); return {doc, view, state, actions};
 }
 
+test("raster choices separate map layers from completed runs and explain unavailable results", () => {
+    const h = fixture(), recipe = {...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}};
+    const result = {kind: "runArtifact", jobId: "1".repeat(32), artifactId: "a".repeat(32), label: "Cuba clip · Clipped raster", expiresAt: "2099-01-01T00:00:00Z"};
+    h.state.draft = createModelDraft(recipe, {rasters: [raster, result], area}, "private-draft");
+    h.state.draft.raster = result; h.state.nextCursor = "older";
+    h.view.render(h.state);
+    assert.deepEqual(h.view.setup.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.equal(h.view.setup.resultActions.hidden, false);
+    assert.equal(h.view.setup.olderResults.hidden, false);
+    h.state.draft.raster.available = false; h.state.draft.sources[1].available = false; h.view.render(h.state);
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.match(h.view.setup.source.children[2].children[0].textContent, /unavailable/);
+    assert.equal(h.view.setup.source.children[2].children[0].disabled, true);
+});
+
 test("all model controls exist in production markup and progress retains field focus", () => {
     const h = fixture(); const field = h.view.setup.parameters.summary;
     field.value = "mean(a)"; field.focus();

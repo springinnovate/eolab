@@ -22,26 +22,46 @@ from eolab_app.processing.models import (
     ProcessingLimits,
 )
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 
 OPERATION_VERSION = "raster.clip.v1"
 
 
-class ClipInputs(CatalogRasterRequest):
-    """A catalog raster and exactly one explicit, lifecycle-valid clip area."""
+class ClipInputs(BaseModel):
+    """A raster and explicit clip area, accepting historical flat catalog requests.
+
+    New requests use ``source`` for either a catalog or owned run-file reference.
+    Historical collectionId/itemId requests retain their original serialized form.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    source: RasterSourceReference | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    collection_id: str | None = Field(
+        default=None, alias="collectionId", exclude_if=lambda value: value is None
+    )
+    item_id: str | None = Field(
+        default=None, alias="itemId", exclude_if=lambda value: value is None
+    )
 
     selectedBounds: Wgs84Bounds | None = None
     catalogSelection: CatalogSelection | None = None
 
     @model_validator(mode="after")
-    def require_explicit_area(self) -> "ClipInputs":
-        """Require one area; omission must never become a whole-raster export.
+    def validate_clip_inputs(self) -> "ClipInputs":
+        """Require one raster reference and one explicit geographic clip area.
 
         Returns:
             Validated request.
 
         Raises:
-            ValueError: If neither or both selection variants were supplied.
+            ValueError: If source identities conflict or the area is absent or ambiguous.
         """
+        if self.source is None:
+            CatalogRasterRequest(collectionId=self.collection_id, itemId=self.item_id)
+        elif self.collection_id is not None or self.item_id is not None:
+            raise ValueError("Choose one raster source")
         if (self.selectedBounds is None) == (self.catalogSelection is None):
             raise ValueError("Choose exactly one histogram box or catalog selection")
         return self
@@ -145,14 +165,33 @@ class ClipGrid(BaseModel):
 
 
 class ClipSpec(BaseModel):
-    """Durable, path-free clip plan with catalog identity retained for provenance."""
+    """A path-free clip plan retaining its source identity and private-file checksum."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["raster.clip.v1"] = OPERATION_VERSION
-    source: CatalogRasterRequest
+    source: RasterSourceReference
     sourceSignature: tuple[int, int, int, int]
+    sourceChecksum: str | None = Field(
+        default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None
+    )
     area: ClipArea
     grid: ClipGrid
+
+    @model_validator(mode="after")
+    def check_source_checksum(self) -> "ClipSpec":
+        """Require a published checksum for private input files in stored plans.
+
+        Returns:
+            The prepared clip with the correct source identity contract.
+
+        Raises:
+            ValueError: If the checksum disagrees with the source reference type.
+        """
+        if isinstance(self.source, RunArtifactReference) != (
+            self.sourceChecksum is not None
+        ):
+            raise ValueError("Private raster plans require their published checksum")
+        return self
 
 
 class ClipAreaSummary(BaseModel):
@@ -191,7 +230,7 @@ class ClipJobResponse(JobResponse):
     """Add raster context to the shared job lifecycle without redefining it."""
 
     operation: Literal["raster.clip.v1"]
-    source: CatalogRasterRequest | None
+    source: RasterSourceReference | None
     grid: ClipGrid | None
     area: ClipAreaSummary | None
     progress: ClipProgressResponse

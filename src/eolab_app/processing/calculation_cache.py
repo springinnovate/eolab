@@ -22,6 +22,7 @@ CALCULATION_CACHE_VERSION = 3
 def calculation_result_cache_keys(
     calculation: AggregateSpec | AggregatePlanRequest,
     source_signature: tuple[int, int, int, int] | None = None,
+    source_checksum: str | None = None,
 ) -> list[str]:
     """Identify requested values without opening the raster or measuring the area.
 
@@ -29,6 +30,7 @@ def calculation_result_cache_keys(
         calculation: Validated request before planning, or a completed job plan.
         source_signature: Authorized raster metadata, required for a request.
             Stored plans already contain this metadata.
+        source_checksum: Verified published checksum when the input is a private file.
 
     Returns:
         One hash per formula. Identity includes the immutable raster, exact
@@ -43,6 +45,7 @@ def calculation_result_cache_keys(
     alias, source = next(iter(calculation.sources.items()))
     if isinstance(calculation, AggregateSpec):
         source_signature = calculation.sourceSignature
+        source_checksum = calculation.sourceChecksum
         area = calculation.area.model_dump(mode="json", by_alias=True)
         area.pop("resolved", None)
         if calculation.area.kind == "polygons":
@@ -89,6 +92,8 @@ def calculation_result_cache_keys(
             node.op == "areaha" for root in roots for node in walk(root)
         ),
     }
+    if source_checksum is not None:
+        common["sourceChecksum"] = source_checksum
     if calculation.pixelPoint is not None and any(
         node.op == "pixelValue" for root in roots for node in walk(root)
     ):
@@ -189,6 +194,7 @@ def restore_cached_calculation_plan(
     source_signature: tuple[int, int, int, int],
     cached_results: dict[str, dict[str, object]],
     polygon_area: AggregateArea | None = None,
+    source_checksum: str | None = None,
 ) -> AggregateSpec | None:
     """Build a result-only job from cached values, without estimating raster work.
 
@@ -197,13 +203,14 @@ def restore_cached_calculation_plan(
         source_signature: Current authorized raster metadata.
         cached_results: Unexpired cache entries indexed by requested input hash.
         polygon_area: Authorized polygon input, kept out of shared result-cache records.
+        source_checksum: Verified published identity for a private raster input.
 
     Returns:
         A plan retaining all requested values, or None for a missing, malformed
         or incompatible entry. Retaining rows prevents later cache expiry from
         turning an approved reuse into an unexpected raster calculation.
     """
-    keys = calculation_result_cache_keys(request, source_signature)
+    keys = calculation_result_cache_keys(request, source_signature, source_checksum)
     entries = [cached_results.get(key) for key in keys]
     if any(entry is None for entry in entries):
         return None
@@ -222,6 +229,7 @@ def restore_cached_calculation_plan(
         plan = AggregateSpec(
             sources=request.sources,
             sourceSignature=source_signature,
+            sourceChecksum=source_checksum,
             calculations=request.calculations,
             pixelPoint=request.pixelPoint,
             area=area,

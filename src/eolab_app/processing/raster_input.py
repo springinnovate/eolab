@@ -11,6 +11,7 @@ from typing import Any
 from rasterio.io import DatasetReader
 
 from eolab_app.processing.models import ProcessingError
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.raster.bounded_window import (
     NoRasterBoundsOverlapError,
     selected_raster_area_for_wgs84_bounds,
@@ -24,6 +25,23 @@ from eolab_app.raster.source_contract import (
     require_raster_analysis_georeferencing,
     require_bounded_source_structure,
 )
+
+
+def raster_source_filename_prefix(source: RasterSourceReference) -> str:
+    """Name a derived file using its catalog item or published artifact identity.
+
+    Args:
+        source: Validated path-free raster reference.
+
+    Returns:
+        A portable filename prefix containing no server path or user-supplied label.
+    """
+    return (
+        source.artifact_id
+        if isinstance(source, RunArtifactReference)
+        else source.item_id
+    )
+
 
 def validate_supported_raster(dataset: Any, path: Path) -> None:
     """Validate that an opened raster is supported for calculations and clipping.

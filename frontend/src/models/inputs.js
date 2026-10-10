@@ -1,11 +1,21 @@
 /** Build model drafts from catalog identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 
-/** Identify a catalog source without using its label or map visibility.
- * @param {Object} source Catalog collection and item IDs.
+/** Identify a raster or vector choice without using its label or map visibility.
+ * @param {Object} source Catalog identity or owned run-file reference.
  * @return {string} Composite identity for a choice list.
  */
-export function modelSourceKey(source) { return JSON.stringify([source.collectionId, source.itemId]); }
+export function modelSourceKey(source) { return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId] : [source.collectionId, source.itemId]); }
+
+/** List published raster files that this session can choose for a model.
+ * @param {Object[]} runs Authoritative run snapshots already loaded by Models.
+ * @return {Object[]} Source choices; display previews and transient files are excluded.
+ */
+export function modelResultSources(runs) {
+    return runs.filter(run => run.status === "ready" && Date.parse(run.expiresAt) > Date.now() && run.artifacts?.availability === "available")
+        .flatMap(run => run.artifacts.files.filter(file => file.mediaType === "image/tiff" && ["result", "intermediate"].includes(file.role))
+            .map(file => ({kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, label: `${run.label} · ${file.label}`, available: true, expiresAt: run.expiresAt})));
+}
 
 /** Explain the saved polygon selection without exposing server paths.
  * @param {Object} filter Typed catalog filter.
@@ -72,8 +82,9 @@ export function modelSupportsArea(model, area) {
  */
 export function createModelDraft(model, context, id) {
     const sources = structuredClone(context.rasters ?? []);
-    const enabled = sources.filter(source => source.visible);
-    const suggestion = enabled.length === 1 ? enabled[0] : sources.length === 1 ? sources[0] : null;
+    const catalog = sources.filter(source => source.kind !== "runArtifact");
+    const enabled = catalog.filter(source => source.visible);
+    const suggestion = enabled.length === 1 ? enabled[0] : catalog.length === 1 ? catalog[0] : null;
     let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
     let selectionError = "";
@@ -84,7 +95,7 @@ export function createModelDraft(model, context, id) {
     }
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
         raster: suggestion ? structuredClone(suggestion) : null,
-        sourceReason: sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
+        sourceReason: Object.values(model.inputs).some(input => input.type === "raster") ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
@@ -100,7 +111,9 @@ export function createModelDraft(model, context, id) {
 export function captureModelSubmission(draft, requestId) {
     if (!draft.label.trim() || draft.label.length > 80) throw new Error("Name this run using 1–80 characters.");
     if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
-        throw new Error("Choose a raster from Map layers.");
+        throw new Error("Choose a raster from Map layers or a completed run.");
+    if (draft.raster.available === false || draft.raster.kind === "runArtifact" && Date.parse(draft.raster.expiresAt) <= Date.now())
+        throw new Error("This raster result is no longer available. Choose another input.");
     if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
         throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
@@ -108,11 +121,13 @@ export function captureModelSubmission(draft, requestId) {
     if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose a sampling area, visible map area or vector layer supported by this model.");
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
-        if (input.type === "catalog_raster") inputs[name] = {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
+        if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
+        if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = draft.raster.kind === "runArtifact" ?
+            {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
-    const area = Object.values(inputs).find(value => value.kind);
+    const area = Object.entries(draft.model.inputs).filter(([, input]) => ["summary_area", "clip_area"].includes(input.type)).map(([name]) => inputs[name])[0];
     if (area.kind === "selectedArea") modelAreaInput(area);
     else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
     else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
