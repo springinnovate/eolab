@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 from fastapi import FastAPI
@@ -34,6 +35,7 @@ from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.source_files import (
     LeasedSourceFiles,
+    ResolvedSourceFile,
     SourceFileError,
     finish_source_task,
 )
@@ -181,6 +183,23 @@ class FileAuthority:
         self.leases.add(lease)
         return FileLease(self.path, self.size, self.sha256, lease)
 
+    async def resolve(self, owner: str, run: str, file: str) -> ResolvedSourceFile:
+        """Authorize a short read of the original file without retaining it.
+
+        Args:
+            owner: Requesting session.
+            run: Opaque run identity.
+            file: Opaque output identity.
+
+        Returns:
+            Original-file metadata after the same ownership and expiry check.
+
+        Raises:
+            SourceFileError: If current access is denied.
+        """
+        await self.check(owner, run, file)
+        return ResolvedSourceFile(self.path, self.size, self.sha256, "image/tiff")
+
     async def release(self, lease: str) -> bool:
         """Release one completed read's retention token.
 
@@ -219,6 +238,7 @@ class FileAuthority:
             self.check,
             self.renew,
             renewal_seconds=renewal_seconds,
+            resolve=self.resolve,
         )
 
 
@@ -619,66 +639,109 @@ def test_mutation_during_a_read_prevents_source_delivery(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
-def test_lost_lease_stops_pixel_work_before_releasing_the_file(
+def test_private_pixel_reuses_short_reader_without_checksums_or_processes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed renewal cancels active native work and withholds its result.
+    """Private picking uses the catalog reader and handles a disappearing source.
 
     Args:
-        tmp_path: Isolated immutable source fixture.
-        monkeypatch: Control native execution and the owning renewal callback.
+        tmp_path: Original-file fixture directory.
+        monkeypatch: Forbid expensive verification and child-process startup.
     """
+    from eolab_app.raster.pixel import read_raster_pixel
+
     path = write_source(tmp_path / "source.tif")
     authority = FileAuthority(path)
 
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        """Fail if an interactive pixel request invokes the process supervisor.
+
+        Args:
+            args: Unexpected supervisor arguments.
+            kwargs: Unexpected supervisor options.
+
+        Raises:
+            AssertionError: Always; picking must use its ordinary reader.
+        """
+        raise AssertionError("Pixel picking must not hash files or spawn children")
+
+    monkeypatch.setattr("eolab_app.source_files.run_bounded_process", forbidden)
+    monkeypatch.setattr("eolab_app.raster.source_access.run_bounded_process", forbidden)
+    sources = RasterSourceAccess(CatalogAuthority(path), authority.files())
+    service = RasterPixelService(sources, 1, pixel_reader=read_raster_pixel)
+    request = RasterPixelSourceRequest(source=PRIVATE, longitude=-1.5, latitude=1.5)
+
     async def exercise() -> None:
-        """Lose retention only after the native reader starts."""
-        entered, stopped = asyncio.Event(), asyncio.Event()
-
-        async def renew(lease: str) -> bool:
-            """Deny retention once the read is active.
-
-            Args:
-                lease: Issued transfer token.
-
-            Returns:
-                Whether retention is still available.
-            """
-            return lease in authority.leases and not entered.is_set()
-
-        async def native(reader: Any, *arguments: Any) -> Any:
-            """Keep native work active until source retention cancels it.
-
-            Args:
-                reader: Existing pixel reader.
-                arguments: Original path and coordinates.
-
-            Returns:
-                No result because this read loses its lease.
-            """
-            entered.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                assert authority.leases
-                stopped.set()
-
-        monkeypatch.setattr(authority, "renew", renew)
-        monkeypatch.setattr(
-            "eolab_app.raster.pixel_service.read_private_raster", native
+        """Read the same cell, then reject wrong ownership, expiry and missing data."""
+        catalog = await service.get(
+            CatalogPixelRequest(**CATALOG, longitude=-1.5, latitude=1.5)
         )
-        sources = RasterSourceAccess(CatalogAuthority(path), authority.files(0.02))
-        with pytest.raises(SourceFileError, match="no longer available"):
-            await asyncio.wait_for(
-                RasterPixelService(sources, 1).get(
-                    RasterPixelSourceRequest(source=PRIVATE, longitude=0, latitude=0),
-                    "owner",
-                ),
-                10,
-            )
-        assert stopped.is_set() and not authority.leases
+        assert await service.get(request, "owner") == catalog
+        assert authority.sequence == 0 and not authority.leases
+        with pytest.raises(SourceFileError):
+            await service.get(request, "someone-else")
+        authority.ready = False
+        with pytest.raises(SourceFileError):
+            await service.get(request, "owner")
+        authority.ready = True
+        path.unlink()
+        with pytest.raises(RasterConflictError, match="could not be sampled"):
+            await service.get(request, "owner")
 
     asyncio.run(exercise())
+
+
+def test_cancelled_private_pixel_retains_only_reader_capacity(tmp_path: Path) -> None:
+    """Cancelled picks discard results while the existing bounded thread finishes.
+
+    Args:
+        tmp_path: Original-file fixture directory.
+    """
+    path = write_source(tmp_path / "source.tif")
+    authority = FileAuthority(path)
+    entered, release = Event(), Event()
+    calls = []
+
+    def reader(source: Path, longitude: float, latitude: float) -> Any:
+        """Hold one ordinary reader to observe admission and cancellation.
+
+        Args:
+            source: Original raster path.
+            longitude: Requested longitude.
+            latitude: Requested latitude.
+
+        Returns:
+            Existing native pixel result.
+        """
+        from eolab_app.raster.pixel import read_raster_pixel
+
+        calls.append(source)
+        entered.set()
+        release.wait(5)
+        return read_raster_pixel(source, longitude, latitude)
+
+    async def exercise() -> None:
+        """Keep a second pick queued until the cancelled first native read exits."""
+        service = RasterPixelService(
+            RasterSourceAccess(CatalogAuthority(path), authority.files()), 1, reader
+        )
+        request = RasterPixelSourceRequest(source=PRIVATE, longitude=-1.5, latitude=1.5)
+        first = asyncio.create_task(service.get(request, "owner"))
+        await asyncio.to_thread(entered.wait, 3)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(service.get(request, "owner"))
+        await asyncio.sleep(0.02)
+        assert len(calls) == 1 and not authority.leases
+        release.set()
+        await asyncio.wait_for(second, 3)
+        assert len(calls) == 2
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
 
 
 def test_lost_lease_cannot_be_hidden_by_shielded_consumer_cleanup(

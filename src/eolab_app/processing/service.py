@@ -48,7 +48,7 @@ from eolab_app.processing.model_runs import (
     build_model_calculation_request,
 )
 from eolab_app.processing.model_yaml import encode_canonical_json, export_yaml
-
+from eolab_app.source_files import ResolvedSourceFile
 
 def require_operation(row: dict[str, Any], operation: str) -> None:
     """Keep idempotent retries on their original operation.
@@ -928,6 +928,83 @@ class ProcessingService:
         except BaseException:
             await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)
             raise
+
+    async def model_artifact_is_available(
+        self, identifier: str, artifact_id: str
+    ) -> bool:
+        """Check output lifetime for internal publication cleanup, without granting access.
+
+        Args:
+            identifier: Opaque run handle recorded by the application.
+            artifact_id: Opaque file identity from a registered publication.
+
+        Returns:
+            Whether the ready run still offers this original file.
+
+        Raises:
+            ProcessingError: If storage is unavailable; cleanup must retry.
+            ValidationError: If persisted file metadata is malformed.
+        """
+        row = await asyncio.to_thread(self.jobs.available_result, identifier)
+        if row is None:
+            return False
+        require_operation(row, MODEL_OPERATION)
+        stored = (row.get("artifact") or {}).get("manifest")
+        return bool(
+            stored
+            and any(
+                file.id == artifact_id for file in read_artifact_manifest(stored).files
+            )
+        )
+
+    async def resolve_model_artifact(
+        self, owner: str, identifier: str, artifact_id: str
+    ) -> ResolvedSourceFile:
+        """Resolve an owned, unexpired output for a short original-file read.
+
+        Published outputs are immutable and the API mounts their storage read-only.
+        No transfer lease or full-file checksum is needed for an interactive read;
+        callers handle a missing file if cleanup runs after this check.
+
+        Args:
+            owner: Server-derived session hash.
+            identifier: Opaque model-run identity.
+            artifact_id: Opaque published file identity.
+
+        Returns:
+            Confined original file and its publication metadata.
+
+        Raises:
+            ProcessingError: If ownership, expiry, format or availability fails.
+            ValidationError: If persisted file metadata is invalid.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        require_operation(row, MODEL_OPERATION)
+        if serialize_model_artifacts(row)["availability"] != "available":
+            raise ProcessingError(
+                "result_unavailable", "This result is no longer available.", 409
+            )
+        manifest = read_artifact_manifest(row["artifact"]["manifest"])
+        file = next((file for file in manifest.files if file.id == artifact_id), None)
+        if file is None:
+            raise ProcessingError(
+                "artifact_not_found", "This result file is unavailable.", 404
+            )
+        path = await asyncio.to_thread(
+            self.artifacts.artifact_path, row["attempt_id"], file.storage_name
+        )
+        try:
+            if path.stat().st_size != file.size:
+                raise ProcessingError(
+                    "result_changed",
+                    "This result file changed. Run the model again.",
+                    410,
+                )
+        except OSError as error:
+            raise ProcessingError(
+                "result_missing", "This result file is no longer available.", 410
+            ) from error
+        return ResolvedSourceFile(path, file.size, file.sha256, file.media_type)
 
     async def check_model_artifact(
         self, owner: str, identifier: str, artifact_id: str

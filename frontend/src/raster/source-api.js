@@ -1,4 +1,4 @@
-/** Authorized original-source metadata and bounded map-display transport. */
+/** Authorized original-source metadata transport. */
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 
 /** Request a bounded private response without browser or shared HTTP caching.
@@ -18,7 +18,7 @@ async function readJson(url, body, signal, fetcher) {
         while (true) {
             const {value, done} = await reader.read(); if (done) break;
             bytes += value.byteLength;
-            if (bytes > 8 * 1024 * 1024) throw new Error("The raster display response is too large. Zoom in and try again.");
+            if (bytes > 8 * 1024 * 1024) throw new Error("The raster metadata response is too large.");
             chunks.push(value);
         }
     } finally { await reader.cancel(); reader.releaseLock(); }
@@ -47,20 +47,3 @@ export async function describeRasterSource(source, signal, fetcher = globalThis.
     return value;
 }
 
-/** Load one viewport grid, reauthorizing the original source on every request.
- * @param {Object} raster Source descriptor with immutable version.
- * @param {Object} window Bounds and bounded output dimensions.
- * @param {AbortSignal} signal Cancellation on move, hide or removal.
- * @param {typeof fetch} [fetcher=globalThis.fetch] HTTP implementation.
- * @return {Promise<Object>} Checked map samples, never calculation inputs.
- * @throws {Error} If ownership, lifetime, checksum or response validation fails.
- */
-export async function readRasterMapWindow(raster, window, signal, fetcher = globalThis.fetch) {
-    const value = await readJson("/api/rendering/raster-window", {source: rasterSourceReference(raster), ...window}, signal, fetcher);
-    const bounds = [window.bounds.west, window.bounds.south, window.bounds.east, window.bounds.north];
-    if (rasterSourceKey(value) !== rasterSourceKey(raster) || value.version !== raster.version ||
-        value.width !== window.width || value.height !== window.height || JSON.stringify(value.bounds) !== JSON.stringify(bounds) ||
-        !Array.isArray(value.values) || value.values.length !== window.width * window.height ||
-        value.values.some(number => number !== null && !Number.isFinite(number))) throw new Error("The server returned an invalid raster display.");
-    return value;
-}

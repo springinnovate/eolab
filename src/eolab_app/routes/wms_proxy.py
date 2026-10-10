@@ -3,6 +3,8 @@
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
+from xml.etree import ElementTree
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -224,6 +226,11 @@ def create_wms_proxy_router(
     published_layers: tuple[PublishedLayerRegistry, ...],
     get_map_request_tracker: GetMapRequestTracker,
     render_queue: MapRenderQueue,
+    *,
+    authorize_layers: (
+        Callable[[tuple[str, ...], Request], Awaitable[bool]] | None
+    ) = None,
+    hidden_layer: Callable[[str], bool] | None = None,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
 
@@ -233,6 +240,8 @@ def create_wms_proxy_router(
         published_layers: Feature-owned current-process layer registries.
         get_map_request_tracker: Bounded GetMap request observer.
         render_queue: GetMap capacity shared with composite map tiles.
+        authorize_layers: Current-session source-access check supplied by composition.
+        hidden_layer: Identifies private publications omitted from public capabilities.
 
     Returns:
         Router exposing only EOLab's validated WMS contract.
@@ -266,6 +275,11 @@ def create_wms_proxy_router(
                 detail="The public WMS endpoint accepts only GET requests",
             )
         query_entries, layer_name, operation = validated_public_wms_query(request)
+        private = bool(
+            layer_name
+            and authorize_layers
+            and await authorize_layers((layer_name,), request)
+        )
         if layer_name is not None:
             authorization = None
             for published_layer_registry in published_layers:
@@ -346,7 +360,7 @@ def create_wms_proxy_router(
                         headers=forwarded_headers,
                     )
 
-                return await forward_geoserver_get_map(
+                result = await forward_geoserver_get_map(
                     request,
                     render_queue.run(
                         load_map,
@@ -354,6 +368,9 @@ def create_wms_proxy_router(
                     ),
                     get_map_request_tracker,
                 )
+                if private:
+                    result.headers["Cache-Control"] = "private, no-store"
+                return result
             else:
                 geoserver_response = await geoserver_client.get(
                     f"{internal_geoserver_url}/eolab/wms",
@@ -382,6 +399,36 @@ def create_wms_proxy_router(
                     detail="The rendering service returned too much feature information",
                 )
 
-        return safe_geoserver_response(geoserver_response)
+        if (
+            operation == "getcapabilities"
+            and geoserver_response.is_success
+            and hidden_layer
+        ):
+            try:
+                document = ElementTree.fromstring(geoserver_response.content)
+                for parent in document.iter():
+                    for child in list(parent):
+                        if child.tag.rsplit("}", 1)[-1] != "Layer":
+                            continue
+                        names = (
+                            element.text
+                            for element in child
+                            if element.tag.rsplit("}", 1)[-1] == "Name"
+                        )
+                        if any(name and hidden_layer(name) for name in names):
+                            parent.remove(child)
+                return Response(
+                    ElementTree.tostring(document, encoding="utf-8"),
+                    media_type="application/xml",
+                    headers={"Cache-Control": "no-store"},
+                )
+            except ElementTree.ParseError as error:
+                raise HTTPException(
+                    502, "The rendering service returned invalid capabilities."
+                ) from error
+        result = safe_geoserver_response(geoserver_response)
+        if private:
+            result.headers["Cache-Control"] = "private, no-store"
+        return result
 
     return router

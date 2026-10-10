@@ -115,3 +115,19 @@ test("raster display delegates to the common raster owner using original identit
     assert.equal(copy.artifactId, h.file.artifactId); assert.equal(copy.appearance.kind, "raster");
     attachment.lifecycle.removed(); assert.equal(h.owner.layers.size, 0);
 });
+
+
+test("closing during raster publication cancels attachment without removing an unattached layer", async () => {
+    let finish, presentation;
+    const h = fixture({describe: async source => ({source, version:"a".repeat(64), bounds:[0,0,1,1],
+        capabilities:{pixels:{supported:true},statistics:{supported:true}}}),
+        addRaster: async (_raster, _lifecycle, options) => {
+            presentation = options; await new Promise(resolve => {finish=resolve;});
+            assert.equal(options.signal.aborted, true); assert.equal(options.isCurrent(), false); return null;
+        }});
+    h.file.mediaType="image/tiff"; h.file.sha256="a".repeat(64);
+    const work=h.owner.show(h.run,h.file); await Promise.resolve();
+    assert.ok(presentation); assert.equal(h.owner.layers.size,0);
+    h.owner.destroy(); finish(); await work;
+    assert.equal(h.owner.layers.size,0); assert.equal(h.owner.pending.size,0);
+});

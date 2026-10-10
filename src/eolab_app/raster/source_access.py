@@ -39,7 +39,7 @@ class RasterReadSource:
         source_path: Confined path consumed only by native readers.
         cache_identity: Immutable identity including private access context where needed.
         version: Public immutable version, without ownership credentials or paths.
-        private: Whether cancellation must stop supervised work before releasing a lease.
+        private: Whether leased, long reads use supervision before releasing retention.
     """
 
     source_path: Path
@@ -196,16 +196,7 @@ class RasterSourceAccess:
             Exception: If the owning authority rejects access.
         """
         if isinstance(reference, CatalogRasterRequest):
-            source = await self.catalog.authorize(reference)
-            identity = (
-                reference.collection_id,
-                reference.item_id,
-                source.source_signature,
-            )
-            version = hashlib.sha256(
-                json.dumps(identity, default=str).encode()
-            ).hexdigest()
-            yield RasterReadSource(source.source_path, ("catalog", *identity), version)
+            yield await self.resolve(reference, owner)
             return
         if self.files is None or owner is None:
             raise SourceFileError(
@@ -229,6 +220,56 @@ class RasterSourceAccess:
                 source.sha256,
                 True,
             )
+
+    async def resolve(
+        self, reference: RasterSourceReference, owner: str | None = None
+    ) -> RasterReadSource:
+        """Authorize an original raster for the ordinary short-read pipeline.
+
+        Args:
+            reference: Validated catalog or run/file identity.
+            owner: Server-derived session hash for a private output.
+
+        Returns:
+            Original file and immutable identity, without a retention lease.
+
+        Raises:
+            RasterFeatureError: If catalog authorization or the format fails.
+            SourceFileError: If ownership, expiry or file resolution fails.
+        """
+        if isinstance(reference, CatalogRasterRequest):
+            source = await self.catalog.authorize(reference)
+            identity = (
+                reference.collection_id,
+                reference.item_id,
+                source.source_signature,
+            )
+            version = hashlib.sha256(
+                json.dumps(identity, default=str).encode()
+            ).hexdigest()
+            return RasterReadSource(source.source_path, ("catalog", *identity), version)
+        if self.files is None or owner is None:
+            raise SourceFileError(
+                "This raster result is unavailable to this session.", 404
+            )
+        source = await self.files.resolve(
+            owner, reference.job_id, reference.artifact_id
+        )
+        if source.media_type != "image/tiff":
+            raise RasterAssetError("Choose a GeoTIFF raster result.")
+        return RasterReadSource(
+            source.path,
+            (
+                "runArtifact",
+                owner,
+                reference.job_id,
+                reference.artifact_id,
+                source.sha256,
+                source.size,
+            ),
+            source.sha256,
+            True,
+        )
 
     async def describe(
         self, reference: RasterSourceReference, owner: str | None = None

@@ -58,3 +58,20 @@ class GeoWebCacheLayerConfigurator:
                 "Content-Type": "application/xml",
             },
         )
+
+    async def remove(self, resource_name: str) -> None:
+        """Delete one layer's cache configuration and stored tiles, allowing retries.
+
+        Args:
+            resource_name: Exact unqualified layer owned by the calling publisher.
+
+        Raises:
+            Exception: The publisher's categorized error when cleanup must retry.
+        """
+        encoded_name = quote(f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}", safe="")
+        await self._gateway.application_request(
+            "remove GeoWebCache layer",
+            "DELETE",
+            f"/gwc/rest/layers/{encoded_name}.xml",
+            accepted_statuses=frozenset({200, 404}),
+        )

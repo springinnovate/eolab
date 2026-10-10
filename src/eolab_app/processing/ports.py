@@ -439,6 +439,20 @@ class JobStore(Protocol):
         """
         ...
 
+    def available_result(self, identifier: str) -> dict[str, Any] | None:
+        """Read ready result metadata for internal lifecycle reconciliation only.
+
+        Args:
+            identifier: Previously registered opaque result handle.
+
+        Returns:
+            Available result metadata, or None. This grants no user/file access.
+
+        Raises:
+            ProcessingError: If lookup fails and reconciliation must retry.
+        """
+        ...
+
     def cleanup_candidates(self) -> list[dict[str, Any]]:
         """Prune old job records, expire inputs/results, and find removable files.
 

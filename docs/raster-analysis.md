@@ -51,17 +51,19 @@ session authority; analysis and its source readers do not import Processing
 storage, workers, GeoServer or preview services. Requests cannot supply a path,
 download URL or owner identity. Responses use `Cache-Control: private, no-store`.
 
-The common private-file access scope acquires the existing renewable transfer
-lease, verifies the published checksum, then rechecks ownership, availability
-and file identity before delivering derived data. It renews every 10 seconds
-and retains the file until native work stops, including cancellation and lease
-loss. The owning transfer limits still apply. Checksum verification admits two
-concurrent checks per API process with a 30-second deadline and no waiting queue;
-it reads the full file on each request, including statistical cache hits.
-Private numerical reads use the existing native readers in supervised processes
-with a 30-second deadline and a Linux 2 GiB address-space ceiling. Catalog
-numerical reads retain their existing thread scheduling and immutable catalog
-source policy.
+Pixel picking resolves the owner and expiry once, then uses the same
+`read_raster_pixel` reader and bounded thread scheduling as catalog sources.
+It does not create a transfer lease, read the whole file for a checksum, or start
+a subprocess. Published files are immutable and mounted read-only in the API.
+A file removed between authorization and reading produces the ordinary source
+error. Cancellation discards the response but retains the concurrency slot until
+the native read finishes.
+
+Longer private statistics and metadata operations retain the existing renewable
+transfer lease, checksum verification, availability recheck and supervised native
+reader. They keep their transfer limits, 30-second native deadline and Linux
+2 GiB address-space ceiling; this change does not weaken queued model input
+retention or download integrity checks.
 
 Private statistics use the existing bounded cache and request coalescing, keyed
 by owner, run, file, checksum and byte count as well as area and numerical policy.
@@ -255,34 +257,39 @@ capacity are removed when results are added. Deleting an owned job removes its
 download, not the independently cached numerical values. Cache entries contain
 no user titles, raster pixels, polygon geometry, source paths or download links.
 
-## Private raster map delivery
+## Temporary raster map delivery
 
-`POST /api/rendering/raster-window` accepts `{source, bounds, width, height}`.
-`source` uses the same original-file reference as analysis; `bounds` has WGS84
-`west`, `south`, `east` and `north` fields within Web Mercator latitudes. Integer
-width and height are each 1–512. The response contains the original reference,
-immutable version, bounds in west/south/east/north order, dimensions and row-major
-values (`null` for invalid/outside cells). No filesystem paths or download URLs
-are returned. This display response is never an input to analysis or Processing.
+`POST /api/rendering/layers` also accepts `{source: {kind: "runArtifact", jobId,
+artifactId}}`. The same publisher registers the original GeoTIFF under a stable
+opaque `model_<run>_<file>` coverage-store name and returns the ordinary
+`{layerName, bbox}` response. No client path is accepted or returned. The browser
+uses the same WMS factory, composite plans, tile recovery, styles and legends as
+catalog rasters. There is no private viewport renderer or raster-window endpoint.
 
-The delivery adapter uses neutral source access and the existing supervised
-native process reader. Private requests require the same owner cookie,
-same-origin header, checksum verification and renewable lease as analysis;
-responses are `private, no-store`. At most two windows run per API process, with
-no waiting queue, a 30-second native deadline and the existing Linux 2 GiB
-process ceiling. The browser retries capacity responses with bounded backoff
-and cancels superseded requests. Every request reauthorizes the source.
+Application composition supplies current-session checks to publication, WMS and
+composite delivery. Every private request checks owner, expiry and file presence,
+including requests served from the existing bounded composite tile cache. Private
+HTTP responses use `Cache-Control: private, no-store`. Temporary layers are
+unadvertised in GeoServer and filtered from public WMS capabilities. GeoServer
+remains internal; the public proxy is the access boundary.
 
-Display centers are projected into the native grid and sampled by nearest cell.
-The reader checks at most 4,096 data/mask blocks and 512 MiB of decoded work
-before reading pixels, alongside the neutral per-block limits. Embedded masks,
-NoData and nonfinite values retain ordinary native validity; overviews do not
-replace original values. Requests exceeding the budget explain that the user
-should zoom in. Zooming requests a new visible window instead of enlarging a
-single whole-raster thumbnail. Styling reuses the ordinary palette/category
-functions and recolors only the current bounded browser grid.
+The GeoServer service needs the existing `processing-data` volume mounted at
+`/processing-data:ro`, matching the API mount. Deploy the updated Compose
+configuration and rerun the existing GeoServer initializer to extend its file
+allowlist to published result TIFFs. Deploy the application image too. Processing workers do not need
+GeoServer credentials and can compute, retain inputs and delete files while
+GeoServer is unavailable.
 
-Catalog display continues through its existing WMS/composite path. Private
-files are never published to GeoServer or shared tile caches. The historical
-run-file `/preview` endpoint remains available to existing clients and delegates
-raster sampling to the same bounded reader; vector previews are unchanged.
+The API lifespan reconciles temporary GeoServer stores every 30 seconds against
+Processing's authoritative result lifetime. Unavailable runs are removed from
+GeoWebCache (including disk tiles), then their GeoServer store and process-local
+publication registry. Failed cleanup retries; discovery includes stores left by
+an earlier API process. Original-file deletion stays with Processing and respects
+accepted dependent jobs. Unpublication is eventual and may follow file deletion;
+per-request access checks reject expired/deleted outputs immediately even while
+cleanup is pending. The bounded in-memory composite cache may retain inaccessible
+bytes until normal eviction, but cannot deliver them without a fresh access check.
+
+The historical run-file `/preview` endpoint remains for existing clients; ordinary
+raster display no longer calls it. Existing vector previews are unchanged.
+Rendering availability does not authorize or gate any numerical operation.

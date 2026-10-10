@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  publishCatalogRaster,
+  publishRasterSource,
   RenderingRequestError,
 } from "../../src/raster/api.js";
 import {
@@ -20,9 +20,9 @@ import {
   CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
-test("publishCatalogRaster sends only the STAC Item identity", async () => {
+test("publishRasterSource sends only the STAC Item identity", async () => {
   const requests = [];
-  const publishedRaster = await publishCatalogRaster(
+  const publishedRaster = await publishRasterSource(
     MOUNTED_GEOTIFF_ITEM,
     async (url, options) => {
       requests.push({ url, options });
@@ -44,10 +44,11 @@ test("publishCatalogRaster sends only the STAC Item identity", async () => {
     {
       url: "/api/rendering/layers",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
         },
         body: JSON.stringify({
           collectionId: "eolab-mounted-geotiffs",
@@ -58,9 +59,9 @@ test("publishCatalogRaster sends only the STAC Item identity", async () => {
   ]);
 });
 
-test("publishCatalogRaster reports the backend detail", async () => {
+test("publishRasterSource reports the backend detail", async () => {
   await assert.rejects(
-    publishCatalogRaster(
+    publishRasterSource(
       MOUNTED_GEOTIFF_ITEM,
       async () => new Response(
         JSON.stringify({ detail: "Catalog Item not found" }),
@@ -71,8 +72,8 @@ test("publishCatalogRaster reports the backend detail", async () => {
   );
 });
 
-test("publishCatalogRaster preserves an actionable failure category", async () => {
-  const publication = publishCatalogRaster(
+test("publishRasterSource preserves an actionable failure category", async () => {
+  const publication = publishRasterSource(
     MOUNTED_GEOTIFF_ITEM,
     async () => new Response(
       JSON.stringify({
@@ -117,10 +118,11 @@ test("loadRasterStatistics sends only Item identity and validates data", async (
     {
       url: "/api/raster-analysis/statistics",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
           "X-EOLab-Processing": "1",
         },
         credentials: "same-origin", cache: "no-store",
@@ -315,10 +317,11 @@ test("sampleRasterPixel sends only Item identity and WGS 84 position", async () 
     {
       url: "/api/raster-analysis/pixels",
       options: {
-        method: "POST",
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: undefined,
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-EOLab-Processing": "1",
           "X-EOLab-Processing": "1",
         },
         credentials: "same-origin", cache: "no-store",

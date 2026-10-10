@@ -174,9 +174,9 @@ export class MapLayerController {
 
     /**
      * Attach a local layer using its owner's synchronous rendering adapter.
-     * No Catalog Item or server publication is created. Local layers supply
+     * An existing publication may be supplied without a Catalog Item. Layers supply
      * createState, createLayer and snapshot, plus optional lifecycle callbacks.
-     * @param {{key:string,label:string,visible?:boolean,opacity?:number}} source Local presentation.
+     * @param {{key:string,label:string,visible?:boolean,opacity?:number,publication?:Object}} source Local presentation and optional completed publication.
      * @param {Object} adapter Owner's rendering and presentation methods.
      * @return {Object} Retained record.
      * @throws {Error} If the identity is duplicated or construction fails.
@@ -186,13 +186,13 @@ export class MapLayerController {
             throw new Error("Local layer cannot be added to this stack.");
         }
         const { entry } = this.stack.addLocal(source.key, source.label, this.recordIntent());
-        const record = { entry, adapter, publication: null, state: null, error: null };
+        const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null };
         try {
             this.stack.setVisible(entry.key, source.visible ?? true);
             this.stack.setOpacity(entry.key, source.opacity ?? 1);
-            record.state = adapter.createState({ entry, source });
+            record.state = adapter.createState({ entry, source, publication: record.publication });
             this.records.set(entry.key, record);
-            this.leafletLayers.add(entry.key, adapter.createLayer(record), entry);
+            this.leafletLayers.add(entry.key, this.#createLayer(record), entry);
             this.#applyLeafletOrder();
         } catch (error) {
             this.leafletLayers.remove(entry.key);
@@ -1016,18 +1016,6 @@ export class MapLayerController {
         this.view.render(this.snapshots(), this.presentationActiveKey);
     }
 
-    /** Report an adapter's display failure without restarting rendering or analysis.
-     * @param {string} key Retained layer identity; removed layers are ignored.
-     * @param {string|null} message Readable failure, or null after recovery.
-     * @return {void}
-     */
-    updateRenderingError(key, message) {
-        const record = this.records.get(key);
-        if (!record || this.destroyed || record.error === message) return;
-        record.error = message;
-        this.view.render(this.snapshots(), this.presentationActiveKey);
-    }
-
     /**
      * Render and publish current retained-layer state.
      *
@@ -1043,7 +1031,7 @@ export class MapLayerController {
                     key: entry.key,
                     visible: entry.visible,
                     opacity: entry.opacity,
-                    descriptor: entry.item === null ? null : record.adapter.renderDescriptor(record),
+                    descriptor: record.publication === null ? null : record.adapter.renderDescriptor(record),
                 };
             })
         );
@@ -1204,17 +1192,23 @@ export class MapLayerController {
             error: null,
         };
         record.state = adapter.createState({ entry, publication, item });
-        let layer;
-        layer = adapter.createLayer(record, () => {
-            if (this.leafletLayers.get(key) !== layer) {
-                return;
-            }
+        return { key, record, layer: this.#createLayer(record) };
+    }
+
+    /** Construct a layer with the same tile-failure handling for every source.
+     * @param {Object} record Owner adapter, stack entry and completed publication.
+     * @return {Object} Detached Leaflet layer.
+     */
+    #createLayer(record) {
+        const {adapter, entry: {key}} = record;
+        const layer = adapter.createLayer(record, () => {
+            if (this.leafletLayers.get(key) !== layer) return;
             if (this.leafletLayers.hasTileRecovery(key)) return;
             record.error = adapter.tileErrorMessage;
             this.render();
             adapter.tileError?.(record);
         });
-        return { key, record, layer };
+        return layer;
     }
 
     /**

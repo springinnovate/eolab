@@ -18,8 +18,13 @@ from eolab_app.routes.processing import (
 )
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.raster.source_access import RasterSourceAccess
-from eolab_app.raster.map_rendering import RasterMapWindows
-from eolab_app.routes.raster_map import create_raster_map_router
+from test_temporary_raster_publication import (
+    attach_output_rendering,
+    OutputGeoServer,
+    map_query,
+    plan_request,
+)
+from test_composite_map import _tile_url
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from test_model_runs_postgres import model_boundary, model_request, submit
@@ -52,14 +57,16 @@ def preview_boundary(model_boundary: Any) -> Iterator[Any]:
             ),
         )
     )
-    app.include_router(
-        create_raster_map_router(
-            RasterMapWindows(sources),
-            lambda request, response: get_processing_session_owner_hash(
-                request, response, 7 * 86_400
-            ),
-        )
+    publication, _ = attach_output_rendering(
+        app,
+        sources,
+        service.model_artifact_is_available,
+        lambda request, response: get_processing_session_owner_hash(
+            request, response, 7 * 86_400
+        ),
+        OutputGeoServer(),
     )
+    app.state.output_publication = publication
     app.include_router(
         create_processing_router(service, preview_artifact=renderer.read)
     )
@@ -113,29 +120,38 @@ def test_private_preview_and_download_lifetimes(
         "jobId": job["jobId"],
         "artifactId": file["artifactId"],
     }
-    window_request = {"source": reference, "bounds": AREA, "width": 8, "height": 8}
+    publication_request = {"source": reference}
     window = client.post(
-        "/api/rendering/raster-window", json=window_request, headers=HEADERS
+        "/api/rendering/layers", json=publication_request, headers=HEADERS
     )
     assert window.status_code == 200, window.text
     assert (
-        window.json()["source"] == reference
-        and window.json()["version"] == file["sha256"]
+        window.json()["layerName"] == f"eolab:model_{job['jobId']}_{file['artifactId']}"
     )
     assert "no-store" in window.headers["cache-control"]
     assert str(worker.artifacts.root) not in window.text
     assert (
-        client.post("/api/rendering/raster-window", json=window_request).status_code
+        client.post("/api/rendering/layers", json=publication_request).status_code
         == 403
     )
     assert (
         client.post(
-            "/api/rendering/raster-window",
-            json=window_request,
+            "/api/rendering/layers",
+            json=publication_request,
             headers={**HEADERS, "Origin": "https://foreign.test"},
         ).status_code
         == 403
     )
+    layer = window.json()["layerName"]
+    assert (
+        client.get("/geoserver/eolab/wms", params=map_query(layer)).status_code == 200
+    )
+    plan = client.post(
+        "/api/map-rendering/plans", json=plan_request(layer), headers=HEADERS
+    )
+    assert plan.status_code == 200, plan.text
+    tile_url = _tile_url(plan.json()["wmsUrl"])
+    assert client.get(tile_url).status_code == 200
     pixel_request = {"source": reference, "longitude": 0.5, "latitude": 9.5}
     pixel = client.post(
         "/api/raster-analysis/pixels", json=pixel_request, headers=HEADERS
@@ -172,10 +188,15 @@ def test_private_preview_and_download_lifetimes(
     )
     with TestClient(client.app, base_url="https://testserver") as foreign:
         denied_window = foreign.post(
-            "/api/rendering/raster-window", json=window_request, headers=HEADERS
+            "/api/rendering/layers", json=publication_request, headers=HEADERS
         )
         assert denied_window.status_code == 404
         assert "no-store" in denied_window.headers["cache-control"]
+        assert foreign.get(tile_url).status_code == 404
+        assert (
+            foreign.get("/geoserver/eolab/wms", params=map_query(layer)).status_code
+            == 404
+        )
         denied = foreign.get(url)
         assert denied.status_code == 404
         assert denied.json()["detail"]["code"] == "job_not_found"
@@ -207,10 +228,18 @@ def test_private_preview_and_download_lifetimes(
                 "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
                 (job["jobId"],),
             )
+    assert client.get(tile_url).status_code == 409
+    assert (
+        client.get("/geoserver/eolab/wms", params=map_query(layer)).status_code == 409
+    )
+    assert not client.portal.call(
+        service.model_artifact_is_available, job["jobId"], file["artifactId"]
+    )
+    client.portal.call(client.app.state.output_publication.cleanup)
     assert client.get(url).status_code == 409
     assert (
         client.post(
-            "/api/rendering/raster-window", json=window_request, headers=HEADERS
+            "/api/rendering/layers", json=publication_request, headers=HEADERS
         ).status_code
         == 409
     )
@@ -294,7 +323,9 @@ def test_preview_rejects_same_size_storage_change(
         },
         headers=HEADERS,
     )
-    assert pixel.status_code == 422 and "changed" in pixel.text
+    # Interactive picking reads only the requested original cell, without hashing
+    # unrelated bytes. Long preview/download/analysis contracts still verify SHA256.
+    assert pixel.status_code == 200 and pixel.json()["value"] is not None
     with psycopg.connect(store.conninfo) as connection:
         assert (
             connection.execute("SELECT count(*) FROM processing.transfers").fetchone()[

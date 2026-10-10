@@ -8,7 +8,7 @@ import logging
 import signal
 
 import httpx2
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -41,7 +41,10 @@ from eolab_app.processing.worker import ProcessingWorker, serve as serve_process
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
-from eolab_app.raster.publication import RasterPublicationService
+from eolab_app.raster.publication import (
+    RasterPublicationService,
+    temporary_raster_source,
+)
 from eolab_app.raster.source_authorization import (
     CatalogRasterSourceAuthorizer,
 )
@@ -63,8 +66,7 @@ from eolab_app.routes.processing import (
     get_processing_session_owner_hash,
 )
 from eolab_app.raster.source_access import RasterSourceAccess
-from eolab_app.raster.map_rendering import RasterMapWindows
-from eolab_app.routes.raster_map import create_raster_map_router
+from eolab_app.source_files import SourceFileError
 from eolab_app.processing.source_access import create_model_source_files
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
@@ -227,18 +229,70 @@ def create_app(
         queue_wait_seconds=app_global_configuration.raster_statistics_queue_wait_seconds,
         max_waiters=app_global_configuration.raster_statistics_max_waiters,
     )
-    raster_feature = create_raster_feature(
-        RasterPublicationService(
-            raster_catalog,
-            raster_source_resolver,
-            GeoServerRasterPublisher(
-                geoserver_rest_client,
-                app_global_configuration.geoserver_internal_url,
-            ),
-            published_rasters,
+    raster_publication = RasterPublicationService(
+        raster_catalog,
+        raster_source_resolver,
+        GeoServerRasterPublisher(
+            geoserver_rest_client,
+            app_global_configuration.geoserver_internal_url,
         ),
         published_rasters,
+        source_access=raster_sources,
+        source_available=processing_service.model_artifact_is_available,
     )
+    raster_feature = create_raster_feature(
+        raster_publication,
+        published_rasters,
+        lambda request, response: get_processing_session_owner_hash(
+            request, response, processing_session_ttl
+        ),
+    )
+
+    async def authorize_map_layers(
+        layer_names: tuple[str, ...], request: Request
+    ) -> bool:
+        """Supply current-session access to ordinary rendering without coupling its services.
+
+        Args:
+            layer_names: Validated layer identities requested for WMS or composition.
+            request: Browser request carrying its existing HttpOnly session cookie.
+
+        Returns:
+            Whether the response contains private run output.
+
+        Raises:
+            HTTPException: If ownership, expiry or file availability rejects access.
+        """
+        if not any(temporary_raster_source(name) for name in layer_names):
+            return False
+        owner = get_processing_session_owner_hash(
+            request, Response(), processing_session_ttl
+        )
+        try:
+            return await raster_publication.authorize_layers(layer_names, owner)
+        except SourceFileError as error:
+            raise HTTPException(
+                error.status, str(error), headers={"Cache-Control": "private, no-store"}
+            ) from error
+
+    async def reconcile_output_publications() -> None:
+        """Retry temporary GeoServer cleanup independently of model execution.
+
+        Runs every thirty seconds while the API is alive. Private WMS access
+        checks expiry on every request, including when cleanup is unavailable.
+
+        Raises:
+            asyncio.CancelledError: On application shutdown.
+        """
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await raster_publication.cleanup()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Temporary raster publication cleanup will retry."
+                )
+
     vector_catalog = StacVectorCatalog(
         catalog_client,
         app_global_configuration.catalog_internal_url,
@@ -321,7 +375,13 @@ def create_app(
             ):
                 client_stack.push_async_callback(client.aclose)
             client_stack.push_async_callback(render_queue.close)
-            yield
+            publication_cleanup = asyncio.create_task(reconcile_output_publications())
+            try:
+                yield
+            finally:
+                publication_cleanup.cancel()
+                with suppress(asyncio.CancelledError):
+                    await publication_cleanup
 
     application = FastAPI(
         title=app_global_configuration.app_title,
@@ -355,14 +415,6 @@ def create_app(
             raster_statistics_service,
             source_access=raster_sources,
             session_owner=lambda request, response: get_processing_session_owner_hash(
-                request, response, processing_session_ttl
-            ),
-        )
-    )
-    application.include_router(
-        create_raster_map_router(
-            RasterMapWindows(raster_sources),
-            lambda request, response: get_processing_session_owner_hash(
                 request, response, processing_session_ttl
             ),
         )
@@ -437,6 +489,8 @@ def create_app(
             (raster_feature.registry, vector_feature.registry),
             get_map_request_tracker,
             render_queue,
+            authorize_layers=authorize_map_layers,
+            hidden_layer=lambda name: temporary_raster_source(name) is not None,
         )
     )
     application.include_router(
@@ -449,6 +503,7 @@ def create_app(
             get_map_request_tracker,
             render_queue,
             app_global_configuration.composite_tile_cache_bytes,
+            authorize_layers=authorize_map_layers,
         )
     )
 

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,6 +22,23 @@ class LeasedSourceFile(Protocol):
     sha256: str
     media_type: str
     lease_id: str
+
+
+@dataclass(frozen=True)
+class ResolvedSourceFile:
+    """An authorized immutable file for a short read that may race cleanup.
+
+    Attributes:
+        path: Server-resolved confined original file.
+        size: Published byte count.
+        sha256: Checksum established when the original file was published.
+        media_type: Published file format.
+    """
+
+    path: Path
+    size: int
+    sha256: str
+    media_type: str
 
 
 class SourceFileError(Exception):
@@ -106,6 +124,7 @@ class LeasedSourceFiles:
         renew: Callable[[str], Awaitable[bool]],
         *,
         renewal_seconds: float = 10,
+        resolve: Callable[[str, str, str], Awaitable[ResolvedSourceFile]] | None = None,
     ) -> None:
         """Connect file authority without importing any storage or job implementation.
 
@@ -115,6 +134,7 @@ class LeasedSourceFiles:
             check: Reauthorize and return current size, checksum and media type.
             renew: Extend a live lease; false means it was lost.
             renewal_seconds: Interval shorter than the owning lease lifetime.
+            resolve: Owner-checked file resolution for short reads without retention.
 
         Raises:
             ValueError: If renewal timing is not positive.
@@ -128,7 +148,33 @@ class LeasedSourceFiles:
             renew,
         )
         self.renewal_seconds = renewal_seconds
+        self._resolve = resolve
         self._verification_slots = asyncio.Semaphore(2)
+
+    async def resolve(
+        self, owner: str, run_id: str, file_id: str
+    ) -> ResolvedSourceFile:
+        """Authorize a short read without hashing or retaining the entire file.
+
+        The file's owner confines its path and checks current access and expiry.
+        Consumers handle an unavailable file if cleanup races the subsequent read.
+
+        Args:
+            owner: Server-derived session hash.
+            run_id: Opaque run identity.
+            file_id: Opaque immutable file identity.
+
+        Returns:
+            Current original-file location and its publication metadata.
+
+        Raises:
+            SourceFileError: If short-read resolution or the file is unavailable.
+        """
+        if self._resolve is None:
+            raise SourceFileError(
+                "This source does not support interactive reads.", 404
+            )
+        return await self._resolve(owner, run_id, file_id)
 
     async def _acquire(self, owner: str, run_id: str, file_id: str) -> LeasedSourceFile:
         """Release a late lease if cancellation races its asynchronous acquisition.

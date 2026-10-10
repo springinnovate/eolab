@@ -51,7 +51,6 @@ def test_artifact_previews_use_only_authorized_delivery_and_neutral_reading() ->
     assert {name for name in imports if name.startswith("eolab_app.")} == {
         "eolab_app.execution.bounded_process",
         "eolab_app.raster.source_contract",
-        "eolab_app.raster.map_rendering",
         "eolab_app.source_files",
     }
 
@@ -129,28 +128,13 @@ def test_raster_preflight_and_approximate_view_edges_are_removed() -> None:
     assert "eolab_app.raster.eligibility" not in composition_imports
 
 
-def test_raster_window_adapter_uses_only_neutral_original_source_contracts() -> None:
-    """Private map delivery cannot call analysis, Processing or GeoServer implementations."""
-    assert {
-        name
-        for name in imported_modules(Path("src/eolab_app/raster/map_rendering.py"))
-        if name.startswith("eolab_app.")
-    } == {
-        "eolab_app.raster.models",
-        "eolab_app.raster.source_models",
-        "eolab_app.raster.source_access",
-        "eolab_app.raster.source_contract",
-        "eolab_app.source_files",
-    }
-    assert {
-        name
-        for name in imported_modules(Path("src/eolab_app/routes/raster_map.py"))
-        if name.startswith("eolab_app.")
-    } == {
-        "eolab_app.raster.errors",
-        "eolab_app.raster.map_rendering",
-        "eolab_app.raster.source_models",
-        "eolab_app.routes.http_disconnect",
-        "eolab_app.routes.raster_http",
-        "eolab_app.source_files",
-    }
+def test_temporary_rasters_reuse_publication_without_processing_imports() -> None:
+    """Keep output rendering on WMS and ownership callbacks outside feature imports."""
+    assert not Path("src/eolab_app/raster/map_rendering.py").exists()
+    assert not Path("src/eolab_app/routes/raster_map.py").exists()
+    assert not Path("frontend/src/raster/window-layer.js").exists()
+    imports = imported_modules(Path("src/eolab_app/raster/publication.py"))
+    assert not any(name.startswith("eolab_app.processing") for name in imports)
+    assert "eolab_app.raster.source_access" in imports
+    compose = APPLICATION_COMPOSITION_SOURCE.read_text(encoding="utf-8")
+    assert "source_available=processing_service.model_artifact_is_available" in compose

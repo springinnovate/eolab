@@ -22,10 +22,11 @@ export class CompositeMapPlanClient {
      */
     async create(layers, signal) {
         const response = await fetch(this.url, {
-            method: "POST",
+            method: "POST", credentials: "same-origin", cache: "no-store",
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
+                "X-EOLab-Processing": "1",
             },
             body: JSON.stringify({ layers }),
             signal,

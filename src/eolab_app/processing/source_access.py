@@ -2,8 +2,11 @@
 
 from eolab_app.processing.models import ArtifactDownload, ProcessingError
 from eolab_app.processing.service import ProcessingService
-from eolab_app.source_files import LeasedSourceFiles, SourceFileError
-
+from eolab_app.source_files import (
+    LeasedSourceFiles,
+    ResolvedSourceFile,
+    SourceFileError,
+)
 
 def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
     """Expose the existing artifact authority without leaking Processing errors to readers.
@@ -68,4 +71,27 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
         """
         return await service.transfer_heartbeat(lease, release=True)
 
-    return LeasedSourceFiles(acquire, release, check, service.transfer_heartbeat)
+    async def resolve(owner: str, run_id: str, file_id: str) -> ResolvedSourceFile:
+        """Resolve an owned file for an interactive read without acquiring a lease.
+
+        Args:
+            owner: Server-derived session hash.
+            run_id: Opaque run identity.
+            file_id: Opaque file identity.
+
+        Returns:
+            Confined original file and publication metadata.
+
+        Raises:
+            SourceFileError: If ownership, expiry or file availability fails.
+        """
+        try:
+            return await service.resolve_model_artifact(owner, run_id, file_id)
+        except ProcessingError as error:
+            raise SourceFileError(
+                error.detail, error.status, code=error.code
+            ) from error
+
+    return LeasedSourceFiles(
+        acquire, release, check, service.transfer_heartbeat, resolve=resolve
+    )

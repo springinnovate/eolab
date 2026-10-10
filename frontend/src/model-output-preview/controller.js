@@ -1,6 +1,6 @@
 /** Keep opt-in output displays tied to their originating run and file lifetime. */
 import { PREVIEW_MEDIA_TYPES, readArtifactPreview } from "./api.js";
-import { describeRasterSource } from "../raster/window-api.js";
+import { describeRasterSource } from "../raster/source-api.js";
 import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
 
 /** Return the map identity of one run's immutable file.
@@ -30,7 +30,7 @@ export class ModelOutputLayers {
      * @param {(key:string,data:Object,appearance:Object)=>Object} dependencies.createLayer Create a Leaflet-compatible display.
      * @param {(jobId:string)=>void} dependencies.openRun Open the originating run's details.
      * @param {()=>void} dependencies.onChange Refresh output buttons and the private-map notice.
-     * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Object} dependencies.addRaster Attach through the common raster owner.
+     * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addRaster Attach through the common raster owner.
      * @param {Function} [dependencies.describe=describeRasterSource] Original-source metadata reader.
      * @param {Function} [dependencies.read=readArtifactPreview] Bounded preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
@@ -79,8 +79,7 @@ export class ModelOutputLayers {
                 if (!bbox) throw new Error("This raster cannot be placed on the map. Download it or choose it directly as a model input.");
                 if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This raster crosses unsupported map bounds.");
                 const state = {key, jobId: job.jobId, runName: job.label, file, expiresAt: job.expiresAt, kind: "raster"};
-                this.layers.set(key, state);
-                this.addRaster({source, version: metadata.version, bbox, label: file.label,
+                const retained = await this.addRaster({source, version: metadata.version, bbox, label: file.label,
                     group: {id: job.jobId, label: job.label},
                     capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
                         calculations: true, modelInput: true}}, {
@@ -92,7 +91,9 @@ export class ModelOutputLayers {
                     copy: appearance => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance}),
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
-                }, {visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance});
+                }, {visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                    isCurrent: () => !this.destroyed && isCurrent() && Date.parse(job.expiresAt) > Date.now()});
+                if (retained !== null) this.layers.set(key, state);
                 this.schedule(); return;
             }
             const data = await this.read(job.jobId, file, abort.signal);

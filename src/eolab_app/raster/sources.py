@@ -143,3 +143,11 @@ class PublishedRasterRegistry:
             )
         source_path, approved_signature = authorization
         return PublishedRasterAuthorization(source_path, approved_signature)
+
+    def revoke(self, layer_name: str) -> None:
+        """Forget one expired publication after its GeoServer cleanup completes.
+
+        Args:
+            layer_name: Exact workspace-qualified raster publication.
+        """
+        self._sources.pop(layer_name, None)

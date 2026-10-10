@@ -116,10 +116,10 @@ and legends. They also participate in pixel picking, **Distributions**,
 These tools read the original GeoTIFF; changing colors or making a category
 transparent does not change its numeric values or exclude it from calculations.
 
-The map loads a bounded grid for the visible area and requests finer detail when
-you zoom. Very broad views that exceed reading limits ask you to zoom in. Moving,
-hiding or removing the layer cancels its outstanding display request. Download
-the GeoTIFF to keep the full-resolution file. Small WGS84 GeoJSON outputs still
+The map uses the same GeoServer tiles as catalog rasters, including detail as
+you zoom, style changes and tile retry controls. Pixel picking reads the original
+file directly through the ordinary raster reader. Download the GeoTIFF to keep
+the full-resolution file. Small WGS84 GeoJSON outputs still
 use solid point, line or polygon previews. Up to eight result layers can be on
 the map at once, grouped by the run that produced each file.
 

@@ -7,8 +7,7 @@
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
-import { createRasterWindowLayer } from "./window-layer.js";
-import { publishCatalogRaster } from "./api.js";
+import { publishRasterSource } from "./api.js";
 import {
     loadRasterStatistics,
     loadRasterPairedStatistics,
@@ -128,7 +127,7 @@ function canRetryRasterStatistics(error) {
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
  * one selected raster Item.
- * @property {(raster:import('../raster-source.js').RasterDescriptor,lifecycle:Object,presentation?:Object)=>Object}
+ * @property {(raster:import('../raster-source.js').RasterDescriptor,lifecycle:Object,presentation?:Object)=>Promise<Object|null>}
  * showSource Retain an authorized original raster through the same controls.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
@@ -186,8 +185,8 @@ function canRetryRasterStatistics(error) {
  * adapter created only when the viewer owns its neutral controller.
  * @property {MapLayerController|null} [mapLayerController=null] Neutral shared
  * retained-layer controller supplied by application composition.
- * @property {(item: Object) => Promise<Object>}
- * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
+ * @property {(item:Object,fetcher?:Function,signal?:AbortSignal)=>Promise<Object>}
+ * [publishRaster=publishRasterSource] Publishes one original raster.
  * @property {(item: Object, samplingArea:Object, signal:AbortSignal)
  * => Promise<Object>} [loadStatistics=loadRasterStatistics] Loads whole
  * or selected statistics.
@@ -204,7 +203,6 @@ function canRetryRasterStatistics(error) {
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
  * =>Promise<Object>} [loadPairedStatistics=loadRasterPairedStatistics]
  * Loads paired X-reference statistics.
- * @property {Function} [createWindowLayer=createRasterWindowLayer] Authorized viewport renderer factory.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
@@ -260,14 +258,13 @@ export function initializeRasterViewer(
         controlsView = null,
         layerStackView = null,
         mapLayerController = null,
-        publishRaster = publishCatalogRaster,
+        publishRaster = publishRasterSource,
         loadStatistics = loadRasterStatistics,
         samplePixel = sampleRasterPixel,
         sampleCursorPixel = samplePixel,
         loadPairedStatistics = loadRasterPairedStatistics,
         cursorValuesView = null,
         clock = globalThis,
-        createWindowLayer = createRasterWindowLayer,
     } = {}
 ) {
     if (typeof onHistogramRequested !== "function") {
@@ -2028,20 +2025,14 @@ export function initializeRasterViewer(
             return session;
         },
         /**
-         * Construct the raster through its WMS or authorized viewport delivery adapter.
+         * Construct the raster through the ordinary GeoServer WMS tile adapter.
          *
          * @param {Object} record Record containing publication and raster state.
          * @param {() => void} reportTileError Controller-owned failure callback.
          * @return {Object} Leaflet-compatible raster layer, not yet attached.
          */
         createLayer(record, reportTileError) {
-            const layer = record.state.item.source
-                ? createWindowLayer(leaflet, leafletMap, {...record.state.item, key: record.entry.key},
-                    rasterSessionAppearance(record.state), message => {
-                        if (mapLayers.getRecord(record.entry.key) !== record) return;
-                        mapLayers.updateRenderingError(record.entry.key, message);
-                    })
-                : createRasterLayer(record.publication, record.state.rasterStyle, reportTileError);
+            const layer = createRasterLayer(record.publication, record.state.rasterStyle, reportTileError);
             record.state.layer = layer;
             if (record.state.appearanceMode === "categorical") {
                 setRasterLayerAppearance(layer, rasterSessionAppearance(record.state));
@@ -4369,16 +4360,18 @@ export function initializeRasterViewer(
         return publication;
     }
 
-    /** Attach a source descriptor to the ordinary raster style and analysis owner.
+    /** Publish and attach a source through ordinary raster tiles, style and analysis.
      * @param {Object} raster Original source, metadata, label, group and capabilities.
      * @param {Object} lifecycle Composition-supplied info, Undo and removal callbacks.
-     * @param {Object} [presentation={}] Visibility, opacity and optional restored appearance.
-     * @return {Object} Retained raster record; no catalog item is created.
+     * @param {Object} [presentation={}] Visibility, opacity, restored appearance, signal and isCurrent callback.
+     * @return {Promise<Object|null>} Retained raster record, or null after cancellation.
      * @throws {Error} If identity, appearance or layer construction fails.
      */
-    function showSource(raster, lifecycle, presentation = {}) {
+    async function showSource(raster, lifecycle, presentation = {}) {
+        const publication = await publishRaster(raster, undefined, presentation.signal);
+        if (presentation.signal?.aborted || presentation.isCurrent?.() === false) return null;
         const key = rasterSourceKey(raster);
-        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation}, rasterMapLayerAdapter);
+        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation, publication}, rasterMapLayerAdapter);
         renderLayerHistogramSummaries();
         return record;
     }
