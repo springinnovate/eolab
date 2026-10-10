@@ -38,18 +38,13 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
-from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
+from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.downstream_models import (
+    DownstreamLimits,
     DownstreamRequest,
     DownstreamPlan,
     DownstreamNumericalPolicy,
     VectorStartingMask,
-    MAX_ROUTING_CELLS,
-    MAX_VALUE_CELLS,
-    MAX_WATERSHEDS,
-    MAX_COORDINATES,
-    MAX_TERMINALS,
-    MAX_DISTANCE_PAIRS,
     FLOW_THRESHOLD,
 )
 from eolab_app.processing.ground_area import PixelAreaCalculator
@@ -105,6 +100,7 @@ class Watershed:
 def read_network(
     sources: DownstreamSources,
     request: DownstreamRequest,
+    limits: DownstreamLimits,
     starting: BaseGeometry | None = None,
     selected: tuple[int | str, ...] | None = None,
 ) -> dict[int | str, Watershed]:
@@ -121,6 +117,7 @@ def read_network(
     Args:
         sources: Authorized complete network reader.
         request: Captured field mappings and prepared configuration.
+        limits: Deployment watershed/coordinate budgets for this run.
         starting: Exact geographic starting area used for the initial spatial query.
         selected: Previously admitted IDs when rereading an execution plan.
 
@@ -176,7 +173,10 @@ def read_network(
                 if identifier in result:
                     continue
                 coordinates += int(get_num_coordinates(polygon))
-                if len(result) >= MAX_WATERSHEDS or coordinates > MAX_COORDINATES:
+                if (
+                    len(result) >= limits.max_watersheds
+                    or coordinates > limits.max_watershed_coordinates
+                ):
                     raise ProcessingError(
                         "model_too_large",
                         "The selected drainage exceeds this worker's feature or geometry limit.",
@@ -239,7 +239,7 @@ def read_network(
 
 
 def starting_geometry(
-    sources: DownstreamSources, limits: RasterClipLimits
+    sources: DownstreamSources, limits: DownstreamLimits
 ) -> BaseGeometry:
     """Read the selected vector polygons or positive raster mask cells as a starting area.
 
@@ -256,7 +256,7 @@ def starting_geometry(
     if sources.starting is None:
         with rasterio.open(sources.rasters["starting_mask"]) as dataset:
             validate_supported_raster(dataset, sources.rasters["starting_mask"])
-            if dataset.width * dataset.height > MAX_ROUTING_CELLS:
+            if dataset.width * dataset.height > limits.max_mask_cells:
                 raise ProcessingError(
                     "model_too_large",
                     "The starting mask exceeds the native read limit. Clip it to the intended starting area first.",
@@ -351,7 +351,7 @@ def select_downstream_watersheds(
 
 
 def plan_native_grid(
-    dataset: Any, geometry: BaseGeometry, limit: int, limits: RasterClipLimits
+    dataset: Any, geometry: BaseGeometry, limit: int, limits: DownstreamLimits
 ) -> ClipGrid:
     """Measure an original raster window before allocating its data or distance arrays.
 
@@ -405,7 +405,7 @@ def plan_native_grid(
 
 
 def plan_downstream(
-    sources: DownstreamSources, request: DownstreamRequest, limits: RasterClipLimits
+    sources: DownstreamSources, request: DownstreamRequest, limits: DownstreamLimits
 ) -> DownstreamPlan:
     """Admit watershed expansion and native input work without writing scratch files.
 
@@ -421,9 +421,9 @@ def plan_downstream(
         ProcessingError: If coverage, source structure or resource limits fail.
     """
     starting = starting_geometry(sources, limits)
-    network = read_network(sources, request, starting)
+    network = read_network(sources, request, limits, starting)
     identifiers = select_downstream_watersheds(network, starting)
-    groups = group_watersheds_by_sink(network, identifiers)
+    groups = group_watersheds_by_sink(network, identifiers, limits)
     region = unary_union([network[item].geometry for item in identifiers])
     if not region.covers(starting):
         raise ProcessingError(
@@ -433,8 +433,8 @@ def plan_downstream(
         )
     with rasterio.open(sources.rasters["dem"]) as dataset:
         validate_supported_raster(dataset, sources.rasters["dem"])
-        routing = plan_native_grid(dataset, region, MAX_ROUTING_CELLS, limits)
-        if len(groups) * routing.width * routing.height > MAX_ROUTING_CELLS:
+        routing = plan_native_grid(dataset, region, limits.max_routing_cells, limits)
+        if len(groups) * routing.width * routing.height > limits.max_routing_cells:
             raise ProcessingError(
                 "model_too_large",
                 "The combined drainage networks exceed routing work capacity. Choose a smaller area.",
@@ -453,10 +453,10 @@ def plan_downstream(
             )
     with rasterio.open(sources.rasters["values"]) as dataset:
         validate_supported_raster(dataset, sources.rasters["values"])
-        values = plan_native_grid(dataset, region, MAX_VALUE_CELLS, limits)
+        values = plan_native_grid(dataset, region, limits.max_value_cells, limits)
     if sources.starting is None:
         with rasterio.open(sources.rasters["starting_mask"]) as dataset:
-            plan_native_grid(dataset, starting, MAX_ROUTING_CELLS, limits)
+            plan_native_grid(dataset, starting, limits.max_mask_cells, limits)
     reserved = routing.reservedBytes + values.reservedBytes
     if reserved > limits.max_stored_bytes:
         raise ProcessingError(
@@ -506,6 +506,7 @@ def buffer_cell_mask(
     lat: NDArray[np.float64],
     origins: NDArray[np.bool_],
     metres: float,
+    max_pairs: int = DownstreamLimits().max_distance_pairs,
 ) -> NDArray[np.bool_]:
     """Expand a cell mask to include cell centers within the requested buffer distance.
 
@@ -521,6 +522,7 @@ def buffer_cell_mask(
         lat: Latitude of each admitted grid center.
         origins: Boolean mask of starting cells; True cells are always retained.
         metres: Inclusive nonnegative distance threshold.
+        max_pairs: Maximum ambiguous candidate pairs to check exactly.
 
     Returns:
         Boolean mask with True at original cells and all cell centers within
@@ -557,7 +559,7 @@ def buffer_cell_mask(
         for index in possible[distances > metres]:
             count = tree.query_ball_point(points[index], metres, return_length=True)
             work += count
-            if work > MAX_DISTANCE_PAIRS:
+            if work > max_pairs:
                 raise ProcessingError(
                     "model_too_large",
                     "The buffer needs too many distance comparisons. Choose a smaller area.",
@@ -578,7 +580,7 @@ def sample_native_mask(
     path: Path,
     lon: NDArray[np.float64],
     lat: NDArray[np.float64],
-    limits: RasterClipLimits,
+    limits: DownstreamLimits,
 ) -> NDArray[np.bool_]:
     """Read positive mask values at routing centers without interpolating values.
 
@@ -611,7 +613,7 @@ def sample_native_mask(
         x0, x1 = int(cols[inside].min()), int(cols[inside].max()) + 1
         y0, y1 = int(rows[inside].min()), int(rows[inside].max()) + 1
         window = Window(x0, y0, x1 - x0, y1 - y0)
-        if window.width * window.height > MAX_ROUTING_CELLS:
+        if window.width * window.height > limits.max_mask_cells:
             raise ProcessingError(
                 "model_too_large",
                 "The starting raster mask exceeds the native read limit.",
@@ -663,7 +665,9 @@ def write_downstream_geotiff(
 
 
 def group_watersheds_by_sink(
-    network: dict[int | str, Watershed], selected: tuple[int | str, ...]
+    network: dict[int | str, Watershed],
+    selected: tuple[int | str, ...],
+    limits: DownstreamLimits,
 ) -> dict[int | str, list[BaseGeometry]]:
     """Group selected watershed polygons by the real sink they drain into.
 
@@ -673,6 +677,7 @@ def group_watersheds_by_sink(
     Args:
         network: Current prepared network records.
         selected: Admitted downstream partition identities.
+        limits: Maximum independent sink groups admitted for this deployment.
 
     Returns:
         Process-local polygon groups, one for each real terminal drainage.
@@ -686,7 +691,7 @@ def group_watersheds_by_sink(
         while network[current].downstream is not None:
             current = network[current].downstream
         groups.setdefault(current, []).append(network[identifier].geometry)
-    if len(groups) > MAX_TERMINALS:
+    if len(groups) > limits.max_terminals:
         raise ProcessingError(
             "model_too_large",
             "The starting mask reaches too many drainage networks. Choose a smaller area.",
@@ -699,7 +704,7 @@ def calculate_downstream(
     sources: DownstreamSources,
     spec: DownstreamPlan,
     directory: Path,
-    limits: RasterClipLimits,
+    limits: DownstreamLimits,
 ) -> AggregateArtifact:
     """Compute combined downstream coverage and summarize native values in one process.
 
@@ -735,11 +740,11 @@ def calculate_downstream(
         raise ProcessingError(
             "source_changed", "The model inputs changed after preparation.", 409
         )
-    network = read_network(sources, request, selected=spec.watersheds)
-    groups = group_watersheds_by_sink(network, spec.watersheds)
+    network = read_network(sources, request, limits, selected=spec.watersheds)
+    groups = group_watersheds_by_sink(network, spec.watersheds, limits)
     if (
         len(groups) * spec.routingGrid.width * spec.routingGrid.height
-        > MAX_ROUTING_CELLS
+        > limits.max_routing_cells
     ):
         raise ProcessingError(
             "model_too_large",
@@ -772,7 +777,7 @@ def calculate_downstream(
             projected = project_wgs84_polygons(
                 dataset,
                 tuple(mapping(polygon) for polygon in polygons),
-                MAX_COORDINATES,
+                limits.max_watershed_coordinates,
             )
             inside = geometry_mask(
                 projected,
@@ -834,9 +839,14 @@ def calculate_downstream(
     write_progress(directory, "buffering_downstream_coverage", 0, 0)
     # True cells form the area used to summarize the values raster: downstream
     # cells plus their buffer, restricted to the watershed domain and cutoff.
-    summary_coverage = buffer_cell_mask(lon, lat, reached, request.buffer_m) & domain
+    summary_coverage = (
+        buffer_cell_mask(lon, lat, reached, request.buffer_m, limits.max_distance_pairs)
+        & domain
+    )
     if request.cutoff_m is not None:
-        summary_coverage &= buffer_cell_mask(lon, lat, seeds, request.cutoff_m)
+        summary_coverage &= buffer_cell_mask(
+            lon, lat, seeds, request.cutoff_m, limits.max_distance_pairs
+        )
     write_progress(directory, "summarizing_values", 0, 0)
     root = compile_expression(request.summary, "a")
     calculation = Calculation(root)

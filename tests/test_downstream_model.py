@@ -19,12 +19,11 @@ from eolab_app.processing.downstream_calculation import (
     plan_downstream,
     buffer_cell_mask,
 )
-from eolab_app.processing.downstream_models import DownstreamRequest
+from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamLimits
 from eolab_app.processing.hydrology_validation import (
     validate_hydrology_sources,
     HydrologyValidationLimits,
 )
-from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.prepared_hydrology import NetworkTermination
 from eolab_app.raster.models import AuthorizedRaster
@@ -34,7 +33,7 @@ from test_prepared_hydrology import prepare_sources
 
 def scaled_downstream_fixture(
     directory: Path, width: int, height: int
-) -> tuple[DownstreamSources, DownstreamRequest, RasterClipLimits]:
+) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
     """Generate the same three-basin reference at a larger native resolution.
 
     Args:
@@ -79,7 +78,7 @@ def scaled_downstream_fixture(
 
 def downstream_fixture(
     directory: Path, *, values: np.ndarray | None = None, formula: str = "sum(a)"
-) -> tuple[DownstreamSources, DownstreamRequest, RasterClipLimits]:
+) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
     """Create a prepared three-basin eastward slope and a first-column raster mask.
 
     Args:
@@ -139,7 +138,7 @@ def downstream_fixture(
         network,
         None,
     )
-    return sources, request, RasterClipLimits(free_space_floor=0)
+    return sources, request, DownstreamLimits(free_space_floor=0)
 
 
 @pytest.mark.parametrize("tiled", [True, False])
@@ -294,7 +293,7 @@ def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> N
     """
     sources, request, _ = downstream_fixture(tmp_path)
     with pytest.raises(ProcessingError, match="native cells"):
-        plan_downstream(sources, request, RasterClipLimits(process_memory_bytes=1024))
+        plan_downstream(sources, request, DownstreamLimits(process_memory_bytes=1024))
 
 
 @pytest.mark.parametrize(
@@ -750,3 +749,37 @@ def test_routing_preserves_projected_and_non_wgs84_terrain(
     with rasterio.open(directory / "coverage.tif") as dataset:
         assert dataset.crs.to_epsg() == int(crs.split(":")[1])
         assert tuple(dataset.transform)[:6] == spec.routingGrid.transform
+
+
+@pytest.mark.parametrize(
+    "budget,ceiling",
+    [
+        ("max_routing_cells", 23),
+        ("max_value_cells", 23),
+        ("max_mask_cells", 23),
+        ("max_watersheds", 2),
+        ("max_watershed_coordinates", 10),
+    ],
+)
+def test_downstream_uses_configured_work_budgets(
+    tmp_path: Path, budget: str, ceiling: int
+) -> None:
+    """Lower budgets reject work in preparation and when executing a saved plan.
+
+    Args:
+        tmp_path: Original sources and private attempt.
+        budget: Administrator setting for the measured input work.
+        ceiling: Less than the reference dataset requires.
+    """
+    sources, request, limits = downstream_fixture(tmp_path / "sources")
+    spec = plan_downstream(sources, request, limits)
+    restricted = replace(limits, **{budget: ceiling})
+    with pytest.raises(ProcessingError, match=".") as preparing:
+        plan_downstream(sources, request, restricted)
+    assert preparing.value.code == "model_too_large"
+    directory = tmp_path / "attempt"
+    directory.mkdir()
+    with pytest.raises(ProcessingError) as running:
+        calculate_downstream(sources, spec, directory, restricted)
+    assert running.value.code == "model_too_large"
+    assert not list(directory.iterdir())

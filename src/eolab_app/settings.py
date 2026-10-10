@@ -4,11 +4,12 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
 from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.downstream_models import DownstreamLimits
 
 APPLICATION_VERSION_PATH = Path("/app/version")
 
@@ -65,6 +66,42 @@ def load_processing_limits() -> RasterClipLimits:
             "PROCESSING_MAX_EXECUTION_MEMORY_BYTES must fit PROCESSING_PROCESS_MEMORY_BYTES"
         )
     return RasterClipLimits(**values)
+
+
+def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
+    """Load administrator downstream-work budgets while preserving Processing limits.
+
+    Args:
+        limits: Validated job, source-read, memory and storage settings.
+
+    Returns:
+        Downstream settings for the worker's preparation and native execution.
+
+    Raises:
+        ValueError: If an override is blank, nonintegral, nonpositive or exceeds
+            the signed 64-bit configuration range; names the offending variable.
+    """
+    defaults = DownstreamLimits()
+    values = asdict(limits)
+    for attribute in (
+        "max_routing_cells",
+        "max_value_cells",
+        "max_mask_cells",
+        "max_watersheds",
+        "max_watershed_coordinates",
+        "max_terminals",
+        "max_distance_pairs",
+    ):
+        name = "PROCESSING_DOWNSTREAM_" + attribute.upper()
+        raw = os.environ.get(name, str(getattr(defaults, attribute)))
+        try:
+            value = int(raw)
+        except ValueError as error:
+            raise ValueError(f"{name} must be an integer") from error
+        if not 1 <= value <= 2**63 - 1:
+            raise ValueError(f"{name} must be between 1 and {2**63 - 1}")
+        values[attribute] = value
+    return DownstreamLimits(**values)
 
 
 @dataclass(frozen=True)

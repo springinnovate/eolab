@@ -83,6 +83,7 @@ from eolab_app.settings import (
     load_settings,
     load_processing_worker_settings,
     load_processing_limits,
+    load_downstream_limits,
 )
 from eolab_app.vector.assessment import (
     VectorAssessmentFinalizer,
@@ -199,6 +200,8 @@ def create_app(
         selection_executor=SelectionJobs(vector_jobs),
     )
     processing_limits = load_processing_limits()
+    # Validate shared deployment settings at API startup.
+    load_downstream_limits(processing_limits)
     processing_events = PostgresJobEvents()
     processing_store = PostgresJobStore(processing_limits)
     processing_service = ProcessingService(
@@ -571,6 +574,7 @@ async def run_processing_worker() -> None:
     """
     settings = load_processing_worker_settings()
     limits = load_processing_limits()
+    downstream_limits = load_downstream_limits(limits)
     artifacts = LocalJobArtifacts(
         settings.processing_data_path, (Path.cwd(), settings.scan_mount_path)
     )
@@ -619,6 +623,7 @@ async def run_processing_worker() -> None:
                     limits,
                     native=execution_native,
                     areas=areas,
+                    downstream_limits=downstream_limits,
                 )
                 workers.create_task(
                     serve_processing(worker, PostgresJobWakeup(), cleanup_lock)

@@ -26,6 +26,7 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.source_files import verify_source_file
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
+from eolab_app.processing.downstream_models import DownstreamLimits
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -53,6 +54,7 @@ class ProcessingWorker:
         *,
         native: ReusableProcess | None = None,
         areas: CatalogSelectionReader | None = None,
+        downstream_limits: DownstreamLimits | None = None,
     ) -> None:
         """Compose the worker's narrow capabilities.
 
@@ -63,6 +65,7 @@ class ProcessingWorker:
             limits: Deployment-wide bounded processing policy.
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
+            downstream_limits: Optional administrator settings for downstream work.
         """
         self.areas = areas
         self.authorizer = authorizer
@@ -71,6 +74,9 @@ class ProcessingWorker:
         self.limits = limits
         self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
+        self.downstream_limits = downstream_limits or DownstreamLimits.with_lifecycle(
+            limits
+        )
         # Fail startup for invalid packaged definitions rather than hiding them
         # from discovery or accepting work the worker cannot dispatch.
         ModelRegistry.load_installed()
@@ -96,6 +102,7 @@ class ProcessingWorker:
             run_process,
             reuse_results,
             source_checksum,
+            downstream_limits=self.downstream_limits,
         )
 
     async def _resolve_source(

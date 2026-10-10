@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.downstream_models import (
+    DownstreamLimits,
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
@@ -18,7 +19,6 @@ from eolab_app.processing.downstream_calculation import (
 from eolab_app.processing.model_yaml import compute_document_checksum
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
-from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 
@@ -192,7 +192,7 @@ async def prepare_downstream(
     sources = await resolve_downstream_sources(context, queued.request, authorized)
     status, result = await context.run_native(
         downstream_process_target,
-        ("plan", (sources, queued.request, context.limits)),
+        ("plan", (sources, queued.request, context.downstream_limits)),
         context.limits.plan_timeout_seconds,
         context.native,
     )
@@ -256,7 +256,7 @@ async def check_downstream_execution(
 
 def select_downstream_execution(
     spec: DownstreamPlan, context: OperationContext, reserved_bytes: int
-) -> tuple[Callable[..., None], str, RasterClipLimits]:
+) -> tuple[Callable[..., None], str, DownstreamLimits]:
     """Select sequential downstream execution after verifying the disk reservation.
 
     Args:
@@ -276,7 +276,7 @@ def select_downstream_execution(
             "The downstream run needs a new disk reservation. Submit it again.",
             409,
         )
-    return downstream_process_target, "calculate", context.limits
+    return downstream_process_target, "calculate", context.downstream_limits
 
 
 def describe_downstream_policy(spec: DownstreamPlan) -> DownstreamNumericalPolicy:

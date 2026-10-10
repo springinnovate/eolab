@@ -1,12 +1,14 @@
 """Describe one downstream calculation's inputs, native grids and numerical rules."""
 
+from dataclasses import asdict, dataclass, fields
 from typing import Annotated, Literal
 from sys import float_info
 
 from pydantic import Field, model_validator
 
 from eolab_app.catalog_selection import CatalogSelection
-from eolab_app.processing.clip_models import ClipGrid
+from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
+from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
     PreparedHydrologySnapshot,
@@ -18,14 +20,54 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "f7e2adba2a4d41128aea941bb747470418d2dce9"
-# Admission ceilings are checked again in the native calculation.
-MAX_ROUTING_CELLS = 4_000_000
-MAX_VALUE_CELLS = 4_000_000
-MAX_WATERSHEDS = 100_000
-MAX_COORDINATES = 2_000_000
-MAX_TERMINALS = 64
-MAX_DISTANCE_PAIRS = 4_000_000
 FLOW_THRESHOLD = 100 * float_info.epsilon
+
+
+@dataclass(frozen=True)
+class DownstreamLimits(RasterClipLimits):
+    """Administrator budgets for native downstream work, in addition to job limits.
+
+    Defaults describe the measured small-region profile, not dataset dimensions
+    or algorithmic maxima. Deployment settings can raise or lower them; memory,
+    disk, native-reader and execution-time limits still apply independently.
+
+    Attributes:
+        max_routing_cells: Sum of routing-window cells over separate sink groups.
+        max_value_cells: Native cells in the values-raster window.
+        max_mask_cells: Native cells read from a raster starting mask.
+        max_watersheds: Watershed records retained for one run.
+        max_watershed_coordinates: Coordinates retained across those polygons.
+        max_terminals: Independent sink groups routed sequentially.
+        max_distance_pairs: Ambiguous candidate pairs checked with exact geodesics.
+    """
+
+    max_routing_cells: int = 4_000_000
+    max_value_cells: int = 4_000_000
+    max_mask_cells: int = 4_000_000
+    max_watersheds: int = 100_000
+    max_watershed_coordinates: int = 2_000_000
+    max_terminals: int = 64
+    max_distance_pairs: int = 4_000_000
+
+    @classmethod
+    def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
+        """Copy shared job and source budgets, leaving unrelated operation settings out.
+
+        Args:
+            limits: Worker lifecycle settings, possibly with another operation's
+                additional budgets; matching downstream fields are preserved.
+
+        Returns:
+            Downstream settings with the shared budgets and remaining defaults.
+        """
+        accepted = {field.name for field in fields(cls)}
+        return cls(
+            **{
+                name: value
+                for name, value in asdict(limits).items()
+                if name in accepted
+            }
+        )
 
 
 class RasterStartingMask(HydrologySchema):
@@ -100,7 +142,7 @@ class DownstreamPlan(HydrologySchema):
     inputs: DownstreamRequest
     grid: ClipGrid
     routingGrid: ClipGrid
-    watersheds: tuple[NetworkId, ...] = Field(min_length=1, max_length=MAX_WATERSHEDS)
+    watersheds: tuple[NetworkId, ...] = Field(min_length=1)
     reservedBytes: Annotated[int, Field(gt=0)]
     sourceChecksum: str | None = None
 

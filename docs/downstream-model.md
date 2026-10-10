@@ -64,7 +64,7 @@ catalog source.
 
 ## Bounds and execution
 
-The initial small-region profile admits at most four million routing cells
+By default, the measured small-region profile admits four million routing cells
 summed across terminal groups, four million value cells and four million native
 starting-mask cells. It retains at most 100,000 selected watershed records, two
 million selected watershed coordinates and 64 real drainage groups. Original
@@ -72,6 +72,27 @@ vector stream limits, source block/decoded-byte limits, the configured preparati
 deadline, memory ceiling and total run deadline still apply. The buffer is capped
 at 100 km and the optional cutoff at 1,000 km. Ambiguous exact-distance comparisons
 have a four-million-pair ceiling.
+
+These are administrator settings, not fixed algorithmic maxima or browser model
+parameters. Set the following variables in Compose (omit `EOLAB_` for a direct
+worker deployment), then restart/redeploy the worker. No code changes are needed:
+
+| Setting | Default | Work being limited |
+| --- | ---: | --- |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_ROUTING_CELLS` | 4000000 | Routing-window cells summed over sink groups |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_VALUE_CELLS` | 4000000 | Native values-window cells |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_MASK_CELLS` | 4000000 | Native starting-raster cells |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHEDS` | 100000 | Retained watershed records |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHED_COORDINATES` | 2000000 | Retained polygon coordinates |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_TERMINALS` | 64 | Independently routed sink groups |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_DISTANCE_PAIRS` | 4000000 | Ambiguous exact-distance comparisons |
+
+Four million cells is the largest measured synthetic reference below; it is not
+an estimate of the size of a typical real drainage. Feature, coordinate, sink and
+distance defaults are initial workload policies, not independently benchmarked
+scientific thresholds. Raising a cell limit does not raise the native reader,
+process-memory, storage or timeout budgets. Size those settings together and
+measure representative regional data before admitting larger runs.
 
 Preparation reserves conservative scratch capacity before routing. The native
 operation rechecks its plan and resource limits before allocation. Numerical
