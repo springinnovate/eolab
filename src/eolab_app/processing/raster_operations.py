@@ -690,22 +690,6 @@ async def restore_summary_result(
     )
 
 
-async def skip_clip_cache(
-    context: OperationContext, spec: ClipSpec, directory: Path
-) -> None:
-    """Require native clip execution; scalar cached values cannot supply raster pixels.
-
-    Args:
-        context: Current worker capabilities.
-        spec: Prepared clip specification.
-        directory: Admitted private attempt directory.
-
-    Returns:
-        None, indicating that native execution is required.
-    """
-    return None
-
-
 def collect_summary_cache_values(
     spec: AggregateSpec, artifact: AggregateArtifact
 ) -> dict[str, dict[str, object]] | None:
@@ -723,16 +707,3 @@ def collect_summary_cache_values(
         if artifact.cache_hit
         else prepare_calculation_values_for_cache(spec, artifact.rows)
     )
-
-
-def skip_clip_cache_values(spec: ClipSpec, artifact: Artifact) -> None:
-    """Keep completed raster files outside the scalar-summary cache.
-
-    Args:
-        spec: Completed clip's prepared specification.
-        artifact: Completed clip artifact owned by this job.
-
-    Returns:
-        None; this operation creates no scalar cache entries.
-    """
-    return None

@@ -1,6 +1,5 @@
 """Bind downstream recipes to the existing Processing admission and worker lifecycle."""
 
-from pathlib import Path
 from typing import Any, Callable
 
 from eolab_app.processing.aggregate_models import AggregateArea
@@ -17,7 +16,7 @@ from eolab_app.processing.downstream_calculation import (
     downstream_process_target,
 )
 from eolab_app.processing.model_yaml import compute_document_checksum
-from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
+from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
@@ -319,32 +318,3 @@ def describe_downstream_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
         Scientific outcome fields; the common manifest records each raster.
     """
     return {"statistics": artifact["rows"]}
-
-
-async def skip_downstream_cache(
-    context: OperationContext, spec: DownstreamPlan, directory: Path
-) -> None:
-    """Require fresh routing and outputs for each downstream model run.
-
-    Args:
-        context: Current worker capabilities.
-        spec: Captured prepared plan.
-        directory: Private attempt directory.
-
-    Returns:
-        None; there is no cross-run result reuse.
-    """
-    return None
-
-
-def skip_downstream_cache_values(spec: DownstreamPlan, artifact: Artifact) -> None:
-    """Keep downstream values out of the single-raster summary cache.
-
-    Args:
-        spec: Completed downstream plan.
-        artifact: Completed owned outputs.
-
-    Returns:
-        None; downstream identities are not shared cache keys.
-    """
-    return None

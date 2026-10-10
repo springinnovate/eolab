@@ -321,7 +321,7 @@ class ProcessingWorker:
             row["reserved_bytes"],
             self.limits,
         )
-        if model is None:
+        if model is None and handler.cached is not None:
             value = await handler.cached(context, spec, directory)
             if value is not None:
                 await handler.check_execution(context, spec)
@@ -478,9 +478,10 @@ class ProcessingWorker:
                 reusable_results = None
                 if row["spec"]["operation"] != MODEL_OPERATION:
                     handler = get_model_operation(row["spec"]["operation"])
-                    reusable_results = handler.reusable(
-                        handler.prepared_type.model_validate(row["spec"]), artifact
-                    )
+                    if handler.reusable is not None:
+                        reusable_results = handler.reusable(
+                            handler.prepared_type.model_validate(row["spec"]), artifact
+                        )
                 finished = await asyncio.to_thread(
                     self.jobs.finish,
                     identifier,

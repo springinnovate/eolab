@@ -81,8 +81,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         policy: Report effective numerical settings from a prepared plan.
         result: Describe completed result values and grid metadata.
         outcome: Describe retained scientific metadata in Run YAML.
-        cached: Restore an ordinary operation result when its cache is complete.
-        reusable: Extract newly computed values eligible for existing cache storage.
+        cached: Optional cache reader; None means the operation always computes results.
+        reusable: Optional cache-value extractor; None disables result-cache writes.
         primary_input: Argument bound to the main raster source and its grid metadata.
         extra_sources: Additional catalog rasters to capture and check with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
@@ -113,8 +113,12 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     policy: Callable[[Prepared], BaseModel]
     result: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
     outcome: Callable[[dict[str, Any]], dict[str, Any]]
-    cached: Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]]
-    reusable: Callable[[Prepared, Artifact], dict[str, dict[str, object]] | None]
+    cached: (
+        Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]] | None
+    ) = None
+    reusable: (
+        Callable[[Prepared, Artifact], dict[str, dict[str, object]] | None] | None
+    ) = None
     additional_outputs: tuple[OperationOutput, ...] = ()
     primary_input: str = "raster"
     extra_sources: (
@@ -201,8 +205,6 @@ OPERATIONS = MappingProxyType(
                 policy=downstream.describe_downstream_policy,
                 result=downstream.describe_downstream_result,
                 outcome=downstream.describe_downstream_outcome,
-                cached=downstream.skip_downstream_cache,
-                reusable=downstream.skip_downstream_cache_values,
                 primary_input="values",
                 extra_sources=downstream.get_additional_sources,
                 execution_inputs=downstream.resolve_downstream_execution_inputs,
@@ -253,8 +255,6 @@ OPERATIONS = MappingProxyType(
                 policy=raster.describe_clip_policy,
                 result=raster.describe_clip_result,
                 outcome=raster.describe_clip_outcome,
-                cached=raster.skip_clip_cache,
-                reusable=raster.skip_clip_cache_values,
             ),
         )
     }
