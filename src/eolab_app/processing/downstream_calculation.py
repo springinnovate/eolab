@@ -423,7 +423,7 @@ def plan_downstream(
     starting = starting_geometry(sources, limits)
     network = read_network(sources, request, starting)
     identifiers = select_downstream_watersheds(network, starting)
-    groups = watershed_groups(network, identifiers)
+    groups = group_watersheds_by_sink(network, identifiers)
     region = unary_union([network[item].geometry for item in identifiers])
     if not region.covers(starting):
         raise ProcessingError(
@@ -668,10 +668,13 @@ def write_grid(
         target.write(data, 1)
 
 
-def watershed_groups(
+def group_watersheds_by_sink(
     network: dict[int | str, Watershed], selected: tuple[int | str, ...]
 ) -> dict[int | str, list[BaseGeometry]]:
-    """Separate selected partitions by real sink so virtual links cannot convey flow.
+    """Group selected watershed polygons by the real sink they drain into.
+
+    Each group is routed separately so flow cannot cross a virtual connection
+    from an inland sink into a different drainage network.
 
     Args:
         network: Current prepared network records.
@@ -736,7 +739,7 @@ def calculate_downstream(
             "source_changed", "The model inputs changed after preparation.", 409
         )
     network = read_network(sources, request, selected=spec.watersheds)
-    groups = watershed_groups(network, spec.watersheds)
+    groups = group_watersheds_by_sink(network, spec.watersheds)
     if (
         len(groups) * spec.routingGrid.width * spec.routingGrid.height
         > MAX_ROUTING_CELLS
