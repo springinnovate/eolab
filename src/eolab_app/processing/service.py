@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
@@ -17,7 +18,9 @@ from eolab_app.processing.models import (
     ArtifactDownload,
     JobSubmission,
     ProcessingError,
+    PreparedJobPlan,
 )
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
@@ -233,21 +236,46 @@ class ProcessingService:
                 "models_unavailable", "Model source authorization is unavailable.", 503
             )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
-        authorized = await self.model_authorizer.authorize(
-            operation.source(calculation)
-        )
+        source = operation.source(calculation)
+        signature = None
+        if not isinstance(source, RunArtifactReference):
+            authorized = await self.model_authorizer.authorize(source)
+            signature = tuple(authorized.source_signature.to_catalog())
         reference = operation.polygon(calculation)
         polygons = await self.read_polygon_area(owner, reference) if reference else None
         operation_plan = operation.queue(calculation, polygons)
+        operation_plan = await self.capture_input_file(owner, source, operation_plan)
         prepared = build_model_job_submission(
             operation_plan,
             invocation,
-            tuple(authorized.source_signature.to_catalog()),
+            signature,
         )
         row = await asyncio.to_thread(
             self.jobs.submit, owner, request.requestId, prepared, request_hash
         )
         return public_job(row)
+
+    async def capture_input_file(self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan) -> PreparedJobPlan:
+        """Capture a published raster identity for atomic job-input admission.
+
+        Args:
+            owner: Requesting browser session hash.
+            source: Catalog identity or owned published-file reference.
+            prepared: Operation-owned queued specification.
+
+        Returns:
+            Plan with a private input identity when needed. Private work is not
+            coalesced with another submission; catalog sharing stays unchanged.
+
+        Raises:
+            ProcessingError: If the file is unavailable or is not published raster data.
+        """
+        if not isinstance(source, RunArtifactReference):
+            return prepared
+        file = await asyncio.to_thread(self.jobs.inspect_input_file, owner, source.jobId, source.artifactId)
+        if file.media_type != "image/tiff" or file.role not in {"result", "intermediate"} or file.size <= 0:
+            raise ProcessingError("invalid_raster_input", "Choose a published raster result or scientific raster intermediate.", 422)
+        return replace(prepared, input_files=(file,), work_key=None)
 
     async def list_models(self) -> dict[str, Any]:
         """List every installed model recipe and its setup fields.
@@ -450,6 +478,14 @@ class ProcessingService:
         ).hexdigest()
         operation = get_model_operation("raster.clip.v1")
         prepared = operation.queue(request, None)
+        try:
+            prepared = await self.capture_input_file(owner, operation.source(request), prepared)
+        except ProcessingError:
+            existing = await asyncio.to_thread(self.jobs.find_request, owner, request.requestId)
+            if existing is None or existing["request_hash"] != request_hash:
+                raise
+            require_operation(existing, operation.id)
+            return public_job(existing)
         row = await asyncio.to_thread(
             self.jobs.submit,
             owner,
@@ -565,6 +601,10 @@ class ProcessingService:
                 )
         operation = get_model_operation("raster.aggregate.v1")
         prepared = operation.queue(request, polygons)
+        try:
+            prepared = await self.capture_input_file(owner, operation.source(request), prepared)
+        except ProcessingError as error:
+            return JobSubmission(request.requestId, request_hash, operation.id, error)
         return JobSubmission(request.requestId, request_hash, operation.id, prepared)
 
     async def submit_calculation_batch(

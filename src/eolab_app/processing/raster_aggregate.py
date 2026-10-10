@@ -1,6 +1,7 @@
 """Plan native single-raster calculations and stream scalar results to artifacts."""
 
 from eolab_app.processing.statistics_csv import statistics_csv
+from eolab_app.processing.raster_input import raster_source_filename_prefix
 
 from eolab_app.bounded_vector import PolygonRasterizer
 from contextlib import ExitStack
@@ -718,7 +719,7 @@ def write_statistics_result(
     artifact = AggregateArtifact(
         size=result.stat().st_size,
         sha256=digest,
-        filename=f"{source.item_id}-calculations.csv",
+        filename=f"{raster_source_filename_prefix(source)}-calculations.csv",
         rows=rows,
         cache_hit=cache_hit,
     )

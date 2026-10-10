@@ -4,13 +4,14 @@ from typing import Protocol, Any
 from pathlib import Path
 from datetime import datetime
 from threading import Event
-from eolab_app.processing.artifact_manifest import ArtifactManifest, FileDeclaration
+from eolab_app.processing.artifact_manifest import ArtifactManifest, FileDeclaration, PublishedFile
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
     ProcessingLimits,
     JobSubmission,
     ProcessingError,
+    JobInputFile,
 )
 
 
@@ -73,6 +74,39 @@ class JobWakeup(Protocol):
 
 class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
+
+    def inspect_input_file(self, owner: str, run_id: str, artifact_id: str) -> JobInputFile:
+        """Check a published raster's ownership and availability before admission.
+
+        Args:
+            owner: Current session hash.
+            run_id: Public handle of a completed model run.
+            artifact_id: Published scientific raster file identity.
+
+        Returns:
+            Immutable identity to recheck atomically when accepting work.
+
+        Raises:
+            ProcessingError: If the file is foreign, expired, deleted or ineligible.
+        """
+        ...
+
+    def read_retained_input(self, identifier: str, attempt: str, run_id: str, artifact_id: str) -> tuple[str, PublishedFile]:
+        """Resolve an accepted input for a live worker, including expired parents.
+
+        Args:
+            identifier: Dependent computation ID.
+            attempt: Current execution fencing token.
+            run_id: Parent public handle recorded in the operation inputs.
+            artifact_id: Published file identity recorded in those inputs.
+
+        Returns:
+            Parent storage attempt and validated immutable file metadata.
+
+        Raises:
+            ProcessingError: If the grant, attempt or published identity is invalid.
+        """
+        ...
 
     def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
         """Store an owner-private JSON input and return its expiring opaque ID.

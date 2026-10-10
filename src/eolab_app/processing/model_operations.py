@@ -19,7 +19,8 @@ from eolab_app.processing.aggregate_models import (
     AggregateArea,
 )
 from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec, UnpreparedClip
-from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
+from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing import raster_operations as raster
 
 Request = TypeVar("Request", bound=BaseModel)
@@ -64,7 +65,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         prepared_type: Persisted execution schema after preparation.
         policy_type: Schema validating recorded numerical implementation facts.
         bind: Translate recipe-bound arguments into the existing request contract.
-        source: Extract the current operation's catalog raster identity.
+        source: Extract the operation's catalog or owned run-file reference.
         polygon: Identify an owned polygon upload that admission must copy.
         queue: Capture inputs and ordinary sharing identity; model admission removes it.
         prepare: Measure native work and return the required disk reservation.
@@ -86,7 +87,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     prepared_type: type[Prepared]
     policy_type: type[BaseModel]
     bind: Callable[[dict[str, Any], dict[str, Any], str, str], Request]
-    source: Callable[[Request | Queued | Prepared], CatalogRasterRequest]
+    source: Callable[[Request | Queued | Prepared], RasterSourceReference]
     polygon: Callable[[Request], PolygonAreaReference | None]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
@@ -136,7 +137,7 @@ OPERATIONS = MappingProxyType(
         for operation in (
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",
-                inputs=(("raster", "catalog_raster"), ("area", "summary_area")),
+                inputs=(("raster", "raster"), ("area", "summary_area")),
                 parameters=(("expression", "summary_expression"),),
                 output=OperationOutput(
                     "statistics", "statistics", "table", "text/csv", "Statistics"
@@ -160,7 +161,7 @@ OPERATIONS = MappingProxyType(
             ),
             ModelOperation[ClipJobRequest, UnpreparedClip, ClipSpec](
                 id="raster.clip.v1",
-                inputs=(("raster", "catalog_raster"), ("area", "clip_area")),
+                inputs=(("raster", "raster"), ("area", "clip_area")),
                 parameters=(),
                 output=OperationOutput(
                     "raster", "raster", "map", "image/tiff", "Raster"

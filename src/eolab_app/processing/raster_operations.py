@@ -48,6 +48,7 @@ from eolab_app.processing.calculation_cache import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
+from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.execution.reusable_process import ReusableProcess
 from typing import Literal
 
@@ -64,6 +65,7 @@ class RasterOperationContext:
         native: Supervised native execution lane.
         run_native: Bounded execution function supplied by the worker.
         reuse_results: Whether this job may use the scalar-results cache.
+        source_checksum: Verified published checksum for a private raster input.
     """
 
     jobs: JobStore
@@ -73,6 +75,7 @@ class RasterOperationContext:
     native: ReusableProcess | None
     run_native: Callable[..., Awaitable[Any]]
     reuse_results: bool
+    source_checksum: str | None = None
 
 
 class SummaryNumericalPolicy(BaseModel):
@@ -149,10 +152,10 @@ async def prepare_summary(
     if context.reuse_results:
         cached_results = await asyncio.to_thread(
             context.jobs.get_cached_calculation_results,
-            calculation_result_cache_keys(request, signature),
+            calculation_result_cache_keys(request, signature, context.source_checksum),
         )
         spec = restore_cached_calculation_plan(
-            request, signature, cached_results, queued.polygonArea
+            request, signature, cached_results, queued.polygonArea, context.source_checksum
         )
     # Cache reuse is selected by the caller; fresh runs measure their own grid.
     if spec is None:
@@ -202,6 +205,7 @@ async def prepare_summary(
         spec = AggregateSpec(
             sources=request.sources,
             sourceSignature=signature,
+            sourceChecksum=context.source_checksum,
             calculations=request.calculations,
             pixelPoint=request.pixelPoint,
             area=area,
@@ -230,9 +234,7 @@ async def prepare_clip(
         ProcessingError: If the selection, native planning or resource limits fail.
     """
     request = queued.request
-    source = CatalogRasterRequest(
-        collectionId=request.collection_id, itemId=request.item_id
-    )
+    source = get_clip_source(queued)
     signature = tuple(authorized.source_signature.to_catalog())
     if request.selectedBounds:
         area = ClipArea(kind="bounds", bounds=request.selectedBounds.canonical_tuple())
@@ -268,6 +270,7 @@ async def prepare_clip(
     spec = ClipSpec(
         source=source,
         sourceSignature=signature,
+        sourceChecksum=context.source_checksum,
         area=area,
         grid=grid,
     )
@@ -317,7 +320,7 @@ def bind_clip(
         ValueError: If arguments violate the clip request contract.
     """
     return ClipJobRequest(
-        requestId=request_id, **inputs["raster"], **bind_area_arguments(inputs["area"])
+        requestId=request_id, source=inputs["raster"], **bind_area_arguments(inputs["area"])
     )
 
 
@@ -346,14 +349,14 @@ def bind_area_arguments(area: dict[str, Any]) -> dict[str, Any]:
 
 def get_summary_source(
     value: AggregateJobRequest | UnpreparedCalculation | AggregateSpec,
-) -> CatalogRasterRequest:
+) -> RasterSourceReference:
     """Return the source from a validated summary request or execution plan.
 
     Args:
         value: Summary request, queued inputs or prepared specification.
 
     Returns:
-        The operation's single catalog raster identity.
+        The operation's catalog or owned published-raster reference.
     """
     return next(
         iter(
@@ -366,19 +369,19 @@ def get_summary_source(
 
 def get_clip_source(
     value: ClipJobRequest | UnpreparedClip | ClipSpec,
-) -> CatalogRasterRequest:
+) -> RasterSourceReference:
     """Return the source from a validated clip request or execution plan.
 
     Args:
         value: Clip request, queued inputs or prepared specification.
 
     Returns:
-        The operation's single catalog raster identity.
+        The operation's catalog or owned published-raster reference.
     """
     if isinstance(value, ClipSpec):
         return value.source
     request = value.request if isinstance(value, UnpreparedClip) else value
-    return CatalogRasterRequest(
+    return request.source or CatalogRasterRequest(
         collectionId=request.collection_id, itemId=request.item_id
     )
 

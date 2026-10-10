@@ -37,6 +37,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult
@@ -193,6 +194,7 @@ class ModelInvocation(ModelSchema):
         ):
             raise ValueError("Captured bindings do not match the definition")
         input_types = {
+            "raster": RasterSourceReference,
             "catalog_raster": CatalogRasterRequest,
             "clip_area": ClipModelArea,
             "summary_area": SummaryArea,
@@ -218,7 +220,7 @@ class ModelRunSpec(ModelSchema):
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
     calculation: SerializeAsAny[BaseModel]
-    sourceSignature: tuple[int, int, int, int]
+    sourceSignature: tuple[int, int, int, int] | None
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
 
@@ -247,6 +249,21 @@ class ModelRunSpec(ModelSchema):
         if not isinstance(identifier, str):
             raise ValueError("Stored calculation requires an operation ID")
         return get_model_operation(identifier).parse_specification(value)
+
+    @model_validator(mode="after")
+    def check_source_identity(self) -> "ModelRunSpec":
+        """Require catalog signatures while private inputs use accepted file grants.
+
+        Returns:
+            The stored run with the identity contract appropriate to its source.
+
+        Raises:
+            ValueError: If the signature is absent for catalog data or supplied for a run file.
+        """
+        source = get_model_operation(self.calculation.operation).source(self.calculation)
+        if isinstance(source, RunArtifactReference) != (self.sourceSignature is None):
+            raise ValueError("Source identity does not match the raster reference")
+        return self
 
 
 class ModelIdentity(ModelReference):
@@ -394,10 +411,15 @@ class RunDocument(ModelSchema):
         raster_roles = {
             name
             for name, role in definition.inputs.items()
-            if role.type == "catalog_raster"
+            if role.type in {"raster", "catalog_raster"}
         }
         if set(self.execution.sources) != raster_roles:
             raise ValueError("Execution sources do not match the captured recipe")
+        for name in raster_roles:
+            private = self.invocation.inputs[name].get("kind") == "runArtifact"
+            recorded = self.execution.sources[name]
+            if private != (recorded.sha256 is not None and recorded.bytes is not None):
+                raise ValueError("Private raster provenance requires its published checksum and size")
         return self
 
 
@@ -416,6 +438,8 @@ class ResolvedModelSource(ModelSchema):
     """
 
     sourceSignature: Digest
+    sha256: Digest | None = None
+    bytes: Annotated[int, Field(gt=0)] | None = None
     band: Literal[1]
     grid: AggregateGrid | ClipGrid | None = None
 

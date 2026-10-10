@@ -21,6 +21,9 @@ from eolab_app.processing.artifact_manifest import FileDeclaration
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_identity import RasterSourceIdentity
+from eolab_app.source_files import verify_source_file
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.raster_operations import RasterOperationContext
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
@@ -72,11 +75,12 @@ class ProcessingWorker:
         # from discovery or accepting work the worker cannot dispatch.
         ModelRegistry.load_installed()
 
-    def _operation_context(self, reuse_results: bool) -> RasterOperationContext:
+    def _operation_context(self, reuse_results: bool, source_checksum: str | None = None) -> RasterOperationContext:
         """Supply existing execution capabilities to a registered raster operation.
 
         Args:
             reuse_results: Whether this attempt may reuse scalar results.
+            source_checksum: Verified published checksum when using a private file.
 
         Returns:
             Operation context without browser, recipe or rendering state.
@@ -89,16 +93,42 @@ class ProcessingWorker:
             self.native,
             run_process,
             reuse_results,
+            source_checksum,
         )
 
-    async def _prepare_operation(self, row: dict[str, Any]) -> AuthorizedRaster:
+    async def _resolve_source(self, row: dict[str, Any], source: RasterSourceReference) -> tuple[AuthorizedRaster, str | None]:
+        """Authorize catalog data or verify a file retained by this accepted job.
+
+        Args:
+            row: Claimed computation with its current attempt token.
+            source: Operation-owned catalog or published-file reference.
+
+        Returns:
+            Confined raster path and stat identity, plus its published checksum
+            for private inputs. The durable grant survives parent expiry/deletion.
+
+        Raises:
+            ProcessingError: If the accepted grant or file identity is invalid.
+            RasterFeatureError: If catalog authorization fails.
+            ProcessDeadlineError: If bounded checksum verification times out.
+        """
+        if not isinstance(source, RunArtifactReference):
+            return await self.authorizer.authorize(source), None
+        parent_attempt, file = await asyncio.to_thread(self.jobs.read_retained_input, row["id"], row["attempt_id"], source.jobId, source.artifactId)
+        path = await asyncio.to_thread(self.artifacts.artifact_path, parent_attempt, file.storage_name)
+        identity = await run_process(verify_source_file, (path, file.size, file.sha256), min(30, self.limits.plan_timeout_seconds))
+        if identity is None:
+            raise ProcessingError("source_changed", "The retained raster is no longer intact. Run the parent model again.", 409)
+        return AuthorizedRaster(path, RasterSourceIdentity.from_catalog(list(identity[1:]))), file.sha256
+
+    async def _prepare_operation(self, row: dict[str, Any]) -> tuple[AuthorizedRaster, str | None]:
         """Prepare registered operation inputs within the current fenced attempt.
 
         Args:
             row: Claimed job updated with its prepared specification and reservation.
 
         Returns:
-            Authorized source reusable by immediate execution in this attempt.
+            Authorized source and published checksum reusable in this attempt.
 
         Raises:
             ProcessingError: If authorization, cancellation, planning or reservation fails.
@@ -123,9 +153,10 @@ class ProcessingWorker:
                 raise ProcessingError(
                     "job_cancelled", "Calculation stopped before preparation.", 409
                 )
-            authorized = await self.authorizer.authorize(operation.source(queued))
+            authorized, checksum = await self._resolve_source(row, operation.source(queued))
             if (
                 model is not None
+                and model.sourceSignature is not None
                 and tuple(authorized.source_signature.to_catalog())
                 != model.sourceSignature
             ):
@@ -135,7 +166,7 @@ class ProcessingWorker:
                     409,
                 )
             prepared = await operation.prepare(
-                self._operation_context(model is None), queued, authorized
+                self._operation_context(model is None, checksum), queued, authorized
             )
             if model is not None:
                 prepared = record_model_preparation(row, prepared, self.limits)
@@ -144,7 +175,7 @@ class ProcessingWorker:
                     self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
                 )
             )
-            return authorized
+            return authorized, checksum
 
     async def _execute(self, row: dict[str, Any]) -> Artifact | None:
         """Authorize the inputs, reuse or calculate values, and publish result files.
@@ -180,8 +211,9 @@ class ProcessingWorker:
             model.calculation if model else row["spec"]
         )
         authorized = None
+        checksum = None
         if isinstance(calculation, handler.queued_type):
-            authorized = await self._prepare_operation(row)
+            authorized, checksum = await self._prepare_operation(row)
             if not handler.reuse_prepared_source:
                 authorized = None
         if row["status"] == "queued":
@@ -193,8 +225,6 @@ class ProcessingWorker:
         )
         spec = handler.prepared_type.model_validate(calculation_spec)
         source = handler.source(spec)
-        context = self._operation_context(model is None)
-        target, action, limits = handler.execution(spec, context, row["reserved_bytes"])
         resolved_area = None
         if spec.area.kind == "catalogSelection":
             if self.areas is None:
@@ -212,9 +242,12 @@ class ProcessingWorker:
                 }
             )
         if authorized is None:
-            authorized = await self.authorizer.authorize(source)
+            authorized, checksum = await self._resolve_source(row, source)
+        context = self._operation_context(model is None, checksum)
+        target, action, limits = handler.execution(spec, context, row["reserved_bytes"])
         if (
             model is not None
+            and model.sourceSignature is not None
             and tuple(authorized.source_signature.to_catalog()) != model.sourceSignature
         ):
             raise ProcessingError(
@@ -242,6 +275,8 @@ class ProcessingWorker:
         )
         if status != "ok":
             raise ProcessingError(*value)
+        if checksum is not None and RasterSourceIdentity.read(authorized.source_path) != authorized.source_signature:
+            raise ProcessingError("source_changed", "The retained raster changed during calculation.", 409)
         if resolved_area is not None:
             await self.areas.resolve_for_sampling(resolved_area.selection)
         return await self._publish_result(row, value)

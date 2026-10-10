@@ -18,7 +18,7 @@ def custom_recipe(model_id: str) -> ModelDefinition:
     Returns:
         YAML-round-tripped custom recipe with independent names and output label.
     """
-    document = ModelRegistry.load_installed().get(model_id, "1.0.0").to_document()
+    document = ModelRegistry.load_installed().get(model_id, "1.1.0").to_document()
     document["id"] = "custom-" + model_id
     document["title"] = "Habitat calculation"
     document["inputs"] = {

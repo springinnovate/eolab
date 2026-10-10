@@ -52,6 +52,7 @@ class ModelInput(ModelSchema):
     """
 
     type: Literal[
+        "raster",
         "catalog_raster",
         "summary_area",
         "clip_area",
@@ -332,7 +333,7 @@ def validate_operation(definition: ModelDefinition) -> None:
         ]
         valid = (
             {
-                name: definition.inputs[item.input].type
+                name: ("raster" if definition.inputs[item.input].type == "catalog_raster" else definition.inputs[item.input].type)
                 for name, item in step.inputs.items()
             }
             == dict(contract.inputs)

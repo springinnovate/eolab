@@ -87,7 +87,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:
         connection.execute(
-            "TRUNCATE processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
+            "TRUNCATE processing.input_files, processing.job_subscribers, processing.transfers, processing.jobs, processing.calculation_results, processing.inputs"
         )
     return result
 
