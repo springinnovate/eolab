@@ -40,6 +40,10 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
+from eolab_app.processing.prepared_hydrology import (
+    HydrologyReference,
+    PreparedHydrologySnapshot,
+)
 from eolab_app.processing.model_result_contracts import ModelResult
 from eolab_app.processing.artifact_manifest import (
     FileId,
@@ -170,13 +174,17 @@ class ModelInvocation(ModelSchema):
     """The model recipe, inputs and effective parameter values saved for a run.
 
     Unlike a submission request, this includes the complete recipe and the
-    default values filled in when the run was accepted.
+    default values filled in when the run was accepted. Hydrology inputs also
+    retain the validated configuration and exact catalog source identities.
     """
 
     model: CapturedModel
     inputs: dict[Name, JsonValue]
     parameters: dict[Name, JsonValue]
     label: Label
+    hydrology: dict[Name, PreparedHydrologySnapshot] = Field(
+        default_factory=dict, max_length=16, exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def check_bindings(self) -> "ModelInvocation":
@@ -198,11 +206,30 @@ class ModelInvocation(ModelSchema):
             "catalog_raster": CatalogRasterRequest,
             "clip_area": ClipModelArea,
             "summary_area": SummaryArea,
+            "prepared_hydrology": HydrologyReference,
         }
+        hydrology_roles = {
+            name
+            for name, role in definition.inputs.items()
+            if role.type == "prepared_hydrology"
+        }
+        if set(self.hydrology) != hydrology_roles:
+            raise ValueError(
+                "Capture every selected hydrology configuration with its source identities"
+            )
         for name, role in definition.inputs.items():
             if role.type not in input_types:
                 raise ValueError("Unsupported captured input type")
-            TypeAdapter(input_types[role.type]).validate_python(self.inputs[name])
+            selected_input = TypeAdapter(input_types[role.type]).validate_python(
+                self.inputs[name]
+            )
+            if (
+                name in hydrology_roles
+                and self.hydrology[name].reference != selected_input
+            ):
+                raise ValueError(
+                    "Captured hydrology does not match the selected configuration"
+                )
         for name, parameter in definition.parameters.items():
             type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}

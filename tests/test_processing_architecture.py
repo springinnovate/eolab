@@ -49,6 +49,31 @@ def test_processing_has_no_histogram_renderer_or_aoi_implementation_dependency()
         }, path
 
 
+def test_hydrology_validation_uses_original_sources_without_sibling_services() -> None:
+    """Hydrology contracts and native validation stay independent of renderer and catalog storage."""
+    for name in ("prepared_hydrology.py", "hydrology_validation.py"):
+        dependencies = imports(Path("src/eolab_app/processing") / name)
+        assert not {
+            module
+            for module in dependencies
+            if module.startswith(
+                (
+                    "eolab_app.vector.",
+                    "eolab_app.rendering.",
+                    "eolab_app.routes.",
+                    "eolab_app.catalog.pgstac",
+                    "eolab_app.processing.service",
+                    "eolab_app.raster.geoserver",
+                    "eolab_app.raster.publication",
+                )
+            )
+        }
+    reader = imports(Path("src/eolab_app/bounded_vector.py"))
+    assert not {
+        module for module in reader if module.startswith("eolab_app.processing")
+    }
+
+
 def test_mechanisms_and_storage_never_import_application_services() -> None:
     """Keep neutral native execution and storage below their workflow owners."""
     paths = [

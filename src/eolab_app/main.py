@@ -37,6 +37,7 @@ from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.job_events import PostgresJobEvents
 from eolab_app.processing.service import ProcessingService
+from eolab_app.processing.prepared_hydrology import PreparedHydrologyRegistry
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
@@ -208,6 +209,10 @@ def create_app(
         ),
         changes=processing_events,
         model_authorizer=raster_source_authorizer,
+        hydrology_registry=PreparedHydrologyRegistry.load(
+            app_global_configuration.prepared_hydrology_directory
+        ),
+        hydrology_selections=vector_selection_reader,
     )
     source_files = create_model_source_files(processing_service)
     raster_sources = RasterSourceAccess(raster_source_authorizer, source_files)

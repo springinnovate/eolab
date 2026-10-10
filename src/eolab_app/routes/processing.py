@@ -50,6 +50,11 @@ from eolab_app.processing.model_run_contracts import (
     ModelRunRequest,
     ModelArtifactManifest,
 )
+from eolab_app.processing.prepared_hydrology import (
+    HydrologyReference,
+    PreparedHydrologyLibrary,
+    PreparedHydrologySnapshot,
+)
 from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
@@ -382,6 +387,47 @@ def create_processing_router(
         """
         get_processing_session_owner_hash(request, response, session_ttl_seconds)
         return await _await_service_result(service.list_models())
+
+    @router.get("/prepared-hydrology", response_model=PreparedHydrologyLibrary)
+    async def list_prepared_hydrology(
+        request: Request, response: Response
+    ) -> dict[str, Any]:
+        """List administrator-validated terrain and watershed configurations for model setup.
+
+        Args:
+            request: Browser request carrying its Processing session cookie.
+            response: Response receiving private-cache and session headers.
+
+        Returns:
+            Installed reports, with exact field mappings, grid and source revisions.
+            Selection rechecks availability before these can be used in a run.
+        """
+        get_processing_session_owner_hash(request, response, session_ttl_seconds)
+        return await _await_service_result(service.list_prepared_hydrology())
+
+    @router.post(
+        "/prepared-hydrology/resolve",
+        response_model=PreparedHydrologySnapshot,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def resolve_prepared_hydrology(
+        body: HydrologyReference, request: Request, response: Response
+    ) -> PreparedHydrologySnapshot:
+        """Check that a selected hydrology configuration still has its validated sources.
+
+        Args:
+            body: Configuration ID, version and effective checksum returned by discovery.
+            request: Same-origin browser request carrying its session cookie.
+            response: Response receiving private-cache and session headers.
+
+        Returns:
+            The complete configuration/source snapshot suitable for run capture.
+
+        Raises:
+            HTTPException: If configuration or source identity is missing or has changed.
+        """
+        get_processing_session_owner_hash(request, response, session_ttl_seconds)
+        return await _await_service_result(service.resolve_prepared_hydrology(body))
 
     @router.get("/models/{model_id}/versions/{model_version}/yaml")
     async def download_model_yaml(
