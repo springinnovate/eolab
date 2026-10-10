@@ -43,7 +43,10 @@ def docker(*args: str, timeout: int = 120, capture: bool = True) -> str:
 
 
 def build_image(application_image: str | None) -> str:
-    """Build a uniquely tagged test image from an allowlisted tar context.
+    """Build an isolated test image using the application's pinned native dependencies.
+
+    When no installed image is supplied, reuse the reviewed dependency lock files
+    and build the legacy EcoShard archive without an incomplete isolated backend.
 
     Args:
         application_image: Optional installed application image to verify unchanged.
@@ -64,8 +67,18 @@ def build_image(application_image: str | None) -> str:
             "RUN apt-get update && apt-get install -y --no-install-recommends "
             "libexpat1 g++ libgdal-dev=3.10.3+dfsg-1 "
             "&& rm -rf /var/lib/apt/lists/*\n"
+            "COPY deployment/application-*-requirements.txt /build-inputs/\n"
+            "RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes "
+            "-r /build-inputs/application-build-requirements.txt "
+            "-r /build-inputs/application-runtime-requirements.txt "
+            "&& python -m pip install --no-cache-dir --no-deps --no-build-isolation "
+            "--require-hashes -r /build-inputs/application-gdal-requirements.txt "
+            "&& SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d "
+            "python -m pip install --no-cache-dir --no-deps --no-build-isolation "
+            "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt\n"
             "COPY pyproject.toml README.md LICENSE ./\nCOPY src/ ./src/\n"
-            "RUN python -m pip install --no-cache-dir .\n"
+            "RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation . "
+            "&& python -m pip check\n"
         )
     recipe += (
         "RUN python -m venv --system-site-packages /test-venv "
@@ -73,6 +86,7 @@ def build_image(application_image: str | None) -> str:
         "COPY pyproject.toml ./\nCOPY tests/ ./tests/\nCOPY scripts/ ./scripts/\n"
         "COPY docs/model-examples/ ./docs/model-examples/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
+        "ENV OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1\n"
         'ENV PYTHONPATH="" PYTEST_ADDOPTS=""\n'
         "USER 65534:65534\nENTRYPOINT []\nHEALTHCHECK NONE\n"
     )
@@ -93,6 +107,9 @@ def build_image(application_image: str | None) -> str:
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]
                 paths += list((ROOT / "docs" / "model-examples").glob("*"))
                 if not application_image:
+                    paths += list(
+                        (ROOT / "deployment").glob("application-*-requirements.txt")
+                    )
                     paths += list((ROOT / "src").rglob("*.py"))
                     paths += list((ROOT / "src").rglob("*.sql"))
                     paths += list(
