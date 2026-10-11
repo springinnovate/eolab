@@ -3,7 +3,48 @@
 Open **Tools → Models** in the map's right-hand Analysis area. Search the
 library by name or purpose, then choose **Set up model**. **Raster summary**
 calculates one summary formula for a raster and area. **Raster clip** produces
-a downloadable GeoTIFF of a raster within the chosen area.
+a downloadable GeoTIFF of a raster within the chosen area. **Downstream ecosystem
+beneficiaries** traces flow from a starting mask and summarizes values in the
+downstream area.
+
+## Set up downstream analysis
+
+Choose **Downstream ecosystem beneficiaries → Set up model**. Select a named,
+versioned **Prepared hydrology** dataset. Setup suggests a dataset when its
+elevation and watershed sources uniquely match Map layers, or only one dataset
+is installed; review that suggestion for your region. Expand **Terrain,
+watersheds & field mappings** to inspect its sources, connection fields, stopping
+rule and terrain preparation. The source check must succeed before Run becomes
+available. If no datasets are installed, an administrator must
+[validate and install a configuration](prepared-hydrology.md).
+
+For **Starting mask**, choose a vector layer and edit its filter in the same
+panel, or choose **Raster cells greater than zero** and a starting raster from
+Map layers. Raster seeds include only positive, valid cells; the comparison is
+fixed by this model. All selected features or starting cells form one combined
+mask and one overall result. The watershed network limits the downstream search;
+it does not add starting cells outside that mask.
+
+Choose **Values to summarize** from Map layers or a completed run. Ambiguous
+choices remain blank, and previous results are never selected automatically.
+Hidden map inputs can be chosen explicitly. The model may suggest the only
+visible values raster other than its prepared elevation and chosen starting
+raster, or the only starting vector other than its watershed network; each
+suggestion explains its basis and remains editable.
+
+Set **Buffer radius (m)**, an optional **Maximum straight-line distance (m)**,
+and **Summary formula**, which defaults to `sum(a)`. Leave the distance cutoff
+blank for no cutoff. These are distances from reached cells and original
+starting cells respectively; there is no attenuation or distance decay.
+Choose **Run model** to capture the displayed inputs. Later clicks, layer
+visibility changes and filter edits do not change an accepted run.
+
+The same Runs view shows mask preparation, downstream routing, buffering and
+summary progress, with cancellation and downloads. Coverage and the starting
+mask use the ordinary **Show on map** actions under that run. **Duplicate with
+changes** rechecks the exact original hydrology revision; if it is no longer
+available, choose a replacement explicitly. Refreshing the dataset list never
+silently substitutes a different revision for the copied run.
 
 ## Choose inputs
 

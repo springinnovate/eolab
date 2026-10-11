@@ -13,6 +13,9 @@
 .models-form legend { padding: 0; font-weight: 600; }
 .models-help { color: var(--text-2); font-size: 0.78rem; margin: 4px 0; overflow-wrap: anywhere; }
 .models-vector { display: grid; gap: 8px; }
+.models-hydrology { display: grid; gap: 4px; min-width: 0; }
+.models-hydrology > button { width: fit-content; }
+.models-hydrology .models-details { margin: 4px 0; }
 .models-library-card, .models-result { padding: 12px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
 .models-library-card p { font-size: 0.8rem; }
 .models-result { display: grid; gap: 5px; }
