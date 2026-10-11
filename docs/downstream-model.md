@@ -3,13 +3,13 @@
 `downstream-beneficiaries` is an installed Model YAML recipe calling the trusted
 `hydrology.downstream_beneficiaries.v1` Processing adapter. It uses the existing
 queue, session ownership, cancellation, expiry, worker supervision and published
-artifact inventory. It starts no TaskGraph workers or nested jobs. The browser
-setup controls for its mask and prepared-hydrology inputs are separate work in
-#701; the current browser explains that these controls are unavailable.
+artifact inventory. It starts no TaskGraph workers or nested jobs. Open it in
+**Tools → Models** to choose its starting mask, prepared hydrology, values raster
+and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
 
 ## Inputs and results
 
-Select a validated prepared-hydrology report, one starting mask, and one values
+Select an installed prepared-hydrology configuration, one starting mask, and one values
 raster. The mask is either `{kind: catalogRaster, source: {collectionId, itemId}}`
 or `{kind: catalogSelection, selection: ...}` using the normal immutable catalog
 selection and filter contract. The values input also accepts the ordinary owned
@@ -154,11 +154,12 @@ actual catalog IDs found for `astgtm_compressed.tif` and
 `HYBAS_ID` as the connection identity, `NEXT_DOWN` as the next link, and stop when
 `NEXT_SINK == HYBAS_ID`. `ID` and `MAIN_BAS` are not used.
 
-Run the [administrator validator](prepared-hydrology.md) against those original
-mounted files before installing the report. This repository does not include a
-fabricated validation report. Catalog metadata reports watershed coverage to
-83.6256° N but DEM coverage only to approximately 83.0001° N. A global validation
-may therefore fail and require a smaller complete watershed network within valid
-terrain. Do not bypass coverage checks or silently trim a downstream drainage.
-Global validation also needs appropriately configured administrator work budgets;
+Follow the [Coolify installation commands](prepared-hydrology.md#install-the-resilience-configuration-from-coolify)
+to validate those original mounted files and install the report. This repository
+does not include a fabricated validation report. Catalog metadata reports watershed
+coverage to 83.6256 degrees N but DEM coverage only to approximately 83.0001 degrees N.
+That mismatch does not prevent installation: each run requires DEM coverage only
+for the downstream watersheds selected from its starting mask. An uncovered
+drainage fails explicitly instead of being silently trimmed. The full network still
+needs valid connections and appropriately configured administrator work budgets;
 regional model execution retains only the selected drainage polygons.

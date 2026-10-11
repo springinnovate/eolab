@@ -50,6 +50,7 @@ into exported older recipes, preserving their checksums.
 | --- | --- | --- | --- | --- |
 | `raster.aggregate.v1` | `raster: raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
 | `raster.clip.v1` | `raster: raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
+| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression` | Statistics CSV, coverage GeoTIFF and optional starting-mask GeoTIFF | `downstream-small-region` |
 
 The `raster` input accepts either the existing `{collectionId, itemId}` catalog
 reference or `{kind: runArtifact, jobId, artifactId}` for an owned published
@@ -61,7 +62,7 @@ A summary recipe can rename its formula parameter and change its default, such
 as `mean(a)` or `stdev(a)`. Formula syntax and area support remain governed by
 the registered operation. Execution profiles select supported server policy;
 recipes cannot raise deployment resource limits. The current runner accepts
-one step and one raster. Recipes can retain multiple outputs declared
+one step, with inputs declared by its registered operation. Recipes can retain multiple outputs declared
 by that operation, plus provenance. The bundled summary and clip operations
 currently each produce one scientific result. `map` and
 `saveEligible` describe output capabilities; map previews and permanent saving
