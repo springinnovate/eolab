@@ -8,8 +8,9 @@ different regional datasets without changing its recipe.
 The administrator validates each configuration explicitly and installs the
 resulting report. Model setup can discover these reports through the Processing
 API. Opening setup does not scan a DEM or rebuild a network. The
-[downstream model](downstream-model.md) executes through Processing; its browser
-input controls are delivered separately.
+[downstream model](downstream-model.md) executes through Processing. Its Models
+setup lists the installed configurations and rechecks the selected sources before
+enabling Run; terrain and topology details are expandable in the same panel.
 
 ## Administrator setup
 

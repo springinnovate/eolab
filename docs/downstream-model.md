@@ -3,9 +3,9 @@
 `downstream-beneficiaries` is an installed Model YAML recipe calling the trusted
 `hydrology.downstream_beneficiaries.v1` Processing adapter. It uses the existing
 queue, session ownership, cancellation, expiry, worker supervision and published
-artifact inventory. It starts no TaskGraph workers or nested jobs. The browser
-setup controls for its mask and prepared-hydrology inputs are separate work in
-#701; the current browser explains that these controls are unavailable.
+artifact inventory. It starts no TaskGraph workers or nested jobs. Open it in
+**Tools → Models** to choose its starting mask, prepared hydrology, values raster
+and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
 
 ## Inputs and results
 
