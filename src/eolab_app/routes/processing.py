@@ -963,6 +963,36 @@ def create_processing_router(
         )
 
     @router.post(
+        "/jobs/{job_id}/renew",
+        response_model=SupportedJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def renew_model_run(
+        job_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Extend an available model run's files and details by seven days from now.
+
+        Args:
+            job_id: The owned model run to keep available.
+            request: Same-origin request carrying the browser session cookie.
+            response: Response receiving the renewed session cookie.
+
+        Returns:
+            Updated run state; an already later expiry is preserved.
+
+        Raises:
+            HTTPException: If ownership, origin, run kind or availability rejects renewal.
+        """
+        return await _await_service_result(
+            service.renew_model_run(
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
+            )
+        )
+
+    @router.post(
         "/jobs/{job_id}/cancel",
         status_code=202,
         response_model=SupportedJobResponse,

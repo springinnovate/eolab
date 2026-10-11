@@ -514,6 +514,16 @@ export class ProcessingApiClient {
         return validateJob(await this.request(`/jobs/${opaqueId(id)}`));
     }
 
+    /** Keep a completed model run and its outputs for another seven days.
+     * @param {string} id Owned model run ID.
+     * @return {Promise<Object>} Validated run with its effective expiry.
+     * @throws {ProcessingRequestError|Error} If the run is unavailable or the request fails.
+     */
+    async renewModelRun(id) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}/renew`, "POST"));
+    }
+
     /** Cancel an owned active job. @param {string} id Job ID. @return {Promise<Object>} Updated job. */
     async cancelJob(id) {
         await this.ensureSession();

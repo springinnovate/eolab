@@ -63,6 +63,46 @@ test("published results are explicit model choices without previews or map layer
     assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
 });
 
+test("renewal updates the shared observer and all run consumers without resubmitting", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const renewed = {...ready, expiresAt: "2099-02-01T00:00:00Z", updatedAt: "2026-10-10T00:00:00Z"};
+    const h = fixture({getJob: async () => ready, renewModelRun: async () => renewed});
+    const changes = []; h.controller.onRunChange = value => changes.push(value);
+    await h.controller.showRun(ready.jobId);
+    await h.controller.renewRun();
+    assert.equal(h.controller.runSnapshots.get(ready.jobId), renewed);
+    assert.equal(h.jobs.jobs[0], renewed); assert.equal(changes.at(-1), renewed);
+    assert.match(h.controller.state.actionMessage, /Results kept until/);
+    h.controller.rememberRun(ready);
+    assert.equal(h.controller.runSnapshots.get(ready.jobId), renewed);
+    assert.equal(h.submitted.length, 0);
+});
+
+test("deletion needs confirmation and removes captured inputs and choices after success", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const deleted = {...ready, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"};
+    let calls = 0;
+    const h = fixture({getJob: async () => ready, deleteJob: async () => { calls++; return deleted; },
+        readJobStatuses: async () => ({jobs: [ready], unavailableJobIds: []})});
+    await h.controller.showRun(ready.jobId);
+    await h.controller.deleteRun(); assert.equal(calls, 0);
+    h.controller.requestRunDeletion(); assert.equal(calls, 0);
+    await h.controller.deleteRun();
+    assert.equal(calls, 1); assert.equal(h.controller.state.deleteConfirmation, null);
+    assert.equal(h.controller.state.invocation, null);
+    assert.equal(h.controller.runSnapshots.get(ready.jobId).status, "deleted");
+    assert.match(h.controller.state.actionMessage, /Run and results deleted/);
+});
+
+test("navigation during confirmation never deletes another run", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    let calls = 0;
+    const h = fixture({getJob: async id => ({...ready, jobId: id}), deleteJob: async () => { calls++; return ready; }});
+    await h.controller.showRun(ready.jobId); h.controller.requestRunDeletion();
+    await h.controller.showRun("2".repeat(32)); await h.controller.deleteRun();
+    assert.equal(calls, 0);
+});
+
 test("legacy catalog recipes exclude results and late history loads preserve the chosen input", async () => {
     const artifacts = fileManifest(), parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
     const h = fixture({listModelRuns: async () => ({jobs: [parent], nextCursor: null})});

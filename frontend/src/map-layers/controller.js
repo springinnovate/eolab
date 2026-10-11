@@ -157,6 +157,7 @@ export class MapLayerController {
                 if (record.entry.item === null) record.adapter.info?.(record);
                 else this.onItemInfo(record.entry.item);
             },
+            onGroupAction: id => this.onGroupAction?.(id),
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
             onLegendInclusion: (key, included) => this.setLegendIncluded(key, included),
@@ -822,6 +823,14 @@ export class MapLayerController {
         const next = this.stack.entries[Math.min(snapshot.index, this.stack.entries.length - 1)];
         this.render({ key: next?.key ?? snapshot.key, action: "style" });
         this.view.announceStatus?.("Layer removal undo dismissed.");
+    }
+
+    /** Discard Undo when composition reports that its original source was deleted.
+     * @param {(snapshot:RemovedMapLayer)=>boolean} matches Whether the removed source is no longer available.
+     * @return {void}
+     */
+    forgetUnavailableRemoval(matches) {
+        if (this.removedLayer && matches(this.removedLayer)) this.dismissLayerRemoval();
     }
 
     /**

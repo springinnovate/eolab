@@ -509,8 +509,8 @@ fail startup. Omitted values use the defaults below.
 | `EOLAB_PROCESSING_MAX_STORED_BYTES` | 21474836480 | Artifact/scratch disk reservations, unchanged 20 GiB default |
 | `EOLAB_PROCESSING_FREE_SPACE_FLOOR_BYTES` | 2147483648 | Physical free space to leave unused; zero disables the floor |
 | `EOLAB_PROCESSING_EXECUTION_TIMEOUT_SECONDS` | 600 | Maximum duration of an executing job, excluding queue wait |
-| `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Result lifetime starting at completion |
-| `EOLAB_PROCESSING_METADATA_TTL_SECONDS` | 604800 | Saved model recipe, inputs and outcome lifetime, starting when a run first finishes, fails, is cancelled or is interrupted |
+| `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Ordinary result lifetime; new model runs use at least seven days and preserve a longer configured value |
+| `EOLAB_PROCESSING_METADATA_TTL_SECONDS` | 604800 | Saved recipe, inputs and outcome lifetime after the first terminal state; new model runs preserve at least seven days and any longer result lifetime |
 
 Counts, durations and byte limits must be positive integers (the free-space
 floor may be zero; durations cannot exceed one year). Pending input reservations
@@ -531,7 +531,13 @@ Set `EOLAB_PROCESSING_METADATA_TTL_SECONDS` in Compose or Coolify to change how
 long Model/Run YAML remains downloadable. For example, `1209600` keeps it for
 14 days. Each new job records the configured duration; changing the environment
 does not change an accepted job's retention or extend an existing deadline.
-Result files still use their separate result lifetime. Processing session
+New model runs capture the largest of seven days, the result lifetime and the
+metadata lifetime for both files and details. Ordinary non-model calculations
+and clips keep their separate result policy. Existing completed model runs keep
+their current deadlines until the owner chooses **Keep for another 7 days**.
+That action renews available files and details together from the current time,
+preserving a later existing deadline. It cannot recover expired data and does
+not retain scratch or exempt files from storage accounting. Processing session
 cookies are renewed on access and last at least as long as the configured result
 and metadata lifetimes, with a seven-day minimum. Clearing the cookie still
 removes that browser's access to its private runs.

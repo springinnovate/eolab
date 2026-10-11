@@ -33,6 +33,16 @@ test("submission uses the immutable request key and normal Processing mutation h
     assert.deepEqual(JSON.parse(h.calls[1].options.body), body);
 });
 
+test("renewal uses the owned run endpoint and validates the returned job", async () => {
+    const h = fixture(() => job());
+    await h.api.renewModelRun(job().jobId);
+    assert.equal(h.calls[1].url, `/api/processing/jobs/${job().jobId}/renew`);
+    assert.equal(h.calls[1].options.method, "POST");
+    assert.equal(h.calls[1].options.headers["X-EOLab-Processing"], "1");
+    const broken = fixture(() => job({expiresAt: "invalid"}));
+    await assert.rejects(broken.api.renewModelRun(job().jobId), /invalid/);
+});
+
 test("model results use the existing numeric-row and download safety validation", async () => {
     const result = {...statisticsResult, url: `/api/processing/jobs/${job().jobId}/result`, provenanceUrl: `/api/processing/jobs/${job().jobId}/provenance`, rows: [{label: "Sum", expression: "sum(a)", state: "ok", value: "not-a-number", valueType: "float", aggregates: []}]};
     const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));

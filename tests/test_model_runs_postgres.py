@@ -1,6 +1,8 @@
 """Real model HTTP, catalog, PostgreSQL and supervised aggregate boundaries."""
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from datetime import datetime, timedelta, timezone
 import asyncio
 import hashlib
@@ -36,6 +38,151 @@ from catalog_selection_support import register_selection, write_geopackage_layer
 import eolab_app.processing.worker as worker_module
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.processing.job_store import PostgresJobStore
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["queued", "expired", "deleted", "details_expired", "foreign", "cross_origin"],
+)
+def test_model_renewal_rejects_unavailable_or_unowned_runs(
+    model_boundary: Any, store: PostgresJobStore, state: str
+) -> None:
+    """Reject renewal without reviving expired data or granting another session access.
+
+    Args:
+        model_boundary: Real HTTP, worker and lifecycle composition.
+        store: Isolated PostgreSQL store.
+        state: Unavailable state or rejected request boundary to exercise.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    base = f"/api/processing/jobs/{run['jobId']}"
+    if state != "queued":
+        assert client.portal.call(worker.run_once)
+    if state == "deleted":
+        assert client.delete(base, headers=HEADERS).status_code == 200
+    if state in {"expired", "details_expired"}:
+        column = "expires_at" if state == "expired" else "metadata_expires_at"
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                psycopg.sql.SQL(
+                    "UPDATE processing.jobs SET {}=now()-interval '1 second' WHERE id=%s"
+                ).format(psycopg.sql.Identifier(column)),
+                (run["jobId"],),
+            )
+    if state == "foreign":
+        client.cookies.clear()
+    headers = {
+        **HEADERS,
+        **({"Origin": "https://elsewhere.test"} if state == "cross_origin" else {}),
+    }
+    response = client.post(base + "/renew", headers=headers)
+    assert response.status_code == (
+        404 if state == "foreign" else 403 if state == "cross_origin" else 409
+    ), response.text
+
+
+def test_model_renewal_serializes_with_delete_and_cleanup(
+    model_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Concurrent renewals do not stack weeks and deletion cannot be reversed.
+
+    Args:
+        model_boundary: Real model execution and HTTP composition.
+        store: Isolated store sharing the same transaction lock across callers.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    assert client.portal.call(worker.run_once)
+    identifier = run["jobId"]
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()+interval '1 minute',metadata_expires_at=now()+interval '1 minute' WHERE id=%s",
+            (identifier,),
+        )
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(
+            pool.map(
+                lambda _: store.extend_result_lifetime(identifier, owner, 7 * 86400),
+                range(4),
+            )
+        )
+    with psycopg.connect(store.conninfo) as connection:
+        remaining = connection.execute(
+            "SELECT expires_at-clock_timestamp() FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()[0]
+    assert timedelta(days=7, seconds=-10) < remaining <= timedelta(days=7)
+    assert all(row["expires_at"] == row["metadata_expires_at"] for row in results)
+    barrier = Barrier(3)
+
+    def compete(action: str) -> str:
+        """Release one lifecycle operation at the shared race boundary.
+
+        Args:
+            action: Renew, delete or find expired results.
+
+        Returns:
+            The completed action, or its classified lifecycle rejection.
+        """
+        barrier.wait(timeout=5)
+        try:
+            if action == "renew":
+                store.extend_result_lifetime(identifier, owner, 7 * 86400)
+            elif action == "delete":
+                store.cancel(identifier, owner, True)
+            else:
+                store.cleanup_candidates()
+            return action
+        except ProcessingError as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outcomes = list(pool.map(compete, ("renew", "delete", "cleanup")))
+    assert outcomes[0] in {"renew", "result_unavailable"}
+    assert outcomes[1:] == ["delete", "cleanup"]
+    assert store.get(identifier, owner)["status"] == "deleted"
+    with pytest.raises(ProcessingError, match="completed run"):
+        store.extend_result_lifetime(identifier, owner, 7 * 86400)
+    client.portal.call(worker.cleanup)
+
+
+def test_ordinary_clip_retention_and_renewal_boundary_are_unchanged(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Keep ordinary raster downloads on their configured lifetime without model renewal.
+
+    Args:
+        boundary: Real raster clip HTTP and worker fixture.
+        store: Isolated PostgreSQL store.
+    """
+    client, worker, _, _, _ = boundary
+    response = client.post(
+        "/api/processing/raster-clips",
+        json={**clip_inputs(client), "requestId": uuid4().hex},
+        headers=HEADERS,
+    )
+    assert response.status_code == 202, response.text
+    identifier = response.json()["jobId"]
+    assert client.portal.call(worker.run_once)
+    with psycopg.connect(store.conninfo) as connection:
+        captured, remaining = connection.execute(
+            "SELECT result_ttl_seconds,expires_at-clock_timestamp() FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()
+    assert captured is None
+    assert (
+        timedelta(seconds=store.limits.result_ttl_seconds - 10)
+        < remaining
+        <= timedelta(seconds=store.limits.result_ttl_seconds)
+    )
+    assert (
+        client.post(
+            f"/api/processing/jobs/{identifier}/renew", headers=HEADERS
+        ).status_code
+        == 409
+    )
 
 
 def test_application_starts_with_registered_hydrology(
@@ -627,7 +774,7 @@ def test_model_capture_survives_cleanup_then_expires(
 def test_model_metadata_keeps_the_retention_chosen_at_submission(
     model_boundary: Any, store: Any, retention_seconds: int
 ) -> None:
-    """Honor a configured lifetime without shortening it during later cleanup.
+    """Keep model details for seven days or a longer configured lifetime.
 
     Args:
         model_boundary: Model HTTP service and its worker.
@@ -640,15 +787,18 @@ def test_model_metadata_keeps_the_retention_chosen_at_submission(
     identifier = job["jobId"]
     # A deployment setting changed while this job waits must not alter its promise.
     store.limits = replace(store.limits, metadata_ttl_seconds=2 * 86_400)
-    before = datetime.now(timezone.utc)
+    with psycopg.connect(store.conninfo) as connection:
+        before = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     cancelled = client.post(
         f"/api/processing/jobs/{identifier}/cancel", headers=HEADERS
     )
     assert cancelled.status_code == 202, cancelled.text
-    after = datetime.now(timezone.utc)
+    with psycopg.connect(store.conninfo) as connection:
+        after = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     deadline = datetime.fromisoformat(cancelled.json()["metadataExpiresAt"])
-    assert before + timedelta(seconds=retention_seconds) <= deadline
-    assert deadline <= after + timedelta(seconds=retention_seconds)
+    effective_seconds = max(retention_seconds, 7 * 86_400)
+    assert before + timedelta(seconds=effective_seconds) <= deadline
+    assert deadline <= after + timedelta(seconds=effective_seconds)
     store.cleaned(identifier)
     with psycopg.connect(store.conninfo) as connection:
         connection.execute(

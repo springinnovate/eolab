@@ -23,16 +23,18 @@ export class ModelsController {
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {(job:Object,file:Object)=>Promise<void>} [dependencies.showOutput] Show one chosen file through composition.
      * @param {(jobId:string,artifactId:string,file:Object)=>Object} [dependencies.outputState] Display-only map capability, inclusion and feedback.
+     * @param {(job:Object)=>void} [dependencies.onRunChange] Notify composition of authoritative run availability and expiry.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
     constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
-        showOutput = async () => {}, outputState = () => ({}),
+        showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
         this.outputState = outputState;
+        this.onRunChange = onRunChange;
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
-            pending: null, submitting: false, actionBusy: false};
+            pending: null, submitting: false, actionBusy: false, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0;
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
@@ -44,6 +46,8 @@ export class ModelsController {
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
+            onRenew: () => void this.renewRun(), onDelete: () => this.requestRunDeletion(), onConfirmDelete: () => void this.deleteRun(),
+            onKeepRun: () => { this.state.deleteConfirmation = null; this.render(); this.view.focusRunDelete?.(); },
             onShowOutput: artifactId => {
                 const job = this.runSnapshots.get(this.state.selectedRun);
                 const file = job?.artifacts?.files.find(value => value.artifactId === artifactId);
@@ -443,7 +447,10 @@ export class ModelsController {
      */
     rememberRun(job) {
         if (job.operation !== "model.run.v1") return;
+        const previous = this.runSnapshots.get(job.jobId);
+        if (previous && (previous.updatedAt > job.updatedAt || previous.status === "deleted" && job.status !== "deleted")) return;
         this.runSnapshots.set(job.jobId, job);
+        this.onRunChange(job);
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" && this.state.draft?.raster?.jobId === job.jobId)) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
@@ -491,13 +498,15 @@ export class ModelsController {
             this.jobs.tracked.delete(previous); this.tracked.delete(previous);
         }
         this.state.selectedRun = id; this.state.page = "run"; this.state.invocation = null; this.state.invocationError = "";
+        this.state.deleteConfirmation = null; this.state.actionMessage = "";
         this.state.error = ""; this.state.yaml = null; this.jobs.tracked.add(id); this.tracked.add(id); this.jobs.schedule();
         this.render(); this.view.focusHeading();
         try {
             const [job, invocation] = await Promise.all([this.api.getJob(id), this.api.readModelInvocation(id).catch(error => ({readError: error.message}))]);
             if (revision !== this.revision || this.destroyed) return;
             this.rememberRun(job);
-            if (invocation.readError) this.state.invocationError = invocation.readError;
+            if (this.runSnapshots.get(id)?.status === "deleted") this.state.invocation = null;
+            else if (invocation.readError) this.state.invocationError = invocation.readError;
             else this.state.invocation = invocation;
         } catch (error) { if (revision === this.revision) this.state.invocationError = `This run is unavailable: ${error.message}`; }
         this.render();
@@ -511,6 +520,51 @@ export class ModelsController {
         this.state.actionBusy = true; this.render();
         try { const job = await this.jobs.action(id, "cancel"); if (job) this.rememberRun(job); }
         catch (error) { this.state.error = `Cancellation could not be confirmed: ${error.message}`; }
+        finally { this.state.actionBusy = false; this.render(); }
+    }
+
+    /** Ask for confirmation before deleting the selected run and every output.
+     * @return {void}
+     */
+    requestRunDeletion() {
+        const job = this.runSnapshots.get(this.state.selectedRun);
+        if (!job || this.state.actionBusy || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted") return;
+        this.state.deleteConfirmation = job.jobId; this.state.actionMessage = ""; this.render();
+        this.view.focusDeleteConfirmation?.();
+    }
+
+    /** Renew the selected run without changing another run if navigation changes.
+     * @return {Promise<void>} Completion after renewal or visible failure.
+     */
+    async renewRun() {
+        const id = this.state.selectedRun;
+        if (!id || this.state.actionBusy) return;
+        this.state.actionBusy = true; this.state.actionMessage = ""; this.state.error = ""; this.render();
+        try {
+            const job = await this.api.renewModelRun(id);
+            this.jobs.accept(job); this.rememberRun(job); this.refreshMapLayers();
+            if (this.state.selectedRun === id) this.state.actionMessage = `Results kept until ${new Date(job.expiresAt).toLocaleString()}.`;
+        } catch (error) { this.state.error = `Could not extend this run: ${error.message}`; }
+        finally { this.state.actionBusy = false; this.render(); }
+    }
+
+    /** Delete the confirmed run through the existing reader-safe job lifecycle.
+     * @return {Promise<void>} Completion after deletion or visible failure.
+     */
+    async deleteRun() {
+        const id = this.state.deleteConfirmation;
+        if (!id || id !== this.state.selectedRun || this.state.actionBusy) return;
+        this.state.actionBusy = true; this.state.error = ""; this.render();
+        try {
+            const job = await this.jobs.action(id, "delete");
+            if (job) this.rememberRun(job);
+            this.refreshMapLayers();
+            if (this.state.selectedRun === id) {
+                this.state.invocation = null; this.state.invocationError = ""; this.state.yaml = null;
+                this.state.deleteConfirmation = null;
+                this.state.actionMessage = "Run and results deleted. Files still in use will be removed when those calculations or downloads finish.";
+            }
+        } catch (error) { this.state.error = `Deletion could not be confirmed: ${error.message}`; }
         finally { this.state.actionBusy = false; this.render(); }
     }
 

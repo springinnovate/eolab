@@ -47,7 +47,11 @@ from eolab_app.processing.prepared_hydrology import (
 from pydantic import ValidationError
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunRequest
+from eolab_app.processing.model_run_contracts import (
+    MODEL_OPERATION,
+    MODEL_RUN_RETENTION_SECONDS,
+    ModelRunRequest,
+)
 from eolab_app.processing.model_runs import (
     build_model_job_submission,
     decode_model_run_cursor,
@@ -876,6 +880,30 @@ class ProcessingService:
             "jobs": [public_job(by_id[value]) for value in requested if value in by_id],
             "unavailableJobIds": [value for value in requested if value not in by_id],
         }
+
+    async def renew_model_run(self, owner: str, identifier: str) -> dict[str, Any]:
+        """Keep a completed model run and its files for at least another seven days.
+
+        Args:
+            owner: Hash of the requesting browser session.
+            identifier: Owned model run's public job ID.
+
+        Returns:
+            Updated run state, with later existing expiry dates preserved.
+
+        Raises:
+            ProcessingError: If the run is unavailable, expired, or not a model run.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        require_operation(row, MODEL_OPERATION)
+        return public_job(
+            await asyncio.to_thread(
+                self.jobs.extend_result_lifetime,
+                identifier,
+                owner,
+                MODEL_RUN_RETENTION_SECONDS,
+            )
+        )
 
     async def cancel(
         self, owner: str, identifier: str, delete: bool = False

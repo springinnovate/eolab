@@ -1,6 +1,7 @@
 """Multiple real model files across HTTP, PostgreSQL, native execution and cleanup."""
 
 from dataclasses import replace
+from datetime import timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
+from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.raster_clip import create_clip, clip_process_target
@@ -25,6 +27,101 @@ from test_model_runs_postgres import model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from test_raster_clips import SOURCE
 from uuid import uuid4
+
+
+def test_renewal_keeps_all_outputs_and_details_without_copying_files(
+    multiple_boundary: Any, store: Any
+) -> None:
+    """Renew a real multi-output run atomically without changing bytes or ownership.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated PostgreSQL retention and accounting authority.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    with psycopg.connect(store.conninfo) as connection:
+        before = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    assert ready["expiresAt"] == ready["metadataExpiresAt"]
+    with psycopg.connect(store.conninfo) as connection:
+        expiry, retained, attempt = connection.execute(
+            "SELECT expires_at,reserved_bytes,attempt_id FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()
+        assert expiry >= before + timedelta(days=7)
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()+interval '1 hour',"
+            "metadata_expires_at=now()+interval '1 hour' WHERE id=%s",
+            (identifier,),
+        )
+    original_files = ready["artifacts"]["files"]
+    paths = sorted(
+        worker.artifacts.artifact_path(attempt, "result.tif").parent.iterdir()
+    )
+    original_bytes = {path.name: path.read_bytes() for path in paths if path.is_file()}
+    assert "scratch.bin" not in original_bytes
+    cookie = client.cookies.get(COOKIE)
+    response = client.post(base + "/renew", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    renewed = response.json()
+    assert (
+        renewed["expiresAt"]
+        == renewed["metadataExpiresAt"]
+        == renewed["artifacts"]["expiresAt"]
+    )
+    assert renewed["artifacts"]["files"] == original_files
+    assert client.cookies.get(COOKIE) == cookie
+    assert "Max-Age=604800" in response.headers["set-cookie"]
+    assert client.get(base + "/run-yaml").status_code == 200
+    assert client.get(base + "/artifacts").json() == renewed["artifacts"]
+    assert {
+        path.name: path.read_bytes() for path in paths if path.is_file()
+    } == original_bytes
+    with psycopg.connect(store.conninfo) as connection:
+        result = connection.execute(
+            "SELECT reserved_bytes,expires_at-clock_timestamp() FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()
+        assert result[0] == retained
+        assert timedelta(days=7, seconds=-15) < result[1] <= timedelta(days=7)
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()+interval '14 days' WHERE id=%s",
+            (identifier,),
+        )
+        later = connection.execute(
+            "SELECT expires_at FROM processing.jobs WHERE id=%s", (identifier,)
+        ).fetchone()[0]
+    for _ in range(2):
+        repeated = client.post(base + "/renew", headers=HEADERS).json()
+        assert repeated["expiresAt"] == repeated["metadataExpiresAt"]
+    with psycopg.connect(store.conninfo) as connection:
+        assert (
+            connection.execute(
+                "SELECT expires_at FROM processing.jobs WHERE id=%s", (identifier,)
+            ).fetchone()[0]
+            == later
+        )
+    restarted = PostgresJobStore(store.limits, store.conninfo)
+    restarted.open()
+    try:
+        owner = hashlib.sha256(cookie.encode()).hexdigest()
+        assert restarted.get(identifier, owner)["expires_at"] == later
+    finally:
+        restarted.close()
+    client.portal.call(worker.cleanup)
+    for file in original_files:
+        assert client.get(file["url"]).status_code == 200
+    deleted = client.delete(base, headers=HEADERS)
+    assert deleted.status_code == 200
+    for file in original_files:
+        assert client.get(file["url"]).status_code == 409
+    assert client.post(base + "/renew", headers=HEADERS).status_code == 409
+    client.portal.call(worker.cleanup)
+    assert not paths[0].exists()
 
 
 def multiple_files_target(

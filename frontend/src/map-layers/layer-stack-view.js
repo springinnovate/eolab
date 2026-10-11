@@ -46,7 +46,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {{label:string,description:string}|null} [roleBadge] Analysis role supplied by the owner.
  * @property {string} [typeLabel] Owner-supplied type or origin label.
  * @property {string} [attribution] Shared-layer provenance.
- * @property {{id:string,label:string}} [group] Owner-supplied grouping; headers follow contiguous drawing order.
+ * @property {{id:string,label:string,actionLabel?:string}} [group] Owner-supplied grouping and optional composed action; headers follow contiguous drawing order.
  * @property {string} [stylePanelId] Owning style panel identifier.
  * @property {HTMLElement} [detailsControl] Retained owner action replacing Catalog Info.
  * @property {HTMLElement} [primaryControl] Retained owner main action.
@@ -78,6 +78,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} onZoom Fit the map to one retained layer.
  * @property {(key: string) => void} onInfo Open one retained layer's Catalog
  * Item details.
+ * @property {(id:string)=>void} [onGroupAction] Open the owner-supplied group action through composition.
  * @property {(key: string) => void} onCopyStyle Copy one retained layer style.
  * @property {(key: string) => void} onPasteStyle Paste onto one retained layer.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
@@ -271,6 +272,11 @@ export class MapLayerStackView {
             if (!layer.group || layers[index - 1]?.group?.id === layer.group.id) return;
             const heading = this.documentContext.createElement("strong");
             heading.className = "map-layer-group-heading"; heading.textContent = layer.group.label;
+            if (layer.group.actionLabel && this.allowRemoval) {
+                const action = this.#button(layer.group.actionLabel, `${layer.group.actionLabel}: ${layer.group.label}`,
+                    layer.key, "group-action", () => this.handlers?.onGroupAction(layer.group.id), focusTargets);
+                heading.append(action);
+            }
             rows[index].classList.add("has-group-heading");
             rows[index].prepend(heading);
         });

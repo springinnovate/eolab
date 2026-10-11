@@ -56,6 +56,7 @@ from eolab_app.processing.artifact_manifest import (
 )
 
 MODEL_OPERATION = "model.run.v1"
+MODEL_RUN_RETENTION_SECONDS = 7 * 86_400
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 
 

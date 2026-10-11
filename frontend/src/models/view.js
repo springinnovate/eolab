@@ -87,6 +87,12 @@ export class ModelsView {
      */
     focusHeading() { this.elements.heading.focus(); }
 
+    /** Focus the safe choice when asking to delete a run. @return {void} */
+    focusDeleteConfirmation() { this.run?.keep.focus(); }
+
+    /** Return focus to the run's deletion action after dismissing confirmation. @return {void} */
+    focusRunDelete() { this.run?.remove.focus(); }
+
     /** Build a labelled input with a stable ID for keyboard users.
      * @param {string} id Unique control ID.
      * @param {string} caption Field label.
@@ -295,13 +301,23 @@ export class ModelsView {
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
         const actions = this.element("div", "", "models-actions");
         const cancel = this.button("Cancel run", this.handlers.onCancel); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate);
-        actions.append(cancel, duplicate);
+        const renew = this.button("Keep for another 7 days", this.handlers.onRenew);
+        const remove = this.button("Delete run and results", this.handlers.onDelete);
+        actions.append(cancel, duplicate, renew, remove);
+        const confirmation = this.element("div", "", "models-result"); confirmation.setAttribute("role", "group");
+        confirmation.setAttribute("aria-label", "Confirm run deletion");
+        const warning = this.element("p");
+        const confirmActions = this.element("div", "", "models-actions");
+        const confirm = this.button("Delete run and results", this.handlers.onConfirmDelete);
+        const keep = this.button("Keep run", this.handlers.onKeepRun);
+        confirmActions.append(keep, confirm); confirmation.append(warning, confirmActions);
+        const feedback = this.element("p", "", "models-help"); feedback.setAttribute("role", "status");
         const expiry = this.element("p", "", "models-help");
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(title, status, progress, error, result, actions, expiry, inputs, details.root);
-        this.run = {id, title, status, progress, error, result, cancel, duplicate, expiry, inputsBody, details};
+        this.elements.run.replaceChildren(title, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
+        this.run = {id, title, status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
     /** Render current run progress, immutable setup and available result downloads.
@@ -321,6 +337,13 @@ export class ModelsView {
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
         const available = job?.status === "ready" && Date.parse(job.expiresAt) > Date.now();
+        r.renew.hidden = !available; r.renew.disabled = Boolean(state.actionBusy);
+        r.remove.hidden = !job || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted" || state.deleteConfirmation === job.jobId;
+        r.remove.disabled = Boolean(state.actionBusy);
+        r.confirmation.hidden = !job || job.status === "deleted" || state.deleteConfirmation !== job.jobId;
+        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. This cannot be undone.`;
+        r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
+        r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
         const signature = JSON.stringify([available, job?.result, job?.artifacts, state.outputPreviews]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
@@ -330,7 +353,9 @@ export class ModelsView {
                 if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
             }
         }
-        r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
+        r.expiry.hidden = job?.status === "deleted";
+        r.inputs.hidden = job?.status === "deleted";
+        r.expiry.textContent = job ? `Temporary run in this browser. Clearing cookies or losing this browser session loses access.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
             (job.metadataExpiresAt ? ` Saved inputs expire ${new Date(job.metadataExpiresAt).toLocaleString()}.` : "") : "";
         const invocation = state.invocation;
         if (invocation && r.invocation !== invocation) {

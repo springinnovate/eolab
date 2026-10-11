@@ -601,6 +601,15 @@ class PostgresJobStore:
                 identifier = uuid4().hex
                 job_id = shared["id"] if shared else identifier
                 if not shared:
+                    retained_seconds = (
+                        max(
+                            expected.minimum_retention_seconds,
+                            self.limits.result_ttl_seconds,
+                            self.limits.metadata_ttl_seconds,
+                        )
+                        if expected.minimum_retention_seconds is not None
+                        else None
+                    )
                     new_inputs.extend(
                         (
                             job_id,
@@ -622,7 +631,8 @@ class PostgresJobStore:
                             expected.operation,
                             expected.work_key,
                             serialize_retained_metadata(expected.retained_metadata),
-                            self.limits.metadata_ttl_seconds,
+                            retained_seconds or self.limits.metadata_ttl_seconds,
+                            retained_seconds,
                         )
                     )
                     waiting += 1
@@ -657,8 +667,8 @@ class PostgresJobStore:
             with cursor.connection.pipeline():
                 if new_jobs:
                     cursor.executemany(
-                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -938,6 +948,71 @@ class PostgresJobStore:
             )
             return cursor.fetchone()
 
+    def extend_result_lifetime(
+        self, identifier: str, owner: str, seconds: int
+    ) -> dict[str, Any]:
+        """Keep an available result and its details until at least now plus a duration.
+
+        Serialize renewal with deletion, expiry and cleanup. Existing later
+        deadlines are preserved, and retained bytes and input grants are unchanged.
+        The application owner chooses the duration; callers cannot revive expired
+        results or details even while another reader still retains the files.
+
+        Args:
+            identifier: Caller-owned public job handle.
+            owner: Hash of the requesting browser session.
+            seconds: Positive retention duration, at most one year.
+
+        Returns:
+            The owned job with the same deadline for results and saved details.
+
+        Raises:
+            ProcessingError: If ownership, availability or the duration is invalid.
+        """
+        if not 1 <= seconds <= 31_536_000:
+            raise ProcessingError("invalid_retention", "Invalid result lifetime.")
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT *, expires_at>clock_timestamp() AS available "
+                "FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ProcessingError(
+                    "job_not_found", "This processing job is unavailable.", 404
+                )
+            if (
+                row["status"] != "ready"
+                or not row["available"]
+                or row["artifact"] is None
+                or row["retained_metadata"] is None
+            ):
+                raise ProcessingError(
+                    "result_unavailable",
+                    "Only a completed run with available files and details can be extended.",
+                    409,
+                )
+            cursor.execute(
+                "UPDATE processing.jobs SET "
+                "expires_at=greatest(expires_at,metadata_expires_at,statement_timestamp()+%s*interval '1 second'),"
+                "metadata_expires_at=greatest(expires_at,metadata_expires_at,statement_timestamp()+%s*interval '1 second'),"
+                "updated_at=clock_timestamp() WHERE id=%s "
+                "AND expires_at>statement_timestamp() AND metadata_expires_at>statement_timestamp() RETURNING id",
+                (seconds, seconds, row["job_id"]),
+            )
+            if cursor.fetchone() is None:
+                raise ProcessingError(
+                    "result_unavailable",
+                    "This run expired before it could be extended.",
+                    409,
+                )
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            return cursor.fetchone()
+
     def claim_next_job(self) -> dict[str, Any] | None:
         """Claim a fitting queued job and reserve its execution capacity atomically.
 
@@ -1054,6 +1129,10 @@ class PostgresJobStore:
     ) -> bool:
         """Publish completed work and cache values only while this attempt owns the job.
 
+        Results use the lifetime captured by the operation at admission, when
+        supplied; ordinary jobs retain the deployment's result lifetime. Captured
+        result and metadata deadlines start together on successful completion.
+
         Args:
             identifier: Running job.
             attempt: Execution fencing token.
@@ -1099,7 +1178,7 @@ class PostgresJobStore:
                     (
                         Jsonb(asdict(artifact)),
                         retained_bytes,
-                        self.limits.result_ttl_seconds,
+                        row["result_ttl_seconds"] or self.limits.result_ttl_seconds,
                         Jsonb({"phase": "ready"}),
                         identifier,
                     ),

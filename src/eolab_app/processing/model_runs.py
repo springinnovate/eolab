@@ -24,6 +24,7 @@ from eolab_app.processing.model_definitions import (
 )
 from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
+    MODEL_RUN_RETENTION_SECONDS,
     ModelInvocation,
     ModelRunRequest,
     ModelRunSpec,
@@ -226,7 +227,8 @@ def build_model_job_submission(
 
     Returns:
         A model job ready to queue, with the information needed for later Run YAML
-        export. It does not join another run's calculation.
+        export and at least seven days of result/detail retention after completion.
+        It does not join another run's calculation.
 
     Raises:
         ProcessingError: If the saved recipe and inputs exceed the YAML size limits.
@@ -310,6 +312,7 @@ def build_model_job_submission(
             "outputs": outputs,
         },
         retained_metadata=metadata,
+        minimum_retention_seconds=MODEL_RUN_RETENTION_SECONDS,
         work_key=None,
         presentation=None,
     )

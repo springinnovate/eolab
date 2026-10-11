@@ -855,6 +855,7 @@ async function initializeCatalog(
     const processingJobs = new ProcessingJobs(processingApi);
     outputLayers = new ModelOutputLayers({
         api: processingApi,
+        onRunObserved: job => processingJobs.accept(job),
         addRaster: (source, lifecycle, presentation) => rasterVisualization.showSource(source, lifecycle, presentation),
         addLayer: (source, adapter) => mapLayerController.addLocal(source, adapter),
         removeLayer: key => mapLayerController.removeKey(key),
@@ -1010,6 +1011,10 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         showOutput: (job, file) => outputLayers.show(job, file),
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),
+        onRunChange: job => {
+            outputLayers.updateRun(job);
+            if (job.status === "deleted") mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.jobId === job.jobId);
+        },
         /** Supply original-source choices and current map areas independently of rendering.
          * @return {Object} Independent raster, vector, selected area and visible map bounds.
          */
@@ -1061,6 +1066,11 @@ async function initializeCatalog(
     });
     mapInspection.subscribeActiveTool(tool => models.setActive(tool === "models"));
     models.start();
+    mapLayerController.onGroupAction = async id => {
+        models.open();
+        await models.showRun(id);
+        if (models.state.selectedRun === id) models.requestRunDeletion();
+    };
     leafletMap.on("moveend resize", () => models.refreshMapArea());
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(),
