@@ -1,6 +1,6 @@
 # Administrator configuration for https://resilience.wwfus.science/.
 # Validate against the original mounted files before installing its report.
-# This is not a prevalidated report; northern coverage may require a regional network.
+# This is not a prevalidated report; each run checks its required DEM coverage.
 schema: eolab.hydrology/v1
 id: resilience-aster-hydrobasins
 version: "1.0.0"

@@ -7,14 +7,15 @@ paths and geometries exist only in that process and its private attempt director
 from contextlib import chdir
 from dataclasses import dataclass, replace
 from pathlib import Path
+import math
 from typing import Any
 
 import numpy as np
 import rasterio
-from rasterio.features import shapes
+from rasterio.features import geometry_mask, geometry_window, shapes
 from rasterio.windows import Window
 from shapely import get_num_coordinates
-from shapely.geometry import shape
+from shapely.geometry import box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -33,6 +34,11 @@ from eolab_app.processing.downstream_models import (
     DownstreamPlan,
 )
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.hydrology_validation import (
+    require_network_id,
+    validate_network_links,
+)
+from eolab_app.raster.bounded_window import project_wgs84_polygons
 from eolab_app.processing.raster_input import (
     native_work,
     select_area,
@@ -83,10 +89,11 @@ def read_network(
 ) -> dict[int | str, Watershed]:
     """Read only starting partitions and their downstream connections from original data.
 
-    ID types, uniqueness, links and acyclicity are guaranteed by the installed
-    hydrology report. The authorized reader checks that the source still matches
-    that report before and after reading. Native queries must return every
-    requested ID; this boundary also enforces per-run geometry/work limits.
+    Check the selected drainage's ID types, uniqueness, links and terminal IDs
+    before routing, including when installation only registered source metadata.
+    The authorized reader checks that sources still match the installed report.
+    Native queries must return every requested ID; this boundary also enforces
+    per-run geometry/work limits. Unrelated drainages are not scanned.
 
     Uses the ordinary spatial and attribute predicates. The full-network source
     authorization remains unchanged; temporary restrictions only reduce its scope.
@@ -102,7 +109,8 @@ def read_network(
         Process-local downstream records within retained feature/coordinate budgets.
 
     Raises:
-        ProcessingError: If coverage, identifiers or retained geometry exceed limits.
+        ProcessingError: If coverage, topology or retained geometry are invalid or
+            exceed limits.
         SelectionUnavailableError: If the original vector changed.
     """
     topology = request.hydrology.definition.topology
@@ -120,6 +128,8 @@ def read_network(
         )
     )
     result: dict[int | str, Watershed] = {}
+    nodes: dict[int | str, tuple[int | str | None, int | str | None]] = {}
+    terminal_links: dict[int | str, int | str] = {}
     coordinates = 0
 
     def read_batch(
@@ -138,6 +148,7 @@ def read_network(
             ProcessingError: If duplicate identities or geometry limits are encountered.
         """
         nonlocal coordinates
+        batch_ids: set[int | str] = set()
         with polygon_records(resolved, fields, bbox) as records:
             for geometry, properties in records:
                 polygon = shape(geometry)
@@ -146,7 +157,37 @@ def read_network(
                     or polygon.intersection(starting).area == 0
                 ):
                     continue
-                identifier = properties[topology.idField]
+                try:
+                    identifier = require_network_id(
+                        properties[topology.idField], topology.idType, topology.idField
+                    )
+                    downstream = require_network_id(
+                        properties[topology.downstreamField],
+                        topology.idType,
+                        topology.downstreamField,
+                    )
+                    terminal = topology.terminal.matches(properties)
+                    terminal_id = (
+                        None
+                        if topology.terminalIdField is None
+                        else require_network_id(
+                            properties[topology.terminalIdField],
+                            topology.idType,
+                            topology.terminalIdField,
+                        )
+                    )
+                except ValueError as error:
+                    raise ProcessingError(
+                        "invalid_hydrology", str(error), 422
+                    ) from error
+                if identifier in batch_ids:
+                    raise ProcessingError(
+                        "invalid_hydrology",
+                        f"Duplicate watershed ID {identifier!r} in the selected drainage. "
+                        "Ask the administrator to check the watershed ID field and duplicate records.",
+                        422,
+                    )
+                batch_ids.add(identifier)
                 if identifier in result:
                     continue
                 coordinates += int(get_num_coordinates(polygon))
@@ -159,10 +200,12 @@ def read_network(
                         "The selected drainage exceeds this worker's feature or geometry limit.",
                         413,
                     )
-                downstream = properties[topology.downstreamField]
+                if terminal and topology.terminal.equalsField is None:
+                    terminal_links[identifier] = downstream
+                nodes[identifier] = (None if terminal else downstream, terminal_id)
                 result[identifier] = Watershed(
                     polygon,
-                    None if topology.terminal.matches(properties) else downstream,
+                    nodes[identifier][0],
                 )
 
     if selected is None:
@@ -175,6 +218,14 @@ def read_network(
                 422,
             )
     pending = set(selected or ()) - result.keys()
+    if (
+        selected is None
+        and request.hydrology.validation.validator == "eolab.hydrology-registration/v1"
+    ):
+        # Check every record for starting IDs, including duplicates whose polygons
+        # fell outside the initial spatial query. Already validated installations
+        # have established global uniqueness and do not need this extra query.
+        pending.update(result)
     pending.update(
         item.downstream
         for item in result.values()
@@ -197,8 +248,7 @@ def read_network(
             sources.network, selection=selection, where=ogr_predicate(predicate)
         )
         read_batch(restricted, None, False)
-        # Native query completeness is an external-reader contract, not a second
-        # validation of the prepared network. Avoid retrying an empty batch forever.
+        # Missing connections fail locally rather than retrying an empty batch.
         if set(batch) - result.keys():
             raise ProcessingError(
                 "source_read_failed",
@@ -212,6 +262,10 @@ def read_network(
             if result[identifier].downstream is not None
             and result[identifier].downstream not in result
         )
+    try:
+        validate_network_links(nodes, terminal_links)
+    except ValueError as error:
+        raise ProcessingError("invalid_hydrology", str(error), 422) from error
     return result
 
 
@@ -381,6 +435,53 @@ def plan_native_grid(
     )
 
 
+def require_downstream_dem_coverage(
+    dataset: rasterio.io.DatasetReader,
+    network: dict[int | str, Watershed],
+    identifiers: tuple[int | str, ...],
+    limits: DownstreamLimits,
+) -> None:
+    """Require complete DEM extent and connected boundaries for the selected drainage.
+
+    Check polygons before raster-window clipping so missing terrain cannot silently
+    shorten a run. No elevation cells are read here; execution checks their validity.
+
+    Args:
+        dataset: Open prepared DEM with validated source metadata.
+        network: Run-local geographic watershed records.
+        identifiers: Watersheds followed from the starting mask to their real sinks.
+        limits: Worker budget for projected watershed coordinates.
+
+    Raises:
+        ProcessingError: If terrain extent or connected watershed boundaries are
+            incomplete, or a selected polygon cannot be projected safely.
+        ValueError: If projection exceeds its coordinate budget.
+    """
+    projected = project_wgs84_polygons(
+        dataset,
+        tuple(mapping(network[item].geometry) for item in identifiers),
+        limits.max_watershed_coordinates,
+    )
+    polygons = dict(zip(identifiers, map(shape, projected), strict=True))
+    diagonal = math.hypot(dataset.transform.a, dataset.transform.e)
+    # Permit projection roundoff only, not an uncovered fraction of a terrain cell.
+    footprint = box(*dataset.bounds).buffer(diagonal * 1e-8)
+    for identifier, polygon in polygons.items():
+        if not polygon.is_valid or not footprint.covers(polygon):
+            raise ProcessingError(
+                "incomplete_dem",
+                "The prepared DEM does not cover the full downstream drainage for this starting mask. Choose another starting area or a hydrology dataset with complete terrain coverage.",
+                422,
+            )
+        downstream = network[identifier].downstream
+        if downstream is not None and polygon.distance(polygons[downstream]) > diagonal:
+            raise ProcessingError(
+                "incomplete_hydrology",
+                "A selected watershed has a gap before its downstream partition. Ask the administrator to repair the watershed boundaries.",
+                422,
+            )
+
+
 def plan_downstream(
     sources: DownstreamSources, request: DownstreamRequest, limits: DownstreamLimits
 ) -> DownstreamPlan:
@@ -410,6 +511,7 @@ def plan_downstream(
         )
     with rasterio.open(sources.rasters["dem"]) as dataset:
         validate_supported_raster(dataset, sources.rasters["dem"])
+        require_downstream_dem_coverage(dataset, network, identifiers, limits)
         routing = plan_native_grid(dataset, region, limits.max_routing_cells, limits)
         if len(groups) * routing.width * routing.height > limits.max_routing_cells:
             raise ProcessingError(
@@ -486,6 +588,63 @@ def group_watersheds_by_sink(
     return groups
 
 
+def require_downstream_dem_cells(
+    sources: DownstreamSources, spec: DownstreamPlan, limits: DownstreamLimits
+) -> None:
+    """Check required native terrain cells before passing the DEM to the WWF model.
+
+    Registration does not inspect elevation cells. This retains the per-run
+    checks for missing elevations and watersheds without pixel centers, without
+    changing the source DEM or the upstream calculation grid.
+
+    Args:
+        sources: Reauthorized terrain and original watershed source.
+        spec: Admitted watershed IDs and native DEM window.
+        limits: Existing source and geometry limits for this run.
+
+    Raises:
+        ProcessingError: If a required watershed has no valid terrain coverage.
+        SelectionUnavailableError: If the watershed source changed.
+        ValueError: If projection exceeds its coordinate budget.
+    """
+    network = read_network(
+        sources,
+        spec.inputs,
+        limits,
+        starting_geometry(sources, limits),
+        spec.watersheds,
+    )
+    with rasterio.open(sources.rasters["dem"]) as dataset:
+        projected = project_wgs84_polygons(
+            dataset,
+            tuple(mapping(network[item].geometry) for item in spec.watersheds),
+            limits.max_watershed_coordinates,
+        )
+        for polygon in projected:
+            window = geometry_window(dataset, (polygon,)).intersection(
+                Window(*spec.routingGrid.window)
+            )
+            covered = geometry_mask(
+                (polygon,),
+                out_shape=(int(window.height), int(window.width)),
+                transform=dataset.window_transform(window),
+                invert=True,
+            )
+            if not covered.any():
+                raise ProcessingError(
+                    "unsupported_dem_resolution",
+                    "A downstream watershed contains no DEM pixel centers. Choose a hydrology dataset with a finer terrain resolution.",
+                    422,
+                )
+            terrain = read_native_raster_window(dataset, window)
+            if np.any(covered & np.ma.getmaskarray(terrain)):
+                raise ProcessingError(
+                    "incomplete_dem",
+                    "The prepared DEM has missing elevation inside the downstream area. Repair terrain coverage.",
+                    422,
+                )
+
+
 def calculate_downstream(
     sources: DownstreamSources,
     spec: DownstreamPlan,
@@ -520,6 +679,7 @@ def calculate_downstream(
         raise ProcessingError(
             "source_changed", "The model inputs changed after preparation.", 409
         )
+    require_downstream_dem_cells(sources, spec, limits)
     from eolab_app.processing.downstream_runner import run_original_downstream
 
     workspace = directory.resolve()

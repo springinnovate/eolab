@@ -1,5 +1,13 @@
 /** Build model drafts from catalog identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
+import { hydrologyReference } from "../processing/hydrology.js";
+
+/** Check whether a recipe declares a particular setup capability.
+ * @param {Object} model Installed recipe.
+ * @param {string} type Input type from the model contract.
+ * @return {boolean} Whether the recipe needs this control.
+ */
+export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
 
 /** Identify a raster or vector choice without using its label or map visibility.
  * @param {Object} source Catalog identity or owned run-file reference.
@@ -69,7 +77,8 @@ export function modelViewportArea(bounds) {
 export function modelSupportsArea(model, area) {
     const role = Object.values(model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type));
     const kinds = role?.type === "clip_area" ? ["selectedArea", "catalogSelection"] :
-        role?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] : [];
+        role?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
+            modelHasInput(model, "mask_source") ? ["catalogSelection"] : [];
     return kinds.includes(area?.kind);
 }
 
@@ -85,19 +94,24 @@ export function createModelDraft(model, context, id) {
     const catalog = sources.filter(source => source.kind !== "runArtifact");
     const enabled = catalog.filter(source => source.visible);
     const suggestion = enabled.length === 1 ? enabled[0] : catalog.length === 1 ? catalog[0] : null;
+    const usesMask = modelHasInput(model, "mask_source");
     let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
     let selectionError = "";
-    if (!modelSupportsArea(model, area)) {
+    if (usesMask) {
+        area = null; areaMode = "vector";
+    } else if (!modelSupportsArea(model, area)) {
         areaMode = "viewport"; area = null;
         try { area = modelViewportArea(context.viewportBounds); }
         catch (error) { selectionError = error.message; }
     }
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
-        raster: suggestion ? structuredClone(suggestion) : null,
+        raster: !usesMask && suggestion ? structuredClone(suggestion) : null,
         sourceReason: Object.values(model.inputs).some(input => input.type === "raster") ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
+        maskRaster: null, hydrology: null, hydrologyChoices: [], hydrologyKey: "", hydrologyLoading: false,
+        hydrologyChecking: false, hydrologyError: "", hydrologyReason: "",
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };
 }
@@ -117,26 +131,42 @@ export function captureModelSubmission(draft, requestId) {
     if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
         throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
-    if (!draft.area) throw new Error(draft.selectionError || "Choose an analysis area before running the model.");
-    if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose a sampling area, visible map area or vector layer supported by this model.");
+    const usesMask = modelHasInput(draft.model, "mask_source");
+    if (usesMask && draft.areaMode === "raster") {
+        if (!draft.maskRaster || draft.maskRaster.kind === "runArtifact" || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.maskRaster)))
+            throw new Error("Choose a starting raster from Map layers.");
+    } else {
+        if (!draft.area) throw new Error(draft.selectionError || (usesMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
+        if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose an area supported by this model.");
+    }
+    if (modelHasInput(draft.model, "prepared_hydrology") && (!draft.hydrology || draft.hydrologyLoading || draft.hydrologyChecking))
+        throw new Error(draft.hydrologyError || "Choose a prepared hydrology dataset and wait for its source check.");
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
         if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = draft.raster.kind === "runArtifact" ?
             {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
+        else if (input.type === "mask_source") inputs[name] = draft.areaMode === "raster" ?
+            {kind: "catalogRaster", source: {collectionId: draft.maskRaster.collectionId, itemId: draft.maskRaster.itemId}} : structuredClone(draft.area);
+        else if (input.type === "prepared_hydrology") inputs[name] = hydrologyReference(draft.hydrology);
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
-    const area = Object.entries(draft.model.inputs).filter(([, input]) => ["summary_area", "clip_area"].includes(input.type)).map(([name]) => inputs[name])[0];
-    if (area.kind === "selectedArea") modelAreaInput(area);
-    else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
-    else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
+    const area = draft.area;
+    if (!usesMask || draft.areaMode === "vector") {
+        if (area.kind === "selectedArea") modelAreaInput(area);
+        else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
+        else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
+    }
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
         if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");
-        if (["number", "optional_number"].includes(parameter.type) && !(value === null && parameter.type === "optional_number") &&
-            (!Number.isFinite(value) || parameter.minimum != null && value < parameter.minimum ||
-                parameter.exclusiveMinimum != null && value <= parameter.exclusiveMinimum)) throw new Error(`Check ${parameter.label}.`);
+        if (["number", "optional_number"].includes(parameter.type) && !(value === null && parameter.type === "optional_number")) {
+            if (!Number.isFinite(value)) throw new Error(`Enter a number for ${parameter.label}.`);
+            const unit = parameter.unit ? ` ${parameter.unit}` : "";
+            if (parameter.minimum != null && value < parameter.minimum) throw new Error(`${parameter.label} must be at least ${parameter.minimum}${unit}.`);
+            if (parameter.exclusiveMinimum != null && value <= parameter.exclusiveMinimum) throw new Error(`${parameter.label} must be greater than ${parameter.exclusiveMinimum}${unit}.`);
+        }
     }
     const {id, version, definitionSha256} = draft.model;
     return structuredClone({requestId, model: {id, version, definitionSha256}, inputs, parameters: draft.parameters, label: draft.label.trim()});

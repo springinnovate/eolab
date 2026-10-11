@@ -16,6 +16,9 @@ The existing queue, progress, explicit cancellation, source authorization, sessi
 ownership, expiry and artifact publication still own the run. There is no new
 renderer, pixel reader or job scheduler.
 
+Open **Tools > Models** to choose the starting mask, prepared hydrology, values
+raster and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
+
 ## Inputs and results
 
 Choose prepared hydrology, one starting mask and a values raster. A raster mask
@@ -122,4 +125,7 @@ actual native cancellation and resource-budget coverage.
 catalog DEM and watersheds. Configure `HYBAS_ID`, `NEXT_DOWN` and `NEXT_SINK`;
 `ID` and `MAIN_BAS` do not participate in upstream calculations. See
 [prepared-hydrology.md](prepared-hydrology.md) for installation. This wrapper does
-not change that contract. Model setup UI is separate in #701/#722.
+not change that contract. Registration-only and both validation-report versions
+remain supported. Installation checks source metadata; each run checks the
+selected drainage and its DEM coverage, so unrelated basins outside a regional
+DEM do not prevent installation.
