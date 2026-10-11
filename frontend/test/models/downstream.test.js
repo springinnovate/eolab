@@ -5,6 +5,7 @@ import { ModelsView, describeModelProgress } from "../../src/models/view.js";
 import { captureModelSubmission } from "../../src/models/inputs.js";
 import { ProcessingApiClient } from "../../src/processing/api.js";
 import { hydrologyKey, hydrologyReference } from "../../src/processing/hydrology.js";
+import { hydrologyDetails } from "../../src/models/hydrology-view.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { downstreamModel, hydrology, raster, selection, job, model, fileManifest } from "../../test-support/models/fixtures.js";
 
@@ -34,6 +35,19 @@ function fixture(overrides = {}) {
     controller.state.library = [downstreamModel]; controller.setActive(true); controller.chooseModel(downstreamModel);
     return {controller, view, doc, context, api, requests, filters, cancelled};
 }
+
+test("registered hydrology can run and its details do not claim full validation", async () => {
+    const registered = structuredClone(hydrology);
+    registered.validation.validator = "eolab.hydrology-registration/v1";
+    const h = fixture({discoverPreparedHydrology: async () => [registered], resolvePreparedHydrology: async () => registered});
+    await settle();
+    assert.equal(h.view.setup.run.disabled, false);
+    const rows = hydrologyDetails(registered);
+    assert.ok(rows.some(([label]) => label === "Registered"));
+    assert.ok(!rows.some(([label]) => label === "Validated"));
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].inputs.terrain, hydrologyReference(registered));
+});
 
 test("one prepared dataset suggests compatible inputs and captures the YAML-named vector mask", async () => {
     const h = fixture(); await settle();

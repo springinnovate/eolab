@@ -210,8 +210,23 @@ class HydrologyReference(HydrologySchema):
     effectiveSha256: Digest
 
 
+class HydrologyRegistration(HydrologySchema):
+    """Record source registration without claiming that the watershed network was checked.
+
+    Only source identities, mapped field presence and DEM metadata are checked.
+    Network counts and bounds are absent because no features were read. The
+    historical ``validatedAt`` field records the registration time; downstream
+    calculations check the selected drainage before using it.
+    """
+
+    validator: Literal["eolab.hydrology-registration/v1"]
+    validatedAt: AwareDatetime
+    demCellsChecked: Literal[0] = 0
+    grid: HydrologyGrid
+
+
 class PreparedHydrologySnapshot(HydrologySchema):
-    """A validated configuration and its source identities, safe to retain in Run YAML.
+    """An installed configuration and its source identities, safe to retain in Run YAML.
 
     The effective checksum covers configuration, source signatures and validator
     version. Validation time is informational. This contains no paths, geometries,
@@ -221,7 +236,9 @@ class PreparedHydrologySnapshot(HydrologySchema):
     definition: PreparedHydrologyDefinition
     demSignature: Digest
     watershedSelection: CatalogSelection
-    validation: HydrologyValidation
+    validation: HydrologyValidation | HydrologyRegistration = Field(
+        discriminator="validator"
+    )
     effectiveSha256: Digest
 
     @model_validator(mode="after")

@@ -7,8 +7,8 @@ configuration names the fields that connect watersheds and records how
 the terrain was prepared. It is separate from Model YAML: the same model can use
 different regional datasets without changing its recipe.
 
-The administrator validates each configuration explicitly and installs the
-resulting report. Model setup can discover these reports through the Processing
+The administrator registers each configuration and installs the resulting report.
+An optional full-network validation is available. Model setup discovers reports through the Processing
 API. Opening setup does not scan a DEM or rebuild a network. The
 [downstream model](downstream-model.md) executes through Processing. Its Models
 setup lists the installed configurations and rechecks the selected sources before
@@ -25,7 +25,7 @@ enabling Run; terrain and topology details are expandable in the same panel.
    A vector catalog Item identifies its exact native layer; no file paths occur
    in this YAML. Include **all downstream partitions**, even when they cross
    administrative boundaries.
-3. Run the validator with the deployment's source mount and catalog. For example,
+3. Register the sources with the deployment's source mount and catalog. For example,
    with the catalog already running and a host setup directory containing the YAML:
 
    ```sh
@@ -34,10 +34,14 @@ enabling Run; terrain and topology details are expandable in the same panel.
      app python -m eolab_app.hydrology_cli /hydrology/region.yaml \
        --catalog-url http://stac-api:8080 \
        --scan-mount /scan-source \
-       --output /hydrology/region.hydrology.json
+       --output /hydrology/region.hydrology.json \
+       --register-only
    ```
 
-   Validation reads original files without editing them. A successful command
+   Registration checks source identities, required fields, CRS and DEM metadata
+   without reading watershed features or DEM pixels. Each run checks its selected
+   drainage. Omit `--register-only` to additionally validate the complete network.
+   Both modes read original files without editing them. A successful command
    atomically writes the report. An invalid configuration, changed source,
    exhausted budget or cancellation leaves an existing report untouched and
    exits unsuccessfully. Run against the same mounted files as the application;
@@ -54,7 +58,7 @@ duplicate ID/version or mismatched checksum fails app startup with a diagnostic.
 There is no fixed maximum number of installed configurations. Each report is
 bounded by the existing 256 KiB Run YAML/JSON parser limits.
 
-Raw YAML edits take effect only after validation and installation of the new
+Raw YAML edits take effect only after registration and installation of the new
 report. Use a new semantic version for intentional dataset/configuration changes.
 The effective SHA-256 also changes when any configuration, source signature or
 validation result changes, even if an administrator accidentally reuses a version.
@@ -93,17 +97,16 @@ python -m eolab_app.hydrology_cli /processing-data/hydrology/resilience.yaml \
   --catalog-url http://stac-api:8080 \
   --scan-mount /scan-source \
   --output /processing-data/hydrology/resilience.hydrology.json \
-  --timeout-seconds 1800 \
-  --max-coordinates 30000000
+  --register-only
 ```
 
-This gives the full Resilience network a one-time validation allowance of 30
-minutes and 30 million polygon coordinates, while retaining the 2 GiB native
-memory limit. These are maximum allowances, not an estimated runtime or a measured
-coordinate count. They apply to this administrator command, not ordinary map reads
-or model runs. The default budgets remain available for smaller regional networks.
+This registers the administrator-prepared data without scanning the global network.
+No feature-count or coordinate budget increase is needed. A duplicate ID or other
+network problem outside a run's selected drainage does not block that run.
+Registration does not repair or deduplicate source data: duplicate IDs in the
+selected drainage still fail that run rather than silently dropping a polygon.
 
-Wait for `Validated configuration written to ...resilience.hydrology.json` and a
+Wait for `Registered configuration written to ...resilience.hydrology.json` and a
 successful exit. If it reports a missing field, source change or exhausted budget,
 address that message before continuing; do not hand-edit a validation report.
 The diagnostic distinguishes a time limit from a feature or coordinate limit.
@@ -113,7 +116,7 @@ Older deployments report `Vector reading exceeded its feature/time budget` after
 15 seconds even when a longer CLI timeout was requested. Deploy the updated worker
 before retrying; changing the command's timeout alone cannot fix that older reader.
 
-After validation succeeds, add this **runtime** environment variable to the
+After registration succeeds, add this **runtime** environment variable to the
 Resilience deployment in Coolify, then redeploy the app:
 
 ```text
@@ -145,14 +148,16 @@ to integer `0` is also valid. If `terminalIdField` is supplied, it must describe
 the terminal reached under the chosen rule.
 The configured display name, including HUC06, implies no schema.
 
-Validation rejects missing fields, wrong/null ID types, duplicate IDs, dangling
+Registration rejects missing fields or unavailable/changed sources, but does not
+read IDs, connections or polygons. Full-network validation and each run's selected
+drainage checks reject wrong/null ID types, duplicate IDs, dangling
 links, cycles and a constant-value terminal that still links to another feature.
 A field-to-field terminal rule permits virtual downstream links at the declared
 real sink. When
 `terminalIdField` is supplied, every value must name the terminal actually reached
 by following links. A network may contain several independent complete drainages.
 
-The shared bounded vector reader checks polygon validity and CRS, applies the
+When features are read, the shared bounded vector reader checks polygon validity and CRS, applies the
 existing source-signature checks and streams original features. No filtered
 vectors or reusable geometry snapshots are saved. Installation checks DEM
 georeferencing, native source structure and the north-up grid, without projecting
@@ -170,8 +175,11 @@ Coverage means the full selected downstream watershed polygons, not just the
 starting mask or a route inferred from incomplete terrain. No drainage is silently
 clipped to the DEM. Resource, source-identity and cancellation checks still apply.
 
-New reports use `eolab.hydrology-validation/v2` with `demCellsChecked: 0`, which
-explicitly records that installation did not scan DEM pixels. Version 1 reports
+Registration reports use `eolab.hydrology-registration/v1` with `demCellsChecked: 0`
+and omit network counts and bounds; they do not claim a full-network check. The
+existing `validatedAt` wire field records registration time, displayed as
+**Registered** in Models. Full validation produces `eolab.hydrology-validation/v2`
+with `demCellsChecked: 0`. Version 1 reports
 and their checksums remain readable in installed configurations and saved Run YAML;
 those reports additionally certified network-wide pixel-center coverage.
 Revalidating produces a version 2 report and a new effective checksum.
@@ -195,7 +203,7 @@ The reader also limits a stream to one million scanned features and 500,000
 coordinates per feature. These limits fail validation explicitly; no truncated
 network is accepted. Containers should retain their normal memory limits.
 
-The validator defaults to 100,000 retained network features and two million
+Without `--register-only`, the validator defaults to 100,000 retained network features and two million
 geographic coordinates. These are computational budgets, adjustable with
 `--max-features` and `--max-coordinates`; they do not limit the number of installed
 configurations. `--timeout-seconds` and `--memory-mib` configure the supervised
@@ -207,7 +215,7 @@ appropriate administrator budget within the server's capacity, when a dataset
 exceeds these limits.
 
 Errors identify the failed field, connection, coverage condition or budget.
-Repair or rescan sources, validate again, and install the new report. Discovery
+Repair or rescan changed sources, register again, and install the new report. Discovery
 does not certify current availability: selection reauthorizes catalog Items and
 compares the exact raster and vector signatures against the report. Stale reports
 return `hydrology_changed` and cannot be captured as newly accepted model inputs.
@@ -215,8 +223,8 @@ return `hydrology_changed` and cannot be captured as newly accepted model inputs
 ## API and captured runs
 
 - `GET /api/processing/prepared-hydrology` returns `configurations`, containing
-  installed reports with their definition, grid, counts, validation time and
-  source identities.
+  installed reports with their definition, grid, registration/validation time and
+  source identities. Network counts and bounds are present only after full validation.
 - `POST /api/processing/prepared-hydrology/resolve` accepts
   `{presetId, version, effectiveSha256}` with the existing
   `X-EOLab-Processing: 1` same-origin header. It rechecks catalog/source access and

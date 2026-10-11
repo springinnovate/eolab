@@ -82,6 +82,7 @@ def downstream_fixture(
     values: np.ndarray | None = None,
     formula: str = "sum(a)",
     records: list[dict[str, Any]] | None = None,
+    register_only: bool = False,
 ) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
     """Create a prepared three-basin eastward slope and a first-column raster mask.
 
@@ -90,13 +91,18 @@ def downstream_fixture(
         values: Optional native 4-by-6 values raster.
         formula: Scalar result formula.
         records: Optional complete network with different coverage or connections.
+        register_only: Install source metadata without validating the full network.
 
     Returns:
         Native sources, captured request and test deployment limits.
     """
     definition, dem, network, _ = prepare_sources(directory, records=records)
     hydrology = validate_hydrology_sources(
-        definition, dem, network, HydrologyValidationLimits()
+        definition,
+        dem,
+        network,
+        HydrologyValidationLimits(),
+        register_only=register_only,
     )
     for name, data in (
         ("mask", np.tile([1, 0, 0, 0, 0, 0], (4, 1)).astype("int16")),
@@ -144,6 +150,115 @@ def downstream_fixture(
         None,
     )
     return sources, request, DownstreamLimits(free_space_floor=0)
+
+
+@pytest.mark.parametrize(
+    "problem,match",
+    [
+        ("cycle", "cycle"),
+        ("missing", "did not return all requested records"),
+        ("sink", "terminal drainage"),
+        ("null_id", "non-null integer"),
+        ("terminal", "still links"),
+        ("duplicate_start", "Duplicate watershed ID 1"),
+        ("duplicate_downstream", "Duplicate watershed ID 2"),
+        ("duplicate_outside_start", "Duplicate watershed ID 1"),
+    ],
+)
+def test_registered_network_checks_only_selected_drainage_before_routing(
+    tmp_path: Path, problem: str, match: str
+) -> None:
+    """Reject ambiguous or cyclic selected drainage before routing or sink traversal.
+
+    Args:
+        tmp_path: Native fixture sources.
+        problem: Invalid selected connection or ID that registration does not scan.
+        match: Expected local diagnostic.
+    """
+    from shapely.geometry import box, mapping
+
+    records = [
+        {
+            "id": i,
+            "next": i + 1 if i < 3 else 0,
+            "sink": 3,
+            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+        }
+        for i in range(1, 4)
+    ]
+    if problem == "cycle":
+        records[1]["next"] = 1
+    elif problem == "missing":
+        records[1]["next"] = 99
+    elif problem == "sink":
+        records[1]["sink"] = 2
+    elif problem == "null_id":
+        records[0]["id"] = None
+    elif problem == "terminal":
+        records[2]["next"] = 2
+    else:
+        duplicate = dict(records[1 if problem == "duplicate_downstream" else 0])
+        if problem == "duplicate_outside_start":
+            duplicate["geometry"] = mapping(box(20, 0, 22, 4))
+        records.append(duplicate)
+    sources, request, limits = downstream_fixture(
+        tmp_path, records=records, register_only=True
+    )
+    if problem == "terminal":
+        # A constant sink flag contradicts the source's remaining downstream link.
+        topology = request.hydrology.definition.topology.model_copy(
+            update={"terminal": NetworkTermination(field="id", value=3)}
+        )
+        definition = request.hydrology.definition.model_copy(
+            update={"topology": topology}
+        )
+        dem = AuthorizedRaster(
+            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
+        )
+        report = validate_hydrology_sources(
+            definition,
+            dem,
+            sources.network,
+            HydrologyValidationLimits(),
+            register_only=True,
+        )
+        request = request.model_copy(update={"hydrology": report})
+    with pytest.raises(ProcessingError, match=match):
+        plan_downstream(sources, request, limits)
+
+
+def test_registered_network_runs_despite_unrelated_duplicate_ids(
+    tmp_path: Path,
+) -> None:
+    """Route a valid selected drainage without scanning unrelated duplicate basin records.
+
+    Args:
+        tmp_path: Original sources and calculation outputs.
+    """
+    from shapely.geometry import box, mapping
+
+    records = [
+        {
+            "id": i,
+            "next": i + 1 if i < 3 else 0,
+            "sink": 3,
+            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+        }
+        for i in range(1, 4)
+    ]
+    records.extend(
+        [{"id": 10, "next": 999, "sink": 10, "geometry": mapping(box(20, 0, 22, 4))}]
+        * 2
+    )
+    sources, request, limits = downstream_fixture(
+        tmp_path, records=records, register_only=True
+    )
+    plan = plan_downstream(sources, request, limits)
+    assert plan.watersheds == (1, 2, 3)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    artifact = calculate_downstream(sources, plan, directory, limits)
+    assert float(artifact.rows[0]["value"]) == 24
 
 
 @pytest.mark.parametrize("tiled", [True, False])

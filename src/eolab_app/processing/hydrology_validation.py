@@ -17,6 +17,7 @@ from eolab_app.catalog_selection import (
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.model_yaml import compute_document_checksum
 from eolab_app.processing.prepared_hydrology import (
+    HydrologyRegistration,
     HydrologyValidation,
     PreparedHydrologyDefinition,
     PreparedHydrologySnapshot,
@@ -85,20 +86,28 @@ def require_network_id(value: Any, id_type: str, field: str) -> int | str:
 
 def validate_network_links(
     nodes: dict[int | str, tuple[int | str | None, int | str | None]],
+    terminal_links: dict[int | str, int | str],
 ) -> int:
-    """Follow every watershed to a terminal and verify declared sink identifiers.
+    """Check that the supplied drainage links reach their declared terminal watersheds.
 
     Args:
-        nodes: Bounded native-validation records containing next ID, optional terminal
-            ID. These records never leave the validation process.
+        nodes: Complete network or selected drainage, containing next ID and optional
+            terminal ID. These records stay inside the supervised native process.
+        terminal_links: Original downstream IDs for constant-value terminal rules.
+            Field-comparison terminal rules may stop at virtual connections instead.
 
     Returns:
         Number of distinct terminal watersheds.
 
     Raises:
-        ValueError: If a link is missing, cyclic or has
-            an inconsistent declared terminal drainage ID.
+        ValueError: If a link is missing, cyclic, contradicts a constant-value
+            terminal rule or has an inconsistent declared terminal drainage ID.
     """
+    for identifier, downstream in terminal_links.items():
+        if downstream in nodes and downstream != identifier:
+            raise ValueError(
+                f"Terminal watershed {identifier!r} still links to another watershed; correct the terminal rule"
+            )
     terminals: dict[int | str, int | str] = {}
     for identifier, (downstream, _) in nodes.items():
         if downstream is not None:
@@ -136,10 +145,13 @@ def validate_hydrology_sources(
     dem: AuthorizedRaster,
     watersheds: ResolvedCatalogSelection,
     limits: HydrologyValidationLimits,
+    *,
+    register_only: bool = False,
 ) -> PreparedHydrologySnapshot:
-    """Validate network connections and DEM metadata before installing a configuration.
+    """Check source metadata and optionally the network before installing a configuration.
 
-    This reads all watershed records and DEM metadata, but no elevation cells.
+    Registration reads no watershed records or elevation cells. Full validation
+    additionally checks every watershed's geometry and network connections.
     DEM extent, validity and connected boundaries are checked for each run.
     Source signatures are checked before and after reading. No flow directions,
     filtered copies, raster masks or persistent geometry are created.
@@ -149,6 +161,8 @@ def validate_hydrology_sources(
         dem: Catalog-authorized original elevation source.
         watersheds: Catalog-authorized complete watershed source.
         limits: Native work and retained-network budgets.
+        register_only: Check identities, required fields and DEM metadata only;
+            defer network and geometry checks to each run's selected drainage.
 
     Returns:
         Path-free configuration and validation evidence for setup and Run YAML.
@@ -202,7 +216,9 @@ def validate_hydrology_sources(
         with polygon_records(
             watersheds, fields, timeout_seconds=limits.read_timeout_seconds
         ) as records:
-            for geometry, properties in records:
+            # Opening the existing reader checks fields, CRS and source identity.
+            # Its iterator is lazy: registration must never advance it.
+            for geometry, properties in (() if register_only else records):
                 if len(nodes) >= limits.features:
                     raise ValueError("Watershed validation exceeds its feature budget")
                 identifier = require_network_id(
@@ -244,29 +260,31 @@ def validate_hydrology_sources(
                     None if terminal else next_id,
                     terminal_id,
                 )
-        if not nodes:
+        if not register_only and not nodes:
             raise ValueError("The configured watershed network has no polygon features")
-        for identifier, downstream in terminal_links.items():
-            if downstream in nodes and downstream != identifier:
-                raise ValueError(
-                    f"Terminal watershed {identifier!r} still links to another watershed; correct the terminal rule"
-                )
-        terminal_count = validate_network_links(nodes)
-        validation = HydrologyValidation(
-            validator="eolab.hydrology-validation/v2",
-            validatedAt=datetime.now(timezone.utc),
-            watershedCount=len(nodes),
-            terminalCount=terminal_count,
-            demCellsChecked=0,
-            bounds=dict(zip(("west", "south", "east", "north"), bounds)),
-            grid={
+        metadata = {
+            "validatedAt": datetime.now(timezone.utc),
+            "demCellsChecked": 0,
+            "grid": {
                 "crs": dataset.crs.to_string(),
                 "transform": tuple(affine)[:6],
                 "width": dataset.width,
                 "height": dataset.height,
                 "dtype": dataset.dtypes[0],
             },
-        )
+        }
+        if register_only:
+            validation = HydrologyRegistration(
+                validator="eolab.hydrology-registration/v1", **metadata
+            )
+        else:
+            validation = HydrologyValidation(
+                validator="eolab.hydrology-validation/v2",
+                watershedCount=len(nodes),
+                terminalCount=validate_network_links(nodes, terminal_links),
+                bounds=dict(zip(("west", "south", "east", "north"), bounds)),
+                **metadata,
+            )
     watersheds.require_current()
     if RasterSourceIdentity.read(dem.source_path) != dem.source_signature:
         raise SelectionUnavailableError(
@@ -292,8 +310,9 @@ def validate_hydrology_process(
     dem: AuthorizedRaster,
     watersheds: ResolvedCatalogSelection,
     limits: HydrologyValidationLimits,
+    register_only: bool = False,
 ) -> None:
-    """Return one validation report or a sanitized failure from the supervised native process.
+    """Return a registration or validation report from the supervised native process.
 
     Args:
         writer: Existing native supervisor's result channel.
@@ -301,9 +320,12 @@ def validate_hydrology_process(
         dem: Authorized original DEM.
         watersheds: Authorized original full watershed network.
         limits: Work and retained-geometry limits enforced inside the child.
+        register_only: Register source metadata without iterating network features.
     """
     try:
-        snapshot = validate_hydrology_sources(definition, dem, watersheds, limits)
+        snapshot = validate_hydrology_sources(
+            definition, dem, watersheds, limits, register_only=register_only
+        )
         writer.put((True, snapshot.model_dump(mode="json", by_alias=True)))
     except (ValueError, GeometryValidationError, SelectionUnavailableError) as error:
         writer.put((False, str(error)))

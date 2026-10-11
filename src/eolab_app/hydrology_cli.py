@@ -1,10 +1,10 @@
-"""Validate administrator-prepared hydrology data and write an installable report."""
+"""Register or validate prepared hydrology data and write an installable report."""
 
 import argparse
 
 
 def main() -> None:
-    """Run catalog-backed validation in the existing supervised native process.
+    """Register catalog sources or validate their network in a supervised native process.
 
     Sources remain read-only. The command writes a path-free report to the named
     output, which administrators can install in the application's configuration
@@ -19,7 +19,7 @@ def main() -> None:
     import sys
 
     parser = argparse.ArgumentParser(
-        description="Validate a prepared DEM and watershed network for EOlab models."
+        description="Register or validate a prepared DEM and watershed network for EOlab models."
     )
     parser.add_argument("configuration", type=Path, help="Administrator hydrology YAML")
     parser.add_argument("--catalog-url", required=True, help="Internal STAC API URL")
@@ -43,6 +43,11 @@ def main() -> None:
     )
     parser.add_argument("--max-features", type=int, default=100_000)
     parser.add_argument("--max-coordinates", type=int, default=2_000_000)
+    parser.add_argument(
+        "--register-only",
+        action="store_true",
+        help="Register source identities and metadata without scanning the watershed network",
+    )
     args = parser.parse_args()
     if not args.scan_mount.is_absolute() or not args.scan_mount.is_dir():
         parser.error(
@@ -52,20 +57,22 @@ def main() -> None:
         parser.error("Use a positive deadline and at least 512 MiB native memory")
     if not args.output.name.endswith(".hydrology.json"):
         parser.error("--output must end in .hydrology.json")
+    action = "registration" if args.register_only else "validation"
     try:
         asyncio.run(validate_configuration(args))
     except KeyboardInterrupt:
-        parser.exit(130, "Validation cancelled; no report was installed.\n")
+        parser.exit(130, f"Hydrology {action} cancelled; no report was installed.\n")
     except Exception as error:
-        parser.exit(1, f"Hydrology validation failed: {error}\n")
-    print(f"Validated configuration written to {args.output}", file=sys.stderr)
+        parser.exit(1, f"Hydrology {action} failed: {error}\n")
+    status = "Registered" if args.register_only else "Validated"
+    print(f"{status} configuration written to {args.output}", file=sys.stderr)
 
 
 async def validate_configuration(args: argparse.Namespace) -> None:
-    """Resolve configured catalog sources, validate them and atomically write the report.
+    """Resolve catalog sources and atomically write a registration or validation report.
 
     Args:
-        args: Parsed administrator paths, catalog URL and positive validation budgets.
+        args: Parsed paths, catalog URL, positive budgets and register_only choice.
 
     Raises:
         ValueError: If configuration, source data or validation budgets are invalid.
@@ -124,7 +131,7 @@ async def validate_configuration(args: argparse.Namespace) -> None:
     try:
         success, result = await process.run(
             validate_hydrology_process,
-            (definition, dem, watersheds, limits),
+            (definition, dem, watersheds, limits, args.register_only),
             args.timeout_seconds,
         )
     finally:

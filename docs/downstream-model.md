@@ -9,7 +9,7 @@ and parameters. See the [setup guide](model-library.md#set-up-downstream-analysi
 
 ## Inputs and results
 
-Select a validated prepared-hydrology report, one starting mask, and one values
+Select an installed prepared-hydrology configuration, one starting mask, and one values
 raster. The mask is either `{kind: catalogRaster, source: {collectionId, itemId}}`
 or `{kind: catalogSelection, selection: ...}` using the normal immutable catalog
 selection and filter contract. The values input also accepts the ordinary owned

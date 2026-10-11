@@ -2,7 +2,7 @@
 import { hydrologyKey, hydrologyReference } from "../processing/hydrology.js";
 import { modelSourceKey } from "./inputs.js";
 
-/** Describe a prepared dataset using map labels when available, otherwise catalog IDs.
+/** Describe a dataset's sources and registration or validation evidence.
  * @param {Object} snapshot Checked or captured hydrology report.
  * @param {Object[]} sources Current map source labels, used only for display.
  * @return {Array<[string,string]>} Dataset and topology details.
@@ -25,7 +25,8 @@ export function hydrologyDetails(snapshot, sources = []) {
         ...(topology.terminalIdField ? [["Terminal watershed ID field", topology.terminalIdField]] : []),
         ["Terrain version", definition.terrain.datasetVersion],
         ["Terrain preparation", definition.terrain.conditioning],
-        ["Validated", new Date(snapshot.validation.validatedAt).toLocaleString()],
+        [snapshot.validation.validator === "eolab.hydrology-registration/v1" ? "Registered" : "Validated",
+            new Date(snapshot.validation.validatedAt).toLocaleString()],
     ];
 }
 
@@ -62,7 +63,7 @@ export class HydrologyInputView {
         this.select.disabled = draft.hydrologyLoading;
         this.refresh.disabled = draft.hydrologyLoading || draft.hydrologyChecking;
         this.status.textContent = draft.hydrologyLoading ? "Loading prepared datasets…" : draft.hydrologyChecking ? "Checking elevation and watershed sources…" :
-            !choices.length && !draft.hydrologyError ? "No prepared datasets are installed. Ask the administrator to validate and install the terrain and watershed configuration." : draft.hydrologyReason;
+            !choices.length && !draft.hydrologyError ? "No prepared datasets are installed. Ask the administrator to register the terrain and watershed configuration." : draft.hydrologyReason;
         this.error.textContent = draft.hydrologyError; this.error.hidden = !draft.hydrologyError;
         const snapshot = draft.hydrology ?? choices.find(value => hydrologyKey(hydrologyReference(value)) === draft.hydrologyKey);
         this.details.hidden = !snapshot;
