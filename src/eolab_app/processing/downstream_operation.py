@@ -8,7 +8,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
-    DownstreamNumericalPolicy,
+    WrappedDownstreamNumericalPolicy,
     RasterStartingMask,
     VectorStartingMask,
 )
@@ -279,7 +279,9 @@ def select_downstream_execution(
     return downstream_process_target, "calculate", context.downstream_limits
 
 
-def describe_downstream_policy(spec: DownstreamPlan) -> DownstreamNumericalPolicy:
+def describe_downstream_policy(
+    spec: DownstreamPlan,
+) -> WrappedDownstreamNumericalPolicy:
     """Describe the actual routing, distance and value policies of a prepared run.
 
     Args:
@@ -288,8 +290,11 @@ def describe_downstream_policy(spec: DownstreamPlan) -> DownstreamNumericalPolic
     Returns:
         Versioned numerical rules for Run YAML and provenance.
     """
-    return DownstreamNumericalPolicy(
-        bufferMetres=spec.inputs.buffer_m, cutoffMetres=spec.inputs.cutoff_m
+    return WrappedDownstreamNumericalPolicy(
+        bufferMetres=spec.inputs.buffer_m,
+        cutoffMetres=spec.inputs.cutoff_m,
+        wgs84PixelSize=spec.inputs.wgs84_pixel_size,
+        distancePixelSizeMetres=spec.inputs.travel_time_pixel_size_m,
     )
 
 

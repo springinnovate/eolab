@@ -35,6 +35,61 @@ from test_polygon_summary_areas import rectangle
 from catalog_selection_support import register_selection, write_geopackage_layer
 import eolab_app.processing.worker as worker_module
 from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.processing.job_store import PostgresJobStore
+
+
+def test_application_starts_with_registered_hydrology(
+    configured_environment: None,
+    version_file_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    store: PostgresJobStore,
+) -> None:
+    """Start the real application lifespan with a registration report and PostgreSQL.
+
+    Args:
+        configured_environment: Complete application environment without production credentials.
+        version_file_path: Isolated application version file.
+        tmp_path: Native fixture sources, installed report and private output directory.
+        monkeypatch: Set deployment paths and the validated disposable database connection.
+        store: Migrated disposable PostgreSQL store supplied by the guarded test fixture.
+    """
+    from eolab_app.main import create_app
+    from eolab_app.processing.model_yaml import encode_canonical_json
+    from test_downstream_model import downstream_fixture
+
+    _, request, _ = downstream_fixture(tmp_path / "sources", register_only=True)
+    document = request.hydrology.model_dump(mode="json", by_alias=True)
+    assert document["validation"]["validator"] == "eolab.hydrology-registration/v1"
+    assert document["validation"]["demCellsChecked"] == 0
+    assert (
+        not {"watershedCount", "terminalCount", "bounds"}
+        & document["validation"].keys()
+    )
+    reports = tmp_path / "registered"
+    reports.mkdir()
+    report = reports / "example.hydrology.json"
+    original = encode_canonical_json(document)
+    report.write_bytes(original)
+    for parameter, variable in (
+        ("host", "PGHOST"),
+        ("port", "PGPORT"),
+        ("dbname", "PGDATABASE"),
+        ("user", "PGUSER"),
+        ("password", "PGPASSWORD"),
+    ):
+        monkeypatch.setenv(
+            variable, psycopg.conninfo.conninfo_to_dict(store.conninfo)[parameter]
+        )
+    monkeypatch.setenv("PREPARED_HYDROLOGY_DIRECTORY", str(reports))
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path / "sources"))
+    monkeypatch.setenv("PROCESSING_DATA_PATH", str(tmp_path / "private"))
+    with TestClient(create_app(version_file_path)) as client:
+        assert client.get("/healthz").status_code == 200
+        response = client.get("/api/processing/prepared-hydrology")
+        assert response.status_code == 200
+        assert response.json()["configurations"] == [document]
+    assert report.read_bytes() == original
 
 
 @pytest.fixture
@@ -177,7 +232,11 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "hydrology": request.hydrology.reference.model_dump(),
             "values": values,
         },
-        parameters={"buffer_m": 0},
+        parameters={
+            "buffer_m": 0,
+            "wgs84_pixel_size": 1,
+            "travel_time_pixel_size_m": 100000,
+        },
     )
     job = submit(client, body)
     identifier = job["jobId"]
@@ -213,6 +272,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         "coverage",
         "starting_mask",
         "provenance",
+        "masked_values",
     }
     exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     RunDocument.model_validate(parse_yaml(exported.content, run=True))

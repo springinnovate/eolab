@@ -28,7 +28,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
-    DownstreamNumericalPolicy,
+    DownstreamPolicy,
 )
 
 Request = TypeVar("Request", bound=BaseModel)
@@ -170,6 +170,8 @@ OPERATIONS = MappingProxyType(
                     ("buffer_m", "number"),
                     ("cutoff_m", "optional_number"),
                     ("summary", "summary_expression"),
+                    ("wgs84_pixel_size", "number"),
+                    ("travel_time_pixel_size_m", "number"),
                 ),
                 output=OperationOutput(
                     "statistics",
@@ -179,6 +181,13 @@ OPERATIONS = MappingProxyType(
                     "Downstream statistics",
                 ),
                 additional_outputs=(
+                    OperationOutput(
+                        "masked_values",
+                        "raster",
+                        "map",
+                        "image/tiff",
+                        "Values within downstream coverage",
+                    ),
                     OperationOutput(
                         "coverage", "raster", "map", "image/tiff", "Downstream coverage"
                     ),
@@ -195,7 +204,7 @@ OPERATIONS = MappingProxyType(
                 reuse_prepared_source=False,
                 queued_type=QueuedDownstream,
                 prepared_type=DownstreamPlan,
-                policy_type=DownstreamNumericalPolicy,
+                policy_type=DownstreamPolicy,
                 bind=downstream.bind_downstream,
                 source=downstream.get_values_source,
                 polygon=downstream.get_uploaded_polygon,

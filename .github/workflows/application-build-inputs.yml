@@ -6,6 +6,7 @@ on:
       - Dockerfile.app
       - pyproject.toml
       - deployment/application-*
+      - deployment/*beneficiaries*
       - services/jobs/**
       - src/eolab_app/vector/outline*
       - src/eolab_app/vector/selection_source.py

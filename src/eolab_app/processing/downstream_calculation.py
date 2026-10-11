@@ -1,23 +1,18 @@
-"""Trace prepared terrain and summarize native raster values within downstream coverage.
+"""Admit downstream inputs and call the original WWF beneficiaries calculation.
 
 All work runs sequentially in the existing supervised native process. Source
 paths and geometries exist only in that process and its private attempt directory.
 """
 
+from contextlib import chdir
 from dataclasses import dataclass, replace
-import hashlib
-import json
-import math
 from pathlib import Path
+import math
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
-from pyproj import Geod, Transformer
 import rasterio
 from rasterio.features import geometry_mask, geometry_window, shapes
-from rasterio.shutil import copy as copy_raster
-from rasterio.transform import Affine
 from rasterio.windows import Window
 from shapely import get_num_coordinates
 from shapely.geometry import box, mapping, shape
@@ -31,44 +26,28 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.aggregate_models import (
-    AggregateArea,
-    AggregateArtifact,
-    RasterAggregateLimits,
-)
-from eolab_app.processing.artifact_manifest import ProducedFile
-from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.aggregate_models import AggregateArtifact
 from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.downstream_models import (
     DownstreamLimits,
     DownstreamRequest,
     DownstreamPlan,
-    DownstreamNumericalPolicy,
-    VectorStartingMask,
-    FLOW_THRESHOLD,
 )
-from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.hydrology_validation import (
     require_network_id,
     validate_network_links,
 )
-from eolab_app.processing.raster_expression import Calculation, compile_expression, walk
+from eolab_app.raster.bounded_window import project_wgs84_polygons
 from eolab_app.processing.raster_input import (
     native_work,
     select_area,
     validate_supported_raster,
 )
-from eolab_app.processing.statistics_csv import statistics_csv
-from eolab_app.raster.bounded_window import project_wgs84_polygons
-from eolab_app.raster.source_contract import (
-    read_native_raster_window,
-    source_block_indexes_for_window,
-)
+from eolab_app.raster.source_contract import read_native_raster_window
 
-# Planning allowances, not exact array sizes: the measured four-million-cell
-# reference peaks near 542 MiB. This estimate reserves about 988 MiB, including
-# interpreter/native-library overhead and overlapping routing/distance arrays.
+# Existing conservative admission allowances, retained when replacing the
+# calculation with upstream code. These are not upstream performance estimates.
 ESTIMATED_MEMORY_BYTES_PER_CELL = 192
 NATIVE_PROCESS_BASE_MEMORY_BYTES = 256 * 1024**2
 # Reserve uncompressed routing DEM/direction/accumulation, seed/mask rasters,
@@ -573,206 +552,15 @@ def plan_downstream(
     )
 
 
-def grid_centers(grid: ClipGrid) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Compute geographic cell centers for an already admitted native grid.
-
-    Args:
-        grid: Bounded native raster window.
-
-    Returns:
-        Longitude and latitude arrays with the grid's shape.
-
-    Raises:
-        ProcessingError: If coordinates cannot be transformed to finite WGS84 positions.
-    """
-    rows, columns = np.indices((grid.height, grid.width), dtype=np.float64)
-    transform = Affine(*grid.transform)
-    x, y = transform * (columns + 0.5, rows + 0.5)
-    projector = Transformer.from_crs(
-        grid.crs, 4326, always_xy=True, allow_ballpark=False
-    )
-    lon, lat = projector.transform(x, y, errcheck=True)
-    if not np.all(np.isfinite(lon) & np.isfinite(lat)) or np.any(np.abs(lat) > 90):
-        raise ProcessingError(
-            "unsupported_grid",
-            "Raster cell centers cannot be located safely on the globe.",
-            422,
-        )
-    return lon, lat
-
-
-def buffer_cell_mask(
-    lon: NDArray[np.float64],
-    lat: NDArray[np.float64],
-    origins: NDArray[np.bool_],
-    metres: float,
-    max_pairs: int = DownstreamLimits().max_distance_pairs,
-) -> NDArray[np.bool_]:
-    """Expand a cell mask to include cell centers within the requested buffer distance.
-
-    Use reached downstream cells as origins to buffer a flow path. Use original
-    starting cells as origins to build the maximum-distance mask applied afterward.
-
-    A Cartesian tree finds candidates using Earth-centered chord distances.
-    Chords are lower bounds on surface distance; ambiguous candidates are checked
-    with WGS84 geodesics, avoiding a degrees-to-metres pixel-size approximation.
-
-    Args:
-        lon: Longitude of each admitted grid center.
-        lat: Latitude of each admitted grid center.
-        origins: Boolean mask of starting cells; True cells are always retained.
-        metres: Inclusive nonnegative distance threshold.
-        max_pairs: Maximum ambiguous candidate pairs to check exactly.
-
-    Returns:
-        Boolean mask with True at original cells and all cell centers within
-        the inclusive distance in metres, with the same shape as origins.
-
-    Raises:
-        ProcessingError: If ambiguous candidate checks exceed the work budget.
-    """
-    from scipy.spatial import cKDTree
-
-    if not origins.any() or origins.all() or metres == 0:
-        return origins.copy()
-    earth = Transformer.from_crs(4979, 4978, always_xy=True)
-    points = np.column_stack(
-        earth.transform(lon.ravel(), lat.ravel(), np.zeros(lon.size))
-    )
-    selected = np.flatnonzero(origins.ravel())
-    tree = cKDTree(points[selected])
-    geod = Geod(ellps="WGS84")
-    result = origins.ravel().copy()
-    work = 0
-    for offset in range(0, lon.size, 8192):
-        indexes = np.arange(offset, min(offset + 8192, lon.size))
-        chords, nearest = tree.query(points[indexes], workers=1)
-        possible = indexes[(chords <= metres) & ~result[indexes]]
-        near = selected[nearest[(chords <= metres) & ~result[indexes]]]
-        _, _, distances = geod.inv(
-            lon.ravel()[possible],
-            lat.ravel()[possible],
-            lon.ravel()[near],
-            lat.ravel()[near],
-        )
-        result[possible[distances <= metres]] = True
-        for index in possible[distances > metres]:
-            count = tree.query_ball_point(points[index], metres, return_length=True)
-            work += count
-            if work > max_pairs:
-                raise ProcessingError(
-                    "model_too_large",
-                    "The buffer needs too many distance comparisons. Choose a smaller area.",
-                    413,
-                )
-            candidates = selected[tree.query_ball_point(points[index], metres)]
-            _, _, exact = geod.inv(
-                np.full(len(candidates), lon.ravel()[index]),
-                np.full(len(candidates), lat.ravel()[index]),
-                lon.ravel()[candidates],
-                lat.ravel()[candidates],
-            )
-            result[index] = bool(np.any(exact <= metres))
-    return result.reshape(lon.shape)
-
-
-def sample_native_mask(
-    path: Path,
-    lon: NDArray[np.float64],
-    lat: NDArray[np.float64],
-    limits: DownstreamLimits,
-) -> NDArray[np.bool_]:
-    """Read positive mask values at routing centers without interpolating values.
-
-    Args:
-        path: Authorized mask raster.
-        lon: Routing center longitudes.
-        lat: Routing center latitudes.
-        limits: Native source read budgets.
-
-    Returns:
-        True for centers falling in positive, finite, unmasked native mask cells.
-
-    Raises:
-        ProcessingError: If the required native mask window exceeds its budget.
-    """
-    with rasterio.open(path) as dataset:
-        validate_supported_raster(dataset, path)
-        projection = Transformer.from_crs(
-            4326, dataset.crs, always_xy=True, allow_ballpark=False
-        )
-        x, y = projection.transform(lon, lat, errcheck=True)
-        cols, rows = (~dataset.transform) * (x, y)
-        cols, rows = np.floor(cols).astype(np.int64), np.floor(rows).astype(np.int64)
-        inside = (
-            (rows >= 0) & (cols >= 0) & (rows < dataset.height) & (cols < dataset.width)
-        )
-        result = np.zeros(lon.shape, dtype=bool)
-        if not inside.any():
-            return result
-        x0, x1 = int(cols[inside].min()), int(cols[inside].max()) + 1
-        y0, y1 = int(rows[inside].min()), int(rows[inside].max()) + 1
-        window = Window(x0, y0, x1 - x0, y1 - y0)
-        if window.width * window.height > limits.max_mask_cells:
-            raise ProcessingError(
-                "model_too_large",
-                "The starting raster mask exceeds the native read limit.",
-                413,
-            )
-        native_work(dataset, window, limits.max_native_blocks, limits.max_decoded_bytes)
-        values = read_native_raster_window(dataset, window)
-        valid = (~np.ma.getmaskarray(values)) & (values.data > 0)
-        result[inside] = valid[rows[inside] - y0, cols[inside] - x0]
-        return result
-
-
-def write_downstream_geotiff(
-    path: Path, data: NDArray[Any], grid: ClipGrid, nodata: int | float
-) -> None:
-    """Write one downstream array as a tiled, compressed GeoTIFF on the DEM grid.
-
-    Routing elevations, seed weights and both output masks share this file
-    creation policy. The helper sets alignment, NoData, compression and one
-    GDAL thread consistently at each call site; it does more than write pixels.
-
-    Args:
-        path: New file confined to the admitted attempt directory.
-        data: One complete admitted grid.
-        grid: Original CRS and alignment.
-        nodata: Explicit outside-domain sentinel.
-
-    Raises:
-        RasterioError: If GDAL cannot create the file.
-    """
-    with rasterio.open(
-        path,
-        "w",
-        driver="GTiff",
-        width=grid.width,
-        height=grid.height,
-        count=1,
-        dtype=data.dtype,
-        crs=grid.crs,
-        transform=Affine(*grid.transform),
-        nodata=nodata,
-        tiled=True,
-        blockxsize=256,
-        blockysize=256,
-        compress="DEFLATE",
-        NUM_THREADS="1",
-    ) as target:
-        target.write(data, 1)
-
-
 def group_watersheds_by_sink(
     network: dict[int | str, Watershed],
     selected: tuple[int | str, ...],
     limits: DownstreamLimits,
 ) -> dict[int | str, list[BaseGeometry]]:
-    """Group selected watershed polygons by the real sink they drain into.
+    """Group selected watershed polygons for the existing sink-count admission budget.
 
-    Each group is routed separately so flow cannot cross a virtual connection
-    from an inland sink into a different drainage network.
+    This budget does not control the upstream calculation's traversal. The
+    original model selects and groups its own partitions during execution.
 
     Args:
         network: Current prepared network records.
@@ -800,37 +588,88 @@ def group_watersheds_by_sink(
     return groups
 
 
+def require_downstream_dem_cells(
+    sources: DownstreamSources, spec: DownstreamPlan, limits: DownstreamLimits
+) -> None:
+    """Check required native terrain cells before passing the DEM to the WWF model.
+
+    Registration does not inspect elevation cells. This retains the per-run
+    checks for missing elevations and watersheds without pixel centers, without
+    changing the source DEM or the upstream calculation grid.
+
+    Args:
+        sources: Reauthorized terrain and original watershed source.
+        spec: Admitted watershed IDs and native DEM window.
+        limits: Existing source and geometry limits for this run.
+
+    Raises:
+        ProcessingError: If a required watershed has no valid terrain coverage.
+        SelectionUnavailableError: If the watershed source changed.
+        ValueError: If projection exceeds its coordinate budget.
+    """
+    network = read_network(
+        sources,
+        spec.inputs,
+        limits,
+        starting_geometry(sources, limits),
+        spec.watersheds,
+    )
+    with rasterio.open(sources.rasters["dem"]) as dataset:
+        projected = project_wgs84_polygons(
+            dataset,
+            tuple(mapping(network[item].geometry) for item in spec.watersheds),
+            limits.max_watershed_coordinates,
+        )
+        for polygon in projected:
+            window = geometry_window(dataset, (polygon,)).intersection(
+                Window(*spec.routingGrid.window)
+            )
+            covered = geometry_mask(
+                (polygon,),
+                out_shape=(int(window.height), int(window.width)),
+                transform=dataset.window_transform(window),
+                invert=True,
+            )
+            if not covered.any():
+                raise ProcessingError(
+                    "unsupported_dem_resolution",
+                    "A downstream watershed contains no DEM pixel centers. Choose a hydrology dataset with a finer terrain resolution.",
+                    422,
+                )
+            terrain = read_native_raster_window(dataset, window)
+            if np.any(covered & np.ma.getmaskarray(terrain)):
+                raise ProcessingError(
+                    "incomplete_dem",
+                    "The prepared DEM has missing elevation inside the downstream area. Repair terrain coverage.",
+                    422,
+                )
+
+
 def calculate_downstream(
     sources: DownstreamSources,
     spec: DownstreamPlan,
     directory: Path,
     limits: DownstreamLimits,
 ) -> AggregateArtifact:
-    """Compute combined downstream coverage and summarize native values in one process.
+    """Check the admitted inputs and invoke the unchanged WWF calculation.
+
+    Execution is sequential in the native worker. Its current directory is
+    temporarily the private attempt so upstream helpers using relative scratch
+    paths work with a read-only application mount and remain run-owned.
 
     Args:
         sources: Reauthorized original files and selections.
-        spec: Admitted windows, watershed IDs and captured model inputs.
-        directory: Private scratch directory covered by this attempt's reservation.
-        limits: Worker resource policy; cancellation is enforced by its supervisor.
+        spec: Existing admitted windows, watershed IDs and captured inputs.
+        directory: Private workspace covered by this attempt's reservation.
+        limits: Existing source, memory, work and storage safeguards.
 
     Returns:
-        Statistics plus complete coverage and starting-mask raster artifacts.
+        The upstream model's rasters and total, plus requested formula metadata.
 
     Raises:
-        ProcessingError: If coverage, staleness, native work or output limits fail.
-        RasterioError: If a native read or output fails.
+        ProcessingError: If admission changed or the original calculation fails.
     """
-    # The model registry imports this module in the API process too. Load the
-    # compiled routing library only when the supervised native calculation runs;
-    # library initialization must not change API-process thread settings.
-    from ecoshard.geoprocessing import routing
-    import numexpr
-
-    # EcoShard configures numexpr at import; this admitted operation is sequential.
-    numexpr.set_num_threads(1)
-    request = spec.inputs
-    checked = plan_downstream(sources, request, limits)
+    checked = plan_downstream(sources, spec.inputs, limits)
     if (
         checked.grid != spec.grid
         or checked.routingGrid != spec.routingGrid
@@ -840,259 +679,14 @@ def calculate_downstream(
         raise ProcessingError(
             "source_changed", "The model inputs changed after preparation.", 409
         )
-    network = read_network(sources, request, limits, selected=spec.watersheds)
-    groups = group_watersheds_by_sink(network, spec.watersheds, limits)
-    if (
-        len(groups) * spec.routingGrid.width * spec.routingGrid.height
-        > limits.max_routing_cells
-    ):
-        raise ProcessingError(
-            "model_too_large",
-            "The combined drainage networks exceed routing work capacity. Choose a smaller area.",
-            413,
+    require_downstream_dem_cells(sources, spec, limits)
+    from eolab_app.processing.downstream_runner import run_original_downstream
+
+    workspace = directory.resolve()
+    with chdir(workspace):
+        return run_original_downstream(
+            sources, spec, workspace, limits, starting_geometry(sources, limits)
         )
-    grid = spec.routingGrid
-    lon, lat = grid_centers(grid)
-    write_progress(directory, "preparing_starting_mask", 0, 0)
-    with rasterio.open(sources.rasters["dem"]) as dataset:
-        dem = read_native_raster_window(dataset, Window(*grid.window))
-        if sources.starting:
-            starting = starting_geometry(sources, limits)
-            projected = project_wgs84_polygons(
-                dataset, (mapping(starting),), limits.max_coordinates
-            )
-            seeds = geometry_mask(
-                projected,
-                out_shape=dem.shape,
-                transform=Affine(*grid.transform),
-                invert=True,
-            )
-        else:
-            seeds = sample_native_mask(
-                sources.rasters["starting_mask"], lon, lat, limits
-            )
-        reached = np.zeros(dem.shape, dtype=bool)
-        domain = np.zeros(dem.shape, dtype=bool)
-        for index, polygons in enumerate(groups.values()):
-            projected = project_wgs84_polygons(
-                dataset,
-                tuple(mapping(polygon) for polygon in polygons),
-                limits.max_watershed_coordinates,
-            )
-            inside = np.zeros(dem.shape, dtype=bool)
-            for polygon in projected:
-                window = geometry_window(dataset, (polygon,)).intersection(
-                    Window(*grid.window)
-                )
-                covered = geometry_mask(
-                    (polygon,),
-                    out_shape=(int(window.height), int(window.width)),
-                    transform=dataset.window_transform(window),
-                    invert=True,
-                )
-                if not covered.any():
-                    raise ProcessingError(
-                        "unsupported_dem_resolution",
-                        "A downstream watershed contains no DEM pixel centers. Choose a hydrology dataset with a finer terrain resolution.",
-                        422,
-                    )
-                row = int(window.row_off) - grid.window[1]
-                column = int(window.col_off) - grid.window[0]
-                inside[
-                    row : row + covered.shape[0], column : column + covered.shape[1]
-                ] |= covered
-            domain |= inside
-            if np.any(inside & np.ma.getmaskarray(dem)):
-                raise ProcessingError(
-                    "incomplete_dem",
-                    "The prepared DEM has missing elevation inside the downstream area. Repair terrain coverage.",
-                    422,
-                )
-            weights = seeds & inside
-            if not weights.any():
-                continue
-            write_progress(directory, "routing_downstream", 0, 0)
-            # EcoShard routing requires a finite NoData sentinel to recognize
-            # outlets at dataset edges. Float64 preserves stored DEM precision.
-            nodata = np.finfo(np.float64).min
-            if np.any(inside & (dem.data == nodata)):
-                raise ProcessingError(
-                    "unsupported_dem",
-                    "The DEM uses an unsupported elevation range.",
-                    422,
-                )
-            elevation = np.where(inside, dem.data, nodata).astype(np.float64)
-            write_downstream_geotiff(
-                directory / "routing-dem.tif", elevation, grid, nodata
-            )
-            write_downstream_geotiff(
-                directory / "routing-seeds.tif", weights.astype(np.uint8), grid, 255
-            )
-            routing.flow_dir_mfd(
-                (str(directory / "routing-dem.tif"), 1),
-                str(directory / "flow.tif"),
-                working_dir=str(directory),
-            )
-            routing.flow_accumulation_mfd(
-                (str(directory / "flow.tif"), 1),
-                str(directory / "accumulation.tif"),
-                weight_raster_path_band=(str(directory / "routing-seeds.tif"), 1),
-            )
-            with rasterio.open(directory / "accumulation.tif") as accumulation:
-                values = accumulation.read(1, masked=True)
-                reached |= weights | (
-                    inside
-                    & ~np.ma.getmaskarray(values)
-                    & (values.data > FLOW_THRESHOLD)
-                )
-    seeds &= domain
-    if not seeds.any():
-        raise ProcessingError(
-            "empty_starting_mask",
-            "The starting mask contains no valid DEM cell centers. Choose a larger starting area or compatible terrain resolution.",
-            422,
-        )
-    write_progress(directory, "buffering_downstream_coverage", 0, 0)
-    # True cells form the area used to summarize the values raster: downstream
-    # cells plus their buffer, restricted to the watershed domain and cutoff.
-    summary_coverage = (
-        buffer_cell_mask(lon, lat, reached, request.buffer_m, limits.max_distance_pairs)
-        & domain
-    )
-    if request.cutoff_m is not None:
-        summary_coverage &= buffer_cell_mask(
-            lon, lat, seeds, request.cutoff_m, limits.max_distance_pairs
-        )
-    write_progress(directory, "summarizing_values", 0, 0)
-    root = compile_expression(request.summary, "a")
-    calculation = Calculation(root)
-    with rasterio.open(sources.rasters["values"]) as dataset:
-        area_calculator = (
-            PixelAreaCalculator(
-                dataset,
-                AggregateArea(kind="wholeRaster"),
-                RasterAggregateLimits.with_lifecycle(limits),
-            )
-            if any(node.op == "areaha" for node in walk(root))
-            else None
-        )
-        grid_values = spec.grid
-        to_dem = Transformer.from_crs(
-            dataset.crs, grid.crs, always_xy=True, allow_ballpark=False
-        )
-        selected_window = Window(*grid_values.window)
-        blocks = source_block_indexes_for_window(
-            selected_window, dataset.block_shapes[0]
-        )
-        for completed, (block_row, block_col) in enumerate(blocks, start=1):
-            tile = dataset.block_window(1, block_row, block_col).intersection(
-                selected_window
-            )
-            values = read_native_raster_window(dataset, tile)
-            rr, cc = np.indices(values.shape, dtype=np.float64)
-            x, y = dataset.window_transform(tile) * (cc + 0.5, rr + 0.5)
-            x, y = to_dem.transform(x, y, errcheck=True)
-            dc, dr = (~Affine(*grid.transform)) * (x, y)
-            dc, dr = np.floor(dc).astype(np.int64), np.floor(dr).astype(np.int64)
-            valid = (dc >= 0) & (dr >= 0) & (dc < grid.width) & (dr < grid.height)
-            covered = np.zeros(values.shape, dtype=bool)
-            covered[valid] = summary_coverage[dr[valid], dc[valid]]
-            valid = covered & ~np.ma.getmaskarray(values)
-            hectares = (
-                area_calculator.calculate_hectares(tile) if area_calculator else None
-            )
-            calculation.process_tile(
-                values.data,
-                valid,
-                hectares,
-                valid if hectares is not None else None,
-            )
-            write_progress(
-                directory,
-                "summarizing_values",
-                completed,
-                len(blocks),
-                unit="blocks",
-            )
-    rows = [
-        {"label": request.label, "expression": request.summary, **calculation.result()}
-    ]
-    result = directory / "result.csv"
-    result.write_bytes(statistics_csv(rows))
-    outputs = []
-    write_progress(directory, "writing_results", 0, 0)
-    for name, data in (("coverage", summary_coverage), ("starting_mask", seeds)):
-        stage, final = directory / (name + "-stage.tif"), directory / (name + ".tif")
-        write_downstream_geotiff(
-            stage, np.where(domain, data, 255).astype(np.uint8), grid, 255
-        )
-        copy_raster(
-            stage,
-            final,
-            driver="COG",
-            compress="DEFLATE",
-            blocksize=256,
-            overview_resampling="NEAREST",
-            NUM_THREADS="1",
-        )
-        with rasterio.open(final) as check:
-            if (
-                check.width != grid.width
-                or check.height != grid.height
-                or check.transform != Affine(*grid.transform)
-            ):
-                raise ProcessingError(
-                    "invalid_output", "A downstream raster failed grid validation.", 500
-                )
-        with final.open("rb") as stream:
-            checksum = hashlib.file_digest(stream, "sha256").hexdigest()
-        outputs.append(
-            ProducedFile(
-                name=name,
-                storage_name=final.name,
-                filename=final.name,
-                media_type="image/tiff",
-                size=final.stat().st_size,
-                sha256=checksum,
-            )
-        )
-    policy = DownstreamNumericalPolicy(
-        bufferMetres=request.buffer_m, cutoffMetres=request.cutoff_m
-    )
-    (directory / "provenance.json").write_text(
-        json.dumps(
-            {
-                "operation": spec.operation,
-                "inputs": request.model_dump(mode="json", by_alias=True),
-                "routingGrid": grid.model_dump(),
-                "valuesGrid": spec.grid.model_dump(),
-                "watershedIds": spec.watersheds,
-                "numericalPolicy": policy.model_dump(),
-                "startingCells": int(seeds.sum()),
-                "reachedCells": int(reached.sum()),
-                "coverageCells": int(summary_coverage.sum()),
-                "statistics": rows,
-            },
-            allow_nan=False,
-        ),
-        encoding="utf-8",
-    )
-    if (
-        sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
-        > spec.reservedBytes
-    ):
-        raise ProcessingError(
-            "output_too_large",
-            "Downstream scratch files exceeded the admitted disk reservation.",
-            413,
-        )
-    return AggregateArtifact(
-        filename="downstream-statistics.csv",
-        size=result.stat().st_size,
-        sha256=hashlib.sha256(result.read_bytes()).hexdigest(),
-        rows=rows,
-        additional_outputs=tuple(outputs),
-    )
 
 
 def downstream_process_target(

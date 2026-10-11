@@ -961,11 +961,13 @@ def test_administrator_command_uses_catalog_sources_and_atomic_report(
     assert output.read_bytes() == registration
 
 
+@pytest.mark.parametrize("register_only", [False, True])
 def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
     configured_environment: None,
     version_file_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    register_only: bool,
 ) -> None:
     """Load reports through real application composition and diagnose bad administrator settings.
 
@@ -974,6 +976,7 @@ def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
         version_file_path: Isolated build version fixture.
         tmp_path: Configuration directory and real native source fixtures.
         monkeypatch: Explicit optional deployment setting.
+        register_only: Exercise metadata registration as well as network validation.
     """
     from eolab_app.main import create_app
     from eolab_app.settings import load_settings
@@ -985,7 +988,11 @@ def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
         load_settings(version_file_path)
     definition, dem, watersheds, _ = prepare_sources(tmp_path)
     snapshot = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
+        definition,
+        dem,
+        watersheds,
+        HydrologyValidationLimits(),
+        register_only=register_only,
     )
     report_path = tmp_path / "example.hydrology.json"
     report_path.write_bytes(
@@ -993,6 +1000,9 @@ def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
     )
     monkeypatch.setenv("PREPARED_HYDROLOGY_DIRECTORY", str(tmp_path))
     application = create_app(version_file_path)
+    if register_only:
+        assert snapshot.validation.validator == "eolab.hydrology-registration/v1"
+        assert "watershedCount" not in snapshot.validation.model_dump()
     # No lifespan or database is required to discover installed metadata.
     client = TestClient(application)
     assert (

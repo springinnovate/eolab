@@ -76,6 +76,9 @@ def build_image(application_image: str | None) -> str:
             "&& SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d "
             "python -m pip install --no-cache-dir --no-deps --no-build-isolation "
             "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt\n"
+            "COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json /build-inputs/\n"
+            "RUN python /build-inputs/build-beneficiaries.py --manifest /build-inputs/beneficiaries-source.json --output /model-wheels "
+            "&& python -m pip install --no-deps --no-index /model-wheels/*.whl\n"
             "COPY pyproject.toml README.md LICENSE ./\nCOPY src/ ./src/\n"
             "RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation . "
             "&& python -m pip check\n"
@@ -107,6 +110,13 @@ def build_image(application_image: str | None) -> str:
                 paths += [ROOT / "scripts" / "processing_postgres_suite.py"]
                 paths += list((ROOT / "docs" / "model-examples").glob("*"))
                 if not application_image:
+                    paths += [
+                        ROOT / "deployment" / name
+                        for name in (
+                            "build-beneficiaries.py",
+                            "beneficiaries-source.json",
+                        )
+                    ]
                     paths += list(
                         (ROOT / "deployment").glob("application-*-requirements.txt")
                     )

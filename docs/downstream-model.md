@@ -1,165 +1,131 @@
 # Downstream ecosystem beneficiaries
 
-`downstream-beneficiaries` is an installed Model YAML recipe calling the trusted
-`hydrology.downstream_beneficiaries.v1` Processing adapter. It uses the existing
-queue, session ownership, cancellation, expiry, worker supervision and published
-artifact inventory. It starts no TaskGraph workers or nested jobs. Open it in
-**Tools → Models** to choose its starting mask, prepared hydrology, values raster
-and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
+`downstream-beneficiaries` version **2.0.0** wraps the original
+[WWF workflow at 7e32ae28540ab53178248758a6f40affea8d6ff6](https://github.com/springinnovate/wwf_es_beneficiaries/tree/7e32ae28540ab53178248758a6f40affea8d6ff6).
+Its source is packaged byte for byte. Processing calls the original partitioning,
+DEM preparation, flow routing, conditional coverage, stitching and population
+masking functions in their original order, sequentially in the existing supervised
+native process. It does not start the upstream TaskGraph scheduler inside a worker.
+
+The wrapper temporarily uses the private attempt as the native process's current
+directory, containing upstream helpers that create relative scratch files. The
+application and input mounts remain read-only; the prior directory is restored
+on success or failure.
+
+The existing queue, progress, explicit cancellation, source authorization, session
+ownership, expiry and artifact publication still own the run. There is no new
+renderer, pixel reader or job scheduler.
+
+Open **Tools > Models** to choose the starting mask, prepared hydrology, values
+raster and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
 
 ## Inputs and results
 
-Select an installed prepared-hydrology configuration, one starting mask, and one values
-raster. The mask is either `{kind: catalogRaster, source: {collectionId, itemId}}`
-or `{kind: catalogSelection, selection: ...}` using the normal immutable catalog
-selection and filter contract. The values input also accepts the ordinary owned
-`runArtifact` reference. All filtered starting features form one combined mask
-and one result. The operation accepts no arbitrary paths, Python, expressions
-outside the existing scalar grammar, or uploaded job code.
+Choose prepared hydrology, one starting mask and a values raster. A raster mask
+passes unchanged to the original conditional calculation with `value > 0`.
+Filtered vector features become one combined AOI and a binary mask on the chosen
+calculation grid. Paths and geometries stay private to the attempt.
 
-The recipe produces a statistics CSV and retains two ordinary GeoTIFF rasters:
-downstream coverage and the starting mask. Both rasters have 1 for included
-cells, 0 for excluded cells inside the admitted watershed domain, and NoData 255
-outside it. Complete rasters enter the normal source, rendering, styling,
-sampling and dependent-model pipelines. There is no new preview renderer.
-Provenance records grids, selected watershed IDs, cell counts and numerical rules;
-Run YAML additionally records the recipe, build and accepted source signatures.
-Routing scratch is removed by normal publication/cleanup and is not a reusable
-catalog source.
+A private OGR view maps configured integer ID fields to `HYBAS_ID`, `NEXT_DOWN`
+and `NEXT_SINK`, leaving IDs, links and geometries unchanged. Upstream controls
+traversal and grouping, including virtual downstream links.
 
-## Numerical rules
+| Model field | Original setting | Default |
+| --- | --- | ---: |
+| Calculation pixel size | `wgs84_pixel_size` | 0.008333333333333 degrees |
+| Pixel size used for distances | `travel_time_pixel_size_m` | 900 m |
+| Buffer radius | `buffer_size_m` | 5000 m |
+| Maximum straight-line distance | `max_downstream_distance_m` | No cutoff |
 
-- Terrain uses the original north-up DEM grid and stored elevations. The
-  model does not fill pits or reproject the DEM. Cell centers are transformed
-  to WGS84 for distance calculations using the existing coordinate-transform
-  contract; the terrain itself need not use a WGS84 datum. The administrator is responsible
-  for preparing elevations suitable for MFD routing.
-- A raster starts flow only at positive, finite, valid cells sampled by native
-  cell containment at DEM centers. Vector masks use centers inside the combined
-  filtered polygons. Expanding downstream partitions never expands the seed mask.
-- Original watershed queries use the existing spatial and attribute filters.
-  Only intersecting starting partitions and their downstream connections are
-  retained. Each real sink is routed separately, so virtual links cannot move
-  flow past that sink. Accumulation weights are one at starting cells and zero
-  elsewhere. Coverage includes seeds and cells with accumulation above 100 times
-  float64 machine epsilon (the reference workflow's noise threshold). This binary
-  coverage is formed before applying the distance buffer.
-- The buffer includes DEM centers within the requested WGS84 ellipsoidal distance
-  of reached centers. An optional straight-line cutoff measures distance from
-  the original seed centers. Both thresholds are inclusive. Buffers remain inside
-  the selected watershed domain. Distances do not use an assumed metres-per-pixel
-  conversion on degree grids. This is binary coverage, without attenuation or
-  distance decay.
-- Values remain on their original grid with no interpolation or resampling.
-  Each native value cell contributes once when its center falls inside a covered
-  DEM cell. Overlapping starting features and routes never multiply its value.
-  Cells outside the values raster and masked, NoData or nonfinite values do not
-  contribute. Valid zeros and negative values do contribute. The normal scalar
-  evaluator provides `sum(a)` by default and the other area-summary formulas.
-  `areaha` measures full covered native value-cell areas using the existing ground
-  area calculator. Its coverage boundary is the binary DEM mask, not a subpixel
-  intersection with a mathematical buffer. Point-only formulas are rejected.
-- Empty or subpixel starting masks and incomplete prepared terrain fail explicitly.
-  A covered region without valid values uses the existing `no_valid_data` result.
+Pixel-size defaults come from the upstream example. They are explicit settings,
+not inferred from the DEM. Compare standalone runs using identical settings,
+inputs and AOIs.
 
-## Bounds and execution
+Retained outputs are original coverage and masked-values GeoTIFFs, a starting-mask
+diagnostic, statistics CSV, provenance and Run YAML. Rasters use ordinary EOlab
+rendering, styling, sampling and model-input pipelines. Scratch remains run-owned
+and is removed after calculation or by failed/cancelled-attempt cleanup.
 
-By default, the measured small-region profile admits four million routing cells
-summed across terminal groups, four million value cells and four million native
-starting-mask cells. It retains at most 100,000 selected watershed records, two
-million selected watershed coordinates and 64 real drainage groups. Original
-vector stream limits, source block/decoded-byte limits, the configured preparation
-deadline, memory ceiling and total run deadline still apply. The buffer is capped
-at 100 km and the optional cutoff at 1,000 km. Ambiguous exact-distance comparisons
-have a four-million-pair ceiling.
+## Numerical behavior
 
-These are administrator settings, not fixed algorithmic maxima or browser model
-parameters. `DownstreamLimits` in Python defines their defaults. Compose forwards
-optional overrides without setting its own numeric defaults; unset or empty
-values use the Python defaults. `.env.example` leaves these overrides empty.
-Nonempty values must be positive integers within the signed 64-bit range.
+The original functions define DEM resampling, pit filling, MFD flow, accumulation
+convolution with a pixel-based circular buffer, distance cutoff, threshold order,
+stitching, nearest-neighbor value resampling, positive-value inclusion and NoData.
+EOlab does not substitute native-grid totals, geodesic distances or new routing.
 
-Set the following variables in the deployment environment or Compose `.env`
-file (omit `EOLAB_` for a direct worker deployment), then recreate/redeploy the
-app and worker containers so they receive the changed environment. No code
-changes are needed:
+Default `sum(a)` returns the exact total from upstream
+`mask_population_with_coverage`, including zero when no positive values contribute.
+Other formulas are **EOlab postprocessing of the upstream masked-values output**.
+They do not alter coverage or the original total.
 
-| Setting | Default | Work being limited |
-| --- | ---: | --- |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_ROUTING_CELLS` | 4000000 | Routing-window cells summed over sink groups |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_VALUE_CELLS` | 4000000 | Native values-window cells |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_MASK_CELLS` | 4000000 | Native starting-raster cells |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHEDS` | 100000 | Retained watershed records |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHED_COORDINATES` | 2000000 | Retained polygon coordinates |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_TERMINALS` | 64 | Independently routed sink groups |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_DISTANCE_PAIRS` | 4000000 | Ambiguous exact-distance comparisons |
+Version 1.0.0 used the replaced EOlab calculation. Historical numerical policies
+remain readable. New runs record version-2 policy and upstream revision. Recipe
+version and implementation checksums change so stale selections and queued
+implementations cannot silently execute new math.
 
-Four million cells is the largest measured synthetic reference below; it is not
-an estimate of the size of a typical real drainage. Feature, coordinate, sink and
-distance defaults are initial workload policies, not independently benchmarked
-scientific thresholds. Raising a cell limit does not raise the native reader,
-process-memory, storage or timeout budgets. Size those settings together and
-measure representative regional data before admitting larger runs.
+## Resources and performance
 
-Preparation reserves conservative scratch capacity before routing. The native
-operation rechecks its plan and resource limits before allocation. Numerical
-libraries and GDAL are configured for one thread per admitted process. Stage
-progress identifies mask preparation, routing, buffering, summary and publication.
-Explicit cancellation terminates and reaps the existing native process before
-the attempt becomes eligible for cleanup. Restarts retain the normal interrupted
-state; there is no restart-resume behavior or cross-run result sharing.
+Existing source, geometry, memory, work, disk and time safeguards remain. These
+conservative admission estimates are **not measurements of upstream requirements**;
+they can still reject work that standalone upstream could run. Changing that
+policy is separate work. Checks also cover actual upstream partitions, output
+resolution and buffer allocation, rejecting oversized work without altering math.
 
-### Reproducible resource measurement
+`DownstreamLimits` owns defaults; Compose only forwards optional overrides.
+Recreate both app and worker containers after changing deployment settings.
 
-`python tests/measure_downstream_resources.py NEW_DIRECTORY --width 2000 --height
-2000 --cutoff-metres 50000` runs the production native lane against a generated
-eastward slope, three connected basins and a first-column seed mask. With the
-pinned EcoShard revision, Python 3.11.14 and GDAL 3.12.1 on Windows, the four-million-
-cell case measured 0.094 seconds of preparation, 6.297 seconds of execution
-including process startup, 568,475,648 bytes peak resident memory and 3,706,291
-bytes peak scratch storage. No descendant processes were observed in that sample;
-repeat Windows measurements identified a brief `cmd /c ver` system-version query
-during startup, rather than a nested routing worker. Its conservative
-disk reservation was 1,158,217,728 bytes. Sampling uses 20 ms intervals and the
-platform's peak working-set counter where available.
+| Deployment override | Default |
+| --- | ---: |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_ROUTING_CELLS` | 4000000 |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_VALUE_CELLS` | 4000000 |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_MASK_CELLS` | 4000000 |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHEDS` | 100000 |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHED_COORDINATES` | 2000000 |
+| `EOLAB_PROCESSING_DOWNSTREAM_MAX_TERMINALS` | 64 |
 
-This synthetic reference establishes a bounded sizing example, not performance
-for the administrator's datasets. Complex coastlines, many partitions, storage
-latency and different terrain can require more work. The hard admission limits
-and supervised deadline remain authoritative. Production CI separately builds
-and tests the pinned Linux/Python 3.12/GDAL 3.10 environment.
+Omit `EOLAB_` for direct worker deployments. Historical
+`PROCESSING_DOWNSTREAM_MAX_DISTANCE_PAIRS` remains accepted for configuration
+compatibility; upstream does not use the former geodesic-pair calculation.
+Existing request caps of 100 km buffer and 1000 km cutoff remain. Cell overrides
+do not increase memory, storage, source-reading or execution-time budgets.
 
-## Algorithm and build provenance
+EOlab adds preparation/rechecks, progress, checksums and publication overhead.
+Partitions execute sequentially; the standalone CLI can parallelize via TaskGraph.
+Measure representative data before claiming equal end-to-end runtime. Small
+parity fixtures print direct CLI, EOlab preparation and wrapped wall time. Earlier
+benchmarks of the removed implementation do not describe this wrapper.
 
-The starting workflow was reviewed at
-[`wwf_es_beneficiaries` revision 7e32ae2](https://github.com/springinnovate/wwf_es_beneficiaries/tree/7e32ae28540ab53178248758a6f40affea8d6ff6).
-EOlab calls the MFD direction and weighted-accumulation kernels from
-[`ecoshard` revision f7e2adb](https://github.com/springinnovate/ecoshard/tree/f7e2adba2a4d41128aea941bb747470418d2dce9),
-whose archive and runtime/build dependencies are hash-locked. Its `LICENSE.txt`
-contains BSD-3-Clause notices for the inherited components and Apache-2.0 terms
-for later contributions. The package and its notices remain in the built wheel. This revision is compatible
-with EOlab's GDAL 3.10 pin; newer upstream revisions assume GDAL 3.11 datatypes.
-The external workflow orchestrator is not imported or copied into EOlab.
+## Build and verification
 
-The application build compiles EcoShard beside GDAL from the reviewed archive,
-using the fixed distribution version `0.7.0+gf7e2adba2a4d`. Application build
-inventory and model implementation checksums include installed numerical packages.
-YAML selects this reviewed operation; it cannot choose a different source revision.
+`deployment/beneficiaries-source.json` pins source revision and archive SHA-256.
+`deployment/build-beneficiaries.py` verifies the archive and adds only packaging
+metadata around unchanged `workflow_runner.py` and the original
+`shortest_distances` extension. Installed provenance includes the runner checksum.
+Application and disposable PostgreSQL images use this same builder.
+
+The calculation uses the existing reviewed EcoShard revision
+`f7e2adba2a4d41128aea941bb747470418d2dce9`. Runtime wheels have reviewed hashes.
+The application build verifies imports; model checksums and build inventory record
+numerical package versions. Revision changes require a reviewed build change.
+
+For native development, run `python deployment/build-beneficiaries.py --manifest
+deployment/beneficiaries-source.json --output /tmp/beneficiaries-wheels`, install
+the generated wheels, then install EOlab.
+
+`tests/test_downstream_upstream.py` invokes the unchanged CLI separately with
+independently prepared inputs. It requires exact coverage and masked pixels,
+validity masks, CRS, transforms, dimensions, types, NoData and total equality.
+Cases cover buffer/cutoff, resampled signed/NoData values, filtered vector starts,
+multiple drainages and virtual links. Worker tests retain publication, Run YAML,
+actual native cancellation and resource-budget coverage.
 
 ## Resilience configuration
 
-[resilience-hydrology.yaml](model-examples/resilience-hydrology.yaml) contains the
-actual catalog IDs found for `astgtm_compressed.tif` and
-`merged_lev06_repaired.gpkg — merged_lev06` on the Resilience instance. Use
-`HYBAS_ID` as the connection identity, `NEXT_DOWN` as the next link, and stop when
-`NEXT_SINK == HYBAS_ID`. `ID` and `MAIN_BAS` are not used.
-
-Follow the [Coolify installation commands](prepared-hydrology.md#install-the-resilience-configuration-from-coolify)
-to validate those original mounted files and install the report. This repository
-does not include a fabricated validation report. Catalog metadata reports watershed
-coverage to 83.6256 degrees N but DEM coverage only to approximately 83.0001 degrees N.
-That mismatch does not prevent installation: each run requires DEM coverage only
-for the downstream watersheds selected from its starting mask. An uncovered
-drainage fails explicitly instead of being silently trimmed. The full network still
-needs valid connections and appropriately configured administrator work budgets;
-regional model execution retains only the selected drainage polygons.
+[resilience-hydrology.yaml](model-examples/resilience-hydrology.yaml) identifies the
+catalog DEM and watersheds. Configure `HYBAS_ID`, `NEXT_DOWN` and `NEXT_SINK`;
+`ID` and `MAIN_BAS` do not participate in upstream calculations. See
+[prepared-hydrology.md](prepared-hydrology.md) for installation. This wrapper does
+not change that contract. Registration-only and both validation-report versions
+remain supported. Installation checks source metadata; each run checks the
+selected drainage and its DEM coverage, so unrelated basins outside a regional
+DEM do not prevent installation.
