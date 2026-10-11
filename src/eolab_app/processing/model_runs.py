@@ -82,7 +82,15 @@ def compute_implementation_checksum() -> str:
                 digest.update(path.read_bytes())
     for dependency in ("numpy", "rasterio", "pyproj", "shapely", "fiona"):
         digest.update(f"{dependency}={version(dependency)}\n".encode())
-    for dependency in ("ecoshard", "scipy"):
+    for dependency in (
+        "ecoshard",
+        "scipy",
+        "wwf-es-beneficiaries",
+        "shortest-distances",
+        "geopandas",
+        "pandas",
+        "pyogrio",
+    ):
         try:
             installed = version(dependency)
         except PackageNotFoundError:

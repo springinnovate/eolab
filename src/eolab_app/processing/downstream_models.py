@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Annotated, Literal
 from sys import float_info
 
-from pydantic import Field, model_validator
+from pydantic import Field, RootModel, model_validator
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
@@ -20,6 +20,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "f7e2adba2a4d41128aea941bb747470418d2dce9"
+BENEFICIARIES_REVISION = "7e32ae28540ab53178248758a6f40affea8d6ff6"
 FLOW_THRESHOLD = 100 * float_info.epsilon
 
 
@@ -27,8 +28,8 @@ FLOW_THRESHOLD = 100 * float_info.epsilon
 class DownstreamLimits(RasterClipLimits):
     """Administrator budgets for native downstream work, in addition to job limits.
 
-    Defaults describe the measured small-region profile, not dataset dimensions
-    or algorithmic maxima. Deployment settings can raise or lower them; memory,
+    Defaults retain EOlab's existing small-region admission profile, not dataset
+    dimensions or upstream algorithmic maxima. Deployments can override them; memory,
     disk, native-reader and execution-time limits still apply independently.
 
     Attributes:
@@ -38,7 +39,8 @@ class DownstreamLimits(RasterClipLimits):
         max_watersheds: Watershed records retained for one run.
         max_watershed_coordinates: Coordinates retained across those polygons.
         max_terminals: Independent sink groups routed sequentially.
-        max_distance_pairs: Ambiguous candidate pairs checked with exact geodesics.
+        max_distance_pairs: Historical setting retained for deployment compatibility;
+            the original model does not perform EOlab's former geodesic-pair work.
     """
 
     max_routing_cells: int = 4_000_000
@@ -103,6 +105,8 @@ class DownstreamRequest(HydrologySchema):
     values: RasterSourceReference
     buffer_m: Annotated[float, Field(ge=0, le=100_000)]
     cutoff_m: Annotated[float, Field(gt=0, le=1_000_000)] | None
+    wgs84_pixel_size: Annotated[float, Field(gt=0)] = 0.008333333333333
+    travel_time_pixel_size_m: Annotated[float, Field(gt=0)] = 900
     summary: Annotated[str, Field(min_length=1, max_length=4096)]
 
     @model_validator(mode="after")
@@ -135,7 +139,8 @@ class DownstreamPlan(HydrologySchema):
     """Record admitted native windows and watershed identities without retaining geometry.
 
     Resolved selections are ephemeral worker arguments and never enter storage.
-    The routing grid remains the original DEM grid; the values grid is independent.
+    These grids measure native input work for admission. The original model
+    constructs its own calculation grid using the captured pixel-size setting.
     """
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
@@ -148,7 +153,7 @@ class DownstreamPlan(HydrologySchema):
 
 
 class DownstreamNumericalPolicy(HydrologySchema):
-    """Record routing, distance, coverage and value rules actually used by the adapter."""
+    """Read the numerical rules retained with historical reimplementation runs."""
 
     version: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
@@ -175,3 +180,41 @@ class DownstreamNumericalPolicy(HydrologySchema):
     flowThreshold: float = FLOW_THRESHOLD
     bufferMetres: float
     cutoffMetres: float | None = None
+
+
+class WrappedDownstreamNumericalPolicy(HydrologySchema):
+    """Record the original model version and the numerical settings passed to it."""
+
+    version: Literal["hydrology.downstream_beneficiaries.v2"] = (
+        "hydrology.downstream_beneficiaries.v2"
+    )
+    beneficiariesRevision: Literal["7e32ae28540ab53178248758a6f40affea8d6ff6"] = (
+        BENEFICIARIES_REVISION
+    )
+    ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
+        ECOSHARD_REVISION
+    )
+    calculation: Literal["unchanged_upstream_functions"] = (
+        "unchanged_upstream_functions"
+    )
+    defaultSummary: Literal["upstream_mask_population_with_coverage_total"] = (
+        "upstream_mask_population_with_coverage_total"
+    )
+    otherSummaries: Literal["eolab_formula_on_upstream_masked_values"] = (
+        "eolab_formula_on_upstream_masked_values"
+    )
+    wgs84PixelSize: float
+    distancePixelSizeMetres: float
+    bufferMetres: float
+    cutoffMetres: float | None = None
+
+
+class DownstreamPolicy(
+    RootModel[
+        Annotated[
+            DownstreamNumericalPolicy | WrappedDownstreamNumericalPolicy,
+            Field(discriminator="version"),
+        ]
+    ]
+):
+    """Read both historical calculations and the current upstream model provenance."""

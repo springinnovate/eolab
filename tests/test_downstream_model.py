@@ -17,7 +17,6 @@ from eolab_app.processing.downstream_calculation import (
     DownstreamSources,
     calculate_downstream,
     plan_downstream,
-    buffer_cell_mask,
 )
 from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamLimits
 from eolab_app.processing.hydrology_validation import (
@@ -73,7 +72,11 @@ def scaled_downstream_fixture(
     report = validate_hydrology_sources(
         request.hydrology.definition, dem, sources.network, HydrologyValidationLimits()
     )
-    return sources, request.model_copy(update={"hydrology": report}), limits
+    return (
+        sources,
+        request.model_copy(update={"hydrology": report, "wgs84_pixel_size": 6 / width}),
+        limits,
+    )
 
 
 def downstream_fixture(
@@ -128,6 +131,8 @@ def downstream_fixture(
         buffer_m=0,
         cutoff_m=None,
         summary=formula,
+        wgs84_pixel_size=1.0,
+        travel_time_pixel_size_m=100000,
     )
     sources = DownstreamSources(
         {
@@ -141,68 +146,6 @@ def downstream_fixture(
     return sources, request, DownstreamLimits(free_space_floor=0)
 
 
-@pytest.mark.parametrize("tiled", [True, False])
-def test_summary_reads_native_blocks_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiled: bool
-) -> None:
-    """Summaries clip native tiles or strips to an unaligned selection without rereads.
-
-    Args:
-        tmp_path: Original sources and isolated run outputs.
-        monkeypatch: Records actual values-raster reads.
-        tiled: Exercise both tiled and striped GeoTIFF storage.
-    """
-    from eolab_app.processing import downstream_calculation as calculation
-
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    with rasterio.open(
-        sources.rasters["values"],
-        "w",
-        driver="GTiff",
-        width=128,
-        height=96,
-        count=1,
-        dtype="int16",
-        crs="EPSG:4326",
-        transform=from_origin(-1, 5, 1 / 16, 1 / 16),
-        tiled=tiled,
-        **({"blockxsize": 64} if tiled else {}),
-        blockysize=32,
-    ) as target:
-        target.write(np.ones((96, 128), dtype="int16"), 1)
-    spec = plan_downstream(sources, request, limits)
-    reads = []
-    original = calculation.read_native_raster_window
-
-    def record_read(dataset: Any, window: rasterio.windows.Window) -> Any:
-        """Record values windows while preserving the ordinary raster reader.
-
-        Args:
-            dataset: Open original source.
-            window: Window requested by the calculation.
-
-        Returns:
-            Original masked values.
-        """
-        if Path(dataset.name) == sources.rasters["values"]:
-            reads.append(window)
-        return original(dataset, window)
-
-    monkeypatch.setattr(calculation, "read_native_raster_window", record_read)
-    directory = tmp_path / "run"
-    directory.mkdir()
-    artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == 96 * 64
-    with rasterio.open(sources.rasters["values"]) as dataset:
-        selection = rasterio.windows.Window(*spec.grid.window)
-        expected = [
-            window.intersection(selection)
-            for _, window in dataset.block_windows(1)
-            if rasterio.windows.intersect(window, selection)
-        ]
-    assert reads == expected
-
-
 def test_field_comparison_stops_virtual_downstream_links() -> None:
     """NEXT_SINK equals HYBAS_ID identifies a real sink even with NEXT_DOWN present."""
     rule = NetworkTermination(field="NEXT_SINK", equalsField="HYBAS_ID")
@@ -212,24 +155,10 @@ def test_field_comparison_stops_virtual_downstream_links() -> None:
         rule.matches({"NEXT_SINK": "12", "HYBAS_ID": 12})
 
 
-@pytest.mark.parametrize("latitude", [0.0, 60.0])
-def test_buffers_measure_metres_on_geographic_grids(latitude: float) -> None:
-    """The same longitude increment has a smaller physical distance at high latitude.
-
-    Args:
-        latitude: Reference latitude for the exact WGS84 distance check.
-    """
-    pytest.importorskip("scipy")
-    lon = np.array([[0.0, 0.01, 0.02]])
-    lat = np.full_like(lon, latitude)
-    selected = buffer_cell_mask(lon, lat, np.array([[True, False, False]]), 700)
-    assert selected.tolist() == [[True, latitude == 60, False]]
-
-
-def test_downstream_native_mask_crosses_watersheds_and_preserves_signed_values(
+def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     tmp_path: Path,
 ) -> None:
-    """Only mask cells seed routing; all downstream native values retain zeros and signs.
+    """The original model masks positive values on its coverage grid.
 
     Args:
         tmp_path: Isolated prepared sources and calculation artifacts.
@@ -241,7 +170,7 @@ def test_downstream_native_mask_crosses_watersheds_and_preserves_signed_values(
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == float(data.sum())
+    assert float(artifact.rows[0]["value"]) == float(data[data > 0].sum())
     assert spec.watersheds == (1, 2, 3)
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
@@ -250,11 +179,12 @@ def test_downstream_native_mask_crosses_watersheds_and_preserves_signed_values(
     assert {item.name for item in artifact.additional_outputs} == {
         "coverage",
         "starting_mask",
+        "masked_values",
     }
 
 
-def test_nodata_values_have_explicit_empty_result(tmp_path: Path) -> None:
-    """Missing values produce the shared no-valid-data result without changing coverage.
+def test_nodata_values_preserve_original_zero_total(tmp_path: Path) -> None:
+    """Missing values retain the original model's zero sum and nonempty coverage.
 
     Args:
         tmp_path: Isolated model sources and outputs.
@@ -267,7 +197,8 @@ def test_nodata_values_have_explicit_empty_result(tmp_path: Path) -> None:
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
-    assert artifact.rows[0]["state"] == "no_valid_data"
+    assert artifact.rows[0]["state"] == "ok"
+    assert float(artifact.rows[0]["value"]) == 0
     with rasterio.open(directory / "coverage.tif") as dataset:
         assert np.all(dataset.read(1) == 1)
 
@@ -285,6 +216,35 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         plan_downstream(sources, request, limits)
 
 
+def test_requested_resolution_cannot_bypass_work_budgets(tmp_path: Path) -> None:
+    """Small native inputs cannot authorize an excessively fine calculation grid.
+
+    Args:
+        tmp_path: Small original inputs and private attempt directory.
+    """
+    sources, request, limits = downstream_fixture(tmp_path / "inputs")
+    request = request.model_copy(update={"wgs84_pixel_size": 0.000001})
+    plan = plan_downstream(sources, request, limits)
+    directory = tmp_path / "attempt"
+    directory.mkdir()
+    with pytest.raises(ProcessingError, match="calculation pixel size"):
+        calculate_downstream(sources, plan, directory, limits)
+    assert not list(directory.rglob("flow.tif"))
+
+
+def test_historical_numerical_policy_remains_readable() -> None:
+    """Saved version-one runs retain their numerical description after replacement."""
+    from eolab_app.processing.downstream_models import DownstreamNumericalPolicy
+    from eolab_app.processing.model_operations import get_model_operation
+
+    historical = DownstreamNumericalPolicy(bufferMetres=5000).model_dump(mode="json")
+    operation = get_model_operation("hydrology.downstream_beneficiaries.v1")
+    assert (
+        operation.policy_type.model_validate(historical).model_dump(mode="json")
+        == historical
+    )
+
+
 def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> None:
     """Even tiny grids fail admission when the deployment memory budget cannot fit them.
 
@@ -298,17 +258,17 @@ def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     "formula,expected",
-    [("sum(a)", 48), ("count(a)", 48), ("mean(a)", 1), ("sum(a, where=a > 0)", 48)],
+    [("sum(a)", 24), ("count(a)", 24), ("mean(a)", 1), ("sum(a, where=a > 0)", 24)],
 )
-def test_values_keep_native_totals_on_a_different_resolution(
+def test_formulas_summarize_the_original_masked_values_grid(
     tmp_path: Path, formula: str, expected: float
 ) -> None:
-    """Finer value cells contribute once each without changing population totals.
+    """EOlab formulas read the original model's resampled, masked values output.
 
     Args:
         tmp_path: Isolated native model sources.
         formula: Existing scalar grammar expression to evaluate.
-        expected: Independent reference result across 48 native cells.
+        expected: Reference result across the 24 cells in the upstream output grid.
     """
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources", formula=formula)
@@ -415,7 +375,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     registry = ModelRegistry.load_installed()
-    definition = registry.get("downstream-beneficiaries", "1.0.0")
+    definition = registry.get("downstream-beneficiaries", "2.0.0")
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
@@ -431,7 +391,13 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
             "hydrology": request.hydrology.reference.model_dump(),
             "values": request.values.model_dump(by_alias=True),
         },
-        parameters={"buffer_m": 0, "cutoff_m": None, "summary": "sum(a)"},
+        parameters={
+            "buffer_m": 0,
+            "cutoff_m": None,
+            "summary": "sum(a)",
+            "wgs84_pixel_size": 1,
+            "travel_time_pixel_size_m": 100000,
+        },
     )
     calculation, invocation = build_model_calculation_request(
         submitted, registry, hydrology={"hydrology": request.hydrology}
@@ -527,6 +493,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         "coverage",
         "starting_mask",
         "provenance",
+        "masked_values",
     }
     document = RunDocument.model_validate(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
@@ -570,9 +537,10 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
         )
         try:
             async with asyncio.timeout(45):
-                while (
-                    artifacts.progress(attempt).get("phase") != "routing_downstream"
-                    or not (directory / "flow.tif").exists()
+                while artifacts.progress(attempt).get(
+                    "phase"
+                ) != "routing_downstream" or not any(
+                    (directory / "upstream").rglob("flow.tif")
                 ):
                     assert not task.done(), task.result() if task.done() else None
                     await asyncio.sleep(0.01)
@@ -591,59 +559,6 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
             await native.close()
 
     asyncio.run(cancel_during_routing())
-
-
-@pytest.mark.parametrize("include_other_sink", [False, True])
-def test_routing_stops_at_real_sink_with_virtual_downstream_connection(
-    tmp_path: Path,
-    include_other_sink: bool,
-) -> None:
-    """NEXT_SINK-style termination excludes a virtual connection to another drainage.
-
-    Args:
-        tmp_path: Isolated prepared basin network and model outputs.
-        include_other_sink: Start flow independently in the second drainage as well.
-    """
-    from shapely.geometry import box, mapping
-
-    pytest.importorskip("ecoshard.geoprocessing.routing")
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    if include_other_sink:
-        with rasterio.open(sources.rasters["starting_mask"], "r+") as dataset:
-            data = dataset.read(1)
-            data[:, 4] = 1
-            dataset.write(data, 1)
-    topology = request.hydrology.definition.topology.model_dump(
-        by_alias=True, exclude_none=True
-    )
-    topology["terminal"] = {"field": "sink", "equalsField": "id"}
-    records = [
-        {
-            "id": i,
-            "next": i + 1 if i < 3 else 0,
-            "sink": 2 if i < 3 else 3,
-            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
-        }
-        for i in range(1, 4)
-    ]
-    definition, dem, network, _ = prepare_sources(
-        tmp_path / "terminal",
-        records=records,
-        definition_changes={"topology": topology},
-    )
-    report = validate_hydrology_sources(
-        definition, dem, network, HydrologyValidationLimits()
-    )
-    sources = replace(
-        sources, rasters={**sources.rasters, "dem": dem.source_path}, network=network
-    )
-    request = request.model_copy(update={"hydrology": report})
-    spec = plan_downstream(sources, request, limits)
-    assert spec.watersheds == ((1, 2, 3) if include_other_sink else (1, 2))
-    directory = tmp_path / "run"
-    directory.mkdir()
-    artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == (24 if include_other_sink else 16)
 
 
 def test_overlapping_starting_features_count_each_value_once(tmp_path: Path) -> None:
@@ -679,19 +594,6 @@ def test_overlapping_starting_features_count_each_value_once(tmp_path: Path) -> 
         assert np.count_nonzero(dataset.read(1) == 1) == 12
 
 
-def test_buffer_boundary_is_inclusive_in_metres() -> None:
-    """A center exactly at the WGS84 distance threshold is included, one beyond is not."""
-    from pyproj import Geod
-
-    pytest.importorskip("scipy")
-    lon = np.array([[0.0, 0.01, 0.010001]])
-    lat = np.full_like(lon, 60)
-    distance = Geod(ellps="WGS84").inv(0, 60, 0.01, 60)[2]
-    assert buffer_cell_mask(
-        lon, lat, np.array([[True, False, False]]), distance
-    ).tolist() == [[True, True, False]]
-
-
 def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> None:
     """Only valid positive cells seed routing even when nearby mask values exist.
 
@@ -708,47 +610,6 @@ def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> N
     calculate_downstream(sources, spec, directory, limits)
     with rasterio.open(directory / "starting_mask.tif") as dataset:
         assert np.count_nonzero(dataset.read(1) == 1) == 4
-
-
-@pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:4269"])
-def test_routing_preserves_projected_and_non_wgs84_terrain(
-    tmp_path: Path, crs: str
-) -> None:
-    """Prepared terrain keeps its native CRS while distances use geographic centers.
-
-    Args:
-        tmp_path: Original sources and calculation outputs.
-        crs: Projected WGS84 or geographic NAD83 source coordinate system.
-    """
-    from pyproj import Transformer
-    from rasterio.transform import from_bounds
-    from eolab_app.processing.downstream_calculation import grid_centers
-
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    with rasterio.open(sources.rasters["dem"], "r+") as dataset:
-        transform = Transformer.from_crs(
-            4326, crs, always_xy=True, allow_ballpark=False
-        )
-        west, south, east, north = transform.transform_bounds(0, 0, 6, 4)
-        dataset.crs = crs
-        dataset.transform = from_bounds(west, south, east, north, 6, 4)
-    dem = AuthorizedRaster(
-        sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
-    )
-    report = validate_hydrology_sources(
-        request.hydrology.definition, dem, sources.network, HydrologyValidationLimits()
-    )
-    request = request.model_copy(update={"hydrology": report})
-    spec = plan_downstream(sources, request, limits)
-    lon, lat = grid_centers(spec.routingGrid)
-    assert np.all(np.isfinite(lon) & np.isfinite(lat))
-    directory = tmp_path / "run"
-    directory.mkdir()
-    artifact = calculate_downstream(sources, spec, directory, limits)
-    assert float(artifact.rows[0]["value"]) == 24
-    with rasterio.open(directory / "coverage.tif") as dataset:
-        assert dataset.crs.to_epsg() == int(crs.split(":")[1])
-        assert tuple(dataset.transform)[:6] == spec.routingGrid.transform
 
 
 @pytest.mark.parametrize(

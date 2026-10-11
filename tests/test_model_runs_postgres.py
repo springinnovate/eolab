@@ -177,7 +177,11 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "hydrology": request.hydrology.reference.model_dump(),
             "values": values,
         },
-        parameters={"buffer_m": 0},
+        parameters={
+            "buffer_m": 0,
+            "wgs84_pixel_size": 1,
+            "travel_time_pixel_size_m": 100000,
+        },
     )
     job = submit(client, body)
     identifier = job["jobId"]
@@ -213,6 +217,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         "coverage",
         "starting_mask",
         "provenance",
+        "masked_values",
     }
     exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     RunDocument.model_validate(parse_yaml(exported.content, run=True))
