@@ -1,7 +1,9 @@
 # Prepared hydrology datasets
 
 A prepared hydrology configuration pairs an existing catalog DEM with a complete
-watershed network. It names the fields that connect watersheds and records how
+watershed network. The DEM may cover only part of that network; each run must
+have complete terrain coverage for the downstream watersheds it uses. The
+configuration names the fields that connect watersheds and records how
 the terrain was prepared. It is separate from Model YAML: the same model can use
 different regional datasets without changing its recipe.
 
@@ -57,6 +59,56 @@ report. Use a new semantic version for intentional dataset/configuration changes
 The effective SHA-256 also changes when any configuration, source signature or
 validation result changes, even if an administrator accidentally reuses a version.
 
+## Install the Resilience configuration from Coolify
+
+Deploy this PR's updated application **and processing-worker** first. In the
+Resilience application in Coolify, open its terminal and choose the
+`processing-worker` container. Run the following in that Linux shell (not in the
+browser's developer console or on your local computer):
+
+```sh
+mkdir -p /processing-data/hydrology
+python -c "from urllib.request import urlretrieve; urlretrieve('https://raw.githubusercontent.com/springinnovate/eolab/main/docs/model-examples/resilience-hydrology.yaml', '/processing-data/hydrology/resilience.yaml')"
+cat /processing-data/hydrology/resilience.yaml
+```
+
+This downloads only the small administrator configuration, not the DEM or
+watersheds. It names Resilience's already-cataloged `astgtm_compressed.tif` and
+`merged_lev06_repaired.gpkg` and uses `HYBAS_ID`, `NEXT_DOWN` and `NEXT_SINK`.
+Check those entries, then run:
+
+```sh
+python -m eolab_app.hydrology_cli /processing-data/hydrology/resilience.yaml \
+  --catalog-url http://stac-api:8080 \
+  --scan-mount /scan-source \
+  --output /processing-data/hydrology/resilience.hydrology.json
+```
+
+Wait for `Validated configuration written to ...resilience.hydrology.json` and a
+successful exit. If it reports a missing field, source change or exhausted budget,
+address that message before continuing; do not hand-edit a validation report.
+A large network can need a higher `--max-coordinates` budget even though no DEM
+pixels are scanned. See the limits below before increasing memory or work budgets.
+
+After validation succeeds, add this **runtime** environment variable to the
+Resilience deployment in Coolify, then redeploy the app:
+
+```text
+EOLAB_PREPARED_HYDROLOGY_DIRECTORY=/processing-data/hydrology
+```
+
+The existing Compose configuration makes this volume writable in the worker and
+read-only in the app. The `hydrology` directory is outside the temporary job
+`attempts` and `results` directories, so run cleanup does not remove it. Keep the
+same processing-data volume when redeploying; a replacement volume needs the
+configuration installed again. No changes to the read-only dataset mount are needed.
+
+Open `/api/processing/prepared-hydrology` on the Resilience site to confirm its
+`configurations` list contains **Resilience prepared ASTER drainage**. Then reopen
+**Tools / Models / Downstream ecosystem beneficiaries** and choose that dataset.
+Start with a small drainage inside the DEM's extent. Installing a configuration
+does not itself run the model.
+
 ## Field mappings and checks
 
 `idField` and `downstreamField` name distinct fields. IDs must all use the declared
@@ -79,22 +131,34 @@ by following links. A network may contain several independent complete drainages
 
 The shared bounded vector reader checks polygon validity and CRS, applies the
 existing source-signature checks and streams original features. No filtered
-vectors or reusable geometry snapshots are saved. The validator projects those
-polygons using the existing bounded projection mechanism, checks that the DEM
-contains them, and checks connected boundaries within one native DEM-pixel
-diagonal. Exact raster blocks are read using the ordinary mask/NoData/nonfinite
-validity policy. Missing elevation at a watershed-covered pixel center fails
-validation, including missing data in downstream partitions. Zero and negative
-elevations are valid.
+vectors or reusable geometry snapshots are saved. Installation checks DEM
+georeferencing, native source structure and the north-up grid, without projecting
+the entire network into the DEM or reading elevation cells.
 
-These checks certify the declared network and **DEM pixel-center coverage inside
-its polygons**. They do not certify exterior or subpixel gaps, inferred drainage
+For each run, Processing follows the selected starting mask's downstream links
+to the real sinks. Before planning raster windows, it projects those watersheds,
+checks that the DEM contains their complete extent, and checks connected
+boundaries within one native DEM-pixel diagonal. Execution checks pixel-center
+coverage and the ordinary mask/NoData/nonfinite elevation policy before routing.
+Missing elevation in a required watershed fails that run with an actionable
+error; unrelated watersheds outside the DEM or containing NoData do not prevent
+installation or a covered run. Zero and negative elevations remain valid.
+Coverage means the full selected downstream watershed polygons, not just the
+starting mask or a route inferred from incomplete terrain. No drainage is silently
+clipped to the DEM. Resource, source-identity and cancellation checks still apply.
+
+New reports use `eolab.hydrology-validation/v2` with `demCellsChecked: 0`, which
+explicitly records that installation did not scan DEM pixels. Version 1 reports
+and their checksums remain readable in installed configurations and saved Run YAML;
+those reports additionally certified network-wide pixel-center coverage.
+Revalidating produces a version 2 report and a new effective checksum.
+
+These checks do not certify exterior or subpixel gaps, inferred drainage
 connections, vertical accuracy or the scientific correctness of the stated
 conditioning. `terrain.conditioning` and `terrain.datasetVersion` record the
 administrator's provenance; `routing: mfd` and `elevationUnit: metre` state the
-supported intended method. Validation does not run pit filling, MFD routing,
-distance buffers or resampling. Execution must still verify that the starting
-mask lies in supported coverage and check every run-specific grid/mask operation.
+supported intended method. Installation does not run pit filling, MFD routing,
+distance buffers or resampling.
 
 ## Resource limits and diagnostics
 
@@ -102,19 +166,20 @@ The command uses the existing native-process supervisor with a 120-second defaul
 deadline and 2 GiB Linux address-space ceiling. It terminates and reaps native
 work on cancellation, deadline or crash. The existing vector reader additionally
 limits a stream to 15 seconds, one million scanned features and 500,000 coordinates
-per feature, checking its elapsed-time budget between features. Raster coverage
-is checked after this stream closes. These limits fail validation explicitly;
+per feature, checking its elapsed-time budget between features. These limits
+fail validation explicitly;
 no truncated network is accepted. Containers should retain their normal memory limits.
 
-The validator defaults to 100,000 retained network features, two million projected
-coordinates and 512 MiB cumulative decoded DEM work. These are computational
-budgets, adjustable with `--max-features`, `--max-coordinates` and
-`--max-decoded-mib`; they do not limit the number of installed configurations.
-`--timeout-seconds` and `--memory-mib` configure the supervised process. The shared
-vector-reader limits remain in force. DEM work charges repeat reads and embedded
-mask blocks without assuming cache hits. It stores only a bounded network in the
-child and releases it on exit. Prepare smaller **complete drainages**, or increase
-the appropriate administrator budget, when a dataset exceeds these limits.
+The validator defaults to 100,000 retained network features and two million
+geographic coordinates. These are computational budgets, adjustable with
+`--max-features` and `--max-coordinates`; they do not limit the number of installed
+configurations. `--timeout-seconds` and `--memory-mib` configure the supervised
+process. The shared vector-reader limits remain in force. The former
+`--max-decoded-mib` option has been removed because installation no longer reads
+DEM cells; remove it from older validator commands. Per-run native-read budgets
+remain unchanged. Prepare smaller **complete drainages**, or increase the
+appropriate administrator budget within the server's capacity, when a dataset
+exceeds these limits.
 
 Errors identify the failed field, connection, coverage condition or budget.
 Repair or rescan sources, validate again, and install the new report. Discovery

@@ -15,7 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pyproj import Geod, Transformer
 import rasterio
-from rasterio.features import geometry_mask, shapes
+from rasterio.features import geometry_mask, geometry_window, shapes
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import Affine
 from rasterio.windows import Window
@@ -404,6 +404,53 @@ def plan_native_grid(
     )
 
 
+def require_downstream_dem_coverage(
+    dataset: rasterio.io.DatasetReader,
+    network: dict[int | str, Watershed],
+    identifiers: tuple[int | str, ...],
+    limits: DownstreamLimits,
+) -> None:
+    """Require complete DEM extent and connected boundaries for the selected drainage.
+
+    Check polygons before raster-window clipping so missing terrain cannot silently
+    shorten a run. No elevation cells are read here; execution checks their validity.
+
+    Args:
+        dataset: Open prepared DEM with validated source metadata.
+        network: Run-local geographic watershed records.
+        identifiers: Watersheds followed from the starting mask to their real sinks.
+        limits: Worker budget for projected watershed coordinates.
+
+    Raises:
+        ProcessingError: If terrain extent or connected watershed boundaries are
+            incomplete, or a selected polygon cannot be projected safely.
+        ValueError: If projection exceeds its coordinate budget.
+    """
+    projected = project_wgs84_polygons(
+        dataset,
+        tuple(mapping(network[item].geometry) for item in identifiers),
+        limits.max_watershed_coordinates,
+    )
+    polygons = dict(zip(identifiers, map(shape, projected), strict=True))
+    diagonal = math.hypot(dataset.transform.a, dataset.transform.e)
+    # Permit projection roundoff only, not an uncovered fraction of a terrain cell.
+    footprint = box(*dataset.bounds).buffer(diagonal * 1e-8)
+    for identifier, polygon in polygons.items():
+        if not polygon.is_valid or not footprint.covers(polygon):
+            raise ProcessingError(
+                "incomplete_dem",
+                "The prepared DEM does not cover the full downstream drainage for this starting mask. Choose another starting area or a hydrology dataset with complete terrain coverage.",
+                422,
+            )
+        downstream = network[identifier].downstream
+        if downstream is not None and polygon.distance(polygons[downstream]) > diagonal:
+            raise ProcessingError(
+                "incomplete_hydrology",
+                "A selected watershed has a gap before its downstream partition. Ask the administrator to repair the watershed boundaries.",
+                422,
+            )
+
+
 def plan_downstream(
     sources: DownstreamSources, request: DownstreamRequest, limits: DownstreamLimits
 ) -> DownstreamPlan:
@@ -433,6 +480,7 @@ def plan_downstream(
         )
     with rasterio.open(sources.rasters["dem"]) as dataset:
         validate_supported_raster(dataset, sources.rasters["dem"])
+        require_downstream_dem_coverage(dataset, network, identifiers, limits)
         routing = plan_native_grid(dataset, region, limits.max_routing_cells, limits)
         if len(groups) * routing.width * routing.height > limits.max_routing_cells:
             raise ProcessingError(
@@ -779,12 +827,28 @@ def calculate_downstream(
                 tuple(mapping(polygon) for polygon in polygons),
                 limits.max_watershed_coordinates,
             )
-            inside = geometry_mask(
-                projected,
-                out_shape=dem.shape,
-                transform=Affine(*grid.transform),
-                invert=True,
-            )
+            inside = np.zeros(dem.shape, dtype=bool)
+            for polygon in projected:
+                window = geometry_window(dataset, (polygon,)).intersection(
+                    Window(*grid.window)
+                )
+                covered = geometry_mask(
+                    (polygon,),
+                    out_shape=(int(window.height), int(window.width)),
+                    transform=dataset.window_transform(window),
+                    invert=True,
+                )
+                if not covered.any():
+                    raise ProcessingError(
+                        "unsupported_dem_resolution",
+                        "A downstream watershed contains no DEM pixel centers. Choose a hydrology dataset with a finer terrain resolution.",
+                        422,
+                    )
+                row = int(window.row_off) - grid.window[1]
+                column = int(window.col_off) - grid.window[0]
+                inside[
+                    row : row + covered.shape[0], column : column + covered.shape[1]
+                ] |= covered
             domain |= inside
             if np.any(inside & np.ma.getmaskarray(dem)):
                 raise ProcessingError(

@@ -165,21 +165,41 @@ class HydrologyGrid(HydrologySchema):
 
 
 class HydrologyValidation(HydrologySchema):
-    """Record completed network and DEM-coverage checks without retaining source geometry.
+    """Record installed network checks and their scope without retaining geometry.
 
-    Every downstream link terminates within this dataset. Connected polygons meet
-    within one native DEM pixel diagonal, and DEM cells centered in watershed
-    polygons have valid elevations. Exterior cells and subpixel gaps are not
-    certified; run preparation must check its masks, grids and routing separately.
+    Version 2 checks network connections and DEM metadata without reading elevation
+    cells; coverage and connected boundaries are checked for each run. Version 1
+    reports additionally certified network-wide pixel-center coverage and connected
+    boundaries. Both versions retain source identities and remain readable in saved
+    runs. Neither certifies terrain conditioning or vertical accuracy.
     """
 
-    validator: Literal["eolab.hydrology-validation/v1"]
+    validator: Literal["eolab.hydrology-validation/v1", "eolab.hydrology-validation/v2"]
     validatedAt: AwareDatetime
     watershedCount: Annotated[int, Field(strict=True, gt=0)]
     terminalCount: Annotated[int, Field(strict=True, gt=0)]
-    demCellsChecked: Annotated[int, Field(strict=True, gt=0)]
+    demCellsChecked: Annotated[int, Field(strict=True, ge=0)]
     bounds: Wgs84Bounds
     grid: HydrologyGrid
+
+    @model_validator(mode="after")
+    def check_validation_scope(self) -> Self:
+        """Require the elevation-cell count to agree with the validator's scope.
+
+        Returns:
+            This report with consistent validation evidence.
+
+        Raises:
+            ValueError: If a version 1 report has no checked cells or a version 2
+                report claims to have checked elevation cells during installation.
+        """
+        if (self.validator == "eolab.hydrology-validation/v1") != (
+            self.demCellsChecked > 0
+        ):
+            raise ValueError(
+                "DEM cell count does not match the hydrology validator scope"
+            )
+        return self
 
 
 class HydrologyReference(HydrologySchema):
@@ -231,7 +251,7 @@ class PreparedHydrologySnapshot(HydrologySchema):
         return self
 
     def compute_effective_checksum(self) -> str:
-        """Identify the configuration, source revisions and coverage validation result.
+        """Identify the configuration, source revisions and recorded validation scope.
 
         Returns:
             Stable SHA-256 excluding only the informational validation timestamp.

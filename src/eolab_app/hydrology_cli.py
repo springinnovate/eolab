@@ -43,7 +43,6 @@ def main() -> None:
     )
     parser.add_argument("--max-features", type=int, default=100_000)
     parser.add_argument("--max-coordinates", type=int, default=2_000_000)
-    parser.add_argument("--max-decoded-mib", type=int, default=512)
     args = parser.parse_args()
     if not args.scan_mount.is_absolute() or not args.scan_mount.is_dir():
         parser.error(
@@ -100,9 +99,7 @@ async def validate_configuration(args: argparse.Namespace) -> None:
         definition = PreparedHydrologyDefinition.model_validate(
             parse_yaml(source.read(64 * 1024 + 1))
         )
-    limits = HydrologyValidationLimits(
-        args.max_features, args.max_coordinates, args.max_decoded_mib * 1024**2
-    )
+    limits = HydrologyValidationLimits(args.max_features, args.max_coordinates)
     async with httpx2.AsyncClient(timeout=30) as client:
         dem = await CatalogRasterSourceAuthorizer(
             StacRasterCatalog(client, args.catalog_url),

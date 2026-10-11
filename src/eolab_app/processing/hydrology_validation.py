@@ -1,16 +1,12 @@
-"""Check prepared watershed connections and elevation coverage using bounded source reads."""
+"""Check prepared watershed connections and DEM metadata using bounded source reads."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import math
 from typing import Any
 
-import numpy as np
 import rasterio
-from rasterio.features import geometry_mask, geometry_window
 from shapely import get_num_coordinates
-from shapely.geometry import box, mapping, shape
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import shape
 
 from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.bounded_vector import polygon_records
@@ -25,15 +21,12 @@ from eolab_app.processing.prepared_hydrology import (
     PreparedHydrologyDefinition,
     PreparedHydrologySnapshot,
 )
-from eolab_app.raster.bounded_window import project_wgs84_polygons
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.source_contract import (
     require_bounded_source_structure,
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
-    read_native_raster_block,
-    source_work_for_blocks,
 )
 
 
@@ -43,13 +36,11 @@ class HydrologyValidationLimits:
 
     Attributes:
         features: Maximum watershed records retained for link validation.
-        coordinates: Maximum projected coordinates retained for connected-boundary checks.
-        decoded_bytes: Cumulative native data/mask work, counting repeated block reads.
+        coordinates: Maximum geographic coordinates inspected across network features.
     """
 
     features: int = 100_000
     coordinates: int = 2_000_000
-    decoded_bytes: int = 512 * 1024**2
 
     def __post_init__(self) -> None:
         """Require positive validation budgets.
@@ -59,7 +50,7 @@ class HydrologyValidationLimits:
         """
         if any(
             type(value) is not int or value <= 0
-            for value in (self.features, self.coordinates, self.decoded_bytes)
+            for value in (self.features, self.coordinates)
         ):
             raise ValueError("Hydrology validation budgets must be positive integers")
 
@@ -89,33 +80,27 @@ def require_network_id(value: Any, id_type: str, field: str) -> int | str:
 
 
 def validate_network_links(
-    nodes: dict[int | str, tuple[int | str | None, int | str | None, BaseGeometry]],
-    tolerance: float,
+    nodes: dict[int | str, tuple[int | str | None, int | str | None]],
 ) -> int:
-    """Follow every watershed to a terminal and check connected partition boundaries.
+    """Follow every watershed to a terminal and verify declared sink identifiers.
 
     Args:
         nodes: Bounded native-validation records containing next ID, optional terminal
-            ID and projected polygon. These records never leave the validation process.
-        tolerance: One DEM-pixel diagonal in the DEM's coordinate units.
+            ID. These records never leave the validation process.
 
     Returns:
         Number of distinct terminal watersheds.
 
     Raises:
-        ValueError: If a link is missing, cyclic, spatially disconnected or has
+        ValueError: If a link is missing, cyclic or has
             an inconsistent declared terminal drainage ID.
     """
     terminals: dict[int | str, int | str] = {}
-    for identifier, (downstream, _, geometry) in nodes.items():
+    for identifier, (downstream, _) in nodes.items():
         if downstream is not None:
             if downstream not in nodes:
                 raise ValueError(
                     f"Watershed {identifier!r} links outside the configured network; include all downstream partitions"
-                )
-            if geometry.distance(nodes[downstream][2]) > tolerance:
-                raise ValueError(
-                    f"Watershed {identifier!r} has a gap before its downstream partition; repair coverage"
                 )
     for start in nodes:
         path: set[int | str] = set()
@@ -134,70 +119,12 @@ def validate_network_links(
         terminal = terminals[current]
         for identifier in path:
             terminals[identifier] = terminal
-    for identifier, (_, declared_terminal, _) in nodes.items():
+    for identifier, (_, declared_terminal) in nodes.items():
         if declared_terminal is not None and declared_terminal != terminals[identifier]:
             raise ValueError(
                 f"Watershed {identifier!r} has an inconsistent terminal drainage ID"
             )
     return len(set(terminals.values()))
-
-
-def check_dem_coverage(
-    dataset: rasterio.io.DatasetReader,
-    polygons: tuple[dict[str, object], ...],
-    remaining_bytes: int,
-) -> tuple[int, int]:
-    """Check exact DEM validity inside watershed polygons using native raster blocks.
-
-    Args:
-        dataset: Authorized one-band DEM with validated block and validity contracts.
-        polygons: Bounded geometry projected into this DEM's CRS and fully inside its extent.
-        remaining_bytes: Remaining cumulative native data/mask work budget.
-
-    Returns:
-        Count of polygon-covered pixel centers and decoded bytes charged to this read.
-
-    Raises:
-        ValueError: If work exceeds its budget, coverage has NoData/nonfinite/masked
-            cells, or the watershed contains no DEM pixel centers.
-    """
-    window = geometry_window(dataset, polygons)
-    block_height, block_width = dataset.block_shapes[0]
-    checked = work = 0
-    for row in range(
-        int(window.row_off) // block_height,
-        math.ceil((window.row_off + window.height) / block_height),
-    ):
-        for col in range(
-            int(window.col_off) // block_width,
-            math.ceil((window.col_off + window.width) / block_width),
-        ):
-            _, decoded = source_work_for_blocks(dataset, ((row, col),))
-            work += decoded
-            if work > remaining_bytes:
-                raise ValueError(
-                    "DEM coverage validation exceeds its decoded-byte budget; increase the administrator validation budget or prepare a smaller complete network"
-                )
-            block = dataset.block_window(1, row, col)
-            inside = geometry_mask(
-                polygons,
-                out_shape=(int(block.height), int(block.width)),
-                transform=dataset.window_transform(block),
-                invert=True,
-            )
-            if not inside.any():
-                continue
-            values = read_native_raster_block(dataset, block)
-            if np.any(inside & np.ma.getmaskarray(values)):
-                raise ValueError(
-                    "The DEM has missing or invalid elevation cells inside a watershed; repair terrain coverage"
-                )
-            checked += int(np.count_nonzero(inside))
-    if checked == 0:
-        raise ValueError(
-            "A watershed contains no DEM pixel centers; use a compatible terrain resolution"
-        )
-    return checked, work
 
 
 def validate_hydrology_sources(
@@ -206,9 +133,10 @@ def validate_hydrology_sources(
     watersheds: ResolvedCatalogSelection,
     limits: HydrologyValidationLimits,
 ) -> PreparedHydrologySnapshot:
-    """Validate a complete prepared network and its original DEM before model admission.
+    """Validate network connections and DEM metadata before installing a configuration.
 
-    This reads all watershed records and the native DEM blocks covering them.
+    This reads all watershed records and DEM metadata, but no elevation cells.
+    DEM extent, validity and connected boundaries are checked for each run.
     Source signatures are checked before and after reading. No flow directions,
     filtered copies, raster masks or persistent geometry are created.
 
@@ -251,9 +179,9 @@ def validate_hydrology_sources(
             if name is not None
         )
     )
-    nodes: dict[int | str, tuple[int | str | None, int | str | None, BaseGeometry]] = {}
+    nodes: dict[int | str, tuple[int | str | None, int | str | None]] = {}
     terminal_links: dict[int | str, int | str] = {}
-    checked = coordinates = decoded = 0
+    coordinates = 0
     bounds = [180.0, 90.0, -180.0, -90.0]
     with (
         rasterio.Env(GDAL_CACHEMAX=32 * 1024**2),
@@ -267,8 +195,6 @@ def validate_hydrology_sources(
             raise ValueError(
                 "Prepared terrain requires a north-up DEM with positive pixel width and negative pixel height"
             )
-        footprint = box(*dataset.bounds)
-        tolerance = math.hypot(affine.a, affine.e)
         with polygon_records(watersheds, fields) as records:
             for geometry, properties in records:
                 if len(nodes) >= limits.features:
@@ -303,23 +229,14 @@ def validate_hydrology_sources(
                     max(bounds[2], east),
                     max(bounds[3], north),
                 ]
-                projected = project_wgs84_polygons(
-                    dataset, (geometry,), limits.coordinates - coordinates
-                )
-                polygon = shape(projected[0])
-                coordinates += int(get_num_coordinates(polygon))
+                coordinates += int(get_num_coordinates(geographic))
                 if coordinates > limits.coordinates:
                     raise ValueError(
                         "Watershed validation exceeds its retained-coordinate budget"
                     )
-                if not polygon.is_valid or not footprint.covers(polygon):
-                    raise ValueError(
-                        "Watershed coverage falls outside the DEM or cannot be projected safely; include complete downstream terrain"
-                    )
                 nodes[identifier] = (
                     None if terminal else next_id,
                     terminal_id,
-                    polygon,
                 )
         if not nodes:
             raise ValueError("The configured watershed network has no polygon features")
@@ -328,21 +245,13 @@ def validate_hydrology_sources(
                 raise ValueError(
                     f"Terminal watershed {identifier!r} still links to another watershed; correct the terminal rule"
                 )
-        terminal_count = validate_network_links(nodes, tolerance)
-        # Finish the vector stream before DEM work so raster reads do not consume
-        # the vector reader's elapsed-time budget. The native deadline bounds both.
-        for _, _, polygon in nodes.values():
-            cells, work = check_dem_coverage(
-                dataset, (mapping(polygon),), limits.decoded_bytes - decoded
-            )
-            checked += cells
-            decoded += work
+        terminal_count = validate_network_links(nodes)
         validation = HydrologyValidation(
-            validator="eolab.hydrology-validation/v1",
+            validator="eolab.hydrology-validation/v2",
             validatedAt=datetime.now(timezone.utc),
             watershedCount=len(nodes),
             terminalCount=terminal_count,
-            demCellsChecked=checked,
+            demCellsChecked=0,
             bounds=dict(zip(("west", "south", "east", "north"), bounds)),
             grid={
                 "crs": dataset.crs.to_string(),

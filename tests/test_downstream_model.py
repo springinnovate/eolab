@@ -77,7 +77,11 @@ def scaled_downstream_fixture(
 
 
 def downstream_fixture(
-    directory: Path, *, values: np.ndarray | None = None, formula: str = "sum(a)"
+    directory: Path,
+    *,
+    values: np.ndarray | None = None,
+    formula: str = "sum(a)",
+    records: list[dict[str, Any]] | None = None,
 ) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
     """Create a prepared three-basin eastward slope and a first-column raster mask.
 
@@ -85,11 +89,12 @@ def downstream_fixture(
         directory: Isolated fixture files.
         values: Optional native 4-by-6 values raster.
         formula: Scalar result formula.
+        records: Optional complete network with different coverage or connections.
 
     Returns:
         Native sources, captured request and test deployment limits.
     """
-    definition, dem, network, _ = prepare_sources(directory)
+    definition, dem, network, _ = prepare_sources(directory, records=records)
     hydrology = validate_hydrology_sources(
         definition, dem, network, HydrologyValidationLimits()
     )
@@ -783,3 +788,184 @@ def test_downstream_uses_configured_work_budgets(
         calculate_downstream(sources, spec, directory, restricted)
     assert running.value.code == "model_too_large"
     assert not list(directory.iterdir())
+
+
+@pytest.mark.parametrize("outside", ["north", "east"])
+def test_regional_dem_runs_with_network_extending_beyond_it(
+    tmp_path: Path, outside: str
+) -> None:
+    """Route a covered drainage even when other network basins exceed the DEM extent.
+
+    Args:
+        tmp_path: Native source and result files.
+        outside: Direction in which an unused basin extends beyond terrain coverage.
+    """
+    from shapely.geometry import box, mapping
+
+    records = [
+        {
+            "id": i,
+            "next": i + 1 if i < 3 else 0,
+            "sink": 3,
+            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+        }
+        for i in range(1, 4)
+    ]
+    records.append(
+        {
+            "id": 4,
+            "next": 0,
+            "sink": 4,
+            "geometry": mapping(
+                box(0, 5, 2, 6) if outside == "north" else box(8, 0, 10, 4)
+            ),
+        }
+    )
+    sources, request, limits = downstream_fixture(tmp_path, records=records)
+    assert request.hydrology.validation.watershedCount == 4
+    spec = plan_downstream(sources, request, limits)
+    assert spec.watersheds == (1, 2, 3)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    artifact = calculate_downstream(sources, spec, directory, limits)
+    assert float(artifact.rows[0]["value"]) == 24
+
+
+@pytest.mark.parametrize(
+    "width,height,west,north", [(5, 4, 0, 4), (6, 3, 0, 3), (6, 4, 10, 4)]
+)
+def test_run_rejects_missing_downstream_dem_extent(
+    tmp_path: Path, width: int, height: int, west: float, north: float
+) -> None:
+    """Reject partial and absent terrain before clipped windows can truncate a run.
+
+    Args:
+        tmp_path: Isolated sources and private attempt directory.
+        width: Restricted DEM column count.
+        height: Restricted DEM row count.
+        west: DEM western edge.
+        north: DEM northern edge.
+    """
+    sources, request, limits = downstream_fixture(tmp_path)
+    with rasterio.open(
+        sources.rasters["dem"],
+        "w",
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        nodata=-9999,
+        transform=from_origin(west, north, 1, 1),
+    ) as dataset:
+        dataset.write(np.ones((height, width), dtype="float32"), 1)
+    report = validate_hydrology_sources(
+        request.hydrology.definition,
+        AuthorizedRaster(
+            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
+        ),
+        sources.network,
+        HydrologyValidationLimits(),
+    )
+    request = request.model_copy(update={"hydrology": report})
+    with pytest.raises(
+        ProcessingError, match="does not cover the full downstream drainage"
+    ) as error:
+        plan_downstream(sources, request, limits)
+    assert error.value.code == "incomplete_dem"
+
+
+@pytest.mark.parametrize("invalid", [-9999, float("nan"), float("inf"), "mask"])
+@pytest.mark.parametrize("selected", [True, False])
+def test_run_checks_elevation_only_in_selected_watersheds(
+    tmp_path: Path, invalid: float | str, selected: bool
+) -> None:
+    """Reject invalid required terrain while allowing holes in unrelated drainages.
+
+    Args:
+        tmp_path: Isolated sources and result files.
+        invalid: NoData, nonfinite elevation or an embedded mask hole.
+        selected: Whether the watershed containing the bad cell is needed by this run.
+    """
+    from shapely.geometry import box, mapping
+
+    records = [
+        {
+            "id": i,
+            "next": i + 1 if selected and i < 3 else 0,
+            "sink": 3 if selected else i,
+            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+        }
+        for i in range(1, 4)
+    ]
+    sources, request, limits = downstream_fixture(tmp_path, records=records)
+    with (
+        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
+        rasterio.open(sources.rasters["dem"], "r+") as dataset,
+    ):
+        if invalid == "mask":
+            validity = np.full((4, 6), 255, dtype="uint8")
+            validity[1, 4] = 0
+            dataset.write_mask(validity)
+        else:
+            elevations = dataset.read(1)
+            elevations[1, 4] = invalid
+            dataset.write(elevations, 1)
+    report = validate_hydrology_sources(
+        request.hydrology.definition,
+        AuthorizedRaster(
+            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
+        ),
+        sources.network,
+        HydrologyValidationLimits(),
+    )
+    request = request.model_copy(update={"hydrology": report})
+    spec = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    if selected:
+        with pytest.raises(ProcessingError, match="missing elevation") as error:
+            calculate_downstream(sources, spec, directory, limits)
+        assert error.value.code == "incomplete_dem"
+    else:
+        artifact = calculate_downstream(sources, spec, directory, limits)
+        assert float(artifact.rows[0]["value"]) == 8
+
+
+@pytest.mark.parametrize("tiny", [False, True])
+def test_selected_watersheds_require_connected_pixel_coverage(
+    tmp_path: Path, tiny: bool
+) -> None:
+    """Defer spatial compatibility to the run without accepting gaps or empty basins.
+
+    Args:
+        tmp_path: Native sources and private result directory.
+        tiny: Use a subpixel basin instead of a disconnected downstream boundary.
+    """
+    from shapely.geometry import box, mapping
+
+    records = [
+        {
+            "id": i,
+            "next": i + 1 if i < 3 else 0,
+            "sink": 3,
+            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+        }
+        for i in range(1, 4)
+    ]
+    records[1]["geometry"] = mapping(
+        box(2.9, 1, 3.1, 1.2) if tiny else box(2, 0, 2.4, 4)
+    )
+    sources, request, limits = downstream_fixture(tmp_path, records=records)
+    if tiny:
+        spec = plan_downstream(sources, request, limits)
+        directory = tmp_path / "run"
+        directory.mkdir()
+        with pytest.raises(ProcessingError, match="contains no DEM pixel centers"):
+            calculate_downstream(sources, spec, directory, limits)
+    else:
+        with pytest.raises(
+            ProcessingError, match="gap before its downstream partition"
+        ):
+            plan_downstream(sources, request, limits)
