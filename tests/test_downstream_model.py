@@ -245,6 +245,46 @@ def test_historical_numerical_policy_remains_readable() -> None:
     )
 
 
+def test_upstream_relative_scratch_stays_in_run_after_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Upstream relative scratch stays private and the worker's directory is restored.
+
+    Args:
+        tmp_path: Original inputs and an isolated run workspace.
+        monkeypatch: Inject a failure at the external model boundary.
+    """
+    from eolab_app.processing.downstream_runner import load_beneficiaries
+
+    sources, request, limits = downstream_fixture(tmp_path / "inputs")
+    spec = plan_downstream(sources, request, limits)
+    workspace = tmp_path / "attempt"
+    workspace.mkdir()
+    previous = Path.cwd()
+
+    def fail_with_relative_scratch(*args: Any, **kwargs: Any) -> None:
+        """Simulate an upstream helper's relative scratch and subsequent I/O failure.
+
+        Args:
+            *args: Arguments passed unchanged to the original flow function.
+            **kwargs: Original optional function settings.
+
+        Raises:
+            OSError: Always, after creating a run-local scratch marker.
+        """
+        assert Path.cwd() == workspace.resolve()
+        Path("upstream-relative-scratch").write_text("private")
+        raise OSError("upstream fixture failure")
+
+    monkeypatch.setattr(
+        load_beneficiaries(), "calc_flow_dir", fail_with_relative_scratch
+    )
+    with pytest.raises(OSError, match="upstream fixture failure"):
+        calculate_downstream(sources, spec, workspace, limits)
+    assert Path.cwd() == previous
+    assert (workspace / "upstream-relative-scratch").read_text() == "private"
+
+
 def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> None:
     """Even tiny grids fail admission when the deployment memory budget cannot fit them.
 

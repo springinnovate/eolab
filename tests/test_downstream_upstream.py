@@ -298,6 +298,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
         capture_output=True,
         text=True,
         timeout=180,
+        cwd=reference,
         env={
             **os.environ,
             "OPENBLAS_NUM_THREADS": "1",

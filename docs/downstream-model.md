@@ -7,6 +7,11 @@ DEM preparation, flow routing, conditional coverage, stitching and population
 masking functions in their original order, sequentially in the existing supervised
 native process. It does not start the upstream TaskGraph scheduler inside a worker.
 
+The wrapper temporarily uses the private attempt as the native process's current
+directory, containing upstream helpers that create relative scratch files. The
+application and input mounts remain read-only; the prior directory is restored
+on success or failure.
+
 The existing queue, progress, explicit cancellation, source authorization, session
 ownership, expiry and artifact publication still own the run. There is no new
 renderer, pixel reader or job scheduler.

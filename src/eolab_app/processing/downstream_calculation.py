@@ -4,6 +4,7 @@ All work runs sequentially in the existing supervised native process. Source
 paths and geometries exist only in that process and its private attempt directory.
 """
 
+from contextlib import chdir
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -493,6 +494,10 @@ def calculate_downstream(
 ) -> AggregateArtifact:
     """Check the admitted inputs and invoke the unchanged WWF calculation.
 
+    Execution is sequential in the native worker. Its current directory is
+    temporarily the private attempt so upstream helpers using relative scratch
+    paths work with a read-only application mount and remain run-owned.
+
     Args:
         sources: Reauthorized original files and selections.
         spec: Existing admitted windows, watershed IDs and captured inputs.
@@ -517,9 +522,11 @@ def calculate_downstream(
         )
     from eolab_app.processing.downstream_runner import run_original_downstream
 
-    return run_original_downstream(
-        sources, spec, directory, limits, starting_geometry(sources, limits)
-    )
+    workspace = directory.resolve()
+    with chdir(workspace):
+        return run_original_downstream(
+            sources, spec, workspace, limits, starting_geometry(sources, limits)
+        )
 
 
 def downstream_process_target(
