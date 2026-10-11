@@ -3,6 +3,7 @@
 
 # Required by the unchanged WWF beneficiaries workflow; Linux CPython 3.12.
 geopandas==1.1.1 --hash=sha256:589e61aaf39b19828843df16cb90234e72897e2579be236f10eee0d052ad98e8
+packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
 pandas==2.3.3 --hash=sha256:b3d11d2fda7eb164ef27ffc14b4fcab16a80e1ce67e9f57e19ec0afaf715ba89
 pyogrio==0.12.1 --hash=sha256:8b65be8c4258b27cc8f919b21929cecdadda4c353e3637fa30850339ef4d15c5
 tqdm==4.67.1 --hash=sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2
