@@ -110,28 +110,42 @@ def polygon_records(
     property_names: tuple[str, ...],
     bbox: tuple[float, float, float, float] | None = None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    timeout_seconds: float = READ_SECONDS,
 ) -> Iterator[Iterator[tuple[dict[str, Any], dict[str, Any]]]]:
     """Stream validated WGS84 polygons and requested attributes from the original source.
 
     Geometry-only readers and readers needing attributes share the same source,
     filter, projection, cancellation and per-feature work limits. The caller
-    owns validation of the selected attributes' domain meaning.
+    owns validation of the selected attributes' domain meaning. A supervised
+    caller can supply its own finite time budget; ordinary reads keep the default.
 
     Args:
         resolved: Authorized source and compiled attribute predicate.
         property_names: Source fields to include; absent fields are rejected.
         bbox: Conservative native-CRS candidate envelope, or no spatial filter.
         cancellation_requested: Optional request to stop between expensive steps.
+        timeout_seconds: Positive finite elapsed-time budget for the open stream,
+            including time spent by its consumer between yielded features. This
+            is checked between features; callers must supervise native calls to
+            interrupt a blocked driver. Feature and coordinate ceilings still apply.
 
     Yields:
         An iterator of polygon/attribute pairs, valid only inside this context.
 
     Raises:
+        ValueError: If the requested time budget is not a positive finite number.
         GeometryValidationError: If a requested field is missing or geometry/work limits fail.
         SelectionUnavailableError: If a source component changed or cannot be read.
     """
+    if (
+        type(timeout_seconds) not in (int, float)
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("Vector read timeout must be a positive finite number")
     resolved.require_current()
-    deadline = monotonic() + READ_SECONDS
+    deadline = monotonic() + timeout_seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with _source_collection(resolved) as dataset:
             if set(property_names) - set(dataset.schema.get("properties", {})):
@@ -162,9 +176,13 @@ def polygon_records(
                     options["bbox"] = bbox
                 for count, feature in enumerate(dataset.filter(**options), 1):
                     require_active_raster_read(cancellation_requested)
-                    if count > MAX_SCANNED_FEATURES or monotonic() > deadline:
+                    if count > MAX_SCANNED_FEATURES:
                         raise GeometryValidationError(
-                            "Vector reading exceeded its feature/time budget"
+                            f"Vector reading exceeded its {MAX_SCANNED_FEATURES:,}-feature budget"
+                        )
+                    if monotonic() > deadline:
+                        raise GeometryValidationError(
+                            f"Vector reading exceeded its {timeout_seconds:g}-second time budget after {count - 1:,} features"
                         )
                     if not matches_filter(
                         resolved.selection.filter, feature.properties

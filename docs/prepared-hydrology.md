@@ -66,6 +66,17 @@ Resilience application in Coolify, open its terminal and choose the
 `processing-worker` container. Run the following in that Linux shell (not in the
 browser's developer console or on your local computer):
 
+The container name may have a deployment suffix. If you are unsure, identify its
+main process first:
+
+```sh
+python -c "from pathlib import Path; print(Path('/proc/1/cmdline').read_bytes().replace(b'\0', b' ').decode())"
+```
+
+It should include `eolab_app.worker_cli`. The `app` container runs Uvicorn and has
+a read-only `/processing-data` mount. If `mkdir` reports a read-only filesystem,
+select the worker container before continuing; do not change the mount permissions.
+
 ```sh
 mkdir -p /processing-data/hydrology
 python -c "from urllib.request import urlretrieve; urlretrieve('https://raw.githubusercontent.com/springinnovate/eolab/main/docs/model-examples/resilience-hydrology.yaml', '/processing-data/hydrology/resilience.yaml')"
@@ -81,14 +92,26 @@ Check those entries, then run:
 python -m eolab_app.hydrology_cli /processing-data/hydrology/resilience.yaml \
   --catalog-url http://stac-api:8080 \
   --scan-mount /scan-source \
-  --output /processing-data/hydrology/resilience.hydrology.json
+  --output /processing-data/hydrology/resilience.hydrology.json \
+  --timeout-seconds 1800 \
+  --max-coordinates 30000000
 ```
+
+This gives the full Resilience network a one-time validation allowance of 30
+minutes and 30 million polygon coordinates, while retaining the 2 GiB native
+memory limit. These are maximum allowances, not an estimated runtime or a measured
+coordinate count. They apply to this administrator command, not ordinary map reads
+or model runs. The default budgets remain available for smaller regional networks.
 
 Wait for `Validated configuration written to ...resilience.hydrology.json` and a
 successful exit. If it reports a missing field, source change or exhausted budget,
 address that message before continuing; do not hand-edit a validation report.
-A large network can need a higher `--max-coordinates` budget even though no DEM
-pixels are scanned. See the limits below before increasing memory or work budgets.
+The diagnostic distinguishes a time limit from a feature or coordinate limit.
+See the limits below before increasing memory or work budgets.
+
+Older deployments report `Vector reading exceeded its feature/time budget` after
+15 seconds even when a longer CLI timeout was requested. Deploy the updated worker
+before retrying; changing the command's timeout alone cannot fix that older reader.
 
 After validation succeeds, add this **runtime** environment variable to the
 Resilience deployment in Coolify, then redeploy the app:
@@ -164,11 +187,13 @@ distance buffers or resampling.
 
 The command uses the existing native-process supervisor with a 120-second default
 deadline and 2 GiB Linux address-space ceiling. It terminates and reaps native
-work on cancellation, deadline or crash. The existing vector reader additionally
-limits a stream to 15 seconds, one million scanned features and 500,000 coordinates
-per feature, checking its elapsed-time budget between features. These limits
-fail validation explicitly;
-no truncated network is accepted. Containers should retain their normal memory limits.
+work on cancellation, deadline or crash. The CLI passes the same time allowance to
+the watershed reader, which checks elapsed time between features. The supervisor
+still enforces the overall deadline, including native startup and all validation
+work. Ordinary map and analysis reads retain their separate 15-second default.
+The reader also limits a stream to one million scanned features and 500,000
+coordinates per feature. These limits fail validation explicitly; no truncated
+network is accepted. Containers should retain their normal memory limits.
 
 The validator defaults to 100,000 retained network features and two million
 geographic coordinates. These are computational budgets, adjustable with

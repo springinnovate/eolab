@@ -36,7 +36,7 @@ def main() -> None:
         "--timeout-seconds",
         type=int,
         default=120,
-        help="Whole native validation deadline",
+        help="Whole native validation deadline, also used for the watershed read",
     )
     parser.add_argument(
         "--memory-mib", type=int, default=2048, help="Linux child address-space ceiling"
@@ -99,7 +99,11 @@ async def validate_configuration(args: argparse.Namespace) -> None:
         definition = PreparedHydrologyDefinition.model_validate(
             parse_yaml(source.read(64 * 1024 + 1))
         )
-    limits = HydrologyValidationLimits(args.max_features, args.max_coordinates)
+    limits = HydrologyValidationLimits(
+        args.max_features,
+        args.max_coordinates,
+        read_timeout_seconds=args.timeout_seconds,
+    )
     async with httpx2.AsyncClient(timeout=30) as client:
         dem = await CatalogRasterSourceAuthorizer(
             StacRasterCatalog(client, args.catalog_url),

@@ -9,7 +9,7 @@ from shapely import get_num_coordinates
 from shapely.geometry import shape
 
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import polygon_records
+from eolab_app.bounded_vector import READ_SECONDS, polygon_records
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
@@ -37,13 +37,17 @@ class HydrologyValidationLimits:
     Attributes:
         features: Maximum watershed records retained for link validation.
         coordinates: Maximum geographic coordinates inspected across network features.
+        read_timeout_seconds: Elapsed-time allowance passed to the source reader.
+            The CLI supplies its native-process timeout; other callers inherit the
+            reader's default. The reader requires a positive finite value.
     """
 
     features: int = 100_000
     coordinates: int = 2_000_000
+    read_timeout_seconds: float = READ_SECONDS
 
     def __post_init__(self) -> None:
-        """Require positive validation budgets.
+        """Require positive feature and coordinate budgets.
 
         Raises:
             ValueError: If a work budget is not a positive integer.
@@ -195,7 +199,9 @@ def validate_hydrology_sources(
             raise ValueError(
                 "Prepared terrain requires a north-up DEM with positive pixel width and negative pixel height"
             )
-        with polygon_records(watersheds, fields) as records:
+        with polygon_records(
+            watersheds, fields, timeout_seconds=limits.read_timeout_seconds
+        ) as records:
             for geometry, properties in records:
                 if len(nodes) >= limits.features:
                     raise ValueError("Watershed validation exceeds its feature budget")

@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
+from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.hydrology_validation import (
     HydrologyValidationLimits,
     validate_hydrology_sources,
@@ -741,20 +743,52 @@ def test_captured_model_run_retains_exact_hydrology_report(
         ModelInvocation.model_validate(bad)
 
 
+def validate_hydrology_with_slow_reader_clock(
+    writer: ProcessResultWriter,
+    definition: PreparedHydrologyDefinition,
+    dem: AuthorizedRaster,
+    watersheds: ResolvedCatalogSelection,
+    limits: HydrologyValidationLimits,
+) -> None:
+    """Exercise real native validation with eight simulated seconds per watershed.
+
+    Args:
+        writer: Supervisor result channel from the real CLI process.
+        definition: Administrator configuration resolved by the CLI.
+        dem: Authorized original terrain source.
+        watersheds: Authorized complete watershed network.
+        limits: Administrator budgets passed across the native-process boundary.
+    """
+    import eolab_app.bounded_vector as reader
+
+    original_clock = reader.monotonic
+    ticks = count(step=8.0)
+    reader.monotonic = lambda: next(ticks)
+    try:
+        validate_hydrology_process(writer, definition, dem, watersheds, limits)
+    finally:
+        reader.monotonic = original_clock
+
+
 def test_administrator_command_uses_catalog_sources_and_atomic_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Run the real CLI composition with STAC HTTP replaced and native validation intact.
+    """Pass CLI time budgets into native reads and install only complete reports.
 
     Args:
         tmp_path: Isolated original sources, YAML and report.
-        monkeypatch: Replace only external catalog HTTP responses.
+        monkeypatch: Replace catalog HTTP and the native reader's elapsed-time clock.
     """
     import argparse
     import httpx2
     from eolab_app.catalog.geotiff import build_stac_item
     from eolab_app.catalog.geopackage import build_stac_items
     from eolab_app.hydrology_cli import validate_configuration
+
+    monkeypatch.setattr(
+        "eolab_app.processing.hydrology_validation.validate_hydrology_process",
+        validate_hydrology_with_slow_reader_clock,
+    )
 
     definition, dem, watersheds, _ = prepare_sources(tmp_path)
     raster_item = build_stac_item(tmp_path, dem.source_path)
@@ -804,6 +838,11 @@ def test_administrator_command_uses_catalog_sources_and_atomic_report(
         asyncio.run(validate_configuration(args))
     assert output.read_bytes() == original
     assert str(tmp_path) not in original.decode()
+    args.max_features = 100
+    args.timeout_seconds = 15
+    with pytest.raises(ValueError, match="15-second time budget"):
+        asyncio.run(validate_configuration(args))
+    assert output.read_bytes() == original
 
 
 def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
