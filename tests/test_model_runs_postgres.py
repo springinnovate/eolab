@@ -81,6 +81,40 @@ def test_undo_restores_terminal_run_history(
     assert not client.portal.call(worker.run_once)
 
 
+def test_old_run_history_is_retained_during_undo_without_reviving_metadata(
+    model_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Keep an old history row for Undo even when ordinary record retention has ended.
+
+    Args:
+        model_boundary: Real model HTTP and worker composition.
+        store: Isolated lifecycle store used to age a cancelled run.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    assert client.post(base + "/cancel", headers=HEADERS).status_code == 202
+    client.portal.call(worker.cleanup)
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET updated_at=now()-interval '8 days',"
+            "expires_at=now()-interval '1 day',metadata_expires_at=now()-interval '1 day' WHERE id=%s",
+            (identifier,),
+        )
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    client.portal.call(worker.cleanup)
+    response = client.post(
+        base + "/deletion/undo",
+        json={"deletionId": offer["deletionId"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "cancelled"
+    assert client.get(base + "/invocation").status_code == 410
+    assert client.get(base + "/run-yaml").status_code == 410
+
+
 def test_undo_dismiss_and_cleanup_share_one_lifecycle_transition(
     model_boundary: Any, store: PostgresJobStore
 ) -> None:

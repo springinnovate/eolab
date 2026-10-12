@@ -1505,18 +1505,23 @@ class PostgresJobStore:
 
         Retry records last seven days after the last update. A longer configured
         metadata lifetime keeps the record available until that deadline as well.
+        An unexpired deletion Undo window retains the history row, without
+        extending access to its already-expired metadata or files.
 
         Args:
             cursor: Cursor inside the worker maintenance transaction holding the
                 Processing advisory lock.
         """
+
         cursor.execute(
             "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL "
             "AND status NOT IN ('queued','running','cancelling','ready') "
             "AND updated_at<now()-interval '7 days' "
             "AND (metadata_expires_at IS NULL OR metadata_expires_at<=now()) "
             "AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=jobs.id) "
-            "AND NOT EXISTS (SELECT 1 FROM processing.input_files WHERE parent_id=jobs.id)"
+            "AND NOT EXISTS (SELECT 1 FROM processing.input_files WHERE parent_id=jobs.id) "
+            "AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=jobs.id "
+            "AND deletion_undo_until>clock_timestamp())"
         )
 
     def active_attempts(self) -> set[str]:
