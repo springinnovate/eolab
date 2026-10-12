@@ -138,6 +138,28 @@ storage-limit error. Retry after those jobs finish or choose a smaller area.
 
 ## Inspect or download
 
+New model runs keep their completed files and run details for at least seven
+days. The run shows the actual expiry date. Choose **Keep for another 7 days**
+before expiry to keep them until seven days from that click; a later existing
+expiry is preserved. Viewing the map or polling progress does not extend file
+retention. This remains private to the same browser session: clearing cookies
+or losing that session loses access. Download files if you need your own copy.
+
+Choose **Delete run and results** in the run view, or beside its group name in
+Map layers, to review a confirmation naming the run. Deleting removes all its
+outputs from the map and makes them unavailable for new downloads or analyses.
+The run disappears from the list immediately. An **Undo** notice remains for
+30 seconds; **Dismiss** ends that offer sooner. Undo restores the run and the
+output layers removed with it, including their display settings. Reloading this
+tab can recover an unexpired Undo offer, but its previous map display settings
+are no longer available; open the restored run to show its outputs again.
+Undo does not extend the original expiry date or recover files that expired
+during those 30 seconds.
+The layer's ordinary remove control only removes it from the map and can be
+undone. Cancel an active run before deleting it.
+Existing downloads and accepted calculations finish using their protected inputs
+before the server removes those files; other runs are not deleted automatically.
+
 Completed summaries show their values. Completed clips show the raster dimensions,
 valid-pixel count and file size. **Files from this run** lists individual downloads
 for results, retained intermediates and **Calculation details**. Downloads require
@@ -166,7 +188,8 @@ the map at once, grouped by the run that produced each file.
 
 Result layers remain private and temporary. Expiry removes their display;
 deletion and loss of access are checked at least every 30 seconds, even with
-Models closed. If availability cannot be confirmed, the layer is removed and
+Models closed. At expiry the browser checks for renewal before removing the
+layer. If availability cannot be confirmed, the layer is removed and
 can be reopened from its run. They are omitted from saved maps, published maps
 and remembered browser views. Reopen them from **Models → Runs** in the browser
 that owns them. Removing or hiding a layer does not stop an accepted calculation

@@ -1,6 +1,7 @@
 """Multiple real model files across HTTP, PostgreSQL, native execution and cleanup."""
 
 from dataclasses import replace
+from datetime import timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifact_manifest import read_artifact_manifest
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
+from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.raster_clip import create_clip, clip_process_target
@@ -25,6 +27,241 @@ from test_model_runs_postgres import model_boundary, model_request, submit
 from test_processing_jobs import boundary, store, HEADERS, AREA
 from test_raster_clips import SOURCE
 from uuid import uuid4
+
+
+@pytest.mark.parametrize("resolution", ["undo", "dismiss", "timeout"])
+def test_model_deletion_hold_preserves_files_and_reader_protection(
+    multiple_boundary: Any, store: PostgresJobStore, resolution: str
+) -> None:
+    """Undo restores all files; dismissal and timeout use the existing reader-safe cleanup.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated PostgreSQL lifecycle authority.
+        resolution: Restore within thirty seconds, dismiss early, or expire the hold.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    files = ready["artifacts"]["files"]
+    contents = {file["artifactId"]: client.get(file["url"]).content for file in files}
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    record, lease = store.acquire_transfer(identifier, owner)
+    path = worker.artifacts.artifact_path(record["attempt_id"], "result.tif")
+    response = client.delete(base + "?undo=true", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    deleted = response.json()
+    offer = deleted["deletionUndo"]
+    with psycopg.connect(store.conninfo) as connection:
+        remaining, retained = connection.execute(
+            "SELECT s.deletion_undo_until-clock_timestamp(),j.reserved_bytes "
+            "FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id WHERE s.id=%s",
+            (identifier,),
+        ).fetchone()
+    assert timedelta(seconds=25) < remaining <= timedelta(seconds=30)
+    assert retained == record["reserved_bytes"]
+    assert (
+        client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+        == offer
+    )
+    assert identifier not in {
+        item["jobId"]
+        for item in client.get("/api/processing/model-runs").json()["jobs"]
+    }
+    assert client.get(base + "/invocation").status_code == 410
+    for file in files:
+        assert client.get(file["url"]).status_code == 409
+    client.portal.call(worker.cleanup)
+    assert path.exists()
+    action = {"deletionId": offer["deletionId"]}
+    if resolution == "undo":
+        response = client.post(base + "/deletion/undo", json=action, headers=HEADERS)
+        assert response.status_code == 200, response.text
+        restored = response.json()
+        assert restored["status"] == "ready" and restored["deletionUndo"] is None
+        assert restored["expiresAt"] == ready["expiresAt"]
+        assert restored["metadataExpiresAt"] == ready["metadataExpiresAt"]
+        assert restored["artifacts"] == ready["artifacts"]
+        assert (
+            client.post(base + "/deletion/undo", json=action, headers=HEADERS).json()
+            == restored
+        )
+        assert (
+            client.post(base + "/deletion/dismiss", json=action, headers=HEADERS).json()
+            == restored
+        )
+        for file in files:
+            assert client.get(file["url"]).content == contents[file["artifactId"]]
+        assert client.get(base + "/invocation").status_code == 200
+        store.transfer_heartbeat(lease, release=True)
+        client.portal.call(worker.cleanup)
+        assert path.exists()
+        newer = client.delete(base + "?undo=true", headers=HEADERS).json()[
+            "deletionUndo"
+        ]
+        assert newer["deletionId"] != offer["deletionId"]
+        for operation in ("undo", "dismiss"):
+            assert (
+                client.post(
+                    base + f"/deletion/{operation}", json=action, headers=HEADERS
+                ).status_code
+                == 409
+            )
+    else:
+        if resolution == "dismiss":
+            response = client.post(
+                base + "/deletion/dismiss", json=action, headers=HEADERS
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["deletionUndo"] is None
+        else:
+            with psycopg.connect(store.conninfo) as connection:
+                connection.execute(
+                    "UPDATE processing.job_subscribers SET deletion_undo_until=now()-interval '1 second' WHERE id=%s",
+                    (identifier,),
+                )
+        assert (
+            client.post(
+                base + "/deletion/undo", json=action, headers=HEADERS
+            ).status_code
+            == 409
+        )
+        client.portal.call(worker.cleanup)
+        assert path.exists(), "Existing transfers retain their usual protection"
+        store.transfer_heartbeat(lease, release=True)
+        client.portal.call(worker.cleanup)
+        assert not path.exists()
+        assert client.get(base).json()["status"] == "deleted"
+
+
+def test_undo_does_not_revive_results_expiring_during_its_window(
+    multiple_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Restore history after normal expiry without renewing or exposing expired files.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated lifecycle authority used to advance the result deadline.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    base = f"/api/processing/jobs/{run['jobId']}"
+    assert client.portal.call(worker.run_once)
+    files = client.get(base).json()["artifacts"]["files"]
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (run["jobId"],),
+        )
+    client.portal.call(worker.cleanup)
+    restored = client.post(
+        base + "/deletion/undo",
+        json={"deletionId": offer["deletionId"]},
+        headers=HEADERS,
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["status"] == "expired"
+    for file in files:
+        assert client.get(file["url"]).status_code == 409
+
+
+def test_renewal_keeps_all_outputs_and_details_without_copying_files(
+    multiple_boundary: Any, store: Any
+) -> None:
+    """Renew a real multi-output run atomically without changing bytes or ownership.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated PostgreSQL retention and accounting authority.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    with psycopg.connect(store.conninfo) as connection:
+        before = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    assert ready["expiresAt"] == ready["metadataExpiresAt"]
+    with psycopg.connect(store.conninfo) as connection:
+        expiry, retained, attempt = connection.execute(
+            "SELECT expires_at,reserved_bytes,attempt_id FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()
+        assert expiry >= before + timedelta(days=7)
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()+interval '1 hour',"
+            "metadata_expires_at=now()+interval '1 hour' WHERE id=%s",
+            (identifier,),
+        )
+    original_files = ready["artifacts"]["files"]
+    paths = sorted(
+        worker.artifacts.artifact_path(attempt, "result.tif").parent.iterdir()
+    )
+    original_bytes = {path.name: path.read_bytes() for path in paths if path.is_file()}
+    assert "scratch.bin" not in original_bytes
+    cookie = client.cookies.get(COOKIE)
+    response = client.post(base + "/renew", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    renewed = response.json()
+    assert (
+        renewed["expiresAt"]
+        == renewed["metadataExpiresAt"]
+        == renewed["artifacts"]["expiresAt"]
+    )
+    assert renewed["artifacts"]["files"] == original_files
+    assert client.cookies.get(COOKIE) == cookie
+    assert "Max-Age=604800" in response.headers["set-cookie"]
+    assert client.get(base + "/run-yaml").status_code == 200
+    assert client.get(base + "/artifacts").json() == renewed["artifacts"]
+    assert {
+        path.name: path.read_bytes() for path in paths if path.is_file()
+    } == original_bytes
+    with psycopg.connect(store.conninfo) as connection:
+        result = connection.execute(
+            "SELECT reserved_bytes,expires_at-clock_timestamp() FROM processing.jobs WHERE id=%s",
+            (identifier,),
+        ).fetchone()
+        assert result[0] == retained
+        assert timedelta(days=7, seconds=-15) < result[1] <= timedelta(days=7)
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()+interval '14 days' WHERE id=%s",
+            (identifier,),
+        )
+        later = connection.execute(
+            "SELECT expires_at FROM processing.jobs WHERE id=%s", (identifier,)
+        ).fetchone()[0]
+    for _ in range(2):
+        repeated = client.post(base + "/renew", headers=HEADERS).json()
+        assert repeated["expiresAt"] == repeated["metadataExpiresAt"]
+    with psycopg.connect(store.conninfo) as connection:
+        assert (
+            connection.execute(
+                "SELECT expires_at FROM processing.jobs WHERE id=%s", (identifier,)
+            ).fetchone()[0]
+            == later
+        )
+    restarted = PostgresJobStore(store.limits, store.conninfo)
+    restarted.open()
+    try:
+        owner = hashlib.sha256(cookie.encode()).hexdigest()
+        assert restarted.get(identifier, owner)["expires_at"] == later
+    finally:
+        restarted.close()
+    client.portal.call(worker.cleanup)
+    for file in original_files:
+        assert client.get(file["url"]).status_code == 200
+    deleted = client.delete(base, headers=HEADERS)
+    assert deleted.status_code == 200
+    for file in original_files:
+        assert client.get(file["url"]).status_code == 409
+    assert client.post(base + "/renew", headers=HEADERS).status_code == 409
+    client.portal.call(worker.cleanup)
+    assert not paths[0].exists()
 
 
 def multiple_files_target(

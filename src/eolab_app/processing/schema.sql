@@ -113,6 +113,11 @@ CREATE TABLE IF NOT EXISTS processing.job_subscribers (
 );
 CREATE INDEX IF NOT EXISTS subscribers_job ON processing.job_subscribers(job_id);
 CREATE INDEX IF NOT EXISTS subscribers_owner ON processing.job_subscribers(owner,created_at DESC);
+-- An explicit short Undo window hides a handle before its files can be removed.
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_id text;
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_undo_until timestamptz;
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS status_before_deletion text
+    CHECK (status_before_deletion IN ('cancelled','cancelling'));
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='processing'
                AND table_name='jobs' AND column_name='owner') THEN
@@ -133,15 +138,23 @@ ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_metadata jsonb;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS retained_outcome jsonb;
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_expires_at timestamptz;
 -- Capture the deployment's chosen lifetime when each job is submitted. Existing
--- records keep the original seven-day policy; terminal deadlines never restart.
+-- records keep the original seven-day metadata policy. Terminal deadlines start
+-- once; explicit renewal may extend an available result and its saved details.
 ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS metadata_ttl_seconds bigint
     NOT NULL DEFAULT 604800 CHECK (metadata_ttl_seconds > 0);
+-- Optional owner-selected result lifetime. NULL preserves ordinary processing
+-- and historical jobs' deployment-level result policy.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS result_ttl_seconds bigint
+    CHECK (result_ttl_seconds > 0);
 CREATE OR REPLACE FUNCTION processing.retain_terminal_metadata() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.retained_metadata IS NOT NULL AND NEW.metadata_expires_at IS NULL
        AND NEW.status IN ('ready','failed','cancelled','interrupted') THEN
-        NEW.metadata_expires_at := clock_timestamp()
-            + NEW.metadata_ttl_seconds * interval '1 second';
+        NEW.metadata_expires_at := CASE
+            WHEN NEW.status='ready' AND NEW.result_ttl_seconds IS NOT NULL
+                THEN NEW.expires_at
+            ELSE clock_timestamp() + NEW.metadata_ttl_seconds * interval '1 second'
+        END;
         NEW.retained_outcome := jsonb_build_object(
             'status', NEW.status, 'artifact', NEW.artifact, 'error', NEW.error);
     END IF;
@@ -165,7 +178,7 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
        CASE WHEN s.status IS NULL THEN j.error END AS error,
-       j.summary,j.metadata_expires_at,
+       j.summary,j.metadata_expires_at,s.deletion_id,s.deletion_undo_until,
        CASE WHEN s.status IS DISTINCT FROM 'deleted'
                  AND (j.metadata_expires_at IS NULL OR j.metadata_expires_at>now())
             THEN j.retained_metadata END AS retained_metadata,
@@ -178,7 +191,8 @@ LANGUAGE plpgsql AS $$
 DECLARE subscriber_owner text;
 BEGIN
     IF NEW.status IS NOT DISTINCT FROM OLD.status
-       AND NEW.progress IS NOT DISTINCT FROM OLD.progress THEN RETURN NEW; END IF;
+       AND NEW.progress IS NOT DISTINCT FROM OLD.progress
+       AND NEW.expires_at IS NOT DISTINCT FROM OLD.expires_at THEN RETURN NEW; END IF;
     FOR subscriber_owner IN SELECT DISTINCT owner FROM processing.job_subscribers
         WHERE job_id=NEW.id AND (status IS NULL OR status='cancelling') LOOP
         PERFORM pg_notify('eolab_processing_job_changes', subscriber_owner);
@@ -186,7 +200,7 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER processing_job_change AFTER UPDATE OF status, progress ON processing.jobs
+CREATE TRIGGER processing_job_change AFTER UPDATE OF status, progress, expires_at ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.notify_job_change();
 CREATE OR REPLACE FUNCTION processing.notify_subscriber_change() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN
@@ -252,3 +266,5 @@ DROP TRIGGER IF EXISTS processing_release_inputs ON processing.jobs;
 CREATE TRIGGER processing_release_inputs AFTER UPDATE OF status ON processing.jobs
 FOR EACH ROW EXECUTE FUNCTION processing.release_finished_inputs();
 INSERT INTO processing.schema_version VALUES (18) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (19) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;

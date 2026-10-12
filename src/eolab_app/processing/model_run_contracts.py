@@ -56,6 +56,8 @@ from eolab_app.processing.artifact_manifest import (
 )
 
 MODEL_OPERATION = "model.run.v1"
+MODEL_RUN_RETENTION_SECONDS = 7 * 86_400
+MODEL_DELETION_UNDO_SECONDS = 30
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
 
 
@@ -307,6 +309,19 @@ class ModelRunSpec(ModelSchema):
         return self
 
 
+class ModelDeletionAction(ModelSchema):
+    """Identify the exact run deletion to undo or dismiss within its time window."""
+
+    deletionId: OpaqueId
+
+
+class ModelDeletionUndo(ModelSchema):
+    """An owner's opportunity to undo a specific deletion before its deadline."""
+
+    deletionId: OpaqueId
+    expiresAt: AwareDatetime
+
+
 class ModelIdentity(ModelReference):
     """The model's ID, version, checksum and title shown in run status responses."""
 
@@ -385,6 +400,7 @@ class ModelJobResponse(JobResponse):
 
     ``metadataExpiresAt`` is the deadline for reading the saved Model/Run YAML.
     Result files have their own expiry in the inherited ``expiresAt`` field.
+    ``deletionUndo`` identifies a deletion that this owner can still undo.
     """
 
     operation: Literal["model.run.v1"]
@@ -394,6 +410,7 @@ class ModelJobResponse(JobResponse):
     progress: ModelProgress
     result: ModelResult | None
     artifacts: ModelArtifactManifest | None = None
+    deletionUndo: ModelDeletionUndo | None = None
 
 
 class ModelRunList(ModelSchema):

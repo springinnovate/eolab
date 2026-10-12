@@ -29,7 +29,7 @@ function fixture(overrides = {}, viewOverride = null) {
     let sequence = 0; let handlers;
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
-    const controller = new ModelsController({api, jobs, view, storage, getContext: () => context,
+    const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
         prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); },
         closeVectorFilter: () => filterRequests.at(-1)?.close(),
         applyMapFilter: async (source, filter) => {
@@ -61,6 +61,107 @@ test("published results are explicit model choices without previews or map layer
     assert.equal(draft.raster.available, false);
     assert.match(draft.sourceReason, /no longer available/);
     assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
+});
+
+test("renewal updates the shared observer and all run consumers without resubmitting", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const renewed = {...ready, expiresAt: "2099-02-01T00:00:00Z", updatedAt: "2026-10-10T00:00:00Z"};
+    const h = fixture({getJob: async () => ready, renewModelRun: async () => renewed});
+    const changes = []; h.controller.onRunChange = value => changes.push(value);
+    await h.controller.showRun(ready.jobId);
+    await h.controller.renewRun();
+    assert.equal(h.controller.runSnapshots.get(ready.jobId), renewed);
+    assert.equal(h.jobs.jobs[0], renewed); assert.equal(changes.at(-1), renewed);
+    assert.match(h.controller.state.actionMessage, /Results kept until/);
+    h.controller.rememberRun(ready);
+    assert.equal(h.controller.runSnapshots.get(ready.jobId), renewed);
+    assert.equal(h.submitted.length, 0);
+});
+
+test("deletion needs confirmation and removes captured inputs and choices after success", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const deleted = {...ready, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"};
+    let calls = 0;
+    const h = fixture({getJob: async () => ready, deleteModelRun: async () => { calls++; return deleted; },
+        readJobStatuses: async () => ({jobs: [ready], unavailableJobIds: []})});
+    await h.controller.showRun(ready.jobId);
+    await h.controller.deleteRun(); assert.equal(calls, 0);
+    h.controller.requestRunDeletion(); assert.equal(calls, 0);
+    await h.controller.deleteRun();
+    assert.equal(calls, 1); assert.equal(h.controller.state.deleteConfirmation, null);
+    assert.equal(h.controller.state.invocation, null);
+    assert.equal(h.controller.runSnapshots.get(ready.jobId).status, "deleted");
+    assert.deepEqual(h.controller.state.runs, []);
+    assert.equal(h.controller.state.page, "runs");
+    assert.equal(h.controller.state.selectedRun, null);
+    h.controller.rememberRun(ready);
+    await h.controller.showRun(ready.jobId);
+    assert.deepEqual(h.controller.state.runs, []);
+    assert.equal(h.controller.state.page, "runs");
+});
+
+test("Undo restores its run and captured displays without extending expiry or changing the user's setup", async () => {
+    const ready = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z"});
+    const deletionUndo = {deletionId: "d".repeat(32), expiresAt: new Date(Date.now() + 30000).toISOString()};
+    const deleted = {...ready, status: "deleted", updatedAt: "2098-01-01T00:00:00Z", deletionUndo};
+    const restored = {...ready, updatedAt: "2098-01-01T00:00:01Z"};
+    const requests = [], layers = [{key: "hidden", visible: false}, {key: "visible", opacity: 0.4}];
+    const h = fixture({getJob: async () => ready, deleteModelRun: async () => deleted,
+        undoModelDeletion: async (...args) => { requests.push(args); return restored; }});
+    h.controller.captureRunLayers = id => { assert.equal(id, ready.jobId); return layers; };
+    h.controller.restoreRunLayers = async (snapshots, isCurrent) => { assert.equal(snapshots, layers); assert.ok(isCurrent()); };
+    await h.controller.showRun(ready.jobId); h.controller.requestRunDeletion(); await h.controller.deleteRun();
+    assert.equal(h.controller.deletions.size, 1); assert.equal(h.controller.state.runs.length, 0);
+    const notice = h.controller.deletions.get(ready.jobId);
+    h.controller.rememberRun(deleted); assert.equal(h.controller.deletions.get(ready.jobId), notice);
+    h.controller.chooseModel(model); const draft = h.controller.state.draft;
+    await h.controller.resolveDeletion(ready.jobId, true);
+    assert.deepEqual(requests, [[ready.jobId, deletionUndo.deletionId]]);
+    assert.equal(h.controller.state.runs[0].expiresAt, ready.expiresAt);
+    assert.equal(h.controller.state.draft, draft); assert.equal(h.controller.state.page, "setup");
+    assert.equal(h.controller.deletions.size, 0); assert.equal(h.values.size, 0);
+    h.controller.rememberRun(deleted); assert.equal(h.controller.state.runs[0].status, "ready");
+});
+
+test("deletion notices survive reload, isolate dismissal, expire and retain retry on failure", async () => {
+    const deletionUndo = {deletionId: "d".repeat(32), expiresAt: new Date(Date.now() + 30000).toISOString()};
+    const first = job({status: "deleted", deletionUndo}), second = {...first, jobId: "2".repeat(32),
+        deletionUndo: {...deletionUndo, deletionId: "e".repeat(32)}};
+    const h = fixture(); h.controller.rememberRun(first); h.controller.rememberRun(second);
+    const next = fixture({readJobStatuses: async ids => {
+        assert.deepEqual(ids, [first.jobId, second.jobId]); return {jobs: [first, second], unavailableJobIds: []};
+    }});
+    next.controller.storage = h.storage; await next.controller.recoverDeletions();
+    assert.equal(next.controller.deletions.size, 2); assert.equal(next.controller.state.runs.length, 0);
+    next.api.dismissModelDeletion = async () => { throw new Error("Offline"); };
+    await next.controller.resolveDeletion(first.jobId, false);
+    assert.equal(next.controller.deletions.get(first.jobId).busy, false); assert.match(next.controller.state.error, /Offline/);
+    next.api.dismissModelDeletion = async (id, deletionId) => {
+        assert.equal(id, first.jobId); assert.equal(deletionId, deletionUndo.deletionId);
+        return {...first, updatedAt: "2098-01-01T00:00:00Z", deletionUndo: null};
+    };
+    await next.controller.resolveDeletion(first.jobId, false);
+    assert.equal(next.controller.deletions.size, 1); assert.ok(next.controller.deletions.has(second.jobId));
+    next.controller.deletions.get(second.jobId).expiresAt = new Date(Date.now() - 1).toISOString();
+    next.controller.scheduleDeletions(); assert.equal(next.controller.deletions.size, 0);
+    assert.equal(h.values.size, 0);
+});
+
+test("deletion failure preserves the visible run and never offers Undo", async () => {
+    const ready = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z"});
+    const h = fixture({getJob: async () => ready, deleteModelRun: async () => { throw new Error("Offline"); }});
+    await h.controller.showRun(ready.jobId); h.controller.requestRunDeletion(); await h.controller.deleteRun();
+    assert.equal(h.controller.state.runs.length, 1); assert.equal(h.controller.deletions.size, 0);
+    assert.equal(h.controller.state.selectedRun, ready.jobId); assert.match(h.controller.state.error, /Offline/);
+});
+
+test("navigation during confirmation never deletes another run", async () => {
+    const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    let calls = 0;
+    const h = fixture({getJob: async id => ({...ready, jobId: id}), deleteModelRun: async () => { calls++; return ready; }});
+    await h.controller.showRun(ready.jobId); h.controller.requestRunDeletion();
+    await h.controller.showRun("2".repeat(32)); await h.controller.deleteRun();
+    assert.equal(calls, 0);
 });
 
 test("legacy catalog recipes exclude results and late history loads preserve the chosen input", async () => {

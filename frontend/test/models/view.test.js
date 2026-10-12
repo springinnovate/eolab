@@ -11,13 +11,25 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
         runs: [], selectedRun: null, pending: null, error: "", yaml: null};
     view.render(state); return {doc, view, state, actions};
 }
+
+test("Undo and Dismiss remain stable through rendering and move focus when the notice disappears", () => {
+    const h = fixture(), deletion = {jobId: "1".repeat(32), deletionId: "d".repeat(32), label: "Cuba"};
+    h.state.deletions = [deletion]; h.view.render(h.state);
+    const notice = h.view.deletionNotices.get(deletion.deletionId);
+    notice.undo.focus(); h.view.render(h.state); assert.equal(h.doc.activeElement, notice.undo);
+    notice.undo.dispatchEvent(new Event("click")); notice.dismiss.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.slice(-2), [["UndoDelete", deletion.jobId], ["DismissDelete", deletion.jobId]]);
+    deletion.busy = true; h.view.render(h.state); assert.equal(notice.undo.disabled, true); assert.equal(notice.dismiss.disabled, true);
+    h.state.deletions = []; h.view.render(h.state);
+    assert.equal(h.view.elements.deletions.children.length, 0); assert.equal(h.doc.activeElement, h.view.elements.heading);
+});
 
 test("raster choices separate map layers from completed runs and explain unavailable results", () => {
     const h = fixture(), recipe = {...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}};
@@ -33,6 +45,41 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.equal(h.view.setup.run.disabled, true);
     assert.match(h.view.setup.source.children[2].children[0].textContent, /unavailable/);
     assert.equal(h.view.setup.source.children[2].children[0].disabled, true);
+});
+
+test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
+    const h = fixture(), first = job(), second = job({jobId: "2".repeat(32), label: "Another run"});
+    Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
+    const retained = h.view.runCards.get(second.jobId).button;
+    h.state.runs = [second]; h.view.render(h.state);
+    assert.equal(h.view.runCards.has(first.jobId), false);
+    assert.equal(h.view.elements["runs-list"].children.length, 1);
+    assert.equal(h.view.runCards.get(second.jobId).button, retained);
+    h.state.runs = []; h.view.render(h.state);
+    assert.equal(h.view.elements["runs-list"].children.length, 0);
+    assert.match(h.view.elements["runs-status"].textContent, /No model runs/);
+});
+
+test("run renewal and deletion have explicit scope, confirmation and busy feedback", () => {
+    const h = fixture(), artifacts = fileManifest();
+    const ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    Object.assign(h.state, {page: "run", runs: [ready], selectedRun: ready.jobId});
+    h.view.render(h.state);
+    assert.equal(h.view.run.renew.hidden, false);
+    assert.equal(h.view.run.remove.hidden, false);
+    assert.equal(h.view.run.confirmation.hidden, true);
+    h.view.run.remove.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "Delete");
+    h.state.deleteConfirmation = ready.jobId; h.view.render(h.state);
+    assert.match(h.view.run.warning.textContent, /Population total.*all its result files/);
+    assert.match(h.view.run.warning.textContent, /removed from the map/);
+    h.view.focusDeleteConfirmation(); assert.equal(h.doc.activeElement, h.view.run.keep);
+    h.state.actionBusy = true; h.view.render(h.state);
+    assert.equal(h.view.run.confirm.disabled, true); assert.equal(h.view.run.renew.disabled, true);
+    Object.assign(h.state, {actionBusy: false, actionMessage: "Results kept until tomorrow."}); h.view.render(h.state);
+    assert.equal(h.view.run.feedback.textContent, h.state.actionMessage);
+    ready.status = "deleted"; h.view.render(h.state);
+    assert.equal(h.view.run.confirmation.hidden, true); assert.equal(h.view.run.remove.hidden, true);
+    assert.equal(h.view.run.renew.hidden, true); assert.equal(h.view.run.inputs.hidden, true);
 });
 
 test("all model controls exist in production markup and progress retains field focus", () => {

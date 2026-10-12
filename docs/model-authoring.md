@@ -184,6 +184,43 @@ share the run's temporary expiry and deletion lifecycle. Deleting a run prevents
 new transfers; existing leases retain the entire directory until those transfers
 finish. Ordinary shared calculations keep their subscriber-aware deletion rules
 and caller-specific downloads. Named-file endpoints apply only to model runs.
+New model submissions request at least seven days of retention for both files
+and saved details through the neutral job plan. Longer deployment result or
+metadata lifetimes are preserved and captured at submission. Successful runs use
+one expiry for both; ordinary clips and statistics keep their existing policy.
+
+`POST /api/processing/jobs/{jobId}/renew` retains an available completed model
+run until at least seven days from the request. It uses the same browser cookie,
+same-origin mutation header and public job response as existing Processing
+actions. Renewal refreshes that cookie without changing ownership, aligns file
+and metadata expiry, preserves later deadlines and does not copy files or change
+their checksums. Renewal cannot revive expired/deleted runs or expired details.
+Repeated requests renew from the present time, not the previous deadline.
+`DELETE /api/processing/jobs/{jobId}` remains the run-wide deletion operation;
+accepted readers keep their existing protections until they finish.
+Models requests `DELETE /api/processing/jobs/{jobId}?undo=true` to offer a
+30-second Undo window. The run immediately disappears from history and rejects
+new access. Its response includes `deletionUndo: {deletionId, expiresAt}` until
+that window ends. `POST /api/processing/jobs/{jobId}/deletion/undo` restores the
+exact deletion, and `/deletion/dismiss` ends its Undo window early. Both accept
+`{deletionId}`, use the usual owner cookie and same-origin mutation protections,
+and return the current model job. Repeated deletes preserve the original
+deadline; repeated Undo is idempotent. An old deletion ID cannot act on a later
+deletion of the same run. Omitting `undo=true` preserves immediate deletion.
+
+Schema 20 records each subscriber's deletion identity, deadline and previous
+cancellation state. Cleanup retains ready files and their storage charge during
+Undo, without extending their original expiry. Dismissal and timeout release
+that hold; accepted input grants and transfers still protect existing readers.
+Undo may restore expired history but cannot revive expired files or metadata.
+These transitions use the existing lifecycle lock and job-change notifications.
+
+Schema 19 adds a nullable captured result lifetime. Historical rows keep their
+existing deadlines until explicitly renewed; ordinary jobs use the unchanged
+deployment result setting. Renewal, expiry and deletion share the lifecycle
+transaction lock. Updated deadlines produce the existing job-change hints, and
+rendering checks current source availability through its existing interface.
+Neither renewal nor deletion requires GeoServer availability.
 Run YAML retains file names and checksums for its metadata lifetime after the
 files expire, without claiming they are still downloadable. There is no live
 workspace browsing, per-file deletion, permanent saving or catalog publication.

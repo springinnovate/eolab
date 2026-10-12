@@ -113,6 +113,11 @@ function validateJob(job) {
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
         if (job.artifacts != null) validateModelArtifacts(job.artifacts, job);
+        if (job.deletionUndo != null) {
+            opaqueId(job.deletionUndo.deletionId);
+            if (job.status !== "deleted" || !Number.isFinite(Date.parse(job.deletionUndo.expiresAt)))
+                throw new Error("Processing returned invalid deletion Undo details.");
+        }
     }
     if (job.grid) validateGrid(job.grid, job.operation);
     if (job.result) {
@@ -512,6 +517,48 @@ export class ProcessingApiClient {
     async getJob(id) {
         await this.ensureSession();
         return validateJob(await this.request(`/jobs/${opaqueId(id)}`));
+    }
+
+    /** Keep a completed model run and its outputs for another seven days.
+     * @param {string} id Owned model run ID.
+     * @return {Promise<Object>} Validated run with its effective expiry.
+     * @throws {ProcessingRequestError|Error} If the run is unavailable or the request fails.
+     */
+    async renewModelRun(id) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}/renew`, "POST"));
+    }
+
+    /** Delete a model run while keeping a thirty-second Undo opportunity.
+     * @param {string} id Owned model run ID.
+     * @return {Promise<Object>} Deleted run with its server-controlled Undo deadline.
+     * @throws {ProcessingRequestError|Error} If deletion fails or the reply is invalid.
+     */
+    async deleteModelRun(id) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}?undo=true`, "DELETE"));
+    }
+
+    /** Restore one exact model deletion before its Undo deadline.
+     * @param {string} id Owned run ID.
+     * @param {string} deletionId Deletion being undone.
+     * @return {Promise<Object>} Restored run with its original expiry.
+     * @throws {ProcessingRequestError|Error} If the deletion changed or Undo expired.
+     */
+    async undoModelDeletion(id, deletionId) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}/deletion/undo`, "POST", {deletionId: opaqueId(deletionId)}));
+    }
+
+    /** End the Undo window for one exact deletion so ordinary cleanup can proceed.
+     * @param {string} id Owned run ID.
+     * @param {string} deletionId Deletion being dismissed.
+     * @return {Promise<Object>} Authoritative run state after dismissal.
+     * @throws {ProcessingRequestError|Error} If ownership or deletion identity changed.
+     */
+    async dismissModelDeletion(id, deletionId) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}/deletion/dismiss`, "POST", {deletionId: opaqueId(deletionId)}));
     }
 
     /** Cancel an owned active job. @param {string} id Job ID. @return {Promise<Object>} Updated job. */

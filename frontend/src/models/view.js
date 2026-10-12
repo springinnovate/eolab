@@ -44,8 +44,9 @@ export class ModelsView {
      */
     constructor(documentContext = globalThis.document) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
+        this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recover", "query",
-            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml"]
+            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
         this.openers = ["open-models", "open-model-runs"].map(id => documentContext.querySelector(`#${id}`));
@@ -86,6 +87,12 @@ export class ModelsView {
      * @return {void}
      */
     focusHeading() { this.elements.heading.focus(); }
+
+    /** Focus the safe choice when asking to delete a run. @return {void} */
+    focusDeleteConfirmation() { this.run?.keep.focus(); }
+
+    /** Return focus to the run's deletion action after dismissing confirmation. @return {void} */
+    focusRunDelete() { this.run?.remove.focus(); }
 
     /** Build a labelled input with a stable ID for keyboard users.
      * @param {string} id Unique control ID.
@@ -295,13 +302,23 @@ export class ModelsView {
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
         const actions = this.element("div", "", "models-actions");
         const cancel = this.button("Cancel run", this.handlers.onCancel); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate);
-        actions.append(cancel, duplicate);
+        const renew = this.button("Keep for another 7 days", this.handlers.onRenew);
+        const remove = this.button("Delete run and results", this.handlers.onDelete);
+        actions.append(cancel, duplicate, renew, remove);
+        const confirmation = this.element("div", "", "models-result"); confirmation.setAttribute("role", "group");
+        confirmation.setAttribute("aria-label", "Confirm run deletion");
+        const warning = this.element("p");
+        const confirmActions = this.element("div", "", "models-actions");
+        const confirm = this.button("Delete run and results", this.handlers.onConfirmDelete);
+        const keep = this.button("Keep run", this.handlers.onKeepRun);
+        confirmActions.append(keep, confirm); confirmation.append(warning, confirmActions);
+        const feedback = this.element("p", "", "models-help"); feedback.setAttribute("role", "status");
         const expiry = this.element("p", "", "models-help");
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(title, status, progress, error, result, actions, expiry, inputs, details.root);
-        this.run = {id, title, status, progress, error, result, cancel, duplicate, expiry, inputsBody, details};
+        this.elements.run.replaceChildren(title, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
+        this.run = {id, title, status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
     /** Render current run progress, immutable setup and available result downloads.
@@ -321,6 +338,13 @@ export class ModelsView {
         if (job?.progress.total > 0) { r.progress.max = job.progress.total; r.progress.value = job.progress.completed ?? 0; }
         else r.progress.removeAttribute("value");
         const available = job?.status === "ready" && Date.parse(job.expiresAt) > Date.now();
+        r.renew.hidden = !available; r.renew.disabled = Boolean(state.actionBusy);
+        r.remove.hidden = !job || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted" || state.deleteConfirmation === job.jobId;
+        r.remove.disabled = Boolean(state.actionBusy);
+        r.confirmation.hidden = !job || job.status === "deleted" || state.deleteConfirmation !== job.jobId;
+        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. You can undo this for 30 seconds.`;
+        r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
+        r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
         const signature = JSON.stringify([available, job?.result, job?.artifacts, state.outputPreviews]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
@@ -330,7 +354,9 @@ export class ModelsView {
                 if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
             }
         }
-        r.expiry.textContent = job ? `Temporary run in this browser session.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
+        r.expiry.hidden = job?.status === "deleted";
+        r.inputs.hidden = job?.status === "deleted";
+        r.expiry.textContent = job ? `Temporary run in this browser. Clearing cookies or losing this browser session loses access.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
             (job.metadataExpiresAt ? ` Saved inputs expire ${new Date(job.metadataExpiresAt).toLocaleString()}.` : "") : "";
         const invocation = state.invocation;
         if (invocation && r.invocation !== invocation) {
@@ -363,7 +389,37 @@ export class ModelsView {
         r.details.message.textContent = metadataAvailable ? `Recipe ${job.model.title} · ${job.model.version}` : "Saved recipe and inputs are no longer available.";
     }
 
-    /** Update only changed presentation, preserving focus and open details.
+    /** Present separate Undo offers while keeping their focused buttons stable.
+     * @param {Object[]} notices Unexpired server-backed deletion offers.
+     * @return {void}
+     */
+    renderDeletions(notices) {
+        const ids = new Set(notices.map(value => value.deletionId));
+        for (const [id, notice] of this.deletionNotices) {
+            if (ids.has(id)) continue;
+            if (notice.root.contains(this.document.activeElement)) this.focusHeading();
+            notice.root.remove(); this.deletionNotices.delete(id);
+        }
+        for (const deletion of notices) {
+            let notice = this.deletionNotices.get(deletion.deletionId);
+            if (!notice) {
+                const root = this.element("div", "", "models-deletion-notice");
+                const message = this.element("p", `“${deletion.label}” deleted. Undo is available for 30 seconds.`);
+                message.setAttribute("role", "status");
+                const actions = this.element("div", "", "models-actions");
+                const undo = this.button("Undo", () => this.handlers.onUndoDelete(deletion.jobId));
+                const dismiss = this.button("Dismiss", () => this.handlers.onDismissDelete(deletion.jobId));
+                undo.setAttribute("aria-label", `Undo deletion of ${deletion.label}`);
+                dismiss.setAttribute("aria-label", `Dismiss Undo for ${deletion.label}`);
+                actions.append(undo, dismiss); root.append(message, actions);
+                notice = {root, undo, dismiss}; this.deletionNotices.set(deletion.deletionId, notice);
+                this.elements.deletions.append(root);
+            }
+            notice.undo.disabled = deletion.busy; notice.dismiss.disabled = deletion.busy;
+        }
+    }
+
+    /** Update visible runs and controls, removing history cards no longer present.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -375,6 +431,7 @@ export class ModelsView {
         this.elements.heading.textContent = ({library: "Model library", setup: "Model setup", runs: "Model runs", run: "Model run"})[state.page];
         const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
+        this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending; this.elements.recover.disabled = state.submitting;
         const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
         const signature = JSON.stringify(filtered);
@@ -391,6 +448,11 @@ export class ModelsView {
         this.elements["library-status"].textContent = state.loading ? "Loading model library…" : filtered.length ? "" : "No matching models.";
         this.elements.refresh.disabled = state.loading;
         this.renderSetup(state); this.renderRun(state);
+        const retainedRuns = new Set(state.runs.map(job => job.jobId));
+        for (const [id, card] of this.runCards) {
+            if (retainedRuns.has(id)) continue;
+            card.root.remove(); this.runCards.delete(id);
+        }
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {

@@ -5,6 +5,7 @@ import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInpu
 import { hydrologyKey, hydrologyReference } from "../processing/hydrology.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
+const DELETIONS_KEY = "eolab.models.deletions.v1";
 
 /** Keep editable model drafts separate from accepted, session-owned runs. */
 export class ModelsController {
@@ -23,16 +24,24 @@ export class ModelsController {
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
      * @param {(job:Object,file:Object)=>Promise<void>} [dependencies.showOutput] Show one chosen file through composition.
      * @param {(jobId:string,artifactId:string,file:Object)=>Object} [dependencies.outputState] Display-only map capability, inclusion and feedback.
+     * @param {(job:Object)=>void} [dependencies.onRunChange] Notify composition of authoritative run availability and expiry.
+     * @param {(jobId:string)=>Object[]} [dependencies.captureRunLayers] Capture display state through composition before deletion.
+     * @param {(layers:Object[],isCurrent:()=>boolean)=>Promise<void>} [dependencies.restoreRunLayers] Restore captured displays through their existing owners.
+     * @param {Object} [dependencies.clock=globalThis] Timeout scheduler for deletion notices.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
     constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
-        showOutput = async () => {}, outputState = () => ({}),
+        showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
+        captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
         this.outputState = outputState;
+        this.onRunChange = onRunChange;
+        Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
+        this.deletions = new Map();
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
-            pending: null, submitting: false, actionBusy: false};
+            pending: null, submitting: false, actionBusy: false, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0;
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
@@ -44,6 +53,9 @@ export class ModelsController {
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
+            onRenew: () => void this.renewRun(), onDelete: () => this.requestRunDeletion(), onConfirmDelete: () => void this.deleteRun(),
+            onUndoDelete: id => void this.resolveDeletion(id, true), onDismissDelete: id => void this.resolveDeletion(id, false),
+            onKeepRun: () => { this.state.deleteConfirmation = null; this.render(); this.view.focusRunDelete?.(); },
             onShowOutput: artifactId => {
                 const job = this.runSnapshots.get(this.state.selectedRun);
                 const file = job?.artifacts?.files.find(value => value.artifactId === artifactId);
@@ -62,6 +74,7 @@ export class ModelsController {
                 this.state.error = "A previous submission needs recovery. Retry with its original inputs to find or create the same run.";
             }
         } catch { this.state.error = "The previous submission could not be read from this tab's storage."; }
+        void this.recoverDeletions();
         this.render();
     }
 
@@ -437,17 +450,28 @@ export class ModelsController {
         } finally { this.state.submitting = false; this.render(); }
     }
 
-    /** Retain a run independently of the shared recent-history window.
+    /** Retain authoritative run state while hiding deleted runs from the interface.
      * @param {Object} job Authoritative run status.
      * @return {void}
      */
     rememberRun(job) {
         if (job.operation !== "model.run.v1") return;
+        const previous = this.runSnapshots.get(job.jobId);
+        if (previous && (previous.updatedAt > job.updatedAt || previous.status === "deleted" && job.status !== "deleted" && previous.updatedAt === job.updatedAt)) return;
         this.runSnapshots.set(job.jobId, job);
+        this.rememberDeletion(job);
+        this.onRunChange(job);
+        if (job.status === "deleted" && this.state.selectedRun === job.jobId) {
+            this.revision += 1;
+            this.state.selectedRun = null; this.state.invocation = null; this.state.invocationError = "";
+            this.state.yaml = null; this.state.deleteConfirmation = null;
+            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading(); }
+        }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" && this.state.draft?.raster?.jobId === job.jobId)) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
-        this.state.runs = [...this.runSnapshots.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
+        this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
     }
 
     /** Apply observed progress without editing the current setup.
@@ -484,6 +508,7 @@ export class ModelsController {
      * @return {Promise<void>}
      */
     async showRun(id) {
+        if (this.runSnapshots.get(id)?.status === "deleted") { this.navigate("runs"); return; }
         this.closeVectorFilter();
         const revision = ++this.revision;
         const previous = this.state.selectedRun;
@@ -491,13 +516,15 @@ export class ModelsController {
             this.jobs.tracked.delete(previous); this.tracked.delete(previous);
         }
         this.state.selectedRun = id; this.state.page = "run"; this.state.invocation = null; this.state.invocationError = "";
+        this.state.deleteConfirmation = null; this.state.actionMessage = "";
         this.state.error = ""; this.state.yaml = null; this.jobs.tracked.add(id); this.tracked.add(id); this.jobs.schedule();
         this.render(); this.view.focusHeading();
         try {
             const [job, invocation] = await Promise.all([this.api.getJob(id), this.api.readModelInvocation(id).catch(error => ({readError: error.message}))]);
             if (revision !== this.revision || this.destroyed) return;
             this.rememberRun(job);
-            if (invocation.readError) this.state.invocationError = invocation.readError;
+            if (this.runSnapshots.get(id)?.status === "deleted") this.state.invocation = null;
+            else if (invocation.readError) this.state.invocationError = invocation.readError;
             else this.state.invocation = invocation;
         } catch (error) { if (revision === this.revision) this.state.invocationError = `This run is unavailable: ${error.message}`; }
         this.render();
@@ -512,6 +539,125 @@ export class ModelsController {
         try { const job = await this.jobs.action(id, "cancel"); if (job) this.rememberRun(job); }
         catch (error) { this.state.error = `Cancellation could not be confirmed: ${error.message}`; }
         finally { this.state.actionBusy = false; this.render(); }
+    }
+
+    /** Ask for confirmation before deleting the selected run and every output.
+     * @return {void}
+     */
+    requestRunDeletion() {
+        const job = this.runSnapshots.get(this.state.selectedRun);
+        if (!job || this.state.actionBusy || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted") return;
+        this.state.deleteConfirmation = job.jobId; this.state.actionMessage = ""; this.render();
+        this.view.focusDeleteConfirmation?.();
+    }
+
+    /** Renew the selected run without changing another run if navigation changes.
+     * @return {Promise<void>} Completion after renewal or visible failure.
+     */
+    async renewRun() {
+        const id = this.state.selectedRun;
+        if (!id || this.state.actionBusy) return;
+        this.state.actionBusy = true; this.state.actionMessage = ""; this.state.error = ""; this.render();
+        try {
+            const job = await this.api.renewModelRun(id);
+            this.jobs.accept(job); this.rememberRun(job); this.refreshMapLayers();
+            if (this.state.selectedRun === id) this.state.actionMessage = `Results kept until ${new Date(job.expiresAt).toLocaleString()}.`;
+        } catch (error) { this.state.error = `Could not extend this run: ${error.message}`; }
+        finally { this.state.actionBusy = false; this.render(); }
+    }
+
+    /** Delete the confirmed run and offer server-backed Undo for thirty seconds.
+     * @return {Promise<void>} Completion after deletion or visible failure.
+     */
+    async deleteRun() {
+        const id = this.state.deleteConfirmation;
+        if (!id || id !== this.state.selectedRun || this.state.actionBusy) return;
+        this.state.actionBusy = true; this.state.error = ""; this.render();
+        try {
+            const layers = this.captureRunLayers(id);
+            const job = await this.api.deleteModelRun(id);
+            this.jobs.accept(job); this.rememberRun(job);
+            const notice = this.deletions.get(id);
+            if (notice) notice.layers = layers;
+            this.refreshMapLayers();
+        } catch (error) { this.state.error = `Deletion could not be confirmed: ${error.message}`; }
+        finally { this.state.actionBusy = false; this.render(); }
+    }
+
+    /** Keep one Undo notice per deletion, using only the server's original deadline.
+     * @param {Object} job Authoritative model run, possibly deleted.
+     * @return {void}
+     */
+    rememberDeletion(job) {
+        const offer = job.status === "deleted" ? job.deletionUndo : null;
+        if (offer && Date.parse(offer.expiresAt) > Date.now()) {
+            const previous = this.deletions.get(job.jobId);
+            if (previous?.deletionId !== offer.deletionId) this.deletions.set(job.jobId,
+                {jobId: job.jobId, label: job.label, ...offer, busy: false, layers: []});
+        } else this.deletions.delete(job.jobId);
+        this.scheduleDeletions();
+    }
+
+    /** Remove expired notices and save only identities needed to recover offers after reload.
+     * Server cleanup owns the deadline; browser timers never extend file lifetime.
+     * @return {void}
+     */
+    scheduleDeletions() {
+        this.clock.clearTimeout(this.deletionTimer);
+        for (const [id, notice] of this.deletions) {
+            if (Date.parse(notice.expiresAt) <= Date.now()) this.deletions.delete(id);
+        }
+        try {
+            if (this.deletions.size) this.storage?.setItem(DELETIONS_KEY, JSON.stringify([...this.deletions.values()]
+                .map(({jobId, expiresAt}) => ({jobId, expiresAt}))));
+            else this.storage?.removeItem(DELETIONS_KEY);
+        } catch { /* The current notice still works when tab storage is unavailable. */ }
+        if (this.deletions.size && !this.destroyed) this.deletionTimer = this.clock.setTimeout(() => {
+            this.scheduleDeletions(); this.render();
+        }, Math.max(1, Math.min(...[...this.deletions.values()].map(value => Date.parse(value.expiresAt))) - Date.now()));
+    }
+
+    /** Recover unexpired Undo offers from the server after this tab reloads.
+     * Saved identifiers do not grant access; the normal session check still applies.
+     * @return {Promise<void>} Completion after recovery or a visible retry message.
+     */
+    async recoverDeletions() {
+        try {
+            const saved = JSON.parse(this.storage?.getItem(DELETIONS_KEY) ?? "[]");
+            if (!Array.isArray(saved)) return;
+            const ids = saved.filter(value => /^[A-Za-z0-9_-]{16,80}$/.test(value?.jobId) && Date.parse(value.expiresAt) > Date.now())
+                .map(value => value.jobId);
+            for (let offset = 0; offset < ids.length; offset += 100) {
+                const result = await this.api.readJobStatuses(ids.slice(offset, offset + 100));
+                if (this.destroyed) return;
+                for (const job of result.jobs) this.rememberRun(job);
+            }
+            this.scheduleDeletions();
+        } catch { this.state.error = "Could not recover deletion Undo. Reload to retry before its 30 seconds end."; }
+        this.render();
+    }
+
+    /** Undo or dismiss one exact deletion without changing another run or its expiry.
+     * @param {string} id Run identified by the notice.
+     * @param {boolean} restore Whether to restore instead of dismissing Undo.
+     * @return {Promise<void>} Completion after the server action and optional display restoration.
+     */
+    async resolveDeletion(id, restore) {
+        const notice = this.deletions.get(id);
+        if (!notice || notice.busy) return;
+        notice.busy = true; this.state.error = ""; this.render();
+        try {
+            const job = restore ? await this.api.undoModelDeletion(id, notice.deletionId)
+                : await this.api.dismissModelDeletion(id, notice.deletionId);
+            this.jobs.accept(job); this.rememberRun(job); this.refreshMapLayers();
+            const isCurrent = () => !this.destroyed && this.runSnapshots.get(id)?.status === "ready" &&
+                this.runSnapshots.get(id)?.updatedAt === job.updatedAt;
+            if (restore && isCurrent()) {
+                try { await this.restoreRunLayers(notice.layers, isCurrent); }
+                catch (error) { this.state.error = `Run restored. Some map layers could not be restored: ${error.message} Open the run to show them again.`; }
+            }
+        } catch (error) { this.state.error = `${restore ? "Could not undo deletion" : "Could not dismiss Undo"}: ${error.message}`; }
+        finally { notice.busy = false; this.scheduleDeletions(); this.render(); }
     }
 
     /** Copy saved inputs to a new draft only when its exact recipe is still installed.
@@ -581,7 +727,7 @@ export class ModelsController {
     render() {
         if (this.destroyed) return;
         const job = this.runSnapshots.get(this.state.selectedRun);
-        this.view.render({...this.state, outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
+        this.view.render({...this.state, deletions: [...this.deletions.values()], outputPreviews: Object.fromEntries((job?.artifacts?.files ?? [])
             .map(file => [file.artifactId, this.outputState(job.jobId, file.artifactId, file)]))});
     }
 
@@ -592,6 +738,7 @@ export class ModelsController {
         this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.selectionRevision += 1; this.selectionAbort?.abort();
         this.hydrologyAbort?.abort();
+        this.clock.clearTimeout(this.deletionTimer);
         this.unsubscribe(); for (const id of this.tracked) this.jobs.tracked.delete(id); this.view.destroy();
     }
 }

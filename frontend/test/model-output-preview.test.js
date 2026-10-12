@@ -31,11 +31,91 @@ test("outputs are opt-in, keep run identities, and remove without deleting any r
     assert.equal(h.calls.reads, 1); assert.equal(h.records.size, 1);
     assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).onMap, true);
     const record = h.records.get(key);
-    assert.deepEqual(record.adapter.snapshot().group, {id: h.run.jobId, label: h.run.label});
+    assert.deepEqual(record.adapter.snapshot().group, {id: h.run.jobId, label: h.run.label, actionLabel: "Delete run and results"});
     h.owner.removeLayer(key);
     assert.equal(h.owner.layers.size, 0); assert.equal(h.calls.releases, 1);
     assert.equal(h.run.artifacts.files.length, 3);
     await h.owner.show(h.run, h.file); assert.equal(h.calls.reads, 2);
+});
+
+test("renewal updates the map deadline and late reads cannot shorten it", async () => {
+    const h = fixture(); await h.owner.show(h.run, h.file);
+    const renewed = {...h.run, expiresAt: "2099-02-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z"};
+    h.owner.updateRun(renewed);
+    await h.owner.refreshAvailability(); // The in-flight server read still contains the old deadline.
+    assert.equal([...h.owner.layers.values()][0].expiresAt, renewed.expiresAt);
+    assert.equal(h.records.size, 1);
+});
+
+test("unrelated run updates do not postpone output availability checks", async () => {
+    let schedules = 0;
+    const h = fixture({clock: {setTimeout: () => { schedules++; }, clearTimeout: () => {}}});
+    await h.owner.show(h.run, h.file);
+    const before = schedules;
+    h.owner.updateRun({...h.run});
+    h.owner.updateRun({...h.run, jobId: "2".repeat(32), status: "running"});
+    assert.equal(schedules, before);
+});
+
+test("a failed old availability read does not remove a freshly renewed output", async () => {
+    const h = fixture(); await h.owner.show(h.run, h.file);
+    let fail;
+    h.api.readJobStatuses = () => new Promise((_resolve, reject) => { fail = reject; });
+    const pending = h.owner.refreshAvailability();
+    h.owner.updateRun({...h.run, expiresAt: "2099-02-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z"});
+    fail(new Error("Obsolete network error")); await pending;
+    assert.equal(h.records.size, 1);
+});
+
+test("expiry revalidation discovers renewal in another tab before removing the layer", async () => {
+    const observed = [];
+    const h = fixture({onRunObserved: job => observed.push(job)}); await h.owner.show(h.run, h.file);
+    [...h.owner.layers.values()][0].expiresAt = "2000-01-01T00:00:00Z";
+    const renewed = {...h.run, updatedAt: "2026-10-09T00:00:00Z"};
+    h.api.readJobStatuses = async () => ({jobs: [renewed], unavailableJobIds: []});
+    await h.owner.refreshAvailability();
+    assert.equal(h.records.size, 1);
+    assert.equal([...h.owner.layers.values()][0].expiresAt, renewed.expiresAt);
+    assert.deepEqual(observed, [renewed]);
+});
+
+test("revalidation shares another tab's deletion with run controls through composition", async () => {
+    const observed = [];
+    const h = fixture({onRunObserved: job => observed.push(job)}); await h.owner.show(h.run, h.file);
+    const deleted = {...h.run, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"};
+    h.api.readJobStatuses = async () => ({jobs: [deleted], unavailableJobIds: []});
+    await h.owner.refreshAvailability();
+    assert.equal(h.records.size, 0);
+    assert.deepEqual(observed, [deleted]);
+});
+
+test("run deletion removes all its displayed outputs while preserving other runs", async () => {
+    const h = fixture();
+    const second = {...h.file, artifactId: "d".repeat(32)};
+    h.run.artifacts.files.push(second);
+    await h.owner.show(h.run, h.file); await h.owner.show(h.run, second);
+    const other = {...h.run, jobId: "2".repeat(32)};
+    await h.owner.show(other, h.file);
+    h.owner.updateRun({...h.run, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"});
+    assert.equal(h.records.size, 1);
+    assert.equal([...h.owner.layers.values()][0].jobId, other.jobId);
+    await h.owner.show(h.run, h.file); // An obsolete display request cannot restore it.
+    assert.equal(h.records.size, 1);
+});
+
+test("deletion cancels pending original-raster publication before map attachment", async () => {
+    let finish, presentation;
+    const h = fixture({describe: async () => ({version: "a".repeat(64), bounds: [0,0,1,1],
+        capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+        addRaster: (_raster, _lifecycle, options) => { presentation = options; return new Promise(resolve => { finish = resolve; }); }});
+    h.file.mediaType = "image/tiff";
+    const pending = h.owner.show(h.run, h.file); await Promise.resolve(); await Promise.resolve();
+    assert.ok(presentation);
+    h.owner.updateRun({...h.run, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"});
+    assert.equal(presentation.signal.aborted, true);
+    assert.equal(presentation.isCurrent(), false);
+    finish(null); await pending;
+    assert.equal(h.owner.layers.size, 0);
 });
 
 test("separate runs can show the same file identifier without sharing appearance", async () => {
@@ -109,7 +189,7 @@ test("raster display delegates to the common raster owner using original identit
     h.file.mediaType = "image/tiff"; h.file.sha256 = "a".repeat(64);
     await h.owner.show(h.run, h.file);
     assert.deepEqual(attachment.raster.source, {kind: "runArtifact", jobId: h.run.jobId, artifactId: h.file.artifactId});
-    assert.deepEqual(attachment.raster.group, {id: h.run.jobId, label: h.run.label});
+    assert.deepEqual(attachment.raster.group, {id: h.run.jobId, label: h.run.label, actionLabel: "Delete run and results"});
     assert.equal(attachment.raster.capabilities.calculations, true);
     assert.equal(attachment.raster.item, undefined);
     assert.equal(copy.artifactId, h.file.artifactId); assert.equal(copy.appearance.kind, "raster");

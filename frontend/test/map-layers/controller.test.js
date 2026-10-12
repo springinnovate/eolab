@@ -734,6 +734,22 @@ test("Undo restores the last removed layer's order, visibility, opacity and appe
     assert.equal(view.removal.label, null);
 });
 
+test("deleting a source cancels its pending Undo without affecting another layer", async () => {
+    const h = undoFixture();
+    await h.controller.show(catalogItem("a"), h.adapter);
+    await h.controller.show(catalogItem("b"), h.adapter);
+    const key = getCatalogItemKey(catalogItem("a"));
+    h.controller.removeWithUndo(key);
+    let finish;
+    h.beforeRestore = () => new Promise(resolve => { finish = resolve; });
+    const pending = h.controller.undoLayerRemoval();
+    h.controller.forgetUnavailableRemoval(snapshot => snapshot.key === key);
+    finish(); await pending;
+    assert.equal(h.controller.getRecord(key), null);
+    assert.equal(h.view.removal.label, null);
+    assert.equal(h.controller.snapshots().length, 1);
+});
+
 test("only the latest explicit removal is undoable, including the final layer; internal removals do not replace it", async () => {
     const { controller, view, adapter } = undoFixture();
     for (const id of ["a", "b", "c"]) await controller.show(catalogItem(id), adapter);

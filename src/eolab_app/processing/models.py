@@ -47,6 +47,9 @@ class PreparedJobPlan:
             removed, for the configured metadata lifetime after the job finishes.
         input_files: Published files to authorize and retain atomically with admission.
             Each input remains charged to its parent's existing disk reservation.
+        minimum_retention_seconds: Optional minimum lifetime for both published
+            results and saved details after completion. Storage captures the larger
+            of this duration and the deployment's result and metadata lifetimes.
     """
 
     specification: dict[str, object]
@@ -57,6 +60,7 @@ class PreparedJobPlan:
     presentation: dict[str, object] | None = None
     retained_metadata: dict[str, object] | None = None
     input_files: tuple[JobInputFile, ...] = ()
+    minimum_retention_seconds: int | None = None
 
 
 @dataclass(frozen=True)

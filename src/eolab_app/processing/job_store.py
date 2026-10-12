@@ -601,6 +601,15 @@ class PostgresJobStore:
                 identifier = uuid4().hex
                 job_id = shared["id"] if shared else identifier
                 if not shared:
+                    retained_seconds = (
+                        max(
+                            expected.minimum_retention_seconds,
+                            self.limits.result_ttl_seconds,
+                            self.limits.metadata_ttl_seconds,
+                        )
+                        if expected.minimum_retention_seconds is not None
+                        else None
+                    )
                     new_inputs.extend(
                         (
                             job_id,
@@ -622,7 +631,8 @@ class PostgresJobStore:
                             expected.operation,
                             expected.work_key,
                             serialize_retained_metadata(expected.retained_metadata),
-                            self.limits.metadata_ttl_seconds,
+                            retained_seconds or self.limits.metadata_ttl_seconds,
+                            retained_seconds,
                         )
                     )
                     waiting += 1
@@ -657,8 +667,8 @@ class PostgresJobStore:
             with cursor.connection.pipeline():
                 if new_jobs:
                     cursor.executemany(
-                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:
@@ -881,17 +891,21 @@ class PostgresJobStore:
         identifier: str,
         owner: str,
         delete: bool = False,
+        undo_seconds: int = 0,
     ) -> dict[str, Any]:
         """Cancel only this subscriber; stop computation when nobody needs it.
 
         Deleting a completed handle immediately removes that caller's access.
         Files remain while other subscribers, transfers or accepted dependent
-        jobs need them. Deletion does not cancel those dependent jobs.
+        jobs need them. Deletion does not cancel those dependent jobs. An explicit
+        Undo window retains the underlying completed job until dismissal or timeout.
 
         Args:
             identifier: Caller-owned public job handle.
             owner: Current session hash.
             delete: Delete a terminal handle instead of cancelling active work.
+            undo_seconds: Optional deletion Undo window, from zero to sixty seconds.
+                Retried deletion requests preserve the original window.
 
         Returns:
             Updated subscriber state, including cancelling while its last worker exits.
@@ -899,6 +913,8 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If the handle is unowned or deletion targets active work.
         """
+        if not 0 <= undo_seconds <= 60 or undo_seconds and not delete:
+            raise ProcessingError("invalid_deletion", "Invalid deletion Undo window.")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
@@ -915,16 +931,28 @@ class PostgresJobStore:
                     "Cancel this job and wait for it to stop before deleting it.",
                     409,
                 )
+            if delete and row["status"] == "deleted":
+                return row
             if delete or row["status"] in UNFINISHED:
                 cursor.execute(
-                    "UPDATE processing.job_subscribers SET status=%s,updated_at=clock_timestamp() WHERE id=%s",
-                    ("deleted" if delete else "cancelled", identifier),
+                    "UPDATE processing.job_subscribers SET status=%s,"
+                    "status_before_deletion=status,deletion_id=%s,"
+                    "deletion_undo_until=CASE WHEN %s>0 THEN clock_timestamp()+%s*interval '1 second' END,"
+                    "updated_at=clock_timestamp() WHERE id=%s",
+                    (
+                        "deleted" if delete else "cancelled",
+                        uuid4().hex if undo_seconds else None,
+                        undo_seconds,
+                        undo_seconds,
+                        identifier,
+                    ),
                 )
                 cursor.execute(
                     "UPDATE processing.jobs SET status=CASE "
                     "WHEN status='queued' THEN 'cancelled' WHEN status='running' THEN 'cancelling' "
                     "WHEN status='ready' THEN 'deleted' ELSE status END,updated_at=clock_timestamp() "
-                    "WHERE id=%s AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=%s AND status IS NULL) RETURNING status",
+                    "WHERE id=%s AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=%s "
+                    "AND (status IS NULL OR deletion_undo_until>clock_timestamp())) RETURNING status",
                     (row["job_id"], row["job_id"]),
                 )
                 stopped = cursor.fetchone()
@@ -935,6 +963,151 @@ class PostgresJobStore:
                     )
             cursor.execute(
                 "SELECT * FROM processing.subscribed_jobs WHERE id=%s", (identifier,)
+            )
+            return cursor.fetchone()
+
+    def resolve_deletion(
+        self, identifier: str, owner: str, deletion_id: str, restore: bool
+    ) -> dict[str, Any]:
+        """Undo or finalize one exact deletion without changing result expiry.
+
+        Args:
+            identifier: Public job handle belonging to the requesting session.
+            owner: Hash of the browser session.
+            deletion_id: Identity returned by the deletion being acted on.
+            restore: Restore access before the deadline; otherwise end Undo now.
+
+        Returns:
+            Current owned job state, including an idempotent repeated restoration.
+
+        Raises:
+            ProcessingError: If ownership, deletion identity or the Undo window fails.
+        """
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT *,deletion_undo_until>clock_timestamp() AS can_undo "
+                "FROM processing.job_subscribers WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            subscriber = cursor.fetchone()
+            if subscriber is None:
+                raise ProcessingError(
+                    "job_not_found", "This processing job is unavailable.", 404
+                )
+            if subscriber["deletion_id"] != deletion_id:
+                raise ProcessingError(
+                    "deletion_changed",
+                    "This deletion has changed. Refresh the run list.",
+                    409,
+                )
+            if restore and subscriber["status"] == "deleted":
+                if not subscriber["can_undo"]:
+                    raise ProcessingError(
+                        "undo_expired", "The time to undo this deletion has ended.", 409
+                    )
+                cursor.execute(
+                    "UPDATE processing.job_subscribers SET status=status_before_deletion,"
+                    "deletion_undo_until=NULL,updated_at=clock_timestamp() "
+                    "WHERE id=%s AND deletion_undo_until>clock_timestamp() RETURNING id",
+                    (identifier,),
+                )
+                if cursor.fetchone() is None:
+                    raise ProcessingError(
+                        "undo_expired", "The time to undo this deletion has ended.", 409
+                    )
+            elif not restore and subscriber["status"] == "deleted":
+                cursor.execute(
+                    "UPDATE processing.job_subscribers SET deletion_undo_until=NULL,"
+                    "updated_at=clock_timestamp() WHERE id=%s",
+                    (identifier,),
+                )
+                self._finalize_deleted_jobs(cursor)
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            return cursor.fetchone()
+
+    def _finalize_deleted_jobs(self, cursor: Any) -> None:
+        """Release deletion holds whose Undo windows ended, within the lifecycle lock.
+
+        Args:
+            cursor: Cursor in the caller's locked Processing transaction.
+        """
+        cursor.execute(
+            "UPDATE processing.job_subscribers SET deletion_undo_until=NULL,updated_at=clock_timestamp() "
+            "WHERE deletion_undo_until<=clock_timestamp()"
+        )
+        cursor.execute(
+            "UPDATE processing.jobs j SET status='deleted',updated_at=clock_timestamp() "
+            "WHERE j.status='ready' AND EXISTS (SELECT 1 FROM processing.job_subscribers s "
+            "WHERE s.job_id=j.id AND s.status='deleted' AND s.deletion_id IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers s WHERE s.job_id=j.id "
+            "AND (s.status IS NULL OR s.deletion_undo_until>clock_timestamp()))"
+        )
+
+    def extend_result_lifetime(
+        self, identifier: str, owner: str, seconds: int
+    ) -> dict[str, Any]:
+        """Keep an available result and its details until at least now plus a duration.
+
+        Serialize renewal with deletion, expiry and cleanup. Existing later
+        deadlines are preserved, and retained bytes and input grants are unchanged.
+        The application owner chooses the duration; callers cannot revive expired
+        results or details even while another reader still retains the files.
+
+        Args:
+            identifier: Caller-owned public job handle.
+            owner: Hash of the requesting browser session.
+            seconds: Positive retention duration, at most one year.
+
+        Returns:
+            The owned job with the same deadline for results and saved details.
+
+        Raises:
+            ProcessingError: If ownership, availability or the duration is invalid.
+        """
+        if not 1 <= seconds <= 31_536_000:
+            raise ProcessingError("invalid_retention", "Invalid result lifetime.")
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT *, expires_at>clock_timestamp() AS available "
+                "FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ProcessingError(
+                    "job_not_found", "This processing job is unavailable.", 404
+                )
+            if (
+                row["status"] != "ready"
+                or not row["available"]
+                or row["artifact"] is None
+                or row["retained_metadata"] is None
+            ):
+                raise ProcessingError(
+                    "result_unavailable",
+                    "Only a completed run with available files and details can be extended.",
+                    409,
+                )
+            cursor.execute(
+                "UPDATE processing.jobs SET "
+                "expires_at=greatest(expires_at,metadata_expires_at,statement_timestamp()+%s*interval '1 second'),"
+                "metadata_expires_at=greatest(expires_at,metadata_expires_at,statement_timestamp()+%s*interval '1 second'),"
+                "updated_at=clock_timestamp() WHERE id=%s "
+                "AND expires_at>statement_timestamp() AND metadata_expires_at>statement_timestamp() RETURNING id",
+                (seconds, seconds, row["job_id"]),
+            )
+            if cursor.fetchone() is None:
+                raise ProcessingError(
+                    "result_unavailable",
+                    "This run expired before it could be extended.",
+                    409,
+                )
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
             )
             return cursor.fetchone()
 
@@ -1054,6 +1227,10 @@ class PostgresJobStore:
     ) -> bool:
         """Publish completed work and cache values only while this attempt owns the job.
 
+        Results use the lifetime captured by the operation at admission, when
+        supplied; ordinary jobs retain the deployment's result lifetime. Captured
+        result and metadata deadlines start together on successful completion.
+
         Args:
             identifier: Running job.
             attempt: Execution fencing token.
@@ -1099,7 +1276,7 @@ class PostgresJobStore:
                     (
                         Jsonb(asdict(artifact)),
                         retained_bytes,
-                        self.limits.result_ttl_seconds,
+                        row["result_ttl_seconds"] or self.limits.result_ttl_seconds,
                         Jsonb({"phase": "ready"}),
                         identifier,
                     ),
@@ -1298,6 +1475,7 @@ class PostgresJobStore:
             cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             self._delete_old_job_records(cursor)
+            self._finalize_deleted_jobs(cursor)
             cursor.execute(
                 "UPDATE processing.jobs SET retained_metadata=NULL,retained_outcome=NULL "
                 "WHERE metadata_expires_at<=now() AND retained_metadata IS NOT NULL"
@@ -1327,18 +1505,23 @@ class PostgresJobStore:
 
         Retry records last seven days after the last update. A longer configured
         metadata lifetime keeps the record available until that deadline as well.
+        An unexpired deletion Undo window retains the history row, without
+        extending access to its already-expired metadata or files.
 
         Args:
             cursor: Cursor inside the worker maintenance transaction holding the
                 Processing advisory lock.
         """
+
         cursor.execute(
             "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL "
             "AND status NOT IN ('queued','running','cancelling','ready') "
             "AND updated_at<now()-interval '7 days' "
             "AND (metadata_expires_at IS NULL OR metadata_expires_at<=now()) "
             "AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=jobs.id) "
-            "AND NOT EXISTS (SELECT 1 FROM processing.input_files WHERE parent_id=jobs.id)"
+            "AND NOT EXISTS (SELECT 1 FROM processing.input_files WHERE parent_id=jobs.id) "
+            "AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=jobs.id "
+            "AND deletion_undo_until>clock_timestamp())"
         )
 
     def active_attempts(self) -> set[str]:

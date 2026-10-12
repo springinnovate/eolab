@@ -157,6 +157,7 @@ export class MapLayerController {
                 if (record.entry.item === null) record.adapter.info?.(record);
                 else this.onItemInfo(record.entry.item);
             },
+            onGroupAction: id => this.onGroupAction?.(id),
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
             onLegendInclusion: (key, included) => this.setLegendIncluded(key, included),
@@ -775,6 +776,40 @@ export class MapLayerController {
         }
     }
 
+    /** Capture a layer's presentation so its existing owner can restore it later.
+     * @param {string} key Retained layer identity.
+     * @return {RemovedMapLayer} Detached data including visibility, order, style and source identity.
+     * @throws {Error} If the layer is missing or its owner rejects capture.
+     */
+    copyLayerForUndo(key) {
+        const record = this.#requireRecord(key);
+        const {entry, adapter} = record;
+        return {
+            key, label: entry.label, customName: entry.customName ?? null,
+            index: this.stack.entries.findIndex(candidate => candidate.key === key),
+            visible: entry.visible, opacity: entry.opacity,
+            ...(entry.legendIncluded === false ? {legendIncluded: false} : {}),
+            item: entry.item === null ? null : {collection: entry.item.collection, id: entry.item.id},
+            ...(entry.item === null ? {local: adapter.copyLayerForUndo(record)}
+                : {style: structuredClone(adapter.exportSavedState(record)),
+                    ...(adapter.exportFilterState ? {filter: structuredClone(adapter.exportFilterState(record))} : {})}),
+        };
+    }
+
+    /** Restore a captured layer through its original owner and restore legend inclusion.
+     * @param {RemovedMapLayer} snapshot Captured presentation and source identity.
+     * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
+     * @return {Promise<void>} Completion after owner restoration.
+     * @throws {Error} If the source or layer can no longer be restored.
+     */
+    async restoreLayerSnapshot(snapshot, isCurrent) {
+        await this.restoreRemovedLayer(snapshot, isCurrent);
+        if (isCurrent()) {
+            this.#requireRecord(snapshot.key).entry.legendIncluded = snapshot.legendIncluded !== false;
+            this.render();
+        }
+    }
+
     /**
      * Remove a layer at the user's request, keeping only its data for one Undo.
      * Owner capture can reject removal, for example when a polygon is being edited.
@@ -783,19 +818,7 @@ export class MapLayerController {
      */
     removeWithUndo(key) {
         try {
-            const record = this.#requireRecord(key);
-            const { entry, adapter } = record;
-            const snapshot = {
-                key, label: entry.label, customName: entry.customName ?? null,
-                index: this.stack.entries.findIndex(candidate => candidate.key === key),
-                visible: entry.visible, opacity: entry.opacity,
-                ...(entry.legendIncluded === false ? { legendIncluded: false } : {}),
-                item: entry.item === null ? null : { collection: entry.item.collection, id: entry.item.id },
-                ...(entry.item === null
-                    ? { local: adapter.copyLayerForUndo(record) }
-                    : { style: structuredClone(adapter.exportSavedState(record)),
-                        ...(adapter.exportFilterState ? { filter: structuredClone(adapter.exportFilterState(record)) } : {}) }),
-            };
+            const snapshot = this.copyLayerForUndo(key);
             this.removeKey(key);
             this.removalGeneration += 1;
             this.removedLayer = snapshot;
@@ -824,6 +847,14 @@ export class MapLayerController {
         this.view.announceStatus?.("Layer removal undo dismissed.");
     }
 
+    /** Discard Undo when composition reports that its original source was deleted.
+     * @param {(snapshot:RemovedMapLayer)=>boolean} matches Whether the removed source is no longer available.
+     * @return {void}
+     */
+    forgetUnavailableRemoval(matches) {
+        if (this.removedLayer && matches(this.removedLayer)) this.dismissLayerRemoval();
+    }
+
     /**
      * Restore the most recently removed layer; keep the record if restoration fails.
      * Reset or a newer removal makes an in-flight restore obsolete before attachment.
@@ -837,9 +868,8 @@ export class MapLayerController {
         this.restoringLayer = snapshot;
         this.view.showRemoval?.(snapshot, true, null);
         try {
-            await this.restoreRemovedLayer(snapshot, isCurrent);
+            await this.restoreLayerSnapshot(snapshot, isCurrent);
             if (isCurrent()) {
-                this.#requireRecord(snapshot.key).entry.legendIncluded = snapshot.legendIncluded !== false;
                 this.removedLayer = null;
                 this.view.showRemoval?.(null, false, null);
                 this.view.setStatus(`Restored ${snapshot.label}.`);
