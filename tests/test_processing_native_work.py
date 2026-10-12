@@ -71,3 +71,14 @@ def test_billion_cell_downstream_grid_needs_only_metadata() -> None:
     assert grid.reservedBytes == 0
     assert grid.decodedBytes == 0
     assert count_native_raster_blocks(dataset, Window(0, 0, width, height)) == 157 * 118
+
+
+def test_summary_plan_has_no_total_read_window_ceiling() -> None:
+    """Plan millions of read windows without enumerating or limiting the total work."""
+    from eolab_app.processing.aggregate_windows import plan_raster_read_windows
+
+    plan = plan_raster_read_windows(
+        Window(0, 0, 40_000, 30_000), (16, 16), 40_000, 30_000, None, 512,
+    )
+    assert plan.readWindows == 2_500 * 1_875
+    assert plan.readWidth == plan.readHeight == 16

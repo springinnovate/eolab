@@ -359,11 +359,11 @@ class AggregateExecutionPlan(BaseModel):
     readHeight: Annotated[int, Field(gt=0)]
     evaluationWidth: Annotated[int, Field(gt=0)]
     evaluationHeight: Annotated[int, Field(gt=0)]
-    readWindows: Annotated[int, Field(ge=0, le=65_536)]
+    readWindows: Annotated[int, Field(ge=0)]
 
 
 class AggregateGrid(BaseModel):
-    """Native grid, value domain, and conservative work/memory admission."""
+    """Native grid, value domain and execution batches for a raster summary."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     crs: str
