@@ -91,7 +91,13 @@ test("deletion needs confirmation and removes captured inputs and choices after 
     assert.equal(calls, 1); assert.equal(h.controller.state.deleteConfirmation, null);
     assert.equal(h.controller.state.invocation, null);
     assert.equal(h.controller.runSnapshots.get(ready.jobId).status, "deleted");
-    assert.match(h.controller.state.actionMessage, /Run and results deleted/);
+    assert.deepEqual(h.controller.state.runs, []);
+    assert.equal(h.controller.state.page, "runs");
+    assert.equal(h.controller.state.selectedRun, null);
+    h.controller.rememberRun(ready);
+    await h.controller.showRun(ready.jobId);
+    assert.deepEqual(h.controller.state.runs, []);
+    assert.equal(h.controller.state.page, "runs");
 });
 
 test("navigation during confirmation never deletes another run", async () => {

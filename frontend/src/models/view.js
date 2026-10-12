@@ -388,7 +388,7 @@ export class ModelsView {
         r.details.message.textContent = metadataAvailable ? `Recipe ${job.model.title} · ${job.model.version}` : "Saved recipe and inputs are no longer available.";
     }
 
-    /** Update only changed presentation, preserving focus and open details.
+    /** Update visible runs and controls, removing history cards no longer present.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -416,6 +416,11 @@ export class ModelsView {
         this.elements["library-status"].textContent = state.loading ? "Loading model library…" : filtered.length ? "" : "No matching models.";
         this.elements.refresh.disabled = state.loading;
         this.renderSetup(state); this.renderRun(state);
+        const retainedRuns = new Set(state.runs.map(job => job.jobId));
+        for (const [id, card] of this.runCards) {
+            if (retainedRuns.has(id)) continue;
+            card.root.remove(); this.runCards.delete(id);
+        }
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {

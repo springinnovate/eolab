@@ -441,7 +441,7 @@ export class ModelsController {
         } finally { this.state.submitting = false; this.render(); }
     }
 
-    /** Retain a run independently of the shared recent-history window.
+    /** Retain authoritative run state while hiding deleted runs from the interface.
      * @param {Object} job Authoritative run status.
      * @return {void}
      */
@@ -451,10 +451,17 @@ export class ModelsController {
         if (previous && (previous.updatedAt > job.updatedAt || previous.status === "deleted" && job.status !== "deleted")) return;
         this.runSnapshots.set(job.jobId, job);
         this.onRunChange(job);
+        if (job.status === "deleted" && this.state.selectedRun === job.jobId) {
+            this.revision += 1;
+            this.state.selectedRun = null; this.state.invocation = null; this.state.invocationError = "";
+            this.state.yaml = null; this.state.deleteConfirmation = null;
+            if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading(); }
+        }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" && this.state.draft?.raster?.jobId === job.jobId)) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
-        this.state.runs = [...this.runSnapshots.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
+        this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
     }
 
     /** Apply observed progress without editing the current setup.
@@ -491,6 +498,7 @@ export class ModelsController {
      * @return {Promise<void>}
      */
     async showRun(id) {
+        if (this.runSnapshots.get(id)?.status === "deleted") { this.navigate("runs"); return; }
         this.closeVectorFilter();
         const revision = ++this.revision;
         const previous = this.state.selectedRun;

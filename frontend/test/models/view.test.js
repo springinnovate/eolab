@@ -35,6 +35,19 @@ test("raster choices separate map layers from completed runs and explain unavail
     assert.equal(h.view.setup.source.children[2].children[0].disabled, true);
 });
 
+test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
+    const h = fixture(), first = job(), second = job({jobId: "2".repeat(32), label: "Another run"});
+    Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
+    const retained = h.view.runCards.get(second.jobId).button;
+    h.state.runs = [second]; h.view.render(h.state);
+    assert.equal(h.view.runCards.has(first.jobId), false);
+    assert.equal(h.view.elements["runs-list"].children.length, 1);
+    assert.equal(h.view.runCards.get(second.jobId).button, retained);
+    h.state.runs = []; h.view.render(h.state);
+    assert.equal(h.view.elements["runs-list"].children.length, 0);
+    assert.match(h.view.elements["runs-status"].textContent, /No model runs/);
+});
+
 test("run renewal and deletion have explicit scope, confirmation and busy feedback", () => {
     const h = fixture(), artifacts = fileManifest();
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
