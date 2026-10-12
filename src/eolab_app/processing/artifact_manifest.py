@@ -1,4 +1,4 @@
-"""Bounded file declarations and immutable manifests for private Processing results."""
+"""File declarations and immutable inventories for private Processing results."""
 
 from dataclasses import asdict
 import json
@@ -6,9 +6,6 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, model_validator
 from pydantic.dataclasses import dataclass
-
-MAX_ARTIFACT_FILES = 64
-MAX_MANIFEST_BYTES = 64 * 1024
 
 
 def validate_file_name(value: str) -> str:
@@ -156,15 +153,13 @@ class ArtifactManifest:
     owner, expiry and transfer leases; the manifest grants no access by itself.
 
     Attributes:
-        files: At most 64 files, with unique IDs, aliases and private basenames.
-        total_bytes: File bytes plus the encoded inventory. Only the inventory
-            itself is limited to 64 KiB.
+        files: Retained files with unique IDs, names and private basenames.
+            Collections have no fixed file-count or inventory-byte ceiling.
+        total_bytes: File bytes plus the encoded inventory.
         version: Persisted manifest schema version.
     """
 
-    files: Annotated[
-        tuple[PublishedFile, ...], Field(min_length=1, max_length=MAX_ARTIFACT_FILES)
-    ]
+    files: Annotated[tuple[PublishedFile, ...], Field(min_length=1)]
     total_bytes: ByteCount
     version: Literal[1] = 1
 
@@ -176,7 +171,7 @@ class ArtifactManifest:
             This manifest after validating its inventory.
 
         Raises:
-            ValueError: If names collide, inventory size exceeds its limit, or
+            ValueError: If names collide or
                 total_bytes differs from the actual file and inventory sizes.
         """
         for attribute in ("id", "name", "storage_name"):
@@ -184,9 +179,7 @@ class ArtifactManifest:
             if len(set(values)) != len(values):
                 raise ValueError("Duplicate artifact identity or name")
         inventory = encode_manifest_files(self.files)
-        if len(inventory) > MAX_MANIFEST_BYTES or self.total_bytes != sum(
-            file.size for file in self.files
-        ) + len(inventory):
+        if self.total_bytes != sum(file.size for file in self.files) + len(inventory):
             raise ValueError("Invalid retained artifact byte count")
         return self
 
@@ -198,7 +191,7 @@ def read_artifact_manifest(value: object) -> ArtifactManifest:
         value: JSON-compatible stored manifest or an already validated instance.
 
     Returns:
-        Immutable, bounded manifest with verified accounting relationships.
+        Immutable manifest with verified accounting relationships.
 
     Raises:
         ValidationError: If persisted metadata violates the file contract.

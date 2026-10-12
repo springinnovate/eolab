@@ -43,7 +43,6 @@ from eolab_app.processing.models import (
     Artifact,
 )
 from eolab_app.processing.artifact_manifest import (
-    MAX_ARTIFACT_FILES,
     FileDeclaration,
     ProducedFile,
     PublishedFile,
@@ -352,9 +351,7 @@ def declare_model_files(
         sha256=artifact.sha256,
     )
     produced = (primary, *artifact.additional_outputs)
-    if len(produced) >= MAX_ARTIFACT_FILES or len(
-        {item.name for item in produced}
-    ) != len(produced):
+    if len({item.name for item in produced}) != len(produced):
         raise ProcessingError(
             "invalid_model_result",
             "The operation returned unexpected result files.",

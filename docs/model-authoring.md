@@ -156,8 +156,8 @@ The recipe's role, type and presentation must match the registered contract.
 The native operation returns its usual primary `Artifact`, with completed
 `ProducedFile` entries in `additional_outputs`. Each entry identifies a flat
 workspace basename and supplies its exact size, checksum, download name and
-media type. The operation's preparation must reserve disk for all files it can
-produce, including scratch and provenance. YAML cannot increase that reservation.
+media type. Processing writes the requested files without estimating or reserving
+a maximum disk footprint; actual filesystem failures are reported by the worker.
 Adding another recipe that selects these outputs needs no API or UI dispatch.
 
 After native execution exits, the worker binds completed files to the captured
@@ -168,12 +168,13 @@ receive download links. File hashing cooperates with cancellation and the worker
 waits for publication to stop before cleanup. The final database transition still
 checks the attempt, lease and deadline after the directory rename.
 
-Storage permits up to 64 retained files and a 64 KiB inventory. Model YAML
-permits up to 32 scientific outputs. A closed workspace may contain up to 128
+Retained file inventories have no fixed file-count or byte ceiling, so an output
+collection can grow with the calculation's drainage groups. Model YAML still
+permits up to 32 logical scientific outputs. A closed workspace contains only
 flat regular files; nested directories, symbolic links, junctions and hard links
 are rejected. Basenames must be portable and cannot be filesystem paths or
 Windows device names. The exact disk charge includes every retained file and
-the inventory itself. Failed attempts retain their reservation until cleanup.
+the inventory itself. Failed attempts remain owned by Processing until cleanup.
 
 Model status includes an `artifacts` manifest; it is also available from
 `GET /api/processing/jobs/{jobId}/artifacts`. Each file has an opaque `artifactId`,

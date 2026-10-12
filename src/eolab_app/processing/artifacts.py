@@ -17,7 +17,6 @@ from eolab_app.processing.artifact_manifest import (
     ArtifactManifest,
     FileDeclaration,
     PublishedFile,
-    MAX_ARTIFACT_FILES,
     encode_manifest_files,
     FileName,
 )
@@ -162,7 +161,7 @@ class LocalJobArtifacts:
             OSError: If atomic publication fails.
         """
         path = self._directory(attempt, False)
-        if not 1 <= len(declarations) <= MAX_ARTIFACT_FILES:
+        if not declarations:
             raise ProcessingError("invalid_artifact", "Invalid result file count.", 500)
         names = [item.storage_name.casefold() for item in declarations]
         if len(set(names)) != len(names) or any(

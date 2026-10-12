@@ -118,3 +118,16 @@ test("multiple run files require scoped URLs, unique IDs and valid availability"
         await assert.rejects(h.api.getJob(job().jobId));
     }
 });
+
+test("a large routing DEM collection has no fixed response file-count ceiling", async () => {
+    const artifacts = fileManifest(), source = artifacts.files[0];
+    artifacts.files = Array.from({length: 200}, (_, index) => {
+        const artifactId = index.toString(16).padStart(32, "0"), name = `routing_dem_drain_${index}`;
+        return {...source, artifactId, name, filename: `${name}.tif`, role: "intermediate",
+            label: `Routing DEM (pit-filled) · Drain ${index}`,
+            url: `/api/processing/jobs/${artifacts.jobId}/artifacts/${artifactId}`};
+    });
+    artifacts.totalBytes = artifacts.files.reduce((total, file) => total + file.bytes, 65536);
+    const h = fixture(() => job({status: "ready", expiresAt: artifacts.expiresAt, result: statisticsResult, artifacts}));
+    assert.deepEqual((await h.api.getJob(job().jobId)).artifacts, artifacts);
+});

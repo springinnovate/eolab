@@ -150,7 +150,7 @@ function validateJob(job) {
 function validateModelArtifacts(manifest, job) {
     if (manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
         !["pending", "available", "unavailable"].includes(manifest.availability) ||
-        !Array.isArray(manifest.files) || manifest.files.length > 64 ||
+        !Array.isArray(manifest.files) ||
         !Number.isSafeInteger(manifest.totalBytes) || manifest.totalBytes < 0 ||
         (manifest.availability === "available" ? job.status !== "ready" || !manifest.files.length : manifest.files.length || manifest.totalBytes))
         throw new Error("Processing returned invalid result file availability.");
