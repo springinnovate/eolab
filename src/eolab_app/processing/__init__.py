@@ -1,1 +1,1 @@
-"""Owned raster-clip jobs, admission, execution, and temporary downloads."""
+"""Queue raster calculations and model runs, execute them, and retain their results."""

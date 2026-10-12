@@ -103,10 +103,10 @@ def get_uploaded_polygon(request: DownstreamRequest) -> None:
     return None
 
 
-def queue_downstream(
+def build_downstream_submission(
     request: DownstreamRequest, polygons: AggregateArea | None
 ) -> PreparedJobPlan:
-    """Queue downstream inputs without sharing work with another model run.
+    """Build a downstream submission with inputs for an independent model run.
 
     Args:
         request: Captured operation inputs.

@@ -1,4 +1,4 @@
-"""Path-free catalog selection values and the injected source authorization port."""
+"""Identify filtered catalog features and authorize reads of their source files."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +11,7 @@ from eolab_app.attribute_filter import VectorFilter
 
 
 class CatalogSelection(CatalogVectorRequest):
-    """Immutable source, native-layer and predicate identity, never coordinates.
+    """A catalog vector layer and attribute filter identifying features for analysis.
 
     Asset and layer names are checked against the authoritative Catalog on every
     resolution. The signature is a digest of all mounted source components.
@@ -47,7 +47,7 @@ class SelectionUnavailableError(ValueError):
 
 @dataclass(frozen=True)
 class ResolvedCatalogSelection:
-    """Private, short-lived reading capability resolved from Catalog authority.
+    """An authorized vector source, its feature filter and its file-change checks.
 
     Attributes:
         selection: Public immutable selection definition.
@@ -64,7 +64,7 @@ class ResolvedCatalogSelection:
     where: str | None
 
     def require_current(self) -> None:
-        """Check every component without exposing paths on failure.
+        """Reject a selection if any of its source files changed or disappeared.
 
         Raises:
             SelectionUnavailableError: If a file disappeared or changed.
@@ -94,10 +94,10 @@ class CatalogSelectionReader(Protocol):
     async def resolve_for_sampling(
         self, selection: CatalogSelection
     ) -> ResolvedCatalogSelection:
-        """Resolve a descriptor to a private reading capability.
+        """Find and authorize the source files and filter for a catalog selection.
 
         Args:
-            selection: Structurally validated public descriptor.
+            selection: Validated catalog identity, source signature and feature filter.
 
         Returns:
             Current source and server-compiled predicate.

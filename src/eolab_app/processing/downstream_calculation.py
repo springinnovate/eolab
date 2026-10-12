@@ -40,7 +40,7 @@ from eolab_app.processing.hydrology_validation import (
 )
 from eolab_app.raster.bounded_window import project_wgs84_polygons
 from eolab_app.processing.raster_input import (
-    native_work,
+    estimate_native_raster_reads,
     select_area,
     validate_supported_raster,
 )
@@ -74,13 +74,19 @@ class DownstreamSources:
 
 @dataclass(frozen=True)
 class Watershed:
-    """One source watershed's geometry and next connection, ending at a real sink."""
+    """A watershed polygon and the ID of its next downstream watershed.
+
+    Attributes:
+        geometry: Original watershed boundary in WGS84 coordinates.
+        downstream: Next watershed ID, or None when the configured termination
+            rule identifies this watershed as the end of the drainage.
+    """
 
     geometry: BaseGeometry
     downstream: int | str | None
 
 
-def read_network(
+def read_downstream_watershed_network(
     sources: DownstreamSources,
     request: DownstreamRequest,
     limits: DownstreamLimits,
@@ -269,7 +275,7 @@ def read_network(
     return result
 
 
-def starting_geometry(
+def read_starting_area_geometry(
     sources: DownstreamSources, limits: DownstreamLimits
 ) -> BaseGeometry:
     """Read the selected vector polygons or positive raster mask cells as a starting area.
@@ -294,7 +300,7 @@ def starting_geometry(
                     413,
                 )
             window = Window(0, 0, dataset.width, dataset.height)
-            native_work(
+            estimate_native_raster_reads(
                 dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
             )
             values = read_native_raster_window(dataset, window)
@@ -415,7 +421,7 @@ def plan_native_grid(
             f"This downstream run needs {cells:,} native cells; choose a smaller starting area or prepared watershed network.",
             413,
         )
-    blocks, _, decoded = native_work(
+    blocks, _, decoded = estimate_native_raster_reads(
         dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
     )
     raw = cells * (np.dtype(dataset.dtypes[0]).itemsize + 1)
@@ -498,8 +504,8 @@ def plan_downstream(
     Raises:
         ProcessingError: If coverage, source structure or resource limits fail.
     """
-    starting = starting_geometry(sources, limits)
-    network = read_network(sources, request, limits, starting)
+    starting = read_starting_area_geometry(sources, limits)
+    network = read_downstream_watershed_network(sources, request, limits, starting)
     identifiers = select_downstream_watersheds(network, starting)
     groups = group_watersheds_by_sink(network, identifiers, limits)
     region = unary_union([network[item].geometry for item in identifiers])
@@ -607,11 +613,11 @@ def require_downstream_dem_cells(
         SelectionUnavailableError: If the watershed source changed.
         ValueError: If projection exceeds its coordinate budget.
     """
-    network = read_network(
+    network = read_downstream_watershed_network(
         sources,
         spec.inputs,
         limits,
-        starting_geometry(sources, limits),
+        read_starting_area_geometry(sources, limits),
         spec.watersheds,
     )
     with rasterio.open(sources.rasters["dem"]) as dataset:
@@ -685,7 +691,11 @@ def calculate_downstream(
     workspace = directory.resolve()
     with chdir(workspace):
         return run_original_downstream(
-            sources, spec, workspace, limits, starting_geometry(sources, limits)
+            sources,
+            spec,
+            workspace,
+            limits,
+            read_starting_area_geometry(sources, limits),
         )
 
 

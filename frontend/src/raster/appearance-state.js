@@ -21,7 +21,7 @@ const CONTINUOUS_STYLE_FIELDS = Object.freeze([
 ]);
 
 /**
- * Require a plain object with exactly the fields owned by this contract.
+ * Check that an appearance object contains exactly the expected fields.
  *
  * @param {unknown} candidate Untrusted record.
  * @param {string[]} fields Exact required own field names.
@@ -29,7 +29,7 @@ const CONTINUOUS_STYLE_FIELDS = Object.freeze([
  * @return {Record<string,unknown>} Shape-validated record.
  * @throws {TypeError} If the value is not a plain object or its fields differ.
  */
-function appearanceRecord(candidate, fields, label) {
+function validateAppearanceFields(candidate, fields, label) {
     if (candidate === null || typeof candidate !== "object" ||
         ![Object.prototype, null].includes(Object.getPrototypeOf(candidate))) {
         throw new TypeError(`${label} must be an object.`);
@@ -53,7 +53,7 @@ function normalizeContinuousDefinition(candidate, legacy) {
     const fields = legacy && candidate !== null && typeof candidate === "object" &&
         Reflect.ownKeys(candidate).length === 6
         ? CONTINUOUS_STYLE_FIELDS.slice(0, 6) : CONTINUOUS_STYLE_FIELDS;
-    const record = appearanceRecord(candidate, fields, "Saved raster style");
+    const record = validateAppearanceFields(candidate, fields, "Saved raster style");
     const definition = Object.fromEntries(CONTINUOUS_STYLE_FIELDS.map(field => [
         field, fields.includes(field) ? record[field] : 1
     ]));
@@ -67,40 +67,40 @@ function normalizeContinuousDefinition(candidate, legacy) {
 }
 
 /**
- * Normalize one complete raster appearance at an import or clipboard boundary.
+ * Validate and copy a raster style loaded from a saved map or the style clipboard.
  *
- * Both configurations survive mode changes. Legacy envelopes become continuous
- * appearance with an edited range, preserving the historical restore behavior;
- * legacy six-field ramps gain opaque color stops. Modern envelopes require all
- * fields, and categorical mode requires a valid nonempty category table. No
- * source identity, layer opacity, or renderer state belongs to this contract.
+ * Continuous and categorical settings both survive mode changes. Old saved styles
+ * become continuous styles with an edited range; styles with six fields gain fully
+ * opaque color stops. Versioned styles require every field, and categorical mode
+ * requires a nonempty category table. Source identity and whole-layer opacity are
+ * stored separately from these style settings.
  *
  * @param {unknown} candidate Legacy or versioned portable raster appearance.
  * @return {Readonly<RasterAppearanceState>} Independent immutable appearance.
- * @throws {Error} If the envelope or either retained style is invalid.
+ * @throws {Error} If the appearance fields or either saved style are invalid.
  */
 export function normalizeRasterAppearanceState(candidate) {
     const legacy = candidate !== null && typeof candidate === "object" &&
         !Object.hasOwn(candidate, "appearanceVersion");
-    const envelope = appearanceRecord(candidate, legacy
+    const appearanceFields = validateAppearanceFields(candidate, legacy
         ? ["kind", "definition", "paletteName"]
         : ["kind", "appearanceVersion", "mode", "continuous", "categorical"],
     "Raster appearance");
-    if (envelope.kind !== "raster") {
+    if (appearanceFields.kind !== "raster") {
         throw new TypeError("Saved style does not belong to a raster.");
     }
-    if (!legacy && envelope.appearanceVersion !== 1) {
+    if (!legacy && appearanceFields.appearanceVersion !== 1) {
         throw new TypeError("Raster appearance version is not supported.");
     }
-    const mode = legacy ? "continuous" : envelope.mode;
+    const mode = legacy ? "continuous" : appearanceFields.mode;
     if (mode !== "continuous" && mode !== "categorical") {
         throw new TypeError("Raster appearance mode must be continuous or categorical.");
     }
     const continuous = legacy ? {
-        definition: envelope.definition,
-        paletteName: envelope.paletteName,
+        definition: appearanceFields.definition,
+        paletteName: appearanceFields.paletteName,
         styleWasEdited: true
-    } : appearanceRecord(envelope.continuous,
+    } : validateAppearanceFields(appearanceFields.continuous,
         ["definition", "paletteName", "styleWasEdited"], "Continuous appearance");
     if (typeof continuous.paletteName !== "string" ||
         (continuous.paletteName !== "custom" &&
@@ -110,8 +110,8 @@ export function normalizeRasterAppearanceState(candidate) {
     if (typeof continuous.styleWasEdited !== "boolean") {
         throw new TypeError("Continuous style edit state must be boolean.");
     }
-    const categorical = legacy || envelope.categorical === null ? null
-        : normalizeCategoricalRasterStyle(envelope.categorical);
+    const categorical = legacy || appearanceFields.categorical === null ? null
+        : normalizeCategoricalRasterStyle(appearanceFields.categorical);
     if (mode === "categorical" && categorical === null) {
         throw new TypeError("Categorical mode requires a category table.");
     }

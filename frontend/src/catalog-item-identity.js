@@ -1,4 +1,4 @@
-/** Catalog-owned identity contract shared by browser capabilities. */
+/** Identify a catalog item by its collection and item identifiers. */
 
 /**
  * Return one stable key from a STAC Item's composite identity.

@@ -5,8 +5,8 @@ import io
 from typing import Any
 
 
-def csv_text(value: str) -> str:
-    """Keep user-provided labels/expressions inert in spreadsheet applications.
+def escape_spreadsheet_text(value: str) -> str:
+    """Escape text that a spreadsheet could interpret as a formula.
 
     Args:
         value: Bounded user-provided text field.
@@ -37,8 +37,8 @@ def statistics_csv(rows: list[dict[str, Any]]) -> bytes:
     for row in rows:
         writer.writerow(
             [
-                csv_text(row["label"]),
-                csv_text(row["expression"]),
+                escape_spreadsheet_text(row["label"]),
+                escape_spreadsheet_text(row["expression"]),
                 row["value"],
                 row["valueType"],
                 row["state"],

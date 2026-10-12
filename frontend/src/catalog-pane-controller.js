@@ -1,5 +1,5 @@
 /**
- * Catalog pane disclosure and progressive-inspector presentation.
+ * Show catalog results and selected-dataset details in the available screen space.
  *
  * In authoring mode, Catalog search and results remain available. The selected
  * Item is revealed only when a result is chosen: CSS presents it as an
@@ -26,7 +26,7 @@
  */
 
 /**
- * Connects the persistent Catalog results and progressive inspector navigation.
+ * Connect the catalog's results, dataset details and back controls.
  *
  * @param {Document} documentContext Document containing the Catalog workspace.
  * @param {() => void} [onLayoutChange=() => {}] Notifies the composition root
@@ -34,8 +34,7 @@
  * @param {Object} [options] Presentation options supplied by composition.
  * @param {HTMLDialogElement|null} [options.detailsDialog=null] Present included-layer
  * metadata in this dialog instead of opening the catalog browser.
- * @return {CatalogPaneControls} Narrow presentation contract used by Catalog
- * selection without exposing layout or breakpoint decisions.
+ * @return {CatalogPaneControls} Controls for opening details or returning to results.
  * @throws {TypeError} When the layout-change notifier is not callable.
  * @throws {Error} When required Catalog pane markup is absent.
  */

@@ -1,9 +1,9 @@
-/** Read bounded, owner-authorized display copies of immutable run files. */
+/** Fetch and validate small map previews of this browser session's model outputs. */
 
 export const PREVIEW_MEDIA_TYPES = new Set(["image/tiff", "application/geo+json"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 
-/** Validate display data before it reaches Leaflet or a canvas.
+/** Check a preview's file identity, extent and raster values or vector coordinates.
  * @param {Object} value Untrusted preview response.
  * @param {string} jobId Requested run identity.
  * @param {Object} file Validated manifest file.
@@ -11,40 +11,43 @@ const MAX_BYTES = 8 * 1024 * 1024;
  * @throws {Error} If identity, checksum, dimensions or coordinate limits differ.
  */
 export function validateArtifactPreview(value, jobId, file) {
-    /** Reject malformed display data with a path-free explanation. @return {never} */
-    const invalid = () => { throw new Error("The server returned an invalid map preview."); };
+    /** Report malformed preview data without exposing server paths.
+     * @return {never}
+     * @throws {Error} Always, with the preview validation message.
+     */
+    const rejectInvalidPreview = () => { throw new Error("The server returned an invalid map preview."); };
     if (value?.jobId !== jobId || value.artifactId !== file.artifactId || value.sha256 !== file.sha256 ||
-        !Array.isArray(value.bounds) || value.bounds.length !== 4 || !value.bounds.every(Number.isFinite)) invalid();
+        !Array.isArray(value.bounds) || value.bounds.length !== 4 || !value.bounds.every(Number.isFinite)) rejectInvalidPreview();
     const [west, south, east, north] = value.bounds;
-    if (west < -180 || east > 180 || south < -85.051129 || north > 85.051129 || west > east || south > north) invalid();
+    if (west < -180 || east > 180 || south < -85.051129 || north > 85.051129 || west > east || south > north) rejectInvalidPreview();
     if (value.kind === "raster" && file.mediaType === "image/tiff") {
         if (![value.width, value.height].every(n => Number.isInteger(n) && n > 0 && n <= 512) ||
             west === east || south === north || !Array.isArray(value.values) || value.values.length !== value.width * value.height ||
-            value.values.some(n => n !== null && !Number.isFinite(n))) invalid();
+            value.values.some(n => n !== null && !Number.isFinite(n))) rejectInvalidPreview();
     } else if (value.kind === "vector" && file.mediaType === "application/geo+json") {
-        const kinds = {Point: [0, "point"], MultiPoint: [1, "point"], LineString: [1, "line"],
+        const geometryCoordinateLayouts = {Point: [0, "point"], MultiPoint: [1, "point"], LineString: [1, "line"],
             MultiLineString: [2, "line"], Polygon: [2, "polygon"], MultiPolygon: [3, "polygon"]};
-        let count = 0;
-        /** Check one geometry's nested coordinate arrays.
+        let coordinateCount = 0;
+        /** Check every coordinate against the preview extent and 100,000-position limit.
          * @param {unknown} coordinates Candidate array.
-         * @param {number} depth Required nesting.
+         * @param {number} remainingArrayDepth Array levels before a coordinate tuple.
          * @return {void}
-         * @throws {Error} If coordinates or total work exceed the display contract.
+         * @throws {Error} If coordinates are malformed, outside the extent or over the limit.
          */
-        function check(coordinates, depth) {
-            if (!Array.isArray(coordinates) || !coordinates.length) invalid();
-            if (depth) { for (const child of coordinates) check(child, depth - 1); return; }
-            if (![2, 3].includes(coordinates.length) || !coordinates.every(Number.isFinite) || ++count > 100000 ||
-                coordinates[0] < west || coordinates[0] > east || coordinates[1] < south || coordinates[1] > north) invalid();
+        function validatePreviewCoordinates(coordinates, remainingArrayDepth) {
+            if (!Array.isArray(coordinates) || !coordinates.length) rejectInvalidPreview();
+            if (remainingArrayDepth) { for (const child of coordinates) validatePreviewCoordinates(child, remainingArrayDepth - 1); return; }
+            if (![2, 3].includes(coordinates.length) || !coordinates.every(Number.isFinite) || ++coordinateCount > 100000 ||
+                coordinates[0] < west || coordinates[0] > east || coordinates[1] < south || coordinates[1] > north) rejectInvalidPreview();
         }
         const features = value.geojson?.features;
-        if (value.geojson?.type !== "FeatureCollection" || !Array.isArray(features) || !features.length || features.length > 5000) invalid();
+        if (value.geojson?.type !== "FeatureCollection" || !Array.isArray(features) || !features.length || features.length > 5000) rejectInvalidPreview();
         for (const feature of features) {
-            const layout = kinds[feature?.geometry?.type];
-            if (feature?.type !== "Feature" || !layout || layout[1] !== value.geometryKind) invalid();
-            check(feature.geometry.coordinates, layout[0]);
+            const coordinateLayout = geometryCoordinateLayouts[feature?.geometry?.type];
+            if (feature?.type !== "Feature" || !coordinateLayout || coordinateLayout[1] !== value.geometryKind) rejectInvalidPreview();
+            validatePreviewCoordinates(feature.geometry.coordinates, coordinateLayout[0]);
         }
-    } else invalid();
+    } else rejectInvalidPreview();
     return value;
 }
 

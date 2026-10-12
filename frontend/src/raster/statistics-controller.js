@@ -1,9 +1,9 @@
 /**
- * Asynchronous request lifecycle for raster statistics.
+ * Request raster statistics and discard results superseded by a newer selection.
  *
- * This module owns activation, retry, cancellation, and stale-response
- * suppression for one active sampling area. Loading and presentation are
- * injected; histogram math and DOM rendering are out of scope.
+ * Each controller tracks one raster or raster pair and its sampling area.
+ * Callers supply the request function and callbacks for loading, results and
+ * errors. Changing the target aborts the old request; retry repeats the latest one.
  */
 import { normalizeRasterSamplingArea } from "./statistics.js";
 
@@ -49,10 +49,10 @@ import { normalizeRasterSamplingArea } from "./statistics.js";
  * @return {void}
  */
 
-/** Manage one statistics lifecycle and ignore stale responses. */
+/** Request statistics for one active sampling area and ignore results from older requests. */
 export class RasterStatisticsController {
     /**
-     * Create a statistics request lifecycle controller.
+     * Connect a statistics request function to loading, result and error callbacks.
      *
      * @param {LoadRasterStatistics} loadStatistics Loads one target and scope.
      * @param {RasterStatisticsLoadingHandler} onLoading Receives request start.

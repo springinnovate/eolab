@@ -6,19 +6,19 @@ import shapely
 from shapely.affinity import translate
 from shapely.geometry import Polygon, box
 
-from eolab_app.processing.area_coverage import AreaCoverage
+from eolab_app.processing.area_coverage import FractionalAreaCoverage
 
 
-def compiled(geometry: shapely.Geometry) -> AreaCoverage:
-    """Compile valid unioned rings using the Processing mask input contract.
+def coverage_for_polygon(geometry: shapely.Geometry) -> FractionalAreaCoverage:
+    """Create a fractional-coverage calculator from a valid polygon.
 
     Args:
         geometry: Test AOI, potentially multipart or containing holes.
 
     Returns:
-        Oriented edge mask independent of the intersection reference below.
+        Coverage calculator using directed polygon edges, separate from the reference intersections.
     """
-    return AreaCoverage(
+    return FractionalAreaCoverage(
         np.asarray(ring.coords)
         for part in shapely.get_parts(shapely.orient_polygons(geometry))
         for ring in [part.exterior, *part.interiors]
@@ -53,16 +53,30 @@ def test_fractional_mask_matches_independent_cell_intersections(
         for column, (x0, x1) in enumerate(zip(xs[:-1], xs[1:], strict=True)):
             cell = box(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
             expected[row, column] = geometry.intersection(cell).area / cell.area
-    mask = compiled(geometry)
-    np.testing.assert_allclose(mask.mask(xs, ys), expected, rtol=1e-7, atol=2e-8)
-    np.testing.assert_array_equal(mask.mask(xs, ys) > 0, expected > 0)
+    coverage_calculator = coverage_for_polygon(geometry)
+    np.testing.assert_allclose(
+        coverage_calculator.calculate_cell_coverage(xs, ys),
+        expected,
+        rtol=1e-7,
+        atol=2e-8,
+    )
+    np.testing.assert_array_equal(
+        coverage_calculator.calculate_cell_coverage(xs, ys) > 0, expected > 0
+    )
     tiled = np.zeros_like(expected)
     for row in range(0, len(ys) - 1, 3):
         for column in range(0, len(xs) - 1, 4):
-            tile = mask.mask(xs[column : column + 5], ys[row : row + 4])
+            tile = coverage_calculator.calculate_cell_coverage(
+                xs[column : column + 5], ys[row : row + 4]
+            )
             tiled[row : row + tile.shape[0], column : column + tile.shape[1]] = tile
     np.testing.assert_allclose(tiled, expected, rtol=1e-7, atol=2e-8)
-    np.testing.assert_allclose(tiled, mask.mask(xs, ys), rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(
+        tiled,
+        coverage_calculator.calculate_cell_coverage(xs, ys),
+        rtol=1e-9,
+        atol=1e-12,
+    )
 
 
 def test_mask_excludes_holes_and_preserves_thin_boundary_slivers() -> None:
@@ -70,15 +84,27 @@ def test_mask_excludes_holes_and_preserves_thin_boundary_slivers() -> None:
     geometry = Polygon(
         box(0, 0, 10, 10).exterior.coords, [box(2, 2, 8, 8).exterior.coords]
     )
-    mask = compiled(geometry)
-    np.testing.assert_array_equal(mask.mask(np.arange(3, 7), np.arange(3, 7)), 0)
-    np.testing.assert_array_equal(mask.mask(np.arange(-4, 0), np.arange(-4, 0)), 0)
+    coverage_calculator = coverage_for_polygon(geometry)
     np.testing.assert_array_equal(
-        mask.mask(np.array([0, 1, 2]), np.array([0, 1, 2])), 1
+        coverage_calculator.calculate_cell_coverage(np.arange(3, 7), np.arange(3, 7)), 0
     )
-    thin = compiled(box(0.999999, 0, 1, 1)).mask(np.array([0, 1]), np.array([0, 1]))
+    np.testing.assert_array_equal(
+        coverage_calculator.calculate_cell_coverage(np.arange(-4, 0), np.arange(-4, 0)),
+        0,
+    )
+    np.testing.assert_array_equal(
+        coverage_calculator.calculate_cell_coverage(
+            np.array([0, 1, 2]), np.array([0, 1, 2])
+        ),
+        1,
+    )
+    thin = coverage_for_polygon(box(0.999999, 0, 1, 1)).calculate_cell_coverage(
+        np.array([0, 1]), np.array([0, 1])
+    )
     assert thin[0, 0] == pytest.approx(0.000001, rel=1e-9)
-    strip = compiled(box(-1000, 0.01, 1000, 0.02)).mask(np.arange(5), np.array([0, 1]))
+    strip = coverage_for_polygon(box(-1000, 0.01, 1000, 0.02)).calculate_cell_coverage(
+        np.arange(5), np.array([0, 1])
+    )
     np.testing.assert_allclose(strip, 0.01, rtol=1e-12)
 
 
@@ -102,6 +128,6 @@ def test_varied_concave_rings_match_fractional_intersection_reference() -> None:
                 for y0, y1 in zip(ys[:-1], ys[1:], strict=True)
             ]
         )
-        actual = compiled(geometry).mask(xs, ys)
+        actual = coverage_for_polygon(geometry).calculate_cell_coverage(xs, ys)
         np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-12)
         np.testing.assert_array_equal(actual > 0, expected > 0)

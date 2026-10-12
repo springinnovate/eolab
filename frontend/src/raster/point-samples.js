@@ -1,11 +1,9 @@
 /**
- * Exact raster point-value analysis for one retained map click.
+ * Read raster cell values at the last clicked map location.
  *
- * The controller accepts already-selected Catalog participants and delegates
- * bounded reads to an injected analysis client. It owns cancellation,
- * stale-response rejection, and immutable result snapshots; map-layer policy,
- * rendering, GeoServer publication, DOM presentation, and panel visibility
- * remain outside this module.
+ * The caller chooses the rasters; the supplied analysis client reads their cells.
+ * A new click cancels previous reads and discards late responses. Results are
+ * returned as immutable snapshots, independently of map rendering and panel visibility.
  */
 import { isCanonicalWgs84Position } from "./geometry.js";
 
@@ -50,14 +48,14 @@ const POINT_SAMPLE_CONCURRENCY = 2;
  */
 
 /**
- * Validate and copy one bounded participant list.
+ * Validate and copy the list of rasters selected for a map-click sample.
  *
  * @param {RasterPointSampleParticipant[]} participants Candidate participants.
  * @return {RasterPointSampleParticipant[]} Copied participants.
- * @throws {TypeError} If the list exceeds the bounded contract or has invalid
+ * @throws {TypeError} If the list exceeds 50 rasters or has invalid
  * identity, display, Catalog Item, or axis fields.
  */
-function normalizeParticipants(participants) {
+function validatePointSampleRasters(participants) {
     if (
         !Array.isArray(participants) ||
         participants.length > MAXIMUM_POINT_SAMPLE_PARTICIPANTS
@@ -88,14 +86,14 @@ function normalizeParticipants(participants) {
 }
 
 /**
- * Validate one pixel response and reduce it to the point-result state union.
+ * Convert a pixel response into a value, NoData or outside-raster result.
  *
  * @param {unknown} pixel Candidate analysis response.
  * @return {Pick<RasterPointSampleResult,"state"|"value"|"errorMessage">}
  * Normalized result fields.
  * @throws {TypeError} If the analysis response violates the pixel contract.
  */
-function normalizePixel(pixel) {
+function normalizePointSampleResult(pixel) {
     if (
         pixel === null ||
         typeof pixel !== "object" ||
@@ -115,13 +113,14 @@ function normalizePixel(pixel) {
     return { state: "value", value: pixel.value, errorMessage: "" };
 }
 
-/** Own exact point reads for the current bounded raster participant set. */
+/** Read up to 50 rasters at one clicked point, cancelling results from older clicks. */
 export class RasterPointSamplesController {
     /**
-     * Create one renderer- and presentation-independent sampling lifecycle.
+     * Connect the pixel-reading function and the callback that receives sample results.
      *
      * @param {SampleRasterPoint} samplePoint Bounded Catalog pixel client.
      * @param {RasterPointSamplesChanged} onChange Snapshot observer.
+     * @throws {TypeError} If the reader or result callback is not callable.
      */
     constructor(samplePoint, onChange) {
         if (typeof samplePoint !== "function" || typeof onChange !== "function") {
@@ -145,9 +144,10 @@ export class RasterPointSamplesController {
      * @param {RasterPointSampleParticipant[]} participants Ordered participants.
      * @param {{longitude:number,latitude:number}} position Canonical WGS 84 point.
      * @return {void}
+     * @throws {TypeError} If the rasters or clicked coordinates are invalid.
      */
     sample(participants, position) {
-        const normalized = normalizeParticipants(participants);
+        const normalized = validatePointSampleRasters(participants);
         if (!isCanonicalWgs84Position(position)) {
             throw new TypeError("Raster point sample position must be canonical WGS 84");
         }
@@ -204,7 +204,7 @@ export class RasterPointSamplesController {
      * @return {void}
      */
     synchronize(participants) {
-        const normalized = normalizeParticipants(participants);
+        const normalized = validatePointSampleRasters(participants);
         if (this.position === null) {
             return;
         }
@@ -263,7 +263,7 @@ export class RasterPointSamplesController {
             }
             this.results[index] = {
                 ...this.results[index],
-                ...normalizePixel(pixel),
+                ...normalizePointSampleResult(pixel),
             };
         } catch (error) {
             if (generation !== this.generation || error?.name === "AbortError") {

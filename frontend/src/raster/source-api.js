@@ -1,7 +1,8 @@
-/** Authorized original-source metadata transport. */
+/** Read raster dimensions, bounds and analysis support from the source metadata API. */
 import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
 
-/** Request a bounded private response without browser or shared HTTP caching.
+/** Fetch raster metadata with a 45-second timeout and an 8 MiB response limit.
+ * Responses bypass HTTP caches so session-owned sources are checked by the server.
  * @param {string} url Same-origin endpoint.
  * @param {Object} body Validated path-free request.
  * @param {AbortSignal} signal Owning request cancellation.
@@ -9,7 +10,7 @@ import { rasterSourceKey, rasterSourceReference } from "../raster-source.js";
  * @return {Promise<Object>} Size-bounded JSON response.
  * @throws {Error} If transport, authorization, response size or JSON decoding fails.
  */
-async function readJson(url, body, signal, fetcher) {
+async function fetchRasterMetadata(url, body, signal, fetcher) {
     const response = await fetcher(url, {method: "POST", credentials: "same-origin", cache: "no-store",
         headers: {"Content-Type": "application/json", "X-EOLab-Processing": "1"}, body: JSON.stringify(body),
         signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(45000)])});
@@ -37,13 +38,13 @@ async function readJson(url, body, signal, fetcher) {
  * @throws {Error} If metadata is unavailable or invalid.
  */
 export async function describeRasterSource(source, signal, fetcher = globalThis.fetch) {
-    const value = await readJson("/api/raster-analysis/sources", {source: rasterSourceReference(source)}, signal, fetcher);
-    if (rasterSourceKey(value) !== rasterSourceKey(source) || !/^[a-f0-9]{64}$/.test(value.version) ||
-        ![value.width, value.height, value.bands].every(n => Number.isSafeInteger(n) && n > 0) ||
-        !["pixels", "statistics"].every(name => typeof value.capabilities?.[name]?.supported === "boolean") ||
-        value.bounds !== null && (!Array.isArray(value.bounds) || value.bounds.length !== 4 || !value.bounds.every(Number.isFinite))) {
+    const metadata = await fetchRasterMetadata("/api/raster-analysis/sources", {source: rasterSourceReference(source)}, signal, fetcher);
+    if (rasterSourceKey(metadata) !== rasterSourceKey(source) || !/^[a-f0-9]{64}$/.test(metadata.version) ||
+        ![metadata.width, metadata.height, metadata.bands].every(n => Number.isSafeInteger(n) && n > 0) ||
+        !["pixels", "statistics"].every(name => typeof metadata.capabilities?.[name]?.supported === "boolean") ||
+        metadata.bounds !== null && (!Array.isArray(metadata.bounds) || metadata.bounds.length !== 4 || !metadata.bounds.every(Number.isFinite))) {
         throw new Error("The server returned invalid raster metadata.");
     }
-    return value;
+    return metadata;
 }
 

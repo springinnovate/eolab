@@ -1,14 +1,14 @@
-/** Closed scalar contract shared by vector feature-analysis consumers. */
+/** Validate inspected feature attributes and map locations for charts and navigation. */
 
 /**
  * @typedef {Object} VectorInspectionObservation
- * @property {string} sourceId Opaque retained-source identity from composition.
+ * @property {string} sourceId Layer identifier supplied by the application.
  * @property {string} layerLabel User-facing source layer or filename.
- * @property {string|number|null} featureId Bounded feature identity.
+ * @property {string|number|null} featureId Source feature identifier, or null if absent.
  * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}} focus
- * Geometry-neutral map center and optional WGS 84 feature bounds.
+ * Map center and optional WGS 84 feature bounds; full geometry is not included.
  * @property {Readonly<Record<string,string|number|boolean|null>>} properties
- * Scalar attributes returned by the existing feature inspection.
+ * Feature attributes limited to strings, numbers, booleans and null.
  */
 
 /**
@@ -25,7 +25,7 @@ function isValidVectorFeaturePosition(position) {
 }
 
 /**
- * Validate one geometry-neutral selected-feature map target.
+ * Check the center and optional bounding box used to zoom to an inspected feature.
  *
  * @param {unknown} focus Candidate focus target.
  * @return {Object} Valid center and optional bounds.
@@ -51,11 +51,11 @@ export function validateVectorFeatureFocus(focus) {
 }
 
 /**
- * Validate the closed inspection-observation boundary.
+ * Check inspected features for layer identifiers, map locations and scalar attributes.
  *
- * @param {unknown} observations Candidate observations from composition.
+ * @param {unknown} observations Feature records supplied by the application.
  * @return {VectorInspectionObservation[]} Validated observations.
- * @throws {TypeError} If composition violates the observation contract.
+ * @throws {TypeError} If a record has invalid identifiers, coordinates or nested attributes.
  */
 export function validateVectorInspectionObservations(observations) {
     if (!Array.isArray(observations)) {

@@ -1,4 +1,4 @@
-/** Contract fixtures for installed summary and clip models. */
+/** Example model definitions, inputs and run responses for model-library tests. */
 export const model = {schema: "eolab.model/v1", id: "raster-summary", version: "1.0.0", definitionSha256: "a".repeat(64), title: "Raster summary",
     description: "Calculate a scalar expression over a raster and area.", inputs: {raster: {type: "catalog_raster", label: "Raster"}, area: {type: "summary_area", label: "Analysis area"}},
     parameters: {summary: {type: "summary_expression", label: "Summary formula", alias: "a", grammar: "eolab.scalar/v1", default: "sum(a)"}},
@@ -42,7 +42,7 @@ export const clipResult = {name: "raster", label: "Clipped raster", role: "resul
     grid: {width: 10, height: 10, window: [0, 0, 10, 10], crs: "EPSG:4326", dtype: "int16", transform: [0.1, 0, 0, 0, -0.1, 1],
         nodata: null, nativeBlocks: 1, decodedBytes: 200, estimatedRawBytes: 300, reservedBytes: 1024}};
 
-/** A completed summary output using the shared typed-file contract. */
+/** A completed summary result with one formula row and CSV download metadata. */
 export const statisticsResult = {name: "statistics", label: "Statistics", role: "result", presentation: "table", kind: "statistics",
     mediaType: "text/csv", filename: "statistics.csv", bytes: 128, sha256: "d".repeat(64), cacheHit: false,
     url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,

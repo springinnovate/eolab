@@ -1,4 +1,4 @@
-"""Submit vector-area measurements through the existing Jobs lifecycle client."""
+"""Measure filtered vector features through the Jobs service."""
 
 from typing import Any
 
@@ -11,13 +11,13 @@ from eolab_app.vector.selection_operation import SelectionMeasurementResult
 
 
 class SelectionJobs:
-    """Set measurement priority/deadlines and interpret its result for Vector."""
+    """Submit feature-count and bounds jobs with deadlines and readable errors."""
 
     def __init__(self, jobs: JobsClient) -> None:
         """Use the application's authenticated Jobs connection.
 
         Args:
-            jobs: Existing client owning submission, observation and cancellation.
+            jobs: Client that submits jobs, waits for results and cancels abandoned work.
         """
         self.jobs = jobs
 
@@ -28,7 +28,7 @@ class SelectionJobs:
             selection: Catalog source and filter, with no private path/geometry.
 
         Returns:
-            The existing selection API's measurement fields.
+            Feature count, vertex count and WGS 84 bounds of the selected polygons.
 
         Raises:
             VectorConflictError: For invalid features, Jobs failure or overload.

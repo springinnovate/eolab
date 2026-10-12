@@ -1,14 +1,18 @@
-/** Reload recovery for one uncertain submission. No cookies, geometry, or result files are stored. */
+/** Save a raster-clip request for retry after reloading or losing the server response.
+ * Only source and area references, the retry identifier and label are stored.
+ */
 import { labeledRasterSource } from "../raster-source.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 const KEY = "eolab.processing.pending.v2";
 
-/** Own the minimal per-tab idempotency record. */
+/** Store one pending raster-clip request in this browser tab's session storage. */
 export class PendingSubmissionStorage {
     /** @param {Storage|null} storage Browser session storage; null disables submission recovery. */
     constructor(storage) { this.storage = storage; }
 
-    /** Read a bounded validated record after reload. @return {Object|null} Submission identity and display label. */
+    /** Restore a pending clip request, ignoring malformed or oversized saved records.
+     * @return {Object|null} Source, area, retry identifier and label, or null if unavailable.
+     */
     read() {
         try {
             const text = this.storage?.getItem(KEY);

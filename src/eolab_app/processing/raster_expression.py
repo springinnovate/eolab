@@ -35,7 +35,16 @@ PRECEDENCE = {
 
 @dataclass(frozen=True)
 class Node:
-    """Immutable typed syntax; no executable Python objects or source paths."""
+    """A parsed raster-formula value, operator or function call.
+
+    Attributes:
+        op: Source, literal, operator or statistic name.
+        args: Child expressions supplying this node's operands or arguments.
+        value: Numeric literal when op is "number".
+        boolean: Whether the expression produces a true/false condition.
+        scalar: Whether the expression produces one value rather than pixel values.
+        depth: Number of levels from this node to its deepest child.
+    """
 
     op: str
     args: tuple["Node", ...] = ()
@@ -295,12 +304,15 @@ def apply_operator(node: Node, values: list[Any]) -> Any:
 
 
 class Reduction:
-    """Bounded running accumulator for one aggregate node.
+    """Accumulate one raster statistic across successive pixel tiles.
 
     stdev uses population moments of matching valid values, with a fixed origin
     to retain precision for small spreads around large offsets. Only scalar
     moments survive between tiles; source and expression validity are shared
     with the other numeric aggregates.
+
+    Counts distinguish valid source pixels, pixels matching the expression's
+    conditions, and source pixels whose expressions produce invalid arithmetic.
     """
 
     def __init__(self, node: Node, pixel_value: float | None = None) -> None:
@@ -312,7 +324,9 @@ class Reduction:
                 missing or nonfinite values produce no_valid_data.
         """
         self.node = node
-        self.valid = self.matched = self.invalid = 0
+        self.valid_pixel_count = 0
+        self.matched_pixel_count = 0
+        self.invalid_arithmetic_pixel_count = 0
         self.total = self.compensation = self.mean = 0.0
         self.origin: float | None = None
         self.deviation: float = 0.0
@@ -325,20 +339,23 @@ class Reduction:
             and pixel_value is not None
             and math.isfinite(pixel_value)
         ):
-            self.valid = self.matched = 1
+            self.valid_pixel_count = self.matched_pixel_count = 1
             self.total = float(pixel_value)
 
     def update(
-        self, data: np.ndarray, base: np.ndarray, hectares: np.ndarray | None = None
+        self,
+        data: np.ndarray,
+        valid_source_pixels: np.ndarray,
+        hectares: np.ndarray | None = None,
     ) -> None:
-        """Merge one bounded input tile using conservative validity masks.
+        """Accumulate one tile's values that pass source validity and expression filters.
 
         stdev merges centered population moments across tiles. Empty tiles do
         not change those moments; a single matching pixel has deviation zero.
 
         Args:
             data: Float64 stored values in one tile.
-            base: In-area valid source mask.
+            valid_source_pixels: In-area valid source mask.
             hectares: Fractional cell hectares, required for an areaha reduction.
         """
         cache: dict[Node, tuple[Any, Any]] = {}
@@ -355,7 +372,7 @@ class Reduction:
             if node in cache:
                 return cache[node]
             if node.op == "source":
-                result = (data, base)
+                result = (data, valid_source_pixels)
             elif node.op == "number":
                 result = (np.float64(node.value), True)
             else:
@@ -370,13 +387,15 @@ class Reduction:
             return result
 
         values, valid = evaluate(self.node.args[0])
-        eligible = base & valid
+        eligible = valid_source_pixels & valid
         if len(self.node.args) == 2:
             condition, condition_valid = evaluate(self.node.args[1])
             valid = valid & condition_valid
             eligible = eligible & condition_valid & condition
-        self.valid += int(np.count_nonzero(base))
-        self.invalid += int(np.count_nonzero(base & ~np.asarray(valid, dtype=bool)))
+        self.valid_pixel_count += int(np.count_nonzero(valid_source_pixels))
+        self.invalid_arithmetic_pixel_count += int(
+            np.count_nonzero(valid_source_pixels & ~np.asarray(valid, dtype=bool))
+        )
         if self.node.args[0].boolean:
             eligible = eligible & values
         selected = (
@@ -385,8 +404,8 @@ class Reduction:
             else np.broadcast_to(values, data.shape)[eligible]
         )
         count = selected.size
-        prior_count = self.matched
-        self.matched += count
+        prior_count = self.matched_pixel_count
+        self.matched_pixel_count += count
         if (
             not count
             or self.node.op == "count"
@@ -402,9 +421,9 @@ class Reduction:
             block_mean = (
                 0.0 if scale == 0 else float(np.sum(selected / scale) / count * scale)
             )
-            self.mean = self.mean * (prior_count / self.matched) + block_mean * (
-                count / self.matched
-            )
+            self.mean = self.mean * (
+                prior_count / self.matched_pixel_count
+            ) + block_mean * (count / self.matched_pixel_count)
         if self.node.op in {"sum", "areaha"}:
             with np.errstate(over="ignore", invalid="ignore"):
                 partial = float(np.sum(selected, dtype=np.float64))
@@ -425,7 +444,7 @@ class Reduction:
         Args:
             selected: Nonempty finite float64 values after the owning validity
                 and selection boundary has filtered this tile.
-            prior_count: Matched count before this tile; self.matched already
+            prior_count: Matched count before this tile; self.matched_pixel_count already
                 includes its values.
         """
         if (
@@ -449,8 +468,8 @@ class Reduction:
             if scale == 0
             else math.sqrt(float(np.mean(np.square(centered / scale)))) * scale
         )
-        prior_weight = prior_count / self.matched
-        block_weight = selected.size / self.matched
+        prior_weight = prior_count / self.matched_pixel_count
+        block_weight = selected.size / self.matched_pixel_count
         delta = block_mean - self.mean
         self.deviation = math.hypot(
             self.deviation * math.sqrt(prior_weight),
@@ -467,17 +486,19 @@ class Reduction:
             stdev is population standard deviation, zero for one matched pixel
             and null for no valid data, no matches or invalid arithmetic.
         """
-        if self.valid == 0:
+        if self.valid_pixel_count == 0:
             return None, "no_valid_data"
-        if self.invalid == self.valid:
+        if self.invalid_arithmetic_pixel_count == self.valid_pixel_count:
             return None, "invalid_arithmetic"
         if self.overflow:
             return None, "overflow"
         if self.node.op == "count" or (
             self.node.args[0].boolean and self.node.op != "areaha"
         ):
-            return self.matched, "ok" if self.matched else "no_matches"
-        if self.matched == 0:
+            return self.matched_pixel_count, (
+                "ok" if self.matched_pixel_count else "no_matches"
+            )
+        if self.matched_pixel_count == 0:
             return (
                 0.0
                 if self.node.op == "areaha"
@@ -496,7 +517,7 @@ class Reduction:
 
 
 class Calculation:
-    """Evaluate one scalar expression with bounded per-aggregate state."""
+    """Evaluate a raster formula, such as mean(a) + stdev(a), across pixel tiles."""
 
     def __init__(self, root: Node, pixel_value: float | None = None) -> None:
         """Create accumulators for unique aggregate subexpressions.
@@ -598,9 +619,9 @@ class Calculation:
             "aggregates": [
                 {
                     "function": node.op,
-                    "validPixels": item.valid,
-                    "matchedPixels": item.matched,
-                    "invalidArithmeticPixels": item.invalid,
+                    "validPixels": item.valid_pixel_count,
+                    "matchedPixels": item.matched_pixel_count,
+                    "invalidArithmeticPixels": item.invalid_arithmetic_pixel_count,
                     **({"unit": "ha"} if node.op == "areaha" else {}),
                 }
                 for node, item in self.reductions.items()

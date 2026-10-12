@@ -1,4 +1,4 @@
-"""Raster-owned SLD for exact categorical rendering in the GeoServer adapter."""
+"""Generate GeoServer styles that map exact raster category values to colors."""
 
 from xml.etree import ElementTree
 
@@ -13,7 +13,7 @@ def build_categorical_raster_sld(
     style: CategoricalRasterStyle,
     opacity: float,
 ) -> bytes:
-    """Build a trusted categorical rendering transformation and layer opacity.
+    """Build an SLD document for category colors and overall layer opacity.
 
     Args:
         layer_name: Authorized workspace-qualified GeoServer raster identity.

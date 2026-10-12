@@ -137,8 +137,8 @@ def prepare_starting_inputs(
     """
     from osgeo import gdal
 
-    aoi = directory / "starting-area.geojson"
-    aoi.write_text(
+    starting_area_path = directory / "starting-area.geojson"
+    starting_area_path.write_text(
         json.dumps(
             {
                 "type": "FeatureCollection",
@@ -150,12 +150,12 @@ def prepare_starting_inputs(
         encoding="utf-8",
     )
     if sources.starting is None:
-        return aoi, sources.rasters["starting_mask"]
+        return starting_area_path, sources.rasters["starting_mask"]
     check_calculation_grid(starting.bounds, spec, limits, limits.max_mask_cells)
-    mask = directory / "starting-mask.tif"
-    output = gdal.Rasterize(
-        str(mask),
-        str(aoi),
+    starting_mask_path = directory / "starting-mask.tif"
+    starting_mask_dataset = gdal.Rasterize(
+        str(starting_mask_path),
+        str(starting_area_path),
         format="GTiff",
         outputSRS="EPSG:4326",
         xRes=spec.inputs.wgs84_pixel_size,
@@ -165,14 +165,18 @@ def prepare_starting_inputs(
         outputType=gdal.GDT_Byte,
         creationOptions=["TILED=YES", "COMPRESS=LZW", "BIGTIFF=YES"],
     )
-    if output is None or output.RasterXSize < 1 or output.RasterYSize < 1:
+    if (
+        starting_mask_dataset is None
+        or starting_mask_dataset.RasterXSize < 1
+        or starting_mask_dataset.RasterYSize < 1
+    ):
         raise ProcessingError(
             "empty_starting_mask",
             "The starting area is smaller than the selected calculation pixel size.",
             422,
         )
-    output = None
-    return aoi, mask
+    starting_mask_dataset = None
+    return starting_area_path, starting_mask_path
 
 
 def check_calculation_grid(
@@ -228,19 +232,22 @@ def check_calculation_grid(
     return cells
 
 
-def summarize_upstream_values(
-    path: Path, expression: str, upstream_total: float, limits: DownstreamLimits
+def summarize_downstream_covered_values(
+    covered_values_path: Path,
+    expression: str,
+    original_model_sum: float,
+    limits: DownstreamLimits,
 ) -> dict[str, Any]:
-    """Return the upstream sum or apply an EOlab formula to its masked output.
+    """Summarize raster values inside the downstream coverage produced by the WWF model.
 
     ``sum(a)`` reports the exact float returned by the original model. Optional
     formulas are explicitly postprocessing: they read the model's output grid
     and NoData convention without changing its coverage or masked values.
 
     Args:
-        path: Complete masked-values raster produced by the original model.
+        covered_values_path: Complete values raster masked by downstream coverage.
         expression: Validated EOlab scalar formula.
-        upstream_total: Sum returned by ``mask_population_with_coverage``.
+        original_model_sum: Sum returned by ``mask_population_with_coverage``.
         limits: Existing area-calculation resource limits.
 
     Returns:
@@ -252,8 +259,8 @@ def summarize_upstream_values(
     """
     root = compile_expression(expression, "a")
     calculation = Calculation(root)
-    with rasterio.open(path) as dataset:
-        area = (
+    with rasterio.open(covered_values_path) as dataset:
+        pixel_area_calculator = (
             PixelAreaCalculator(
                 dataset,
                 AggregateArea(kind="wholeRaster"),
@@ -264,29 +271,38 @@ def summarize_upstream_values(
         )
         for _, window in dataset.block_windows(1):
             values = dataset.read(1, window=window, masked=True)
-            valid = ~np.ma.getmaskarray(values) & np.isfinite(values.data)
-            hectares = area.calculate_hectares(window) if area else None
+            valid_covered_pixels = ~np.ma.getmaskarray(values) & np.isfinite(
+                values.data
+            )
+            hectares = (
+                pixel_area_calculator.calculate_hectares(window)
+                if pixel_area_calculator
+                else None
+            )
             calculation.process_tile(
-                values.data, valid, hectares, valid if area else None
+                values.data,
+                valid_covered_pixels,
+                hectares,
+                valid_covered_pixels if pixel_area_calculator else None,
             )
     result = calculation.result()
     if root.op == "sum" and len(root.args) == 1 and root.args[0].op == "source":
-        if not math.isfinite(upstream_total):
+        if not math.isfinite(original_model_sum):
             raise ProcessingError(
                 "invalid_output",
                 "The downstream model returned a nonfinite total.",
                 422,
             )
-        result.update(value=str(upstream_total), valueType="float", state="ok")
+        result.update(value=str(original_model_sum), valueType="float", state="ok")
     return result
 
 
-def describe_output(path: Path, name: str) -> ProducedFile:
-    """Describe an unchanged completed upstream raster for ordinary publication.
+def describe_downstream_raster_output(path: Path, name: str) -> ProducedFile:
+    """Measure a completed downstream raster's size and checksum for result publication.
 
     Args:
         path: Flat, run-owned output file.
-        name: Output name declared by the recipe.
+        name: Scientific output name declared by the registered operation.
 
     Returns:
         Measured file size and checksum for the artifact publisher.
@@ -336,20 +352,24 @@ def run_original_downstream(
     """
     from eolab_app.processing.statistics_csv import statistics_csv
 
-    model = load_beneficiaries()
-    request = spec.inputs
-    working = directory / "upstream"
-    working.mkdir()
+    beneficiaries_model = load_beneficiaries()
+    model_inputs = spec.inputs
+    model_working_directory = directory / "upstream"
+    model_working_directory.mkdir()
     write_progress(directory, "preparing_starting_mask", 0, 0)
-    aoi, mask = prepare_starting_inputs(sources, spec, starting, working, limits)
-    network = write_watershed_view(sources, spec, working)
-    partitions = model.partition_subwatersheds_by_terminal_drain(
-        aoi,
-        network,
-        model.choose_equidistant_crs_from_bbox(aoi),
-        working / "partitions",
+    starting_area_path, starting_mask_path = prepare_starting_inputs(
+        sources, spec, starting, model_working_directory, limits
     )
-    if len(partitions) > limits.max_terminals:
+    watershed_view_path = write_watershed_view(sources, spec, model_working_directory)
+    watershed_partitions_by_sink = (
+        beneficiaries_model.partition_subwatersheds_by_terminal_drain(
+            starting_area_path,
+            watershed_view_path,
+            beneficiaries_model.choose_equidistant_crs_from_bbox(starting_area_path),
+            model_working_directory / "partitions",
+        )
+    )
+    if len(watershed_partitions_by_sink) > limits.max_terminals:
         raise ProcessingError(
             "model_too_large",
             "The starting area exceeds the configured number of drainage partitions.",
@@ -360,138 +380,169 @@ def run_original_downstream(
     from shapely.geometry import box
     from eolab_app.processing.downstream_calculation import plan_native_grid
 
-    cells = records = 0
-    all_bounds = []
-    for vector in partitions.values():
-        with fiona.open(vector) as dataset:
+    routing_cell_count = watershed_count = 0
+    partition_bounds = []
+    for partition_vector_path in watershed_partitions_by_sink.values():
+        with fiona.open(partition_vector_path) as dataset:
             bounds = rasterio.warp.transform_bounds(
                 dataset.crs, "EPSG:4326", *dataset.bounds
             )
-            records += len(dataset)
-        cells += check_calculation_grid(bounds, spec, limits, limits.max_routing_cells)
-        all_bounds.append(bounds)
+            watershed_count += len(dataset)
+        routing_cell_count += check_calculation_grid(
+            bounds, spec, limits, limits.max_routing_cells
+        )
+        partition_bounds.append(bounds)
         for name, ceiling in (
             ("dem", limits.max_routing_cells),
             ("values", limits.max_value_cells),
         ):
             with rasterio.open(sources.rasters[name]) as dataset:
                 plan_native_grid(dataset, box(*bounds), ceiling, limits)
-    if cells > limits.max_routing_cells or records > limits.max_watersheds:
+    if (
+        routing_cell_count > limits.max_routing_cells
+        or watershed_count > limits.max_watersheds
+    ):
         raise ProcessingError(
             "model_too_large",
             "The upstream drainage partitions exceed the configured work budget.",
             413,
         )
-    if all_bounds:
+    if partition_bounds:
         check_calculation_grid(
             (
-                min(b[0] for b in all_bounds),
-                min(b[1] for b in all_bounds),
-                max(b[2] for b in all_bounds),
-                max(b[3] for b in all_bounds),
+                min(b[0] for b in partition_bounds),
+                min(b[1] for b in partition_bounds),
+                max(b[2] for b in partition_bounds),
+                max(b[3] for b in partition_bounds),
             ),
             spec,
             limits,
             limits.max_routing_cells,
         )
-    radius = request.buffer_m / request.travel_time_pixel_size_m
+    buffer_radius_pixels = model_inputs.buffer_m / model_inputs.travel_time_pixel_size_m
     if (
-        not math.isfinite(radius)
-        or (2 * round(radius) + 1) ** 2 > limits.max_routing_cells
+        not math.isfinite(buffer_radius_pixels)
+        or (2 * round(buffer_radius_pixels) + 1) ** 2 > limits.max_routing_cells
     ):
         raise ProcessingError(
             "model_too_large",
             "The buffer exceeds the configured calculation-cell budget. Choose a larger pixel size for distances or a smaller buffer.",
             413,
         )
-    coverages = []
-    seeds = []
-    for index, (identifier, vector) in enumerate(partitions.items()):
-        partition = working / identifier
-        partition.mkdir()
-        dem = str(partition / "dem.tif")
-        flow = str(partition / "flow.tif")
-        write_progress(directory, "routing_downstream", index, len(partitions))
-        model.align_and_resize_raster_on_vector(
-            str(sources.rasters["dem"]),
-            dem,
-            "near",
-            [request.wgs84_pixel_size, -request.wgs84_pixel_size],
-            vector,
+    partition_coverage_paths = []
+    partition_starting_mask_paths = []
+    for index, (identifier, partition_vector_path) in enumerate(
+        watershed_partitions_by_sink.items()
+    ):
+        partition_directory = model_working_directory / identifier
+        partition_directory.mkdir()
+        partition_dem_path = str(partition_directory / "dem.tif")
+        flow_direction_path = str(partition_directory / "flow.tif")
+        write_progress(
+            directory, "routing_downstream", index, len(watershed_partitions_by_sink)
         )
-        with rasterio.open(dem) as dataset:
+        beneficiaries_model.align_and_resize_raster_on_vector(
+            str(sources.rasters["dem"]),
+            partition_dem_path,
+            "near",
+            [model_inputs.wgs84_pixel_size, -model_inputs.wgs84_pixel_size],
+            partition_vector_path,
+        )
+        with rasterio.open(partition_dem_path) as dataset:
             if dataset.width * dataset.height > limits.max_routing_cells:
                 raise ProcessingError(
                     "model_too_large",
                     "The calculation grid exceeds the configured routing-cell limit.",
                     413,
                 )
-        model.calc_flow_dir(dem, partition, flow)
-        coverage = partition / "coverage.tif"
-        write_progress(
-            directory, "buffering_downstream_coverage", index, len(partitions)
+        beneficiaries_model.calc_flow_dir(
+            partition_dem_path, partition_directory, flow_direction_path
         )
-        model.calculate_downstream_coverage_from_conditional_raster(
-            vector,
-            Path(flow),
-            mask,
+        partition_downstream_coverage_path = partition_directory / "coverage.tif"
+        write_progress(
+            directory,
+            "buffering_downstream_coverage",
+            index,
+            len(watershed_partitions_by_sink),
+        )
+        beneficiaries_model.calculate_downstream_coverage_from_conditional_raster(
+            partition_vector_path,
+            Path(flow_direction_path),
+            starting_mask_path,
             "starting",
             "value > 0",
-            request.buffer_m,
-            request.cutoff_m,
-            request.travel_time_pixel_size_m,
-            partition,
-            coverage,
+            model_inputs.buffer_m,
+            model_inputs.cutoff_m,
+            model_inputs.travel_time_pixel_size_m,
+            partition_directory,
+            partition_downstream_coverage_path,
         )
-        coverages.append((identifier, str(coverage)))
-        seeds.append((identifier, str(partition / ("mask_starting_" + mask.name))))
+        partition_coverage_paths.append(
+            (identifier, str(partition_downstream_coverage_path))
+        )
+        partition_starting_mask_paths.append(
+            (
+                identifier,
+                str(partition_directory / ("mask_starting_" + starting_mask_path.name)),
+            )
+        )
     write_progress(directory, "writing_results", 0, 0)
-    section = working / "section-coverage.tif"
-    model.stitch_coverage_masks(
-        coverages, request.wgs84_pixel_size, working / "stitch-section", str(section)
+    combined_partition_coverage_path = model_working_directory / "section-coverage.tif"
+    beneficiaries_model.stitch_coverage_masks(
+        partition_coverage_paths,
+        model_inputs.wgs84_pixel_size,
+        model_working_directory / "stitch-section",
+        str(combined_partition_coverage_path),
     )
-    coverage = directory / "coverage.tif"
-    model.stitch_coverage_masks(
-        [("starting", str(section))],
-        request.wgs84_pixel_size,
-        working / "stitch-union",
-        str(coverage),
+    downstream_coverage_path = directory / "coverage.tif"
+    beneficiaries_model.stitch_coverage_masks(
+        [("starting", str(combined_partition_coverage_path))],
+        model_inputs.wgs84_pixel_size,
+        model_working_directory / "stitch-union",
+        str(downstream_coverage_path),
     )
-    model.stitch_coverage_masks(
-        seeds,
-        request.wgs84_pixel_size,
-        working / "stitch-seeds",
+    beneficiaries_model.stitch_coverage_masks(
+        partition_starting_mask_paths,
+        model_inputs.wgs84_pixel_size,
+        model_working_directory / "stitch-seeds",
         str(directory / "starting_mask.tif"),
     )
     write_progress(directory, "summarizing_values", 0, 0)
-    masked = directory / "masked_values.tif"
-    total = model.mask_population_with_coverage(
-        str(sources.rasters["values"]), str(coverage), str(masked)
+    downstream_covered_values_path = directory / "masked_values.tif"
+    original_model_sum = beneficiaries_model.mask_population_with_coverage(
+        str(sources.rasters["values"]),
+        str(downstream_coverage_path),
+        str(downstream_covered_values_path),
     )
-    rows = [
+    statistics_rows = [
         {
-            "label": request.label,
-            "expression": request.summary,
-            **summarize_upstream_values(masked, request.summary, total, limits),
+            "label": model_inputs.label,
+            "expression": model_inputs.summary,
+            **summarize_downstream_covered_values(
+                downstream_covered_values_path,
+                model_inputs.summary,
+                original_model_sum,
+                limits,
+            ),
         }
     ]
-    result = directory / "result.csv"
-    result.write_bytes(statistics_csv(rows))
+    statistics_csv_path = directory / "result.csv"
+    statistics_csv_path.write_bytes(statistics_csv(statistics_rows))
     (directory / "provenance.json").write_text(
         json.dumps(
             {
                 "operation": spec.operation,
                 "beneficiariesRevision": BENEFICIARIES_REVISION,
-                "inputs": request.model_dump(mode="json", by_alias=True),
+                "inputs": model_inputs.model_dump(mode="json", by_alias=True),
                 "numericalPolicy": {
-                    "wgs84PixelSize": request.wgs84_pixel_size,
-                    "distancePixelSizeMetres": request.travel_time_pixel_size_m,
-                    "bufferMetres": request.buffer_m,
-                    "cutoffMetres": request.cutoff_m,
+                    "wgs84PixelSize": model_inputs.wgs84_pixel_size,
+                    "distancePixelSizeMetres": model_inputs.travel_time_pixel_size_m,
+                    "bufferMetres": model_inputs.buffer_m,
+                    "cutoffMetres": model_inputs.cutoff_m,
                 },
-                "upstreamTotal": total,
-                "statistics": rows,
-                "partitionIds": list(partitions),
+                "upstreamTotal": original_model_sum,
+                "statistics": statistics_rows,
+                "partitionIds": list(watershed_partitions_by_sink),
             },
             allow_nan=False,
         ),
@@ -508,19 +559,22 @@ def run_original_downstream(
         )
     # The upstream functions have returned and closed their files. Only this
     # attempt's known scratch subtree is removed; publication remains flat.
-    if working.resolve().parent != directory.resolve() or working.is_symlink():
+    if (
+        model_working_directory.resolve().parent != directory.resolve()
+        or model_working_directory.is_symlink()
+    ):
         raise ProcessingError(
             "invalid_output", "The downstream workspace changed unexpectedly.", 500
         )
-    shutil.rmtree(working)
-    outputs = tuple(
-        describe_output(directory / (name + ".tif"), name)
+    shutil.rmtree(model_working_directory)
+    raster_outputs = tuple(
+        describe_downstream_raster_output(directory / (name + ".tif"), name)
         for name in ("coverage", "starting_mask", "masked_values")
     )
     return AggregateArtifact(
         filename="downstream-statistics.csv",
-        size=result.stat().st_size,
-        sha256=hashlib.sha256(result.read_bytes()).hexdigest(),
-        rows=rows,
-        additional_outputs=outputs,
+        size=statistics_csv_path.stat().st_size,
+        sha256=hashlib.sha256(statistics_csv_path.read_bytes()).hexdigest(),
+        rows=statistics_rows,
+        additional_outputs=raster_outputs,
     )

@@ -1,4 +1,4 @@
-"""FastAPI delivery boundary for rendering-independent raster analysis."""
+"""HTTP routes for raster metadata, pixel values and sampled distributions."""
 
 from collections.abc import Callable
 from typing import Any
@@ -40,7 +40,7 @@ def create_raster_analysis_router(
     source_access: RasterSourceAccess | None = None,
     session_owner: Callable[[Request, Response], str] | None = None,
 ) -> APIRouter:
-    """Create independent raster-analysis routes.
+    """Create raster-analysis routes that read sources without publishing map layers.
 
     Args:
         pixel_service: Source-authorized, capacity-limited pixel workflow.

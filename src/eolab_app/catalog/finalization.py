@@ -1,4 +1,4 @@
-"""Composition helpers for scanner Item finalization boundaries."""
+"""Apply additional metadata and source assessments before catalog Items are stored."""
 
 from typing import Any
 
@@ -6,10 +6,10 @@ from eolab_app.catalog.ports import DatasetItemFinalizer
 
 
 class CompositeDatasetItemFinalizer:
-    """Apply focused Item finalizers in one deterministic scanner boundary."""
+    """Run a sequence of metadata finalizers on each catalog Item."""
 
     def __init__(self, finalizers: tuple[DatasetItemFinalizer, ...]) -> None:
-        """Create a non-empty ordered finalizer composition.
+        """Configure the order in which Item finalizers run.
 
         Args:
             finalizers: Focused finalizers applied in supplied order.
@@ -22,17 +22,17 @@ class CompositeDatasetItemFinalizer:
         self._finalizers = finalizers
 
     async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
-        """Apply every focused finalizer to one extracted scanner Item.
+        """Pass a catalog Item through each finalizer in order.
 
         Args:
             item: Fresh format-handler STAC Item.
 
         Returns:
-            Finalized Item after every owned assessment boundary.
+            The Item returned by the last finalizer.
 
         Raises:
-            Exception: Propagates failures from a focused finalizer so the scan
-                records the source-dataset error through its existing contract.
+            Exception: Propagates a finalizer failure so the scanner can record
+                which dataset could not be cataloged.
         """
         finalized_item = item
         for finalizer in self._finalizers:

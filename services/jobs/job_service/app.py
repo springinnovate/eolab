@@ -1,4 +1,4 @@
-"""Authenticated HTTP boundary for bounded, ephemeral diagnostic jobs."""
+"""Authenticate callers and expose the in-memory Job service over HTTP."""
 
 import hashlib
 import hmac
@@ -37,7 +37,7 @@ MAX_REQUEST_BYTES = 65536
 
 
 def error_response(status: int, code: str, message: str) -> JSONResponse:
-    """Build the public error envelope without including submitted inputs.
+    """Build an HTTP error response without including submitted inputs.
 
     Args:
         status: HTTP status code.
@@ -108,7 +108,7 @@ class RequestSizeLimit:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Create the single-process service with a lifespan-owned execution manager.
+    """Create the HTTP application and manage job execution during its lifetime.
 
     Args:
         settings: Optional already-validated configuration for an embedded host
@@ -436,7 +436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses={**errors, 501: {"model": ErrorResponse}},
     )
     async def events(job_id: UUID, owner: Owner) -> None:
-        """Reserve SSE for later; callers can poll authoritative status.
+        """Report that event streaming is unsupported; clients can poll job status.
 
         Args:
             job_id: Job identity.
@@ -454,7 +454,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses={**errors, 501: {"model": ErrorResponse}},
     )
     async def artifact(job_id: UUID, artifact_id: UUID, owner: Owner) -> None:
-        """Reserve file results for a later operation migration.
+        """Report that file downloads are unsupported by this service.
 
         Args:
             job_id: Job identity.

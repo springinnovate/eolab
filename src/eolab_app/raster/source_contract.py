@@ -1,4 +1,4 @@
-"""Rendering-neutral contracts for bounded scanner-signed raster reads."""
+"""Validate raster metadata and read native pixels within memory limits."""
 
 import math
 from pathlib import Path
@@ -29,7 +29,7 @@ def internal_mask_block_shape(
 ) -> tuple[int, int] | None:
     """Inspect the embedded mask's own blocks without reading pixel values.
 
-    Rasterio exposes data blocks but not mask blocks. GDAL's existing Python
+    Rasterio exposes data blocks but not mask blocks. GDAL's Python
     bindings supply that metadata; mask tiles need not match data tiles.
     The caller must already have checked the signed file dependencies.
 
@@ -65,13 +65,13 @@ def internal_mask_block_shape(
             }:
                 raise ValueError("Raster mask metadata requires unsigned sidecars")
             band = source.GetRasterBand(1)
-            mask = band.GetMaskBand()
-            width, height = mask.GetBlockSize()
+            validity_band = band.GetMaskBand()
+            width, height = validity_band.GetBlockSize()
             if (
                 band.GetMaskFlags() != gdal.GMF_PER_DATASET
-                or mask.XSize != dataset.width
-                or mask.YSize != dataset.height
-                or mask.DataType != gdal.GDT_Byte
+                or validity_band.XSize != dataset.width
+                or validity_band.YSize != dataset.height
+                or validity_band.DataType != gdal.GDT_Byte
                 or width < 1
                 or height < 1
             ):
@@ -98,13 +98,14 @@ def mask_invalid_raster_values(
     Returns:
         Original values with the combined boolean mask, without copying values.
     """
-    valid = numpy.isfinite(values)
+    valid_pixel_mask = numpy.isfinite(values)
     if nodata is not None:
-        numpy.not_equal(values, nodata, out=valid, where=valid)
+        numpy.not_equal(values, nodata, out=valid_pixel_mask, where=valid_pixel_mask)
     if validity is not None:
-        numpy.logical_and(valid, validity, out=valid)
-    numpy.logical_not(valid, out=valid)
-    return numpy.ma.array(values, mask=valid, copy=False)
+        numpy.logical_and(valid_pixel_mask, validity, out=valid_pixel_mask)
+    # NumPy masks use True for excluded pixels; reuse the validity buffer.
+    invalid_pixel_mask = numpy.logical_not(valid_pixel_mask, out=valid_pixel_mask)
+    return numpy.ma.array(values, mask=invalid_pixel_mask, copy=False)
 
 
 def _require_mask_block_memory(

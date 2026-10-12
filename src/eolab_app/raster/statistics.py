@@ -250,21 +250,20 @@ def read_raster_statistics(
     sampling_area: RasterSamplingArea,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> RasterStatistics:
-    """Read band-1 statistics through one bounded source-work planner.
+    """Calculate band-one distributions using a complete window or a sample grid.
 
-    Every scope first resolves a finite integral source envelope. Envelopes
-    satisfying the exact dimension, block, and decoded-byte ceilings are read
-    completely one native block at a time. Broader envelopes use the fixed
-    127-longest-edge center grid, whose unique blocks and cumulative decoded
-    work are proven before I/O. Broad grids prefer a suitable signed embedded
-    overview for unmasked sources; masked sources retain original-cell validity
-    through native-block center sampling. Neither
-    path relies on WMS publication or rendering state.
+    The sampling area determines an integer-pixel source window. Windows that
+    fit the dimension, block-count, and decoded-byte limits are read completely.
+    Larger windows use a center-sampled grid with at most 127 cells per edge;
+    its required blocks and decoded bytes are checked before reading. Sources
+    without embedded validity masks use a suitable embedded overview when
+    available. Sources with masks sample original pixels from native blocks.
+    Both paths read source data independently of WMS publication.
 
     Args:
         source_path: Authorized mounted GeoTIFF.
         sampling_area: Explicit whole, selected-bounds, or resolved catalog selection.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Finite sample distribution and a suggested display range.
@@ -279,6 +278,7 @@ def read_raster_statistics(
         ValueError: If source structure, CRS, transformation, or bounded-read
             admission is invalid.
     """
+
     require_active_raster_read(cancellation_requested)
     with rasterio.open(source_path) as dataset:
         require_active_raster_read(cancellation_requested)
@@ -357,7 +357,7 @@ def summarize_raster_sample(
     sampling_area: RasterSamplingArea,
     sampling_method: Literal["sampleGrid", "exactSourceWindow"],
 ) -> RasterStatistics:
-    """Summarize an owned numeric sample without additional source reads.
+    """Calculate counts, percentiles and a histogram from masked raster samples.
 
     Args:
         sample: Finite/nodata and selected-area masked band-one values.

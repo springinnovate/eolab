@@ -1,4 +1,4 @@
-"""Vector policy for map display outlines executed through the Jobs client."""
+"""Request simplified outlines of filtered vector features through Jobs."""
 
 from typing import Any
 
@@ -11,10 +11,10 @@ from eolab_app.vector.outline_operation import OutlineResult
 
 
 class OutlineJobs:
-    """Build outline inputs and validate results without owning job lifecycle."""
+    """Submit map-outline jobs and validate the returned geometry and bounds."""
 
     def __init__(self, jobs: JobsClient) -> None:
-        """Use the composition root's authenticated Jobs client.
+        """Use an authenticated Jobs client for outline requests.
 
         Args:
             jobs: Operation-independent client with bounded transport/cleanup.
@@ -22,13 +22,13 @@ class OutlineJobs:
         self.jobs = jobs
 
     async def __call__(self, selection: CatalogSelection) -> dict[str, Any]:
-        """Return a map outline without making numeric analysis depend on it.
+        """Create a simplified map outline for a catalog feature selection.
 
         Args:
             selection: Immutable Catalog identity, source signature and filter.
 
         Returns:
-            Validated display geometry and bounds in the existing response shape.
+            Validated GeoJSON FeatureCollection and its WGS 84 bounding box.
 
         Raises:
             VectorConflictError: If execution or outline result validation fails.

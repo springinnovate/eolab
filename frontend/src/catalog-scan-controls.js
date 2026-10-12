@@ -1,4 +1,4 @@
-/** Catalog-owned scan actions and recoverable observation of authoritative status. */
+/** Start catalog scans and keep their progress visible through temporary connection failures. */
 
 const POLL_DELAY_MS = 750;
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
@@ -7,11 +7,11 @@ const ACTIVE_STATES = new Set(["discovering", "scanning"]);
 const SCAN_STATES = new Set([...ACTIVE_STATES, "not_started", "completed", "failed"]);
 
 /**
- * Observe scan progress without owning scan execution or Catalog search.
+ * Start a server scan on request and refresh its status until it finishes.
  *
  * Transport failures retain the last snapshot and retry only status reads.
- * A generation and AbortController fence obsolete requests and timers. The
- * existing renderer and refresh callback remain application composition inputs.
+ * Request sequence numbers and AbortController discard obsolete reads and timers.
+ * Callbacks update the progress display and refresh catalog results after completion.
  */
 export class CatalogScanControls {
     /**

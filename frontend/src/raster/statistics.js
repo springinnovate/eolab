@@ -1,5 +1,5 @@
 /**
- * Domain rules for bounded raster statistics and histogram percentiles.
+ * Validate raster statistics and estimate percentile values from histograms.
  *
  * This module validates the analysis API's statistics contract, determines
  * whether results match the active whole-raster or selected-area scope, and
@@ -39,7 +39,7 @@ function isPositiveInteger(value) {
 }
 
 /**
- * Validate the fixed, bounded raster-statistics response contract.
+ * Check a raster statistics response's sampling area, counts, bins and numeric values.
  *
  * @param {Object} statistics Candidate response from EOLab.
  * @return {Object} The validated response.

@@ -645,7 +645,7 @@ test("composition screens hidden and non-overlapping defaults using Catalog exte
         raster("inside", [77, 22, 78, 23]), raster("3d", [77, 22, -5, 78, 23, 8]),
         raster("unknown"), raster("invalid", [1, 5, 2, 4]), raster("wrapped", [170, 20, -170, 25]),
         { ...raster("vector", [77, 22, 78, 23]), datasetKind: "vector", capabilities: {} }];
-    const policy = new Function("mapLayerController", "clipSource", `${main.slice(start, end)}; return enabledRasterSources;`)(
+    const policy = new Function("mapLayerController", "describeCalculationSource", `${main.slice(start, end)}; return enabledRasterSources;`)(
         { snapshots: () => layers }, (item, label) => ({ ...item, label }));
     assert.deepEqual(policy(box(77)).map(source => source.itemId), ["inside", "3d", "unknown", "invalid"]);
     assert.ok(policy(box(175)).some(source => source.itemId === "wrapped"));
@@ -1033,7 +1033,7 @@ test("histogram action opens and runs all valid configured cards without Calcula
     const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8").replaceAll("\r\n", "\n");
     const callback = main.slice(main.indexOf("onCalculateRequested: ") + "onCalculateRequested: ".length,
         main.indexOf(",\n        onSamplingAreaChange:"));
-    const action = new Function("calculations", "clipSource", "mapLayerController", "rasterSourceKey", `return (${callback});`)(
+    const action = new Function("calculations", "describeCalculationSource", "mapLayerController", "rasterSourceKey", `return (${callback});`)(
         h.controller, item => item, { getRecord: () => null }, item => item.itemId);
     h.controller.setActive(false);
     action(source, box(80)); action(source, box(80));

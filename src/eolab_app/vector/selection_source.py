@@ -1,10 +1,9 @@
-"""Prepare the same vector source and filter for local work and Jobs operations.
+"""Locate catalog vector files and prepare the filter used to select features.
 
-This is the source-resolution logic extracted from VectorSamplingService, not
-another Catalog search or a second implementation. It uses the existing
-VectorCatalog to fetch one Item and MountedVectorResolver to locate its dataset.
-It validates the attribute filter and records file signatures, but reads no
-features. The bounded vector reader applies the filter when it reads polygons.
+VectorCatalog supplies the Item and MountedVectorResolver locates its dataset.
+The filter is validated against catalog fields, and source file signatures are
+recorded for change detection. Feature readers apply the filter later; source
+resolution does not load polygons.
 """
 
 import asyncio
@@ -36,8 +35,8 @@ async def resolve_selection(
     attribute rules so driver-specific string comparisons cannot change results.
 
     Args:
-        catalog: Existing reader that fetches the requested STAC Item.
-        resolver: Existing resolver that maps that Item's data Asset to an
+        catalog: Reader that fetches the requested STAC Item.
+        resolver: Maps the Item's data Asset to an
             allowed dataset path and native layer inside the read-only mount.
         request: Catalog collection/item IDs and attribute filter. Callers name
             a catalog entry, not a filesystem path; the server locates the file.
@@ -60,22 +59,29 @@ async def resolve_selection(
             f"The selected source is {source.source_kind} {source.source_format}; "
             "sampling requires a mounted Shapefile or GeoPackage polygon layer."
         )
-    candidate = validate_filter(request.filter, catalog_vector_fields(item))
-    signature = await asyncio.to_thread(vector_source_signature, source)
-    digest = hashlib.sha256(json.dumps(signature).encode()).hexdigest()
+    validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
+    source_file_signature = await asyncio.to_thread(vector_source_signature, source)
+    source_signature_hash = hashlib.sha256(
+        json.dumps(source_file_signature).encode()
+    ).hexdigest()
     selection = CatalogSelection(
         collectionId=request.collection_id,
         itemId=request.item_id,
         assetKey=source.asset_key,
         layerName=source.layer_name,
-        sourceSignature=digest,
-        filter=candidate,
+        sourceSignature=source_signature_hash,
+        filter=validated_filter,
     )
-    paths = {p.name: p for p in (source.component_paths or (source.source_path,))}
+    component_paths_by_name = {
+        p.name: p for p in (source.component_paths or (source.source_path,))
+    }
     return ResolvedCatalogSelection(
         selection,
         source.source_path,
         "GPKG" if source.source_format == "geopackage" else "ESRI Shapefile",
-        tuple((paths[name], tuple(values)) for name, *values in signature),
-        ogr_predicate(candidate),
+        tuple(
+            (component_paths_by_name[name], tuple(values))
+            for name, *values in source_file_signature
+        ),
+        ogr_predicate(validated_filter),
     )

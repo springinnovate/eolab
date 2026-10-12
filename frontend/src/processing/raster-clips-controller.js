@@ -1,4 +1,4 @@
-/** Raster clips own immutable submissions, recovery, and clip lifecycle presentation. */
+/** Submit raster clips, recover pending requests and present download progress. */
 import { labeledRasterSource, rasterSourceKey } from "../raster-source.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { ProcessingRequestError } from "./api.js";
@@ -7,20 +7,24 @@ import { ProcessingJobs } from "./jobs.js";
 export { ACTIVE_JOB_STATES } from "./jobs.js";
 
 /** Copy original raster identity and its label. @param {Object} source Labeled raster source. @return {Readonly<Object>} Snapshot. @throws {TypeError} If identity or label is invalid. */
-function snapshotSource(source) {
+function copyClipRasterSource(source) {
     return labeledRasterSource(source, source.label);
 }
 
-/** Omit whole-raster areas from the download contract. @param {Object|null} area Sampling selection. @return {Readonly<Object>|null} Explicit area. */
-function explicitArea(area) {
+/** Validate a clip's rectangle or polygon selection, excluding whole-raster requests.
+ * @param {Object|null|undefined} area Sampling selection.
+ * @return {Readonly<Object>|null} Validated area, or null when no clipping area is selected.
+ * @throws {TypeError|Error} If a selected rectangle or polygon reference is invalid.
+ */
+function normalizeClipArea(area) {
     if (area === null || area === undefined || ["wholeRaster", "wholeOverlap"].includes(area.kind)) return null;
     return normalizeRasterSamplingArea(area);
 }
 
 /** Retain clip state and show it only while the raster clip tool is active. */
 export class RasterClipsController {
-    /** Retain clip review and owned job state through existing composition adapters.
-     * @param {Object} dependencies Owned adapters and composition callbacks.
+    /** Connect clip controls to the Processing API, job history and map area callbacks.
+     * @param {Object} dependencies API clients, view, request storage and map callbacks.
      * @param {import("./api.js").ProcessingApiClient} dependencies.api Processing API client.
      * @param {ProcessingJobs} [dependencies.jobs] Shared session polling/history.
      * @param {import("./raster-clips-view.js").RasterClipsView} dependencies.view Raster clip DOM adapter.
@@ -84,17 +88,17 @@ export class RasterClipsController {
         if (!this.state.pending && !this.state.submitting) {
             const context = this.getContext();
             this.state.message = "";
-            this.state.sources = context.sources.map(snapshotSource);
+            this.state.sources = context.sources.map(copyClipRasterSource);
             this.state.review = source !== null || area !== undefined || !!this.editingArea || !this.state.currentJobId;
             if (this.state.review) {
-                this.state.area = explicitArea(area === undefined ? context.area : area);
+                this.state.area = normalizeClipArea(area === undefined ? context.area : area);
                 const fixed = source ?? (this.editingArea && this.sourceWasChosen ? this.state.source : null);
                 const chosen = fixed ?? (this.getQuerySources ? this.getQuerySources(this.state.area)[0] : this.state.sources[0]) ?? null;
                 this.sourceWasChosen = !!fixed;
                 if (chosen && !this.state.sources.some(item => rasterSourceKey(item) === rasterSourceKey(chosen))) {
-                    this.state.sources.unshift(snapshotSource(chosen));
+                    this.state.sources.unshift(copyClipRasterSource(chosen));
                 }
-                this.state.source = chosen ? snapshotSource(chosen) : null;
+                this.state.source = chosen ? copyClipRasterSource(chosen) : null;
             }
         }
         this.editingArea = false;

@@ -1,4 +1,4 @@
-/** Bounded per-tab recovery records for independent calculations. */
+/** Save each raster calculation's inputs and retry state for recovery after a tab reload. */
 import { labeledRasterSource } from "../raster-source.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const LEGACY_KEY = "eolab.processing.calculation.v1";
@@ -6,7 +6,11 @@ const KEY_PREFIX = "eolab.processing.calculation.v2.";
 const CLIENT = /^(summary|(?:raster-series|summary-query):(0|[1-9][0-9]{0,15}))$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
-/** Validate the optional total-pixel execution budget. @param {number|null} value Setting. @return {number|null} Budget. */
+/** Validate the optional number of pixels processed in each calculation batch.
+ * @param {number|null|undefined} value Requested batch size.
+ * @return {number|null} Validated batch size, or null for the server default.
+ * @throws {TypeError} If the size is not an integer from 1 through 4,194,304.
+ */
 export function chunkPixels(value) {
     if (value == null) return null;
     if (!Number.isSafeInteger(value) || value < 1 || value > 4194304) throw new TypeError("Batch size must be 1 to 4,194,304 pixels.");
@@ -28,7 +32,7 @@ export function calculationPixelPoint(calculations, point) {
     return Object.freeze({ longitude: point.longitude, latitude: point.latitude });
 }
 
-/** Copy only the public calculation intent, including a click when a formula needs it.
+/** Validate and freeze the source, area, formulas and optional clicked pixel for a calculation.
  * @param {Object} value Candidate source, area, formulas and optional pixelPoint.
  * @return {Readonly<Object>} Immutable snapshot.
  * @throws {TypeError|Error} If the source, formulas, area, chunk budget or point is invalid.
@@ -52,7 +56,10 @@ export function calculationIntent(value) {
         area: normalizeCalculationArea(value.area), calculations: Object.freeze(calculations) });
 }
 
-/** Keep idempotency and cancellation intent across reloads, without persisting cookies. */
+/** Recover submitted calculations and requested cancellations after reloading the tab.
+ * Saved retry identifiers let the server recognize a resubmission as the same job.
+ * Session cookies are not copied into these records.
+ */
 export class CalculationSessionStorage {
     /** Bind one recovery record for a fixed summary or independent multi-raster position.
      * Each record retains its size limit; browser storage bounds total saved data.
@@ -104,7 +111,9 @@ export class CalculationSessionStorage {
                 (!owner || owner === "summary") && this.client === "summary") ? text : null;
         } catch { return null; }
     }
-    /** Recover validated execution data and caller context without choosing whether to cancel. @return {Object|null} Owned workflow. */
+    /** Read one calculation's saved inputs, job identifier and cancellation request.
+     * @return {Object|null} Validated recovery record, or null if absent, invalid or unreadable.
+     */
     read() {
         try {
             const text = this.storage?.getItem(KEY_PREFIX + this.client) ?? this.readLegacyRecord();
@@ -134,7 +143,7 @@ export class CalculationSessionStorage {
         this.storage.setItem(KEY_PREFIX + this.client, text);
         if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);
     }
-    /** Remove a confirmed terminal workflow. @return {void} */
+    /** Remove this caller's recovery record after its job has finished. @return {void} */
     clear() {
         this.storage?.removeItem(KEY_PREFIX + this.client);
         if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);

@@ -19,7 +19,7 @@ from eolab_app.processing.models import (
 )
 
 class JobSubscription(Protocol):
-    """A bounded owner-specific change hint, never a result or authorization."""
+    """A session-owned subscription that signals when job status should be reread."""
 
     async def wait(self, timeout: float) -> bool:
         """Consume a coalesced hint or time out for a transport heartbeat.
@@ -29,6 +29,9 @@ class JobSubscription(Protocol):
 
         Returns:
             True for a pending hint, False after the timeout.
+
+        Raises:
+            ProcessingError: If the subscription closes before a notification is read.
         """
         ...
 
@@ -38,7 +41,7 @@ class JobSubscription(Protocol):
 
 
 class JobChanges(Protocol):
-    """Processing's session-isolated change-subscription provider."""
+    """Create job-change subscriptions for individual browser sessions."""
 
     def subscribe(self, owner: str) -> JobSubscription:
         """Register before the consumer refreshes its authoritative job state.
@@ -76,7 +79,7 @@ class JobWakeup(Protocol):
 
 
 class JobStore(Protocol):
-    """Storage capability; implementations do not invoke application services."""
+    """Persist Processing jobs and enforce their ownership, leases and storage limits."""
 
     def inspect_input_file(
         self, owner: str, run_id: str, artifact_id: str
@@ -486,7 +489,7 @@ class JobStore(Protocol):
 
 
 class JobArtifactStore(Protocol):
-    """Storage capability; implementations do not invoke application services."""
+    """Store job workspaces and publish, locate or remove their result files."""
 
     def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
         """Check physical free space and create one unique private attempt.

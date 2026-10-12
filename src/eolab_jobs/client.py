@@ -1,4 +1,4 @@
-"""Bounded Jobs transport and caller-owned lifecycles, independent of server code."""
+"""Submit operations to the Job service and monitor, cancel or delete their jobs."""
 
 import asyncio
 import json
@@ -15,7 +15,7 @@ JOBS_URL = "http://jobs:8080/api/jobs"
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 512 * 1024
 CLEANUP_SECONDS = 5
-# Preserve the outline caller's 100 ms authoritative status-check cadence.
+# Poll every 100 ms so short outline jobs can appear promptly in the viewer.
 POLL_SECONDS = 0.1
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "expired"})
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class JobSnapshot(BaseModel):
 
 
 class JobResult(BaseModel):
-    """Owned inline output; operation-specific value validation belongs to callers."""
+    """A job identifier and its JSON result, which the calling operation validates."""
 
     jobId: UUID
     value: JsonValue
@@ -64,12 +64,13 @@ class JobFailed(RuntimeError):
 
 
 class JobsClient:
-    """Operation-independent client using an externally owned HTTP connection pool.
+    """Submit and manage jobs through a caller-supplied HTTP client.
 
     Low-level methods leave job lifetime to the caller. run() owns one submission
     through completion and cancels abandoned work. No queue or background observer
     survives a completed run(). HTTP failures raise httpx2.HTTPError; invalid
-    protocol responses raise ValueError. Feature error translation stays outside.
+    protocol responses raise ValueError. The calling feature translates these
+    failures into its own user-facing errors.
     """
 
     def __init__(
@@ -94,12 +95,12 @@ class JobsClient:
         body: bytes | None = None,
         key: str | None = None,
     ) -> dict[str, Any]:
-        """Exchange bounded JSON only with the internal Jobs endpoint.
+        """Send a Job service request and read at most MAX_RESPONSE_BYTES of JSON.
 
         Args:
             method: Client-selected HTTP method.
             suffix: Fixed suffix built from validated UUIDs.
-            body: Frozen bounded submission, or no body.
+            body: Serialized request bytes, or None for a request without a body.
             key: Stable submission retry identity.
 
         Returns:
@@ -301,7 +302,7 @@ class JobsClient:
         delete_on_completion: bool,
         idempotency_key: str | None = None,
     ) -> JobResult:
-        """Own a job through its result and cancel abandoned work.
+        """Submit a job, wait for its result and cancel it if the caller stops waiting.
 
         Args:
             payload: Submission fields, frozen before the first await.

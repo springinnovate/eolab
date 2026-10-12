@@ -73,7 +73,7 @@ def select_area(
     *,
     max_retained_polygon_bytes: int = 0,
 ) -> SelectedRasterArea:
-    """Project an already-validated bounds/polygon selection value through neutral mechanisms.
+    """Locate a selected area on the raster grid and prepare its polygon-mask source.
 
     Args:
         dataset: Validated open native raster.
@@ -91,6 +91,7 @@ def select_area(
     Raises:
         ProcessingError: If the area is unavailable, invalid, or exceeds bounded work.
     """
+
     try:
         if kind == "catalogSelection":
             if resolved is None:
@@ -130,10 +131,10 @@ def select_area(
         ) from error
 
 
-def native_work(
+def estimate_native_raster_reads(
     dataset: Any, window: Any, max_blocks: int, max_decoded_bytes: int
 ) -> tuple[int, int, int]:
-    """Bound block-index allocation and total decoded source work before reading.
+    """Estimate raster block reads and decoded bytes, rejecting work above the limits.
 
     Args:
         dataset: Validated native dataset.

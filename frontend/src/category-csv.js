@@ -1,6 +1,6 @@
-/** Neutral bounded syntax for category-table CSV input. */
+/** Parse category-table CSV files, checking headers, quoting and row limits. */
 
-/** Maximum UTF-8 file size shared by category-table input boundaries. */
+/** Maximum UTF-8 size of an uploaded category table. */
 export const MAX_CATEGORY_CSV_BYTES = 131072;
 
 /**
@@ -10,13 +10,13 @@ export const MAX_CATEGORY_CSV_BYTES = 131072;
  */
 
 /**
- * Parse comma-separated records with strict quoting and bounded row storage.
+ * Parse CSV records, checking quotes and enforcing the category row limit.
  * Empty physical records are ignored. Quoted empty cells and comma-only rows
- * remain records, allowing the table boundary to report their missing fields.
+ * remain records so the table parser can report their missing fields.
  * Quoted line breaks normalize to LF, matching HTML textarea value semantics.
  *
- * @param {string} text Byte-bounded CSV text without its optional initial BOM.
- * @param {number} maximumCategories Owning table limit.
+ * @param {string} text Size-checked CSV text with any initial byte-order mark removed.
+ * @param {number} maximumCategories Maximum number of data rows allowed by the caller.
  * @return {CategoryCsvRecord[]} Decoded records including the header.
  * @throws {Error} If quoting, line endings, or the category row limit is invalid.
  */
@@ -106,7 +106,7 @@ function readCategoryCsvRecords(text, maximumCategories) {
  * @return {string[]} Trimmed lowercase column names in CSV order.
  * @throws {Error} If a name is unknown, duplicated, or required but missing.
  */
-function categoryCsvColumns(header) {
+function readCategoryCsvColumns(header) {
     const allowed = ["value", "label", "color", "opacity"];
     const columns = header.fields.map(field => field.trim().toLowerCase());
     const seen = new Set();
@@ -129,13 +129,13 @@ function categoryCsvColumns(header) {
 
 /**
  * Read a complete category CSV table without interpreting feature values.
- * Both style owners use the same headers, quoting, UTF-8 byte bound and
- * row-width errors; each supplies its established category-count limit.
- * Values remain literal text for the owning typed contract to interpret.
+ * Every caller uses the same headers, quoting rules, file-size limits and row-width
+ * errors. Each supplies its own category-count limit and converts the returned text
+ * cells into the value types supported by its style.
  *
  * @param {string} text UTF-8 decoded file contents, with an optional BOM.
- * @param {number} maximumCategories Established positive owning table limit.
- * @return {{columns:string[],data:CategoryCsvRecord[]}} Complete bounded table.
+ * @param {number} maximumCategories Positive maximum number of category rows.
+ * @return {{columns:string[],data:CategoryCsvRecord[]}} Validated header and parsed data rows.
  * @throws {TypeError} If input is not text.
  * @throws {Error} If syntax, headers or resource limits are invalid.
  */
@@ -149,7 +149,7 @@ export function readCategoryCsvTable(text, maximumCategories) {
     if (records.length === 0) {
         throw new Error("CSV row 1: add a header with value, label, and color columns.");
     }
-    const columns = categoryCsvColumns(records[0]);
+    const columns = readCategoryCsvColumns(records[0]);
     const data = records.slice(1);
     return { columns, data };
 }

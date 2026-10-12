@@ -43,7 +43,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ProcessingWorker:
-    """Own one attempt's workflow without teaching storage about application services."""
+    """Execute queued jobs, supervise their processes and publish completed results.
+
+    Job storage controls claims and leases; registered operations prepare and
+    calculate results. The worker maintains the lease and coordinates cancellation
+    and cleanup throughout each attempt.
+    """
 
     def __init__(
         self,
@@ -56,7 +61,7 @@ class ProcessingWorker:
         areas: CatalogSelectionReader | None = None,
         downstream_limits: DownstreamLimits | None = None,
     ) -> None:
-        """Compose the worker's narrow capabilities.
+        """Configure source access, job storage, result files and calculation limits.
 
         Args:
             authorizer: Independent catalog source authorization.
@@ -195,7 +200,7 @@ class ProcessingWorker:
     async def _prepare_operation(
         self, row: dict[str, Any]
     ) -> tuple[AuthorizedRaster, str | None]:
-        """Prepare registered operation inputs within the current fenced attempt.
+        """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:
             row: Claimed job updated with its prepared specification and reservation.

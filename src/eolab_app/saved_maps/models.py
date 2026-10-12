@@ -92,14 +92,15 @@ class MapCatalogItem(MapDocumentPart):
 
 
 def validate_appearance_definition_size(definition: dict[str, JsonValue]) -> None:
-    """Bound an opaque appearance definition without interpreting its semantics.
+    """Reject a saved style definition larger than 65,536 UTF-8 bytes.
 
     Args:
-        definition: Owner-specific JSON object from a portable appearance.
+        definition: Raster or vector style settings stored with a saved map.
 
     Raises:
         ValueError: If serialized content exceeds 65,536 UTF-8 bytes.
     """
+
     serialized = json.dumps(
         definition, ensure_ascii=False, allow_nan=False, separators=(",", ":")
     )
@@ -108,11 +109,11 @@ def validate_appearance_definition_size(definition: dict[str, JsonValue]) -> Non
 
 
 class MapRasterContinuousAppearance(MapDocumentPart):
-    """Retained continuous configuration whose definition stays raster-owned.
+    """Continuous raster style settings stored with a saved map.
 
     Attributes:
-        definition: Bounded opaque continuous style definition.
-        paletteName: Raster-owned palette identifier.
+        definition: Continuous style settings, validated when the raster is restored.
+        paletteName: Name of the raster's color palette.
         styleWasEdited: Whether automatic initial styling may replace the range.
     """
 
@@ -122,10 +123,10 @@ class MapRasterContinuousAppearance(MapDocumentPart):
 
     @field_validator("definition")
     @classmethod
-    def require_bounded_definition(
+    def validate_continuous_style_size(
         cls, definition: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
-        """Keep a retained definition within the portable appearance limit.
+        """Reject continuous style settings that exceed the saved-map size limit.
 
         Args:
             definition: Opaque continuous style JSON.
@@ -141,12 +142,12 @@ class MapRasterContinuousAppearance(MapDocumentPart):
 
 
 class MapRasterStyle(MapDocumentPart):
-    """Legacy or versioned raster appearance, with owner-validated definitions.
+    """Saved raster styling in either the legacy or version-one format.
 
-    A legacy envelope contains only kind, definition, and paletteName. Version
+    The legacy format contains only kind, definition, and paletteName. Version
     one contains only kind, appearanceVersion, mode, continuous, and categorical.
-    Both definitions survive a mode change; the raster owner validates their
-    meaning when restoring a layer. Legacy content is preserved for migration.
+    Both definitions survive a mode change; raster styling code validates the
+    settings when restoring a layer. Legacy content is preserved for migration.
 
     Attributes:
         kind: Raster layer appearance discriminator.
@@ -167,11 +168,11 @@ class MapRasterStyle(MapDocumentPart):
     categorical: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
-    def require_complete_appearance_envelope(self) -> Self:
-        """Reject mixed envelopes and preserve the storage/appearance boundary.
+    def validate_appearance_format(self) -> Self:
+        """Require the complete set of fields for the chosen raster style format.
 
         Returns:
-            This unchanged legacy or versioned appearance envelope.
+            The unchanged legacy or version-one raster style.
 
         Raises:
             ValueError: If fields are missing, modes conflict, or a definition

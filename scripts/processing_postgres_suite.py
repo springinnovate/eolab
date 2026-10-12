@@ -1,4 +1,4 @@
-"""Run the complete real Processing database lane, refusing silent skips."""
+"""Run the Processing PostgreSQL test suites and fail if any test is skipped."""
 
 import argparse
 from pathlib import Path
@@ -65,7 +65,7 @@ class RequiredDatabaseTests:
         self.skipped |= report.skipped
 
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
-        """Make any skipped test fail the automated lane.
+        """Fail the test run if any setup, test or teardown was skipped.
 
         Args:
             session: Pytest result whose exit status is finalized here.

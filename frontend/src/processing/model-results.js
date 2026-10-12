@@ -1,6 +1,10 @@
 /** Validate scientific output types independently of model recipes and operations. */
 
-/** Validate the bounded typed table consumed by inline results. @param {Object[]} rows API values. @return {void} */
+/** Check up to five formula results, their numeric values and pixel counts.
+ * @param {Object[]} rows Calculation rows returned by the Processing API.
+ * @return {void}
+ * @throws {Error} If rows, calculation states, numeric values or pixel counts are invalid.
+ */
 export function validateCalculationRows(rows) {
     if (!Array.isArray(rows) || rows.length < 1 || rows.length > 5 || rows.some(row =>
         typeof row.label !== "string" || typeof row.expression !== "string" ||
@@ -15,7 +19,7 @@ export function validateCalculationRows(rows) {
     }
 }
 
-/** Check a downloadable raster's file properties, without execution-plan metadata.
+/** Check a raster result's dimensions, georeferencing and valid-pixel count.
  * @param {Object} result Raster output from the Processing API.
  * @return {void}
  * @throws {Error} If dimensions, georeferencing or validity counts are invalid.
@@ -29,7 +33,7 @@ function validateRasterResult(result) {
         result.rows !== undefined) throw new Error("Processing returned invalid raster result details.");
 }
 
-/** Check a statistics output against the existing scalar result contract.
+/** Check formula results and whether the server reused a cached calculation.
  * @param {Object} result Statistics output from the Processing API.
  * @return {void}
  * @throws {Error} If rows or cache metadata are invalid.
@@ -45,20 +49,20 @@ const RESULT_TYPES = new Map([
     ["statistics", {mediaType: "text/csv", presentation: "table", validate: validateStatisticsResult}],
 ]);
 
-/** Validate recipe-named file metadata and delegate to its scientific result type.
- * Owned download URLs are checked by the API client before this function is called.
+/** Check a model result's file metadata and its raster or statistics contents.
+ * The API client checks session-specific download URLs before calling this function.
  * @param {Object} result API output, including its saved YAML name and label.
  * @return {void}
  * @throws {Error} If the type, file metadata or scientific values are invalid.
  */
 export function validateModelResult(result) {
-    const type = RESULT_TYPES.get(result.kind);
-    if (!type) throw new Error("Processing returned an unsupported model result type.");
-    if (result.mediaType !== type.mediaType || result.presentation !== type.presentation || result.role !== "result" ||
+    const resultType = RESULT_TYPES.get(result.kind);
+    if (!resultType) throw new Error("Processing returned an unsupported model result type.");
+    if (result.mediaType !== resultType.mediaType || result.presentation !== resultType.presentation || result.role !== "result" ||
         typeof result.name !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(result.name) ||
         typeof result.label !== "string" || !result.label || result.label.length > 80 ||
         typeof result.filename !== "string" || !result.filename ||
         !Number.isSafeInteger(result.bytes) || result.bytes <= 0 || !/^[a-f0-9]{64}$/.test(result.sha256))
         throw new Error("Processing returned invalid model result details.");
-    type.validate(result);
+    resultType.validate(result);
 }

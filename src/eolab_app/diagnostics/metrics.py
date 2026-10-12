@@ -26,7 +26,7 @@ _GC_SECONDS_METRIC = "jvm_gc_collection_seconds_sum"
 
 @dataclass(frozen=True)
 class JvmMetrics:
-    """Validated values parsed from the project-owned exporter contract."""
+    """GeoServer JVM memory, CPU, garbage-collection and thread measurements."""
 
     heap_used_bytes: int
     heap_committed_bytes: int
@@ -39,7 +39,7 @@ class JvmMetrics:
 
 
 class RenderingDiagnosticsError(ValueError):
-    """Internal diagnostics did not satisfy the owned input contract."""
+    """GeoServer diagnostics are missing, malformed or outside their valid ranges."""
 
 
 def _parse_metric_value(value_text: str) -> float:
@@ -82,11 +82,11 @@ def _as_nonnegative_integer(value: float, metric_name: str) -> int:
 
 
 def parse_jmx_metrics(document: str) -> JvmMetrics:
-    """Parse only the metrics emitted by EOLab's owned JMX exporter rules.
+    """Read the GeoServer JVM measurements configured in EOLab's JMX exporter.
 
     Unknown exporter self-metrics are ignored. Every EOLab singleton must
-    appear exactly once, and garbage-collector samples must use only the owned
-    ``collector`` label so no upstream label can enter the browser contract.
+    appear exactly once, and garbage-collector samples must use exactly one
+    ``gc`` label. Other label combinations are rejected.
 
     Args:
         document: Complete bounded UTF-8 JVM metrics document.

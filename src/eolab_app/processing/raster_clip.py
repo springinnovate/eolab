@@ -1,4 +1,4 @@
-"""Bounded full-resolution clip kernel; no job, HTTP, or rendering services."""
+"""Plan and create native-resolution raster clips within read and storage limits."""
 
 from eolab_app.bounded_vector import pixels_inside_area
 from dataclasses import asdict
@@ -21,7 +21,7 @@ from eolab_app.processing.artifacts import write_progress as _progress
 from eolab_app.processing.raster_input import (
     validate_supported_raster as _validate_supported_raster,
     select_area,
-    native_work,
+    estimate_native_raster_reads,
     raster_source_filename_prefix,
 )
 from eolab_app.processing.clip_models import (
@@ -38,10 +38,11 @@ from eolab_app.raster.source_contract import (
     source_block_indexes_for_window,
 )
 
-def _selection(
+
+def _select_clip_area(
     dataset: Any, area: ClipArea, limits: RasterClipLimits
 ) -> SelectedRasterArea:
-    """Delegate the clip's explicit area to shared native-input mechanisms.
+    """Locate the clip area on the source raster and prepare its polygon-mask source.
 
     Args:
         dataset: Validated open native raster.
@@ -61,10 +62,10 @@ def _selection(
     )
 
 
-def _grid(
+def _plan_clip_grid(
     dataset: Any, selected: SelectedRasterArea, limits: RasterClipLimits
 ) -> ClipGrid:
-    """Admit source work before materializing block indexes or reading pixels.
+    """Plan the clip grid and estimate its raster-read and output-storage costs.
 
     Args:
         dataset: Validated one-band native grid.
@@ -89,7 +90,7 @@ def _grid(
             "This clip exceeds the native-resolution size or block limit. Choose a smaller area.",
             413,
         )
-    block_count, _, decoded = native_work(
+    block_count, _, decoded = estimate_native_raster_reads(
         dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
     )
     return ClipGrid(
@@ -109,7 +110,7 @@ def _grid(
 
 
 def plan_clip(path: Path, area: ClipArea, limits: RasterClipLimits) -> ClipGrid:
-    """Inspect only metadata and geometry under the caller's process deadline.
+    """Plan a native-resolution raster clip without reading pixel values.
 
     Args:
         path: Authorized local source.
@@ -122,7 +123,9 @@ def plan_clip(path: Path, area: ClipArea, limits: RasterClipLimits) -> ClipGrid:
     with rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"):
         with rasterio.open(path) as dataset:
             _validate_supported_raster(dataset, path)
-            grid = _grid(dataset, _selection(dataset, area, limits), limits)
+            grid = _plan_clip_grid(
+                dataset, _select_clip_area(dataset, area, limits), limits
+            )
     return grid
 
 
@@ -155,7 +158,7 @@ def create_clip(
     ):
         with rasterio.open(path) as source:
             _validate_supported_raster(source, path)
-            selected = _selection(source, spec.area, limits)
+            selected = _select_clip_area(source, spec.area, limits)
             window = selected.source_window
             blocks = source_block_indexes_for_window(window, source.block_shapes[0])
             profile = dict(

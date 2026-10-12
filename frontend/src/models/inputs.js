@@ -2,7 +2,7 @@
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 import { hydrologyReference } from "../processing/hydrology.js";
 
-/** Check whether a recipe declares a particular setup capability.
+/** Check whether a model declares an input of the requested type.
  * @param {Object} model Installed recipe.
  * @param {string} type Input type from the model contract.
  * @return {boolean} Whether the recipe needs this control.
@@ -15,8 +15,8 @@ export function modelHasInput(model, type) { return Object.values(model.inputs).
  */
 export function modelSourceKey(source) { return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId] : [source.collectionId, source.itemId]); }
 
-/** List published raster files that this session can choose for a model.
- * @param {Object[]} runs Authoritative run snapshots already loaded by Models.
+/** List unexpired raster outputs available as inputs to another model run.
+ * @param {Object[]} runs Run status and file lists already loaded by Models.
  * @return {Object[]} Source choices; display previews and transient files are excluded.
  */
 export function modelResultSources(runs) {
@@ -75,15 +75,16 @@ export function modelViewportArea(bounds) {
  * @return {boolean} Whether the area kind can be submitted to this model.
  */
 export function modelSupportsArea(model, area) {
-    const role = Object.values(model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type));
-    const kinds = role?.type === "clip_area" ? ["selectedArea", "catalogSelection"] :
-        role?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
+    const areaInput = Object.values(model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type));
+    const supportedAreaKinds = areaInput?.type === "clip_area" ? ["selectedArea", "catalogSelection"] :
+        areaInput?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
             modelHasInput(model, "mask_source") ? ["catalogSelection"] : [];
-    return kinds.includes(area?.kind);
+    return supportedAreaKinds.includes(area?.kind);
 }
 
-/** Create an editable setup with suggestions and the current map area's meaning.
- * selectedArea is the same box around a map location used by raster histograms.
+/** Create model setup values and suggest an input when only one raster fits.
+ * The selectedArea input is the sampling area used by raster histograms.
+ * Models with a starting mask require the user to choose that mask explicitly.
  * @param {Object} model Installed recipe.
  * @param {Object} context Catalog and map choices supplied by browser composition.
  * @param {string} id Local draft identity.
@@ -91,14 +92,14 @@ export function modelSupportsArea(model, area) {
  */
 export function createModelDraft(model, context, id) {
     const sources = structuredClone(context.rasters ?? []);
-    const catalog = sources.filter(source => source.kind !== "runArtifact");
-    const enabled = catalog.filter(source => source.visible);
-    const suggestion = enabled.length === 1 ? enabled[0] : catalog.length === 1 ? catalog[0] : null;
-    const usesMask = modelHasInput(model, "mask_source");
+    const catalogRasters = sources.filter(source => source.kind !== "runArtifact");
+    const visibleCatalogRasters = catalogRasters.filter(source => source.visible);
+    const suggestedRaster = visibleCatalogRasters.length === 1 ? visibleCatalogRasters[0] : catalogRasters.length === 1 ? catalogRasters[0] : null;
+    const usesStartingMask = modelHasInput(model, "mask_source");
     let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
     let selectionError = "";
-    if (usesMask) {
+    if (usesStartingMask) {
         area = null; areaMode = "vector";
     } else if (!modelSupportsArea(model, area)) {
         areaMode = "viewport"; area = null;
@@ -106,7 +107,7 @@ export function createModelDraft(model, context, id) {
         catch (error) { selectionError = error.message; }
     }
     return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
-        raster: !usesMask && suggestion ? structuredClone(suggestion) : null,
+        raster: !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
         sourceReason: Object.values(model.inputs).some(input => input.type === "raster") ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
@@ -131,12 +132,12 @@ export function captureModelSubmission(draft, requestId) {
     if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
         throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
-    const usesMask = modelHasInput(draft.model, "mask_source");
-    if (usesMask && draft.areaMode === "raster") {
+    const usesStartingMask = modelHasInput(draft.model, "mask_source");
+    if (usesStartingMask && draft.areaMode === "raster") {
         if (!draft.maskRaster || draft.maskRaster.kind === "runArtifact" || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.maskRaster)))
             throw new Error("Choose a starting raster from Map layers.");
     } else {
-        if (!draft.area) throw new Error(draft.selectionError || (usesMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
+        if (!draft.area) throw new Error(draft.selectionError || (usesStartingMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
         if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose an area supported by this model.");
     }
     if (modelHasInput(draft.model, "prepared_hydrology") && (!draft.hydrology || draft.hydrologyLoading || draft.hydrologyChecking))
@@ -153,7 +154,7 @@ export function captureModelSubmission(draft, requestId) {
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
     const area = draft.area;
-    if (!usesMask || draft.areaMode === "vector") {
+    if (!usesStartingMask || draft.areaMode === "vector") {
         if (area.kind === "selectedArea") modelAreaInput(area);
         else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
         else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});

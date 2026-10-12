@@ -1,4 +1,4 @@
-"""Bounded same-origin forwarding to the independent Job service."""
+"""Forward same-origin Job service requests with request and response size limits."""
 
 import re
 
@@ -11,7 +11,7 @@ MAX_RESPONSE_BYTES = 1048576
 
 
 def proxy_error(status: int, code: str, message: str) -> JSONResponse:
-    """Return a proxy error in the Job service's public envelope.
+    """Return a proxy error using the Job service's JSON error format.
 
     Args:
         status: HTTP failure status.
@@ -31,11 +31,11 @@ def proxy_error(status: int, code: str, message: str) -> JSONResponse:
 def create_jobs_proxy_router(
     client: httpx2.AsyncClient, internal_url: str = "http://jobs:8080"
 ) -> APIRouter:
-    """Expose only the Job service prefix through an owned HTTP connection pool.
+    """Create routes that forward /api/jobs requests to the configured Job service.
 
-    This proxy buffers bounded JSON/docs responses. Real SSE and artifact
-    streaming require a later implementation; their endpoints currently return
-    JSON 501. Bearer authorization is relayed only to the fixed Jobs endpoint;
+    This proxy buffers JSON and documentation responses up to MAX_RESPONSE_BYTES.
+    Event streaming and file downloads are unsupported and return JSON 501.
+    Bearer authorization is relayed only to the fixed Jobs endpoint;
     cookies and arbitrary identity/response headers are not relayed.
 
     Args:

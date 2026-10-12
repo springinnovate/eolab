@@ -1,4 +1,4 @@
-/** Immutable geographic selection values shared by sampling and downloads. No I/O. */
+/** Validate and copy geographic areas used by raster sampling and downloads. */
 /**
  * Build the stable validation error used for malformed selected bounds.
  *
@@ -37,13 +37,13 @@ export function validateRasterSelectedBounds(bounds) {
     return bounds;
 }
 
-/** Immutable whole-raster member of the frontend sampling-area union. */
+/** Sampling selection that includes the entire raster. */
 export const WHOLE_RASTER_SAMPLING_AREA = Object.freeze({
     kind: "wholeRaster"
 });
 
 /**
- * Normalize one strict raster-statistics sampling-area union.
+ * Validate and freeze a whole-raster, rectangular or filtered-vector sampling area.
  *
  * @param {Object} [samplingArea=WHOLE_RASTER_SAMPLING_AREA] Candidate whole,
  * selected-bounds, or catalog-selection area.

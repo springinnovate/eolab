@@ -10,7 +10,7 @@ from eolab_infrastructure.geowebcache_documents import (
 
 
 class GeoWebCacheLayerConfigurator:
-    """Converge published layers to EOLab's bounded tile-cache contract."""
+    """Configure and remove cached map tiles for EOLab's published layers."""
 
     def __init__(self, gateway: GeoServerPublicationGateway) -> None:
         """Store the shared authenticated GeoServer transport boundary.

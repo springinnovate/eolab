@@ -1,4 +1,4 @@
-/** Local annotation workflow, composed with neutral map-layer services. */
+/** Connect polygon drawing, editing and local storage to the map's layer list. */
 import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
 import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, validateAnnotationStyle } from "./model.js";

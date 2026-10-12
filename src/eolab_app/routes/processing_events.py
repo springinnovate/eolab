@@ -1,4 +1,4 @@
-"""SSE wire format and response lifetime for Processing-owned change hints."""
+"""Stream notifications telling browsers when to refresh Processing job status."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -13,7 +13,11 @@ from eolab_app.routes.http_disconnect import wait_for_http_disconnect
 
 
 class JobEventResponse(StreamingResponse):
-    """A private bounded stream that never includes job data or owner identifiers."""
+    """A session's job-change notification stream, with heartbeats and a time limit.
+
+    Events tell the browser to fetch current status; they contain no job data
+    or owner identifiers.
+    """
 
     def __init__(
         self,
@@ -50,7 +54,7 @@ class JobEventResponse(StreamingResponse):
         )
 
     async def _events(self) -> AsyncIterator[str]:
-        """Request an initial snapshot, then send hints or idle heartbeats.
+        """Ask the browser to refresh status, then send changes or idle heartbeats.
 
         Yields:
             Fixed change hints and idle heartbeat comments.
@@ -68,7 +72,7 @@ class JobEventResponse(StreamingResponse):
             return
 
     async def _send(self, send: Any) -> None:
-        """Bound the entire stream, including slow-client backpressure.
+        """End streaming at its deadline, including time spent waiting for writes.
 
         Args:
             send: ASGI sender; completion gets at most one extra second to flush.

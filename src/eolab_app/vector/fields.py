@@ -24,8 +24,13 @@ _FIELD_BATCH_SIZE = 4096
 
 
 @dataclass(frozen=True)
-class _BoundedFieldValues:
-    """Raw values and completion state from one neutral bounded field read."""
+class _FieldReadResult:
+    """Values read from one vector field and whether every feature was visited.
+
+    Attributes:
+        values: Property values in source feature order.
+        complete: Whether the source was exhausted before a read limit or cancellation.
+    """
 
     values: tuple[Any, ...]
     complete: bool
@@ -56,11 +61,11 @@ class OgrVectorFieldReader:
             VectorConflictError: If the source format, layer, or field cannot
                 satisfy the field-summary contract.
         """
-        bounded = self._read_values(source, field, feature_limit, cancel_event)
+        field_read = self._read_values(source, field, feature_limit, cancel_event)
         counts: dict[tuple[type[Any], Any], list[Any]] = {}
         null_count = 0
         unsupported_value_count = 0
-        for value in bounded.values:
+        for value in field_read.values:
             if value is None:
                 null_count += 1
                 continue
@@ -80,10 +85,10 @@ class OgrVectorFieldReader:
         )
         return VectorCategoryRead(
             counts=tuple(ordered_counts),
-            scanned_feature_count=len(bounded.values),
+            scanned_feature_count=len(field_read.values),
             null_count=null_count,
             unsupported_value_count=unsupported_value_count,
-            complete=bounded.complete,
+            complete=field_read.complete,
         )
 
     def read_numbers(
@@ -108,11 +113,11 @@ class OgrVectorFieldReader:
             VectorConflictError: If the source format, layer, or field cannot
                 satisfy the field-summary contract.
         """
-        bounded = self._read_values(source, field, feature_limit, cancel_event)
+        field_read = self._read_values(source, field, feature_limit, cancel_event)
         values: list[float] = []
         null_count = 0
         unsupported_value_count = 0
-        for value in bounded.values:
+        for value in field_read.values:
             if value is None:
                 null_count += 1
             elif type(value) in {int, float} and isfinite(value):
@@ -121,10 +126,10 @@ class OgrVectorFieldReader:
                 unsupported_value_count += 1
         return VectorNumericRead(
             values=tuple(values),
-            scanned_feature_count=len(bounded.values),
+            scanned_feature_count=len(field_read.values),
             null_count=null_count,
             unsupported_value_count=unsupported_value_count,
-            complete=bounded.complete,
+            complete=field_read.complete,
         )
 
     def _read_values(
@@ -133,8 +138,8 @@ class OgrVectorFieldReader:
         field: str,
         feature_limit: int,
         cancel_event: Event,
-    ) -> _BoundedFieldValues:
-        """Read one exact property through the shared bounded mechanism.
+    ) -> _FieldReadResult:
+        """Read one vector field until completion, cancellation or the feature limit.
 
         Args:
             source: Catalog-derived exact mounted source and native layer.
@@ -154,7 +159,7 @@ class OgrVectorFieldReader:
             source, (field,), feature_limit, cancel_event,
             lambda properties: values.append(properties.get(field)),
         )
-        return _BoundedFieldValues(values=tuple(values), complete=complete)
+        return _FieldReadResult(values=tuple(values), complete=complete)
 
     def count_filter(
         self, source: ResolvedVectorSource, candidate: VectorFilter,
@@ -289,7 +294,7 @@ class OgrVectorFieldReader:
                                     return False
                                 visit(
                                     {
-                                        field: _property_value(
+                                        field: _normalize_field_value(
                                             columns[field][index], field_types[field]
                                         )
                                         for field in fields
@@ -308,8 +313,8 @@ class OgrVectorFieldReader:
             ) from error
 
 
-def _property_value(value: Any, field_type: str) -> Any:
-    """Normalize OGR batch scalars for the existing property consumer contract.
+def _normalize_field_value(value: Any, field_type: str) -> Any:
+    """Decode OGR text and date fields into Python strings.
 
     Args:
         value: Python scalar from a NumPy column, with masked values as None.

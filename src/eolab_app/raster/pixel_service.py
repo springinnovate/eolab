@@ -35,18 +35,19 @@ class RasterPixelService:
         Args:
             source_access: Scoped catalog/private source authorization.
             read_concurrency: Maximum simultaneous Rasterio reads.
-            pixel_reader: Synchronous pixel boundary, replaceable in tests.
+            pixel_reader: Synchronous function that reads one pixel from an authorized raster.
         """
+
         self._source_access = source_access
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
         self._pixel_reader = pixel_reader
 
-    async def _read_current(
+    async def _read_authorized_pixel(
         self,
         authorized_raster: RasterReadSource,
         request: CatalogPixelRequest | RasterPixelSourceRequest,
     ) -> RasterPixel:
-        """Sample one authorized source through the ordinary original-grid reader.
+        """Read the requested pixel from an authorized raster on a worker thread.
 
         Args:
             authorized_raster: Original source resolved for this interactive read.
@@ -85,7 +86,7 @@ class RasterPixelService:
             owner: Server-derived session hash for a private source.
 
         Returns:
-            Existing band-one pixel result.
+            Band-one value and the source cell containing the requested coordinate.
 
         Raises:
             RasterFeatureError: If the source cannot be read.
@@ -94,14 +95,14 @@ class RasterPixelService:
         source = await self._source_access.resolve(
             raster_source_reference(request), owner
         )
-        return await self._get(request, source)
+        return await self._read_with_concurrency_limit(request, source)
 
-    async def _get(
+    async def _read_with_concurrency_limit(
         self,
         request: CatalogPixelRequest | RasterPixelSourceRequest,
         authorized_raster: RasterReadSource,
     ) -> RasterPixel:
-        """Keep pixel read capacity until its native reader has stopped.
+        """Read one pixel while holding a concurrency slot until the reader stops.
 
         Args:
             request: Validated source identity and WGS 84 position.
@@ -116,13 +117,13 @@ class RasterPixelService:
         """
         await self._read_semaphore.acquire()
         read_task = asyncio.create_task(
-            self._read_current(authorized_raster, request)
+            self._read_authorized_pixel(authorized_raster, request)
         )
 
-        def retrieve_task_exception(
+        def release_pixel_reader(
             completed_task: asyncio.Task[RasterPixel],
         ) -> None:
-            """Retrieve a worker failure after HTTP cancellation.
+            """Release the pixel-read slot and collect any unobserved worker exception.
 
             Args:
                 completed_task: Finished pixel-read task.
@@ -131,7 +132,7 @@ class RasterPixelService:
             if not completed_task.cancelled():
                 completed_task.exception()
 
-        read_task.add_done_callback(retrieve_task_exception)
+        read_task.add_done_callback(release_pixel_reader)
         try:
             return await asyncio.shield(read_task)
         except asyncio.CancelledError:

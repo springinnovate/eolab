@@ -1,4 +1,4 @@
-"""HTTP contracts for the standalone diagnostic Job service."""
+"""Requests and responses for queued operations in the standalone Job service."""
 
 from datetime import datetime
 from typing import Annotated, Final, Literal
@@ -24,13 +24,13 @@ JobStatus = Literal[
 
 
 class Contract(BaseModel):
-    """Reject unknown fields rather than silently accepting unsupported options."""
+    """Base request and response model that rejects unrecognized JSON fields."""
 
     model_config = ConfigDict(extra="forbid")
 
 
 class SubmitJob(Contract):
-    """Immutable invocation of one installed operation."""
+    """Request to queue an installed operation with fixed inputs and time limits."""
 
     operation: str = Field(
         pattern=r"^[a-z][a-z0-9_.-]{0,127}$", examples=["diagnostic.v1"]
@@ -61,7 +61,7 @@ class ErrorDetail(Contract):
 
 
 class ErrorResponse(Contract):
-    """Error envelope shared by lifecycle, routing and validation failures."""
+    """HTTP error response containing a code and a human-readable explanation."""
 
     error: ErrorDetail
 
@@ -120,7 +120,7 @@ class JobPage(Contract):
 
 
 class Artifact(Contract):
-    """Proposed downloadable result; retrieval uses its ID, never a path."""
+    """File-result metadata reserved in the API; file downloads are unsupported."""
 
     artifactId: UUID
     filename: str
@@ -129,7 +129,11 @@ class Artifact(Contract):
 
 
 class JobResult(Contract):
-    """Completed inline JSON result; artifacts remain reserved for future work."""
+    """A completed operation's JSON value and file-result metadata.
+
+    Installed operations return inline values; artifact download requests
+    currently return HTTP 501.
+    """
 
     jobId: UUID
     value: JsonValue = None

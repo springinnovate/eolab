@@ -35,7 +35,7 @@ import org.geotools.filter.function.RenderingTransformation;
 import org.geotools.image.ImageWorker;
 
 /**
- * Maps one already-authorized, bounded raster read to exact category colors.
+ * Colors raster pixels by exact category value, preserving NoData transparency.
  *
  * <p>The function owns appearance only: it never opens paths or consults catalog,
  * analysis, browser, or publication state. GeoServer owns read scheduling,
@@ -56,7 +56,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
     private static final Color TRANSPARENT = new Color(0, 0, 0, 0);
 
     private final List<Category> categories;
-    private final Color unmapped;
+    private final Color unmappedColor;
 
     /** One validated exact code and pixel appearance; labels are not native renderer inputs. */
     private record Category(double value, String color, double opacity) {}
@@ -65,7 +65,8 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      * Validates the three server-generated literal arguments once per parsed style.
      *
      * @param arguments compact category table, fallback hex color, and fallback opacity
-     * @throws IllegalArgumentException if any argument violates the bounded native contract
+     * @throws IllegalArgumentException if the category table, colors or opacity are invalid
+     *     or exceed their limits
      */
     public CategoricalRasterFunction(List<Expression> arguments) {
         super(NAME);
@@ -93,14 +94,14 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
                     || value != Math.rint(value) || !values.add(value == 0 ? 0d : value)) {
                 throw new IllegalArgumentException("Raster category codes must be unique safe integers");
             }
-            double opacity = opacity(fields[2]);
-            color(fields[1], opacity);
+            double opacity = parseOpacity(fields[2]);
+            parseColor(fields[1], opacity);
             parsed.add(new Category(value == 0 ? 0d : value, fields[1], opacity));
         }
         parsed.sort(java.util.Comparator.comparingDouble(Category::value));
         categories = List.copyOf(parsed);
-        unmapped = color(arguments.get(1).evaluate(null, String.class),
-                opacity(arguments.get(2).evaluate(null, String.class)));
+        unmappedColor = parseColor(arguments.get(1).evaluate(null, String.class),
+                parseOpacity(arguments.get(2).evaluate(null, String.class)));
     }
 
     /**
@@ -108,17 +109,18 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      *
      * @param input authorized coverage supplied by the native rendering pipeline
      * @return exact colors with original source NoData and ROI masking applied
-     * @throws IllegalArgumentException if the coverage exceeds the bounded render contract
+     * @throws IllegalArgumentException if the input is not a GridCoverage2D or its image
+     *     dimensions exceed the rendering limits
      * @throws CancellationException if the renderer has cancelled this thread
      */
     @Override
     public Object evaluate(Object input) {
-        requireActive();
+        requireActiveRender();
         if (!(input instanceof GridCoverage2D source)) {
             throw new IllegalArgumentException("Categorical rendering requires a raster coverage");
         }
         RenderedImage image = source.getRenderedImage();
-        requireDimensions(image.getWidth(), image.getHeight());
+        requireRenderDimensions(image.getWidth(), image.getHeight());
         var worker = new ImageWorker(image);
         if (image.getSampleModel().getNumBands() != 1) {
             worker.retainBands(new int[] {0});
@@ -126,7 +128,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
         worker.setROI(CoverageUtilities.getROIProperty(source));
         var noData = CoverageUtilities.getNoDataProperty(source);
         worker.setNoData(noData == null ? null : noData.getAsRange());
-        worker.classify(colorMap(), null);
+        worker.classify(buildColorMap(), null);
         PlanarImage classified = worker.getRenderedOperation();
         try {
             return new GridCoverageFactory().create("categorical", classified,
@@ -160,11 +162,11 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      */
     @Override
     public GridGeometry invertGridGeometry(Query query, GridGeometry target) {
-        requireActive();
+        requireActiveRender();
         if (target == null || target.getGridRange().getDimension() != 2) {
             throw new IllegalArgumentException("Categorical rendering requires a two-dimensional grid");
         }
-        requireDimensions(target.getGridRange().getSpan(0), target.getGridRange().getSpan(1));
+        requireRenderDimensions(target.getGridRange().getSpan(0), target.getGridRange().getSpan(1));
         return target;
     }
 
@@ -179,7 +181,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
     @Override
     public GeneralParameterValue[] customizeReadParams(GridCoverageReader reader,
             GeneralParameterValue... parameters) {
-        requireActive();
+        requireActiveRender();
         var result = new ArrayList<GeneralParameterValue>();
         if (parameters != null) {
             for (GeneralParameterValue value : parameters) {
@@ -187,9 +189,9 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
             }
         }
         // GeoTools injects the geometry validated by invertGridGeometry after this hook returns.
-        replace(result, AbstractGridFormat.OVERVIEW_POLICY, OverviewPolicy.IGNORE);
-        replace(result, AbstractGridFormat.DECIMATION_POLICY, DecimationPolicy.ALLOW);
-        replace(result, AbstractGridFormat.INTERPOLATION, new InterpolationNearest());
+        replaceReadParameter(result, AbstractGridFormat.OVERVIEW_POLICY, OverviewPolicy.IGNORE);
+        replaceReadParameter(result, AbstractGridFormat.DECIMATION_POLICY, DecimationPolicy.ALLOW);
+        replaceReadParameter(result, AbstractGridFormat.INTERPOLATION, new InterpolationNearest());
         return result.toArray(GeneralParameterValue[]::new);
     }
 
@@ -203,23 +205,23 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      *
      * @return a native classifier with at most 513 finite entries and 258 palette colors
      */
-    private LinearColorMap colorMap() {
+    private LinearColorMap buildColorMap() {
         var elements = new ArrayList<LinearColorMapElement>(categories.size() * 2 + 1);
-        double previous = -Double.MAX_VALUE;
-        boolean includePrevious = true;
-        int index = 1;
+        double lowerBound = -Double.MAX_VALUE;
+        boolean includeLowerBound = true;
+        int paletteIndex = 1;
         for (Category category : categories) {
-            if (includePrevious || Math.nextUp(previous) < category.value()) {
-                elements.add(LinearColorMapElement.create("unmapped", unmapped,
-                        RangeFactory.create(previous, includePrevious, category.value(), false, false), 0));
+            if (includeLowerBound || Math.nextUp(lowerBound) < category.value()) {
+                elements.add(LinearColorMapElement.create("unmapped", unmappedColor,
+                        RangeFactory.create(lowerBound, includeLowerBound, category.value(), false, false), 0));
             }
-            elements.add(LinearColorMapElement.create("category", color(category.color(), category.opacity()),
-                    category.value(), index++));
-            previous = category.value();
-            includePrevious = false;
+            elements.add(LinearColorMapElement.create("category", parseColor(category.color(), category.opacity()),
+                    category.value(), paletteIndex++));
+            lowerBound = category.value();
+            includeLowerBound = false;
         }
-        elements.add(LinearColorMapElement.create("unmapped", unmapped,
-                RangeFactory.create(previous, false, Double.MAX_VALUE, true, false), 0));
+        elements.add(LinearColorMapElement.create("unmapped", unmappedColor,
+                RangeFactory.create(lowerBound, false, Double.MAX_VALUE, true, false), 0));
         return new LinearColorMap("categorical", elements.toArray(LinearColorMapElement[]::new),
                 new LinearColorMapElement[0], TRANSPARENT);
     }
@@ -229,10 +231,10 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      *
      * @param <T> native parameter value type
      * @param parameters independent request-local parameter list
-     * @param descriptor parameter identity and value contract
+     * @param descriptor name and type of the parameter to replace
      * @param value replacement parameter value
      */
-    private static <T> void replace(List<GeneralParameterValue> parameters,
+    private static <T> void replaceReadParameter(List<GeneralParameterValue> parameters,
             ParameterDescriptor<T> descriptor, T value) {
         parameters.removeIf(parameter -> parameter.getDescriptor().getName().equals(descriptor.getName()));
         ParameterValue<T> replacement = descriptor.createValue();
@@ -244,13 +246,13 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      * Rejects image shapes that would exceed the categorical render's output allocation bound.
      *
      * <p>This bounds the returned grid, not bytes decoded from compressed source blocks.
-     * Existing GeoServer request timeouts, concurrency, and tile cache govern native reader work.
+     * GeoServer request timeouts, concurrency, and the tile cache govern native reader work.
      *
      * @param width output pixel width
      * @param height output pixel height
      * @throws IllegalArgumentException if either edge or total pixel count exceeds its bound
      */
-    private static void requireDimensions(int width, int height) {
+    private static void requireRenderDimensions(int width, int height) {
         if (width < 1 || height < 1 || width > MAXIMUM_RENDER_EDGE || height > MAXIMUM_RENDER_EDGE
                 || (long) width * height > MAXIMUM_RENDER_PIXELS) {
             throw new IllegalArgumentException("Categorical raster read exceeds its bounded render grid");
@@ -262,7 +264,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      *
      * @throws CancellationException if the current rendering thread was interrupted
      */
-    private static void requireActive() {
+    private static void requireActiveRender() {
         if (Thread.currentThread().isInterrupted()) {
             throw new CancellationException("Categorical raster rendering was cancelled");
         }
@@ -275,7 +277,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      * @return finite opacity between zero and one
      * @throws IllegalArgumentException if the value is missing, nonnumeric, nonfinite, or outside the range
      */
-    private static double opacity(String value) {
+    private static double parseOpacity(String value) {
         if (value == null) {
             throw new IllegalArgumentException("Raster category opacity is required");
         }
@@ -294,7 +296,7 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
      * @return native ARGB color with nearest eight-bit alpha
      * @throws IllegalArgumentException if the color is not a six-digit RGB hex literal
      */
-    private static Color color(String value, double opacity) {
+    private static Color parseColor(String value, double opacity) {
         if (value == null || !value.matches("#[0-9a-fA-F]{6}")) {
             throw new IllegalArgumentException("Raster category colors must be six-digit hex colors");
         }

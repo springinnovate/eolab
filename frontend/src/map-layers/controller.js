@@ -1,4 +1,4 @@
-/** Neutral retained map-layer publication and presentation lifecycle. */
+/** Manage map-layer creation, visibility, order, styles, removal and Undo. */
 
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { LeafletLayerSet } from "./leaflet-layer-set.js";
@@ -82,10 +82,10 @@ function normalizeCustomLayerName(value) {
  * @property {Object} [local] Local owner's committed layer contents.
  */
 
-/** Own retained layers without knowing any dataset-specific controls. */
+/** Maintain the map's layer list using each dataset type's rendering and style adapter. */
 export class MapLayerController {
     /**
-     * Create the neutral controller.
+     * Connect layer-list actions to map layers and dataset-specific adapters.
      *
      * @param {Object} configuration Controller collaborators.
      * @param {Object} configuration.leafletMap Leaflet-compatible map.

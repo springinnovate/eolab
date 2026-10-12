@@ -74,5 +74,9 @@ def test_native_block_rejection_precedes_index_allocation(
 
     monkeypatch.setattr(native, "source_block_indexes_for_window", forbidden)
     with pytest.raises(ProcessingError, match="1,002,001 native blocks"):
-        native.native_work(SimpleNamespace(block_shapes=[(32, 32)]),
-                           Window(0, 0, 32000, 32000), 500, 1_000_000)
+        native.estimate_native_raster_reads(
+            SimpleNamespace(block_shapes=[(32, 32)]),
+            Window(0, 0, 32000, 32000),
+            500,
+            1_000_000,
+        )

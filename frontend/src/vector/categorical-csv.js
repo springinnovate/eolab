@@ -1,11 +1,11 @@
-/** Typed CSV input boundary for vector-owned category rules. */
+/** Parse category-table CSV values according to a vector field's data type. */
 import { readCategoryCsvTable, categoryCsvCells, MAX_CATEGORY_CSV_BYTES } from "../category-csv.js";
 import { CATEGORY_MAXIMUM_LIMIT, normalizeVectorCategorical, vectorCategoricalFieldKind } from "./style.js";
 
 export { MAX_CATEGORY_CSV_BYTES };
 
 /**
- * Convert literal CSV text according to the selected authoritative field type.
+ * Parse a CSV category value using the selected vector field's catalog data type.
  * Strings retain meaningful whitespace, including empty strings. Integer codes
  * use whole decimal notation; numeric fields allow decimal exponents. Boolean
  * fields use true/false. No JavaScript coercion or type inference is accepted.
@@ -15,7 +15,7 @@ export { MAX_CATEGORY_CSV_BYTES };
  * @return {import("./style.js").VectorCategoryValue} Explicitly typed value.
  * @throws {Error} If text does not use the field's accepted grammar.
  */
-function vectorCsvValue(text, kind, row) {
+function parseVectorCategoryValue(text, kind, row) {
     if (kind === "string") return { kind, value: text };
     const literal = text.trim();
     const pattern = kind === "boolean" ? /^(true|false)$/i : kind === "integer"
@@ -28,9 +28,10 @@ function vectorCsvValue(text, kind, row) {
 
 /**
  * Import a complete vector category table for one selected Catalog field.
- * Syntax is neutral; scalar typing, limits and normalization stay vector-owned.
- * The caller owns file reading, preview, replacement and cancellation. No source
- * attributes are read or changed and no partly validated table is returned.
+ * The shared CSV parser reads the rows, then vector-style validation checks their
+ * values, colors and opacity. The caller reads the file and decides when to preview
+ * or apply the style. Source attributes are not changed, and invalid rows reject
+ * the whole table.
  * @param {string} text UTF-8 decoded CSV contents.
  * @param {{name:string,type:string}} field Selected authoritative attribute.
  * @param {{otherColor:string|null,missingColor:string|null}} fallback Retained fallback appearance.
@@ -47,7 +48,7 @@ export function parseCategoricalVectorCsv(text, field, fallback) {
         if (opacityText !== "" && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(opacityText)) {
             throw new Error(`CSV row ${record.row}, column "opacity": use a decimal opacity from 0 to 1; percentages are not accepted.`);
         }
-        return { value: vectorCsvValue(cells.value, kind, record.row), label: cells.label.trim(),
+        return { value: parseVectorCategoryValue(cells.value, kind, record.row), label: cells.label.trim(),
             color: cells.color.trim(), opacity: opacityText === "" ? 1 : Number(opacityText) };
     });
     try {

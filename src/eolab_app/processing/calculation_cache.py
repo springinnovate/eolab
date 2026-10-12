@@ -152,7 +152,7 @@ def restore_cached_calculation_rows(
 def prepare_calculation_values_for_cache(
     calculation_plan: AggregateSpec, rows: list[dict[str, object]]
 ) -> dict[str, dict[str, object]]:
-    """Store numerical values and the metadata needed to skip future planning.
+    """Prepare cache entries containing numerical results and their area/grid metadata.
 
     Args:
         calculation_plan: Inputs used for this completed calculation.
@@ -166,6 +166,7 @@ def prepare_calculation_values_for_cache(
         ValueError: If the number of results does not match the formulas.
         ValidationError: If a completed result violates the numerical result contract.
     """
+
     if calculation_plan.area.kind == "aoi":
         # Historical jobs contain geometry snapshots, which this cache must not retain.
         return {}
