@@ -1,7 +1,7 @@
-/** Shared owned-job polling for clip and calculation presentations. */
+/** Refresh this browser session's Processing jobs for model and calculation views. */
 export const ACTIVE_JOB_STATES = new Set(["queued", "running", "cancelling"]);
 
-/** Own one session listing, mutations, and poll clock independently of editors. */
+/** Share job history, status updates and cancellation or deletion responses across views. */
 export class ProcessingJobs {
     /** @param {Object} api Processing transport. @param {Object} [clock=globalThis] Timer provider. */
     constructor(api, clock = globalThis) {
@@ -20,7 +20,7 @@ export class ProcessingJobs {
     }
     /** Observe shared history. @param {Function} listener Receives store. @return {Function} Unsubscribe. */
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-    /** Notify editors without changing their intent. @return {void} */
+    /** Send the latest job list and refresh error to subscribed views. @return {void} */
     notify() { if (!this.destroyed) for (const listener of this.listeners) listener(this); }
     /** Keep a submission or action response when an older status read is pending.
      * Other jobs in that read can still update normally.

@@ -80,7 +80,7 @@ class RasterSourceDescription(RasterSourceRequest):
 def raster_source_reference(
     request: CatalogRasterRequest | RasterSourceRequest,
 ) -> RasterSourceReference:
-    """Read the source identity from either the existing or extended analysis request.
+    """Extract the raster reference from a catalog-only or explicit-source request.
 
     Args:
         request: Validated flat catalog request or explicit source request.
@@ -88,6 +88,7 @@ def raster_source_reference(
     Returns:
         Only the source identity, excluding sampling fields.
     """
+
     if isinstance(request, RasterSourceRequest):
         return request.source
     return CatalogRasterRequest(

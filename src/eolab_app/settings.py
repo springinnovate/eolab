@@ -122,11 +122,12 @@ class ProcessingWorkerSettings:
     processing_data_path: Path
 
     def __post_init__(self) -> None:
-        """Validate the worker's independent configuration boundary.
+        """Require a catalog URL and absolute source and result-storage paths.
 
         Raises:
             ValueError: If Catalog URL is blank or either storage root is relative.
         """
+
         if not self.catalog_internal_url:
             raise ValueError("CATALOG_INTERNAL_URL must not be blank")
         if not self.scan_mount_path.is_absolute() or not self.processing_data_path.is_absolute():

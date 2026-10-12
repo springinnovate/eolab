@@ -77,7 +77,7 @@ _StatisticsResult = RasterStatistics | RasterPairedStatistics
 
 
 class _CategoricalStatisticsReader(Protocol):
-    """Typed owning boundary for a bounded numeric classification read."""
+    """A callable that reads raster statistics and estimates areas for category codes."""
 
     def __call__(
         self,
@@ -106,7 +106,7 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class _InflightStatistics:
-    """Track one shared worker and the request waiters that still own it.
+    """A statistics read shared by callers requesting the same source and area.
 
     Attributes:
         task: Shared queued or running computation around one Rasterio worker.
@@ -124,7 +124,7 @@ class _InflightStatistics:
 
 
 class RasterStatisticsService:
-    """Authorize, admit, coalesce, cache, and cancel statistics reads.
+    """Schedule authorized raster statistics reads and share identical requests.
 
     Distinct computations wait in FIFO order for configured read capacity.
     Callers requesting an identical cache identity share one queued or active read.
@@ -163,8 +163,8 @@ class RasterStatisticsService:
             read_concurrency: Maximum simultaneous Rasterio reads.
             cache_entries: Maximum completed ordinary and paired statistics
                 documents retained in one combined cache.
-            catalog_selection_reader: Narrow resolver for opaque ready catalog selections. It is
-                optional only for compositions that reject catalog selection requests.
+            catalog_selection_reader: Resolves catalog feature selections to
+                source files and filters. Required for catalog selection requests.
             statistics_reader: Synchronous bounded Rasterio reader boundary.
             paired_statistics_reader: Synchronous ordered-pair reader boundary.
             categorical_statistics_reader: Numeric category/area reader sharing
@@ -218,7 +218,7 @@ class RasterStatisticsService:
             owner: Server-derived session hash for a private source.
 
         Returns:
-            The existing exact or sampled statistics response.
+            Counts, ranges, percentiles and a histogram with sampling details.
 
         Raises:
             RasterFeatureError: If source, area or bounded reading is unavailable.
@@ -227,14 +227,14 @@ class RasterStatisticsService:
         async with self._source_access.open(
             raster_source_reference(request), owner
         ) as source:
-            return await self._get(request, source)
+            return await self._get_authorized_statistics(request, source)
 
-    async def _get(
+    async def _get_authorized_statistics(
         self,
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         authorized_raster: RasterReadSource,
     ) -> RasterStatistics:
-        """Return current bounded statistics for one normalized sampling area.
+        """Reuse or calculate statistics for an authorized raster and sampling area.
 
         Args:
             request: Validated raster identity and strict sampling-area union.
@@ -284,7 +284,7 @@ class RasterStatisticsService:
             else:
                 work = self._join_or_queue_read(
                     cache_key,
-                    lambda cancellation: self._compute(
+                    lambda cancellation: self._compute_statistics(
                         authorized_raster,
                         cache_key,
                         sampling_area,
@@ -353,7 +353,7 @@ class RasterStatisticsService:
             owner: Server-derived session hash for any private input.
 
         Returns:
-            The existing paired-statistics response on the X reference grid.
+            Joint and marginal histograms on the X raster's sampling grid.
 
         Raises:
             RasterFeatureError: If either source or the sampling area is unavailable.
@@ -366,9 +366,9 @@ class RasterStatisticsService:
             y = await stack.enter_async_context(
                 self._source_access.open(request.y_raster, owner)
             )
-            return await self._get_paired(request, x, y)
+            return await self._get_authorized_paired_statistics(request, x, y)
 
-    async def _get_paired(
+    async def _get_authorized_paired_statistics(
         self,
         request: CatalogRasterPairRequest | RasterPairSourceRequest,
         authorized_x: RasterReadSource,
@@ -658,7 +658,7 @@ class RasterStatisticsService:
         if stop_native:
             await finish_source_task(work.task)
 
-    async def _compute(
+    async def _compute_statistics(
         self,
         authorized_raster: RasterReadSource,
         cache_key: RasterStatisticsCacheKey,
@@ -666,7 +666,7 @@ class RasterStatisticsService:
         cancellation_requested: threading.Event,
         category_values: tuple[int, ...] | None = None,
     ) -> RasterStatistics:
-        """Compute one current source/area identity within bounded capacity.
+        """Calculate and cache raster statistics while holding a reader slot.
 
         Args:
             authorized_raster: Original source retained by its access scope.
@@ -767,7 +767,7 @@ class RasterStatisticsService:
             | RasterPairSourceRequest
         ),
     ) -> RasterSamplingArea:
-        """Resolve the request's strict sampling-area union.
+        """Resolve the requested whole-raster, rectangular or catalog-feature area.
 
         Args:
             request: Validated raster identity and exclusive sampling fields.

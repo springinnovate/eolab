@@ -307,7 +307,7 @@ def _read_bounded_overview(
         dataset: Open source used to build ``plan``.
         source_window: Positive integral source window represented by the grid.
         plan: Admitted final sample-grid plan.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Bounded masked overview values, or ``None`` when the overview pyramid
@@ -318,6 +318,7 @@ def _read_bounded_overview(
         rasterio.errors.RasterioError: If the overview read fails.
         ValueError: If Rasterio returns a shape other than the bounded request.
     """
+
     if MaskFlags.per_dataset in dataset.mask_flag_enums[0]:
         return None
     read_shape = _overview_read_shape(
@@ -354,7 +355,7 @@ def _read_overview_sample_grid(
         dataset: Open source used to build ``plan``.
         source_window: Positive integral source window represented by the grid.
         plan: Admitted final sample-grid plan.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Final masked sample grid, or ``None`` when the overview pyramid has no
@@ -408,8 +409,8 @@ def read_planned_sample_grid_from_overview(
     Args:
         dataset: Open source used to build ``plan``.
         source_window: Positive integral source window containing the plan.
-        plan: Admitted explicit-position sample-grid plan.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        plan: Sample positions and read limits checked by the planner.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Masked values matching the plan shape, or ``None`` when the source has
@@ -435,8 +436,8 @@ def read_planned_sample_grid_from_overview(
     source_height = int(source_window.height)
     source_width = int(source_window.width)
     overview_height, overview_width = overview.shape
-    values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
-    mask = numpy.ones(values.shape, dtype=bool)
+    sample_values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
+    invalid_sample_mask = numpy.ones(sample_values.shape, dtype=bool)
     for cell_index, positions in enumerate(plan.cell_positions):
         if not positions:
             continue
@@ -458,16 +459,16 @@ def read_planned_sample_grid_from_overview(
             overview_width - 1,
             math.floor(local_column_center * overview_width / source_width),
         )
-        selected = overview[overview_row, overview_column]
-        if numpy.ma.is_masked(selected):
+        overview_pixel_value = overview[overview_row, overview_column]
+        if numpy.ma.is_masked(overview_pixel_value):
             continue
-        finite_value = float(selected)
+        finite_value = float(overview_pixel_value)
         if not math.isfinite(finite_value):
             continue
         sample_row, sample_column = divmod(cell_index, plan.width)
-        values[sample_row, sample_column] = finite_value
-        mask[sample_row, sample_column] = False
-    return numpy.ma.array(values, mask=mask)
+        sample_values[sample_row, sample_column] = finite_value
+        invalid_sample_mask[sample_row, sample_column] = False
+    return numpy.ma.array(sample_values, mask=invalid_sample_mask)
 
 
 def _block_index(
@@ -502,7 +503,7 @@ def plan_source_window_sample_grid(
         source_window: Positive integral window wholly inside the source.
 
     Returns:
-        Fixed longest-edge grid and its exact native-block work proof.
+        Sample grid with the native blocks and decoded-byte estimate needed to read it.
 
     Raises:
         ValueError: If the source/window contract is invalid or the fixed grid
@@ -556,7 +557,7 @@ def _finite_block_value(
     row: int,
     column: int,
 ) -> float | None:
-    """Return one honest finite value from an already-read native block.
+    """Return a finite pixel value, or None when that pixel is masked or nonfinite.
 
     Args:
         block: Masked native block pixels.
@@ -579,7 +580,7 @@ def plan_sample_grid_for_source_positions(
     height: int,
     cell_positions: tuple[tuple[SourcePosition, ...], ...],
 ) -> SampleGridPlan:
-    """Admit an explicit bounded grid of source-pixel positions.
+    """Plan reads for specified sample positions after checking size and work limits.
 
     The caller owns the spatial meaning of the positions. This neutral
     boundary validates only grid shape, source containment, native-block work,
@@ -593,7 +594,7 @@ def plan_sample_grid_for_source_positions(
             cell outside the source.
 
     Returns:
-        Admitted immutable sample-grid plan.
+        Sample positions and read limits checked by the planner.
 
     Raises:
         ValueError: If shape, positions, or source-work limits are invalid.
@@ -662,16 +663,16 @@ def read_planned_sample_grid(
     plan: SampleGridPlan,
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray:
-    """Read one owned plan a native block at a time.
+    """Read the planned sample positions, visiting each required native block once.
 
-    The planner owns structural validation and work admission. This reader
-    checks cancellation around every native-block read and never opens or
-    closes the dataset.
+    The plan already records validated positions and checked resource limits.
+    Cancellation is checked before and after each native-block read. The caller
+    keeps the dataset open for the duration of this function.
 
     Args:
         dataset: Open source used to build ``plan``.
-        plan: Admitted immutable sample-grid plan.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        plan: Sample positions and read limits checked by the planner.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Masked sample-grid values.
@@ -696,11 +697,11 @@ def read_planned_sample_grid(
     sampled_values: dict[SourcePosition, float | None] = {}
     for block_row, block_column in plan.block_indexes:
         require_active_raster_read(cancellation_requested)
-        window = dataset.block_window(1, block_row, block_column)
-        block = read_native_raster_block(dataset, window)
+        block_window = dataset.block_window(1, block_row, block_column)
+        block = read_native_raster_block(dataset, block_window)
         require_active_raster_read(cancellation_requested)
-        row_offset = int(window.row_off)
-        column_offset = int(window.col_off)
+        row_offset = int(block_window.row_off)
+        column_offset = int(block_window.col_off)
         for row, column in sorted(positions_by_block[(block_row, block_column)]):
             sampled_values[(row, column)] = _finite_block_value(
                 block,
@@ -708,18 +709,18 @@ def read_planned_sample_grid(
                 column - column_offset,
             )
 
-    values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
-    mask = numpy.ones(values.shape, dtype=bool)
+    sample_values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
+    invalid_sample_mask = numpy.ones(sample_values.shape, dtype=bool)
     for cell_index, positions in enumerate(plan.cell_positions):
         if not positions:
             continue
-        selected = sampled_values[positions[0]]
-        if selected is None:
+        source_pixel_value = sampled_values[positions[0]]
+        if source_pixel_value is None:
             continue
         sample_grid_row, sample_grid_column = divmod(cell_index, plan.width)
-        values[sample_grid_row, sample_grid_column] = selected
-        mask[sample_grid_row, sample_grid_column] = False
-    return numpy.ma.array(values, mask=mask)
+        sample_values[sample_grid_row, sample_grid_column] = source_pixel_value
+        invalid_sample_mask[sample_grid_row, sample_grid_column] = False
+    return numpy.ma.array(sample_values, mask=invalid_sample_mask)
 
 
 def read_source_window_sample_grid(
@@ -736,10 +737,10 @@ def read_source_window_sample_grid(
     Args:
         dataset: Open structurally authorized one-band raster.
         source_window: Positive integral source window wholly inside the raster.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
-        Masked source-aligned sample values and their admitted work plan.
+        Masked source-aligned sample values and the plan used to read them.
 
     Raises:
         ValueError: If planning cannot satisfy the fixed source-read contract.

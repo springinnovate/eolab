@@ -1,4 +1,4 @@
-/** Portable saved-map orchestration over existing Catalog and map owners. */
+/** Save, share and restore map layers, styles and viewport settings. */
 
 import {
     decodeSavedMapViewFragment,
@@ -16,12 +16,12 @@ import {
 const RESTORE_CONCURRENCY = 4;
 const REMEMBER_DEBOUNCE_MILLISECONDS = 350;
 
-/** Coordinate shareable map views without becoming a rendering owner. */
+/** Save map settings and restore them through the existing catalog and layer adapters. */
 export class SavedMapViewController {
     /**
-     * Create and bind the portable saved-map coordinator.
+     * Connect map save, share and restore controls to catalog and layer adapters.
      *
-     * @param {Object} configuration Collaborating public boundaries.
+     * @param {Object} configuration Map adapters, controls and browser services.
      * @param {Object} configuration.view Saved-map DOM adapter.
      * @param {Object} configuration.viewport Neutral viewport adapter.
      * @param {Object} configuration.mapLayers Neutral retained-layer owner.
@@ -524,7 +524,7 @@ export class SavedMapViewController {
     async #restore(savedMapView, restoreGeneration) {
         this.beforeRestore();
         this.catalogVisualization.clear();
-        const preparations = await mapBounded(
+        const preparations = await mapWithConcurrencyLimit(
             savedMapView.layers,
             RESTORE_CONCURRENCY,
             async (layer) => {
@@ -705,21 +705,27 @@ export class SavedMapViewController {
 }
 
 /**
- * Map inputs through a fixed-size worker pool while preserving input order.
+ * Transform inputs concurrently while preserving order and limiting active promises.
  *
  * @template Input, Output
  * @param {Input[]} inputs Ordered input values.
  * @param {number} concurrency Positive maximum number of active workers.
  * @param {(input:Input,index:number)=>Promise<Output>} transform Async mapper.
  * @return {Promise<Output[]>} Results in the same order as inputs.
+ * @throws {TypeError} If concurrency is not a positive integer.
+ * @throws {Error} If any transformation fails.
  */
-async function mapBounded(inputs, concurrency, transform) {
+async function mapWithConcurrencyLimit(inputs, concurrency, transform) {
     if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
         throw new TypeError("Restore concurrency must be a positive integer.");
     }
     const results = new Array(inputs.length);
     let nextIndex = 0;
-    async function runWorker() {
+    /** Transform the next unclaimed input until all inputs have been assigned.
+     * @return {Promise<void>} Completion after this worker's transformations finish.
+     * @throws {Error} If a transformation fails.
+     */
+    async function transformQueuedInputs() {
         while (nextIndex < inputs.length) {
             const index = nextIndex;
             nextIndex += 1;
@@ -727,7 +733,7 @@ async function mapBounded(inputs, concurrency, transform) {
         }
     }
     const workerCount = Math.min(concurrency, inputs.length);
-    await Promise.all(Array.from({ length: workerCount }, runWorker));
+    await Promise.all(Array.from({ length: workerCount }, transformQueuedInputs));
     return results;
 }
 

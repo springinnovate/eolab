@@ -39,7 +39,7 @@ class RasterReadSource:
         source_path: Confined path consumed only by native readers.
         cache_identity: Immutable identity including private access context where needed.
         version: Public immutable version, without ownership credentials or paths.
-        private: Whether leased, long reads use supervision before releasing retention.
+        private: Whether this raster is a session-owned run file.
     """
 
     source_path: Path
@@ -51,13 +51,14 @@ class RasterReadSource:
 def raster_read_process(
     writer: Any, reader: Callable[..., Any], arguments: tuple[Any, ...]
 ) -> None:
-    """Execute an existing raster reader under a killable process deadline.
+    """Run a raster reader in a child process with a 2 GiB Linux memory limit.
 
     Args:
         writer: Supervisor's result pipe.
         reader: Trusted installed reader, never chosen by an HTTP import name.
         arguments: Authorized paths and validated numerical arguments.
     """
+
     try:
         if sys.platform == "linux":
             import resource
@@ -73,9 +74,9 @@ def raster_read_process(
 
 
 async def read_private_raster(reader: Callable[..., Any], *arguments: Any) -> Any:
-    """Call the ordinary numerical reader with a 30-second private-file deadline.
+    """Read a private raster in a supervised process with a 30-second deadline.
 
-    The existing supervisor kills and joins native work before cancellation returns.
+    The supervisor stops and joins the child process before cancellation returns.
     Source acquisition, cache identity and numerical policy remain outside this helper.
 
     Args:
@@ -83,11 +84,11 @@ async def read_private_raster(reader: Callable[..., Any], *arguments: Any) -> An
         arguments: Already-authorized reader arguments.
 
     Returns:
-        The reader's existing result contract.
+        The value returned by the supplied reader.
 
     Raises:
         RasterConflictError: If native reading is invalid, fails or times out.
-        ValueError: The reader's existing invalid-data contract, handled by its caller.
+        ValueError: If the reader rejects the data or requested sampling area.
         asyncio.CancelledError: After the child process has stopped.
     """
     try:
@@ -168,10 +169,10 @@ class RasterSourceAccess:
     def __init__(
         self, catalog: RasterSourceAuthorizer, files: LeasedSourceFiles | None = None
     ) -> None:
-        """Compose the existing source authorities without changing numerical readers.
+        """Configure source access for catalog rasters and private run files.
 
         Args:
-            catalog: Existing catalog-only authorization, also used by Processing workers.
+            catalog: Authorizes catalog rasters by resolving their source files.
             files: Optional private immutable-file access composed by the application.
         """
         self.catalog, self.files = catalog, files

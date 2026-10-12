@@ -1,6 +1,6 @@
 /**
- * Bounded exact-value raster styling contracts, independent of controls,
- * rendering transport, and raster analysis. Categories describe appearance;
+ * Validate category codes, labels, colors and opacity for raster styling.
+ * Category styles are independent of controls, rendering and analysis;
  * transparent categories remain data and do not redefine source NoData.
  */
 
@@ -50,7 +50,7 @@ export const DEFAULT_UNMAPPED_RASTER_APPEARANCE = Object.freeze({
 const CATEGORICAL_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 /**
- * Require a plain record containing only fields owned by the given contract.
+ * Check that a category style object contains only the permitted fields.
  *
  * @param {unknown} value Candidate record.
  * @param {string[]} fields Permitted own field names.
@@ -58,7 +58,7 @@ const CATEGORICAL_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
  * @return {Record<string, unknown>} Candidate record after shape validation.
  * @throws {Error} If the value is not a plain record or has unknown fields.
  */
-function categoricalRecord(value, fields, location) {
+function validateCategoryFields(value, fields, location) {
     if (
         value === null || typeof value !== "object" ||
         ![Object.prototype, null].includes(Object.getPrototypeOf(value))
@@ -79,7 +79,7 @@ function categoricalRecord(value, fields, location) {
  * @return {string} Lowercase six-digit RGB hex color.
  * @throws {Error} If the color is not a six-digit hex string.
  */
-function categoricalColor(value, location) {
+function normalizeCategoryColor(value, location) {
     if (typeof value !== "string" || !CATEGORICAL_COLOR_PATTERN.test(value)) {
         throw new Error(`${location} must use a six-digit hex color.`);
     }
@@ -94,7 +94,7 @@ function categoricalColor(value, location) {
  * @return {number} Opacity from zero through one.
  * @throws {Error} If supplied opacity is not finite or is outside zero to one.
  */
-function categoricalOpacity(value, location) {
+function normalizeCategoryOpacity(value, location) {
     if (value === undefined) return 1;
     if (!Number.isFinite(value) || value < 0 || value > 1) {
         throw new Error(`${location} must be a finite number from zero to one.`);
@@ -110,7 +110,7 @@ function categoricalOpacity(value, location) {
  * @return {string} Nonempty trimmed Unicode label with bounded length.
  * @throws {Error} If the label is missing, too long, or contains invalid Unicode.
  */
-function categoricalLabel(value, location) {
+function normalizeCategoryLabel(value, location) {
     if (typeof value !== "string") {
         throw new Error(`${location} must be a nonempty string.`);
     }
@@ -129,7 +129,7 @@ function categoricalLabel(value, location) {
 }
 
 /**
- * Validate and copy a bounded categorical style at the appearance boundary.
+ * Validate and freeze a complete raster category table and its fallback appearance.
  *
  * Exact safe integer codes include zero and negative values. Values are never
  * rounded or coerced. Categories preserve input order, colors become lowercase,
@@ -144,7 +144,7 @@ function categoricalLabel(value, location) {
  * @throws {Error} If shape, values, uniqueness, or resource limits are invalid.
  */
 export function normalizeCategoricalRasterStyle(style) {
-    const record = categoricalRecord(style, ["mode", "categories", "unmapped"], "Style");
+    const record = validateCategoryFields(style, ["mode", "categories", "unmapped"], "Style");
     if (record.mode !== "categorical") {
         throw new Error("Style mode must be categorical.");
     }
@@ -157,7 +157,7 @@ export function normalizeCategoricalRasterStyle(style) {
     const values = new Set();
     const categories = Array.from(record.categories, (candidate, index) => {
         const location = `Category ${index + 1}`;
-        const category = categoricalRecord(
+        const category = validateCategoryFields(
             candidate, ["value", "label", "color", "opacity"], location
         );
         if (!Number.isSafeInteger(category.value)) {
@@ -169,24 +169,24 @@ export function normalizeCategoricalRasterStyle(style) {
         values.add(category.value);
         return Object.freeze({
             value: category.value === 0 ? 0 : category.value,
-            label: categoricalLabel(category.label, `${location} label`),
-            color: categoricalColor(category.color, `${location} color`),
-            opacity: categoricalOpacity(category.opacity, `${location} opacity`)
+            label: normalizeCategoryLabel(category.label, `${location} label`),
+            color: normalizeCategoryColor(category.color, `${location} color`),
+            opacity: normalizeCategoryOpacity(category.opacity, `${location} opacity`)
         });
     });
     const unmapped = record.unmapped === undefined
         ? DEFAULT_UNMAPPED_RASTER_APPEARANCE
-        : categoricalRecord(record.unmapped, ["color", "opacity"], "Unmapped appearance");
+        : validateCategoryFields(record.unmapped, ["color", "opacity"], "Unmapped appearance");
     const normalized = Object.freeze({
         mode: "categorical",
         categories: Object.freeze(categories),
         unmapped: Object.freeze({
-            color: categoricalColor(
+            color: normalizeCategoryColor(
                 unmapped.color === undefined
                     ? DEFAULT_UNMAPPED_RASTER_APPEARANCE.color : unmapped.color,
                 "Unmapped color"
             ),
-            opacity: categoricalOpacity(unmapped.opacity, "Unmapped opacity")
+            opacity: normalizeCategoryOpacity(unmapped.opacity, "Unmapped opacity")
         })
     });
     if (new TextEncoder().encode(JSON.stringify(normalized)).byteLength >

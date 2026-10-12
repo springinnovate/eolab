@@ -307,13 +307,13 @@ class PreparedHydrologyLibrary(HydrologySchema):
 
 
 class PreparedHydrologyRegistry:
-    """Read validated administrator reports for model setup and run capture."""
+    """Find installed hydrology registrations and validation reports for model runs."""
 
     def __init__(self, snapshots: tuple[PreparedHydrologySnapshot, ...] = ()) -> None:
         """Index installed snapshots without limiting the number of configurations.
 
         Args:
-            snapshots: Individually validated administrator reports.
+            snapshots: Schema-checked registration or full-network validation reports.
 
         Raises:
             ValueError: If two reports use the same configuration ID and version.
@@ -328,13 +328,13 @@ class PreparedHydrologyRegistry:
 
     @classmethod
     def load(cls, directory: Path | None) -> "PreparedHydrologyRegistry":
-        """Load bounded validation reports from an optional administrator directory.
+        """Load hydrology registration or validation reports from an administrator directory.
 
         Args:
             directory: Read-only server configuration directory; None installs no datasets.
 
         Returns:
-            The validated installed configurations, without reading their source data.
+            Schema-checked installed configurations, without reading their source data.
 
         Raises:
             ValueError: If the configured directory or a report is invalid.

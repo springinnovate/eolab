@@ -19,7 +19,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateSpec,
 )
 from eolab_app.processing.aggregate_windows import (
-    execution_plan,
+    plan_raster_read_windows,
     iter_raster_read_windows,
 )
 from eolab_app.processing.models import ProcessingError
@@ -54,7 +54,7 @@ def test_streamed_windows_cover_only_admitted_blocks_once(
         target: Requested total-pixel budget.
         tile_side: Legacy numerical or geometry-fallback tile ceiling.
     """
-    plan = execution_plan(window, shape, width, height, target, tile_side)
+    plan = plan_raster_read_windows(window, shape, width, height, target, tile_side)
     seen, counts, reads = (
         [],
         [],
@@ -79,7 +79,7 @@ def test_streamed_windows_cover_only_admitted_blocks_once(
 
 def test_width_first_expansion():
     """A million-pixel target groups four 512 blocks horizontally before vertically."""
-    plan = execution_plan(
+    plan = plan_raster_read_windows(
         Window(0, 0, 4096, 4096), (512, 512), 4096, 4096, 1048576, 256
     )
     assert (plan.readWidth, plan.readHeight) == (2048, 512)
@@ -261,7 +261,7 @@ def test_memory_planning_and_execution_without_grid_recheck(
         """
         pytest.fail("execution rebuilt the saved grid")
 
-    monkeypatch.setattr(kernel, "grid", unexpected_grid_recheck)
+    monkeypatch.setattr(kernel, "plan_statistics_grid", unexpected_grid_recheck)
     for plan in (spec, old):
         result = kernel.calculate_raster_statistics_for_area(
             path, plan, tmp_path, LIMITS

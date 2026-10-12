@@ -1,8 +1,11 @@
-"""Start Processing without reloading application composition in spawned children."""
+"""Start the Processing worker from the command line.
 
+Application startup is imported inside main() so spawned calculation processes
+can import this module without starting another worker.
+"""
 
 def main() -> None:
-    """Run the existing worker composition in the supervisor process only.
+    """Load worker configuration and run the Processing job loop.
 
     Multiprocessing reimports this module when it spawns a native child. Keeping
     application imports inside this function lets the child load only its native

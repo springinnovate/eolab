@@ -24,7 +24,7 @@ from eolab_app.vector.sources import MountedVectorResolver
 
 
 class VectorSamplingService:
-    """Authorize direct catalog selections without retaining geometry or IDs."""
+    """Validate filtered catalog features and request their measurements or outlines."""
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class VectorSamplingService:
             Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
         ) = None,
     ) -> None:
-        """Connect source authority and bounded execution.
+        """Connect catalog source resolution with feature-measurement and outline jobs.
 
         Args:
             catalog: Authoritative Catalog reader.
@@ -58,13 +58,13 @@ class VectorSamplingService:
     async def resolve_for_sampling(
         self, selection: CatalogSelection
     ) -> ResolvedCatalogSelection:
-        """Reauthorize descriptor identity, source signature and native layer.
+        """Verify that a saved feature selection still refers to the same source and filter.
 
         Args:
-            selection: Validated path-free immutable descriptor.
+            selection: Validated catalog source identity and feature filter.
 
         Returns:
-            Current private source capability.
+            Authorized dataset path, feature filter and file-change checks.
 
         Raises:
             SelectionUnavailableError: If identity, source or predicate changed.
@@ -108,7 +108,7 @@ class VectorSamplingService:
         }
 
     async def outline(self, selection: CatalogSelection) -> dict[str, Any]:
-        """Generate optional presentation geometry independently of analysis.
+        """Create a simplified map outline of the selected features.
 
         Args:
             selection: Previously validated catalog descriptor.

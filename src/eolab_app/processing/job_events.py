@@ -12,7 +12,11 @@ from eolab_app.processing.models import ProcessingError
 
 
 class Subscription:
-    """One coalescing bit per stream; no retained job payloads or event history."""
+    """Wait for job-change notifications for one browser session.
+
+    Multiple changes become one pending notification. The subscriber rereads
+    job status from storage; this subscription retains no result or event history.
+    """
 
     def __init__(self, release: Callable[[], None]) -> None:
         """Reserve a stream until closed.
@@ -31,7 +35,10 @@ class Subscription:
             timeout: Heartbeat wait bound in seconds.
 
         Returns:
-            True for a hint or closure, False for a heartbeat timeout.
+            True when a change notification is pending, False after the timeout.
+
+        Raises:
+            ProcessingError: If the subscription closes before a notification is read.
         """
         try:
             async with asyncio.timeout(timeout):

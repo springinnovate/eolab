@@ -10,7 +10,7 @@ from eolab_app.source_files import verify_source_file
 
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
-    """Prepare one lane for raster operations and immutable input verification.
+    """Configure a reusable subprocess for raster calculations and input-file checks.
 
     The dedicated worker uses this process for preparation and execution after
     claiming a job from the database queue.
@@ -19,11 +19,12 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
         limits: Existing startup/planning deadline policy.
 
     Returns:
-        Unstarted lane, recycled after exceeding 1 GiB Linux peak RSS. Completed
+        Unstarted reusable process, replaced after exceeding 1 GiB Linux peak RSS. Completed
         operation count does not trigger replacement.
         The configured Linux address-space ceiling applies to preparation and
         execution. Container limits additionally bound all children together.
     """
+
     return ReusableProcess(
         (
             clip_process_target,

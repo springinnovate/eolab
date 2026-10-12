@@ -1852,7 +1852,7 @@ export function initializeRasterViewer(
             const record = mapLayers.getRecord(key);
             const layer = mapLayers.getLeafletLayer(key);
             if (record === null || layer === null) continue;
-            setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
+            setRasterWmsStyle(layer, buildRasterSessionWmsParameters(record.state));
             layer.setOpacity(record.entry.opacity);
             if (mapLayers.isAttached(key)) {
                 setRasterLayerAdditiveBlend(layer, false);
@@ -2034,7 +2034,7 @@ export function initializeRasterViewer(
             const layer = createRasterLayer(record.publication, record.state.rasterStyle, reportTileError);
             record.state.layer = layer;
             if (record.state.appearanceMode === "categorical") {
-                setRasterWmsStyle(layer, rasterSessionStyleParameters(record.state));
+                setRasterWmsStyle(layer, buildRasterSessionWmsParameters(record.state));
             }
             return layer;
         },
@@ -2751,7 +2751,7 @@ export function initializeRasterViewer(
      * @return {{env?:string,raster_style?:string}} Validated WMS parameters.
      * @throws {Error} If the active style is invalid.
      */
-    function rasterSessionStyleParameters(session) {
+    function buildRasterSessionWmsParameters(session) {
         return session.appearanceMode === "categorical"
             ? { raster_style: buildCategoricalRasterStyleParameter(session.categoricalStyle) }
             : { env: buildRasterStyleEnvironment(session.rasterStyle) };
@@ -2924,7 +2924,7 @@ export function initializeRasterViewer(
         const environment = buildRasterStyleEnvironment(style);
         if (session.layer) setRasterWmsStyle(session.layer,
             session.appearanceMode === "categorical"
-                ? rasterSessionStyleParameters(session) : { env: environment });
+                ? buildRasterSessionWmsParameters(session) : { env: environment });
         session.rasterStyle = { ...style };
         session.paletteName = paletteName;
         session.rasterStyleWasEdited = wasEdited;
@@ -3783,7 +3783,7 @@ export function initializeRasterViewer(
             controlsView.clearPointSamples();
             return;
         }
-        controlsView.renderPointSamples(projectRasterPixelPresentation(snapshot));
+        controlsView.renderPointSamples(applyPixelCategoryLabels(snapshot));
         if (!bivariateMode.active) {
             return;
         }
@@ -3807,7 +3807,7 @@ export function initializeRasterViewer(
             return;
         }
         if (!pixelPickerEnabled || !pointerInspectionEnabled) return;
-        cursorValuesView.render(projectRasterPixelPresentation(snapshot));
+        cursorValuesView.render(applyPixelCategoryLabels(snapshot));
     }
 
     /**
@@ -3832,7 +3832,7 @@ export function initializeRasterViewer(
      * @param {Readonly<Object>|null} snapshot Point or cursor result snapshot.
      * @return {Readonly<Object>|null} Prepared presentation preserving raw results.
      */
-    function projectRasterPixelPresentation(snapshot) {
+    function applyPixelCategoryLabels(snapshot) {
         return presentRasterPixelSnapshot(snapshot, categoricalStyleForPixelPresentation);
     }
 
@@ -3845,9 +3845,9 @@ export function initializeRasterViewer(
      */
     function refreshRasterPixelPresentation() {
         if (latestPointSampleSnapshot !== null) {
-            controlsView.renderPointSamples(projectRasterPixelPresentation(latestPointSampleSnapshot));
+            controlsView.renderPointSamples(applyPixelCategoryLabels(latestPointSampleSnapshot));
         }
-        cursorValuesView.refreshPresentation?.(projectRasterPixelPresentation);
+        cursorValuesView.refreshPresentation?.(applyPixelCategoryLabels);
     }
 
     /**

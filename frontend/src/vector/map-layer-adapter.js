@@ -1,4 +1,4 @@
-/** Focused vector publication and Leaflet adapter for shared map lifecycle. */
+/** Publish, style and filter vector datasets displayed in the map's layer list. */
 
 import {
     classifyCatalogVectorNumbers,
@@ -196,7 +196,7 @@ async function adaptPortableVectorStyleToTarget(
 }
 
 /**
- * Create the vector implementation of the neutral external-map-layer contract.
+ * Create the adapter that publishes vector layers and manages their styles and filters.
  *
  * @param {Object} configuration Adapter configuration.
  * @param {Object} configuration.leaflet Leaflet namespace.

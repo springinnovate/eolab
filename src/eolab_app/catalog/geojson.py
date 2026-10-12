@@ -63,8 +63,8 @@ JsonEvent = tuple[str, str, Any]
 
 
 @dataclass
-class _RootContract:
-    """Bounded validation state for the GeoJSON top-level object.
+class _FeatureCollectionValidator:
+    """Validate FeatureCollection structure and CRS as GeoJSON is streamed.
 
     Attributes:
         root_started: Whether the document began with an object.
@@ -87,7 +87,7 @@ class _RootContract:
     legacy_crs_name: str | None = None
 
     def observe(self, prefix: str, event: str, value: Any) -> None:
-        """Observe one incremental parser event without retaining source data.
+        """Check a parser event and record the top-level fields needed for validation.
 
         Args:
             prefix: Ijson path prefix for the event.
@@ -139,7 +139,7 @@ class _RootContract:
             self.legacy_crs_name = value
 
     def validate(self) -> None:
-        """Validate the completed root and explicit legacy CRS policy.
+        """Require one complete FeatureCollection using WGS 84 coordinates.
 
         Returns:
             None.
@@ -169,8 +169,8 @@ class _RootContract:
 
 
 @dataclass
-class _Bounds:
-    """Streaming WGS 84 coordinate bounds.
+class _GeographicBoundsAccumulator:
+    """Track minimum and maximum longitude and latitude across streamed positions.
 
     Attributes:
         west: Smallest longitude encountered.
@@ -289,8 +289,8 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
     """
     relative_path = geojson_path.relative_to(source_root)
     relative_path_text = relative_path.as_posix()
-    root_contract = _RootContract()
-    bounds = _Bounds()
+    collection_validator = _FeatureCollectionValidator()
+    bounds = _GeographicBoundsAccumulator()
     feature_count = 0
     geometry_types: set[str] = set()
     field_types: dict[str, set[str]] = {}
@@ -298,7 +298,9 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
     try:
         with geojson_path.open("rb") as source:
             parser_events = ijson.parse(source, use_float=True)
-            observed_events = _observe_root(parser_events, root_contract)
+            observed_events = _validate_feature_collection_events(
+                parser_events, collection_validator
+            )
             for feature in ijson.items(observed_events, "features.item"):
                 feature_count += 1
                 _summarize_feature(
@@ -308,7 +310,7 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
                     geometry_types,
                     field_types,
                 )
-        root_contract.validate()
+        collection_validator.validate()
     except (ijson.JSONError, UnicodeDecodeError) as error:
         raise ValueError(f"GeoJSON is malformed: {error}") from error
 
@@ -361,31 +363,31 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
     }
 
 
-def _observe_root(
+def _validate_feature_collection_events(
     parser_events: Iterable[JsonEvent],
-    root_contract: _RootContract,
+    collection_validator: _FeatureCollectionValidator,
 ) -> Iterator[JsonEvent]:
-    """Yield parser events while validating bounded top-level metadata.
+    """Validate FeatureCollection metadata while passing through parser events.
 
     Args:
         parser_events: Incremental ``(prefix, event, value)`` parser events.
-        root_contract: Mutable top-level validation state.
+        collection_validator: Tracks collection structure and any legacy CRS declaration.
 
     Yields:
-        The original parser events for downstream feature materialization.
+        The original events for reading individual features.
 
     Raises:
         ValueError: If root validation fails while observing an event.
     """
     for prefix, event, value in parser_events:
-        root_contract.observe(prefix, event, value)
+        collection_validator.observe(prefix, event, value)
         yield prefix, event, value
 
 
 def _summarize_feature(
     feature: Any,
     feature_number: int,
-    bounds: _Bounds,
+    bounds: _GeographicBoundsAccumulator,
     geometry_types: set[str],
     field_types: dict[str, set[str]],
 ) -> None:
@@ -444,7 +446,7 @@ def _summarize_feature(
 
 def _summarize_geometry(
     geometry: Any,
-    bounds: _Bounds,
+    bounds: _GeographicBoundsAccumulator,
     collection_depth: int,
 ) -> str:
     """Validate one geometry recursively and merge its coordinate bounds.
@@ -500,7 +502,7 @@ def _summarize_geometry(
     return geometry_type
 
 
-def _include_position(position: Any, bounds: _Bounds) -> None:
+def _include_position(position: Any, bounds: _GeographicBoundsAccumulator) -> None:
     """Validate and aggregate one GeoJSON coordinate position.
 
     Args:
@@ -520,7 +522,7 @@ def _include_position(position: Any, bounds: _Bounds) -> None:
 
 def _include_position_array(
     positions: Any,
-    bounds: _Bounds,
+    bounds: _GeographicBoundsAccumulator,
     geometry_name: str,
 ) -> None:
     """Aggregate an array of positions.
@@ -542,7 +544,9 @@ def _include_position_array(
         _include_position(position, bounds)
 
 
-def _include_line(coordinates: Any, bounds: _Bounds, geometry_name: str) -> None:
+def _include_line(
+    coordinates: Any, bounds: _GeographicBoundsAccumulator, geometry_name: str
+) -> None:
     """Validate and aggregate a GeoJSON line coordinate array.
 
     Args:
@@ -563,7 +567,7 @@ def _include_line(coordinates: Any, bounds: _Bounds, geometry_name: str) -> None
     _include_position_array(coordinates, bounds, geometry_name)
 
 
-def _include_multi_line(coordinates: Any, bounds: _Bounds) -> None:
+def _include_multi_line(coordinates: Any, bounds: _GeographicBoundsAccumulator) -> None:
     """Validate and aggregate a MultiLineString coordinate array.
 
     Args:
@@ -582,7 +586,9 @@ def _include_multi_line(coordinates: Any, bounds: _Bounds) -> None:
         _include_line(line, bounds, "MultiLineString")
 
 
-def _include_polygon(coordinates: Any, bounds: _Bounds, geometry_name: str) -> None:
+def _include_polygon(
+    coordinates: Any, bounds: _GeographicBoundsAccumulator, geometry_name: str
+) -> None:
     """Validate and aggregate a Polygon coordinate array.
 
     Args:

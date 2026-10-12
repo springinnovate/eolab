@@ -439,10 +439,10 @@ def get_clip_polygon(request: ClipJobRequest) -> None:
     return None
 
 
-def queue_summary(
+def build_summary_submission(
     request: AggregateJobRequest, polygons: AggregateArea | None
 ) -> PreparedJobPlan:
-    """Capture summary inputs for preparation by the existing worker.
+    """Build a summary submission containing inputs the worker will prepare.
 
     Args:
         request: Validated summary request.
@@ -484,8 +484,8 @@ def queue_summary(
     )
 
 
-def queue_clip(request: ClipJobRequest, polygons: None) -> PreparedJobPlan:
-    """Capture explicit clip inputs for preparation by the existing worker.
+def build_clip_submission(request: ClipJobRequest, polygons: None) -> PreparedJobPlan:
+    """Build a clip submission containing inputs the worker will prepare.
 
     Args:
         request: Validated clip request.

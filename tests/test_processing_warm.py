@@ -20,7 +20,7 @@ from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import ClipArea, ClipSpec, RasterClipLimits
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.native_processes import create_native_process
-from eolab_app.processing.service import public_job
+from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker, serve
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
@@ -91,7 +91,7 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_results(tmp_path: P
                 assert await worker.run_once()
                 artifact = store.finish.call_args.args[2]
                 response = AggregateJobResponse.model_validate(
-                    public_job(
+                    serialize_processing_job(
                         {
                             **row,
                             "status": "ready",

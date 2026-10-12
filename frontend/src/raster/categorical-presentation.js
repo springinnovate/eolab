@@ -68,7 +68,7 @@ function categoryLegendSymbol(appearance) {
 }
 
 /**
- * Project an already normalized category table into the neutral legend contract.
+ * Build legend labels and symbols from a validated raster category table.
  * Entries retain table order and exact codes, followed by the unmapped fallback.
  * Transparent entries remain present; source NoData is not a category.
  *
@@ -93,12 +93,12 @@ export function buildCategoricalRasterLegend(style) {
 }
 
 /**
- * Project pixel results through the current committed layer appearance.
+ * Add category labels to pixel readouts using each layer's current style.
  * Exact equality determines membership, including transparent categories. The
  * numeric value and state are never changed, rounded, or used to authorize a
  * read. Non-value outcomes and continuous layers have no display override.
- * Re-projecting removes any prior override, so mode changes use the same raw
- * result without another sample. Inputs already satisfy their owning contracts.
+ * Applying another style removes prior labels, so mode changes reuse the same
+ * numeric result without another sample. Callers supply already validated data.
  *
  * @param {Readonly<RasterPixelPresentationSnapshot>|null} snapshot Raw or
  * previously projected sample snapshot; null represents a cleared result.

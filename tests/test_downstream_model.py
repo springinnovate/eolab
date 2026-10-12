@@ -529,7 +529,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         export_model_job_yaml,
     )
     from eolab_app.processing.model_yaml import parse_yaml
-    from eolab_app.processing.service import public_job
+    from eolab_app.processing.service import serialize_processing_job
     from test_processing_worker_results import configure_prepared_job_store
 
     pytest.importorskip("ecoshard.geoprocessing.routing")
@@ -646,7 +646,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         "artifact": asdict(artifact),
         "retained_outcome": {"status": "ready", "artifact": asdict(artifact)},
     }
-    response = ModelJobResponse.model_validate(public_job(ready))
+    response = ModelJobResponse.model_validate(serialize_processing_job(ready))
     assert float(response.result.rows[0].value) == 24
     assert {file.name for file in response.artifacts.files} == {
         "statistics",

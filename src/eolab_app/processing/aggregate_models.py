@@ -43,7 +43,7 @@ class NamedCalculation(BaseModel):
 
 
 class AggregateValidationRequest(BaseModel):
-    """Bounded language validation independent of source lookup and raster I/O."""
+    """Raster formulas to check for syntax and size without reading source data."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     _uses_pixel_point: bool = PrivateAttr(default=False)
@@ -54,7 +54,7 @@ class AggregateValidationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_language(self) -> "AggregateValidationRequest":
-        """Check the same bounded language used by planning and execution.
+        """Validate formula syntax, unique labels and the combined expression-size limits.
 
         Returns:
             The checked request.
@@ -117,7 +117,9 @@ class AggregatePlanRequest(BaseModel):
     def serialize_request(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Keep existing request hashes unchanged when no pixel point is supplied.
+        """Serialize a calculation request, omitting an absent sampled point.
+
+        Omitting the optional field preserves hashes for point-free requests.
 
         Args:
             handler: Pydantic's normal field serializer.
@@ -194,7 +196,7 @@ MAX_CALCULATION_BATCH_BYTES = (
 
 
 class AggregateBatchRequest(BaseModel):
-    """Bound the envelope; the HTTP boundary validates each item independently.
+    """A batch of up to fifty calculation requests, each validated independently.
 
     Unvalidated items are intentional: an invalid formula must not reject the
     other calculations. No item reaches the service without AggregateJobRequest

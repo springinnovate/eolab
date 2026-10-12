@@ -11,11 +11,15 @@ from collections.abc import Iterable
 import numpy as np
 
 
-class AreaCoverage:
-    """Rasterize oriented AOI rings onto slices of a cached equal-area grid."""
+class FractionalAreaCoverage:
+    """Calculate the fraction of each grid cell covered by a selected polygon.
+
+    The polygon and cell boundaries use the same equal-area coordinate system;
+    returned values range from zero to one and preserve partially covered cells.
+    """
 
     def __init__(self, rings: Iterable[np.ndarray]) -> None:
-        """Compile the already validated, bounded AOI once for a calculation.
+        """Store the selected polygon's directed boundary edges for repeated grid tiles.
 
         Args:
             rings: Closed equal-area coordinate rings, with counterclockwise
@@ -26,8 +30,8 @@ class AreaCoverage:
         )
         self.edges = segments
 
-    def mask(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """Return fractional coverage using only row/column boundaries and edges.
+    def calculate_cell_coverage(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """Calculate the selected polygon's coverage fraction for each grid cell.
 
         Args:
             xs: Monotone equal-area column edges for a bounded processing tile.

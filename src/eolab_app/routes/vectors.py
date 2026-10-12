@@ -1,4 +1,4 @@
-"""FastAPI delivery boundary for catalog vector visualization."""
+"""HTTP routes for publishing, styling and filtering catalog vector layers."""
 
 from dataclasses import dataclass
 
@@ -26,7 +26,7 @@ from eolab_app.vector.styling import VectorStyleService
 
 @dataclass(frozen=True)
 class VectorFeature:
-    """Explicit vector feature boundary wired into the application.
+    """Vector rendering routes and the registry authorizing their WMS layers.
 
     Attributes:
         router: HTTP routes for assessment and publication.
@@ -48,11 +48,11 @@ def create_vector_feature(
     Args:
         assessment_service: Authoritative selected-Item reassessment workflow.
         publication_service: Serialized exact-layer publication workflow.
-        style_service: Authoritative styling and bounded field-class workflow.
+        style_service: Validates styles and reads field values for classification.
         registry: Process-local vector WMS authorization registry.
 
     Returns:
-        Router and registry forming the vector feature boundary.
+        Vector rendering router and its layer-authorization registry.
     """
     router = APIRouter(prefix="/api/vector-rendering", tags=["rendering"])
 
@@ -80,7 +80,7 @@ def create_vector_feature(
     async def publish_vector(
         request: CatalogVectorRequest,
     ) -> PublishedVector:
-        """Publish one exact mounted vector layer as bounded WMS.
+        """Publish the selected catalog vector layer through GeoServer WMS.
 
         Args:
             request: Authoritative Collection and Item identity.

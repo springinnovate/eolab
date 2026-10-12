@@ -52,7 +52,7 @@ class GeoServerPublicationState:
 
 
 class GeoServerRasterPublisher:
-    """Converge mounted GeoTIFFs to healthy private GeoServer publications."""
+    """Publish mounted GeoTIFFs as styled GeoServer WMS layers."""
 
     def __init__(
         self,
@@ -80,7 +80,7 @@ class GeoServerRasterPublisher:
     async def publish(
         self, resource_name: str, source_path: Path, *, advertised: bool = True
     ) -> None:
-        """Converge and style one mounted GeoTIFF publication.
+        """Create or reuse a GeoServer raster layer and apply its default style.
 
         Clean resources are created, complete resources are preserved, and a
         coverage-store-only orphan is deleted before one clean retry. Mixed

@@ -11,7 +11,7 @@ import { hydrologyKey, hydrologyReference, validateHydrologyReference, validateP
  * @throws {Error} If a private source has invalid opaque identifiers.
  */
 function processingRasterReference(source) {
-    return source.kind === "runArtifact" ? {kind: "runArtifact", jobId: opaqueId(source.jobId), artifactId: opaqueId(source.artifactId)} :
+    return source.kind === "runArtifact" ? {kind: "runArtifact", jobId: validateProcessingId(source.jobId), artifactId: validateProcessingId(source.artifactId)} :
         {collectionId: source.collectionId, itemId: source.itemId};
 }
 
@@ -57,8 +57,12 @@ export function waitBeforeCapacityRetry(error, attempt, signal) {
     });
 }
 
-/** Validate opaque API path identities. @param {string} id Candidate ID. @return {string} Validated ID. */
-function opaqueId(id) {
+/** Check a job, artifact, polygon upload or deletion identifier used by the API.
+ * @param {string} id Candidate 32-character identifier.
+ * @return {string} Validated identifier.
+ * @throws {TypeError} If the identifier contains unsupported characters or has the wrong length.
+ */
+function validateProcessingId(id) {
     if (typeof id !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(id)) {
         throw new TypeError("Invalid processing identity.");
     }
@@ -83,26 +87,28 @@ function validateGrid(grid, operation) {
     if (grid.execution) validateExecution(grid.execution);
 }
 
-/** Validate bounded execution metadata, including a zero-read point outside coverage.
- * @param {Object} value Plan. @return {void}
+/** Check raster batch dimensions and the number of planned read windows.
+ * A point outside raster coverage can have zero read windows.
+ * @param {Object} execution Planned read and evaluation dimensions.
+ * @return {void}
  * @throws {Error} If batch dimensions or read-window count are invalid.
  */
-function validateExecution(value) {
-    chunkPixels(value.targetChunkPixels);
-    if (![value.readWidth, value.readHeight, value.evaluationWidth, value.evaluationHeight]
-        .every(n => Number.isSafeInteger(n) && n > 0) || !Number.isSafeInteger(value.readWindows) || value.readWindows < 0 || value.readWindows > 65536 ||
-        value.evaluationWidth > value.readWidth || value.evaluationHeight > value.readHeight) {
+function validateExecution(execution) {
+    chunkPixels(execution.targetChunkPixels);
+    if (![execution.readWidth, execution.readHeight, execution.evaluationWidth, execution.evaluationHeight]
+        .every(n => Number.isSafeInteger(n) && n > 0) || !Number.isSafeInteger(execution.readWindows) || execution.readWindows < 0 || execution.readWindows > 65536 ||
+        execution.evaluationWidth > execution.readWidth || execution.evaluationHeight > execution.readHeight) {
         throw new Error("Processing returned invalid batch dimensions.");
     }
 }
 
-/** Validate a public owned job before presenting values or download actions.
+/** Check a job's status, progress, results and download links before displaying it.
  * @param {Object} job API response, including optional cache metadata.
  * @return {Object} Validated job.
  * @throws {Error} If the lifecycle, results, metadata or download links are invalid.
  */
 function validateJob(job) {
-    opaqueId(job?.jobId);
+    validateProcessingId(job?.jobId);
     if (!["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired", "deleted"].includes(job.status) ||
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.operation === "model.run.v1") {
@@ -114,7 +120,7 @@ function validateJob(job) {
             throw new Error("Processing returned invalid model run details.");
         if (job.artifacts != null) validateModelArtifacts(job.artifacts, job);
         if (job.deletionUndo != null) {
-            opaqueId(job.deletionUndo.deletionId);
+            validateProcessingId(job.deletionUndo.deletionId);
             if (job.status !== "deleted" || !Number.isFinite(Date.parse(job.deletionUndo.expiresAt)))
                 throw new Error("Processing returned invalid deletion Undo details.");
         }
@@ -135,7 +141,7 @@ function validateJob(job) {
     return job;
 }
 
-/** Validate a run's bounded file inventory before exposing any download links.
+/** Check a run's output-file list, sizes and download URLs against its current status.
  * @param {Object} manifest Complete file metadata from the server.
  * @param {Object} job Owning model job and its lifecycle snapshot.
  * @return {void}
@@ -267,7 +273,7 @@ export class ProcessingApiClient {
      * @throws {Error} If an ID, request, or response is invalid or incomplete.
      */
     async readJobStatuses(jobIds, signal) {
-        const requested = [...new Set(jobIds.map(opaqueId))];
+        const requested = [...new Set(jobIds.map(validateProcessingId))];
         const result = {jobs: [], unavailableJobIds: []};
         await this.ensureSession();
         for (let offset = 0; offset < requested.length; offset += 100) {
@@ -276,7 +282,7 @@ export class ProcessingApiClient {
             if (!Array.isArray(response.jobs) || !Array.isArray(response.unavailableJobIds))
                 throw new Error("Invalid processing status response.");
             const jobs = response.jobs.map(validateJob);
-            const unavailable = response.unavailableJobIds.map(opaqueId);
+            const unavailable = response.unavailableJobIds.map(validateProcessingId);
             const returned = [...jobs.map(job => job.jobId), ...unavailable];
             if (returned.length !== batch.length || new Set(returned).size !== batch.length ||
                 returned.some(id => !batch.includes(id))) throw new Error("Incomplete processing status response.");
@@ -331,7 +337,7 @@ export class ProcessingApiClient {
      */
     async discardPolygonArea(id) {
         await this.ensureSession();
-        return this.request(`/polygon-areas/${opaqueId(id)}`, "DELETE");
+        return this.request(`/polygon-areas/${validateProcessingId(id)}`, "DELETE");
     }
 
     /** Queue complete inputs, coalescing submissions ready in the same microtask turn.
@@ -475,7 +481,7 @@ export class ProcessingApiClient {
      */
     async readModelInvocation(id) {
         await this.ensureSession();
-        const invocation = await this.request(`/jobs/${opaqueId(id)}/invocation`);
+        const invocation = await this.request(`/jobs/${validateProcessingId(id)}/invocation`);
         validateModelIdentity(invocation.model);
         validateAvailableModel({...invocation.model.definition, definitionSha256: invocation.model.definitionSha256});
         if (!invocation.inputs || !invocation.parameters || typeof invocation.label !== "string")
@@ -516,7 +522,7 @@ export class ProcessingApiClient {
     /** Read a tracked job even if it falls outside recent history. @param {string} id Job ID. @return {Promise<Object>} Owned job. */
     async getJob(id) {
         await this.ensureSession();
-        return validateJob(await this.request(`/jobs/${opaqueId(id)}`));
+        return validateJob(await this.request(`/jobs/${validateProcessingId(id)}`));
     }
 
     /** Keep a completed model run and its outputs for another seven days.
@@ -526,7 +532,7 @@ export class ProcessingApiClient {
      */
     async renewModelRun(id) {
         await this.ensureSession();
-        return validateJob(await this.request(`/jobs/${opaqueId(id)}/renew`, "POST"));
+        return validateJob(await this.request(`/jobs/${validateProcessingId(id)}/renew`, "POST"));
     }
 
     /** Delete a model run while keeping a thirty-second Undo opportunity.
@@ -536,7 +542,7 @@ export class ProcessingApiClient {
      */
     async deleteModelRun(id) {
         await this.ensureSession();
-        return validateJob(await this.request(`/jobs/${opaqueId(id)}?undo=true`, "DELETE"));
+        return validateJob(await this.request(`/jobs/${validateProcessingId(id)}?undo=true`, "DELETE"));
     }
 
     /** Restore one exact model deletion before its Undo deadline.
@@ -547,7 +553,7 @@ export class ProcessingApiClient {
      */
     async undoModelDeletion(id, deletionId) {
         await this.ensureSession();
-        return validateJob(await this.request(`/jobs/${opaqueId(id)}/deletion/undo`, "POST", {deletionId: opaqueId(deletionId)}));
+        return validateJob(await this.request(`/jobs/${validateProcessingId(id)}/deletion/undo`, "POST", {deletionId: validateProcessingId(deletionId)}));
     }
 
     /** End the Undo window for one exact deletion so ordinary cleanup can proceed.
@@ -558,19 +564,19 @@ export class ProcessingApiClient {
      */
     async dismissModelDeletion(id, deletionId) {
         await this.ensureSession();
-        return validateJob(await this.request(`/jobs/${opaqueId(id)}/deletion/dismiss`, "POST", {deletionId: opaqueId(deletionId)}));
+        return validateJob(await this.request(`/jobs/${validateProcessingId(id)}/deletion/dismiss`, "POST", {deletionId: validateProcessingId(deletionId)}));
     }
 
     /** Cancel an owned active job. @param {string} id Job ID. @return {Promise<Object>} Updated job. */
     async cancelJob(id) {
         await this.ensureSession();
-        return this.request(`/jobs/${opaqueId(id)}/cancel`, "POST");
+        return this.request(`/jobs/${validateProcessingId(id)}/cancel`, "POST");
     }
 
     /** Revoke an owned terminal result. @param {string} id Job ID. @return {Promise<Object>} Updated job. */
     async deleteJob(id) {
         await this.ensureSession();
-        return this.request(`/jobs/${opaqueId(id)}`, "DELETE");
+        return this.request(`/jobs/${validateProcessingId(id)}`, "DELETE");
     }
 
     /**
@@ -616,7 +622,7 @@ export class ProcessingApiClient {
  * @param {"result"|"provenance"|"model-yaml"|"run-yaml"} kind Artifact type. @return {string} Safe local download URL.
  */
 export function processingDownloadUrl(value, id, kind) {
-    const expected = `/api/processing/jobs/${opaqueId(id)}/${kind}`;
+    const expected = `/api/processing/jobs/${validateProcessingId(id)}/${kind}`;
     if (!["result", "provenance", "model-yaml", "run-yaml"].includes(kind) || value !== expected) {
         throw new TypeError("Invalid processing download address.");
     }
@@ -631,7 +637,7 @@ export function processingDownloadUrl(value, id, kind) {
  * @throws {TypeError} If an identity or address is invalid.
  */
 export function processingArtifactDownloadUrl(value, jobId, artifactId) {
-    const expected = `/api/processing/jobs/${opaqueId(jobId)}/artifacts/${opaqueId(artifactId)}`;
+    const expected = `/api/processing/jobs/${validateProcessingId(jobId)}/artifacts/${validateProcessingId(artifactId)}`;
     if (value !== expected) throw new TypeError("Invalid result file download address.");
     return expected;
 }

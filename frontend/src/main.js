@@ -116,12 +116,13 @@ import { RasterClipsController } from "./processing/raster-clips-controller.js";
 import { RasterClipsView } from "./processing/raster-clips-view.js";
 import { PendingSubmissionStorage } from "./processing/pending-submission.js";
 
-/** Copy the original source identity and map label for a Processing intent.
+/** Describe a calculation input using its original source identity and map label.
  * @param {Object} item Catalog Item or original-source descriptor.
  * @param {string} [label] Map-specific display name; defaults to the catalog title.
  * @return {Object} Source identity and presentation label.
+ * @throws {TypeError} If the source identity or label is invalid.
  */
-function clipSource(item, label = item.label ?? item.properties?.title ?? item.id) {
+function describeCalculationSource(item, label = item.label ?? item.properties?.title ?? item.id) {
     return labeledRasterSource(item, label);
 }
 
@@ -890,14 +891,14 @@ async function initializeCatalog(
                     : west <= bounds.east || east >= bounds.west;
             }
         ).map(/** @param {Object} layer Raster candidate. @return {Object} Source identity. */
-            layer => clipSource(layer.source, layer.label));
+            layer => describeCalculationSource(layer.source, layer.label));
     }
     /** Read committed raster inputs independently of rendering eligibility.
      * @return {{sources:Object[],area:Object|null,pixelPoint:{longitude:number,latitude:number}|null}} Current Processing context.
      */
     const processingContext = () => ({
         sources: mapLayerController.snapshots().filter(layer => layer.capabilities?.calculations)
-            .map(layer => clipSource(layer.source, layer.label)),
+            .map(layer => describeCalculationSource(layer.source, layer.label)),
         area: rasterVisualization?.getSelectedArea() ?? null,
         pixelPoint,
     });
@@ -938,11 +939,11 @@ async function initializeCatalog(
     mapInspection.subscribeActiveTool(tool => rasterClips.setActive(tool === "raster-clips"));
     mapLayerController.onDownload = (key) => {
         const record = mapLayerController.getRecord(key);
-        if (record) rasterClips.open(clipSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
+        if (record) rasterClips.open(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
     };
     mapLayerController.onCalculate = (key) => {
         const record = mapLayerController.getRecord(key);
-        if (record) calculations.open(clipSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
+        if (record) calculations.open(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
     };
     void rasterClips.start();
 
@@ -951,9 +952,9 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onDownloadRequested: (item, area) => rasterClips.open(clipSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area),
+        onDownloadRequested: (item, area) => rasterClips.open(describeCalculationSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area),
         onCalculateRequested: (item, area) => {
-            calculations.open(clipSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area);
+            calculations.open(describeCalculationSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area);
             calculations.calculateSelection(true);
         },
         onSamplingAreaChange: area => {
@@ -1044,8 +1045,8 @@ async function initializeCatalog(
             const viewport = leafletMap.getBounds();
             return {
                 rasters: mapLayerController.snapshots().filter(layer => layer.capabilities?.modelInput)
-                    .map(layer => ({...clipSource(layer.source, layer.label), visible: layer.visible})),
-                vectors: catalogPolygonTargets().map(target => ({...clipSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
+                    .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
+                vectors: catalogPolygonTargets().map(target => ({...describeCalculationSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };

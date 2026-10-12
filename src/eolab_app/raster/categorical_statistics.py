@@ -62,26 +62,25 @@ def categorical_statistics_policy_parameters() -> tuple[int, ...]:
     )
 
 
-def sample_cell_ground_weights(
+def estimate_sample_cell_areas_hectares(
     dataset: rasterio.io.DatasetReader,
     source_window: Window,
     sample_shape: tuple[int, int],
     projected_geometries: tuple[dict[str, object], ...] | PolygonRasterizer | None,
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> NDArray[numpy.float64]:
-    """Estimate selected ground hectares represented by each sample cell.
+    """Estimate the area in hectares that each sample cell represents in the selection.
 
-    Each cell is subdivided into a fixed four-by-four grid. Equal-area projected
-    quadrilaterals weight the native footprint; selected subcell centers estimate
-    fractional coverage. Union masks preserve holes and count overlaps once.
-    This bounded quadrature is deliberately independent of Processing's exact
-    per-native-pixel ground-area calculation.
+    Each cell is subdivided into a fixed four-by-four grid. Subcell areas are
+    measured in an equal-area projection and included when their centers fall
+    inside the selection. Polygon holes are excluded and overlaps count once.
+    These are sampling estimates, distinct from Processing's per-pixel areas.
 
     Args:
-        dataset: Open georeferenced source with admitted native read structure.
+        dataset: Open georeferenced raster whose native block sizes passed read limits.
         source_window: Clipped integral source envelope represented by the sample.
         sample_shape: Bounded grid height and width, at most 127 per edge.
-        projected_geometries: Existing source-CRS selection or streamed rasterizer.
+        projected_geometries: Selected polygons in the raster CRS, or a reader that rasterizes them.
         cancellation_requested: Optional last-waiter cancellation predicate.
 
     Returns:
@@ -113,7 +112,7 @@ def sample_cell_ground_weights(
         sample_transform.d * columns + sample_transform.e * rows + sample_transform.f
     )
     try:
-        geographic = Transformer.from_crs(
+        to_wgs84 = Transformer.from_crs(
             dataset.crs,
             "EPSG:4326",
             always_xy=True,
@@ -121,7 +120,7 @@ def sample_cell_ground_weights(
             only_best=True,
             force_over=True,
         )
-        longitudes, latitudes = geographic.transform(native_x, native_y, errcheck=True)
+        longitudes, latitudes = to_wgs84.transform(native_x, native_y, errcheck=True)
         if not (
             numpy.all(numpy.isfinite(longitudes))
             and numpy.all(numpy.isfinite(latitudes))
@@ -135,7 +134,7 @@ def sample_cell_ground_weights(
             raise ValueError(
                 "Categorical ground-area estimates require a continuous longitude domain from -180 to 180"
             )
-        equal_area = Transformer.from_crs(
+        to_equal_area = Transformer.from_crs(
             "EPSG:4326",
             CATEGORICAL_EQUAL_AREA_CRS,
             always_xy=True,
@@ -143,7 +142,7 @@ def sample_cell_ground_weights(
             only_best=True,
             force_over=True,
         )
-        x, y = equal_area.transform(longitudes, latitudes, errcheck=True)
+        x, y = to_equal_area.transform(longitudes, latitudes, errcheck=True)
     except ProjError as error:
         raise ValueError(
             "Raster coordinates cannot be transformed for categorical ground-area estimates"
@@ -154,24 +153,28 @@ def sample_cell_ground_weights(
     bx, by = x[:-1, 1:] - ax, y[:-1, 1:] - ay
     cx, cy = x[1:, 1:] - ax, y[1:, 1:] - ay
     dx, dy = x[1:, :-1] - ax, y[1:, :-1] - ay
-    areas = numpy.abs(bx * cy - by * cx + cx * dy - cy * dx) / 20_000
-    if not numpy.all(numpy.isfinite(areas)):
+    subcell_areas_hectares = numpy.abs(bx * cy - by * cx + cx * dy - cy * dx) / 20_000
+    if not numpy.all(numpy.isfinite(subcell_areas_hectares)):
         raise ValueError("Categorical ground-area weights must be finite")
     if projected_geometries is not None:
-        inside = pixels_inside_area(
+        subcells_inside_selection = pixels_inside_area(
             projected_geometries,
             out_shape=(fine_height, fine_width),
             transform=sample_transform,
             all_touched=False,
         )
-        areas = numpy.where(inside, areas, 0)
-    weights = areas.reshape(height, subdivisions, width, subdivisions).sum(axis=(1, 3))
-    if not numpy.any(weights > 0):
+        subcell_areas_hectares = numpy.where(
+            subcells_inside_selection, subcell_areas_hectares, 0
+        )
+    sample_areas_hectares = subcell_areas_hectares.reshape(
+        height, subdivisions, width, subdivisions
+    ).sum(axis=(1, 3))
+    if not numpy.any(sample_areas_hectares > 0):
         raise ValueError(
             "No selected ground area was represented by the categorical sample. Use a smaller sampling area."
         )
     require_active_raster_read(cancellation_requested)
-    return weights
+    return sample_areas_hectares
 
 
 def read_raster_categorical_statistics(
@@ -190,7 +193,7 @@ def read_raster_categorical_statistics(
         category_values: Boundary-validated, sorted distinct integer codes.
 
     Returns:
-        Existing numeric statistics plus bounded area totals for supplied codes,
+        Numeric statistics plus estimated area totals for supplied codes,
         Unmapped and NoData. Areas are explicitly approximate.
 
     Raises:
@@ -233,12 +236,12 @@ def read_raster_categorical_statistics(
                 sample = read_exact_source_window(
                     dataset, exact_plan, cancellation_requested
                 )
-                method = "exactSourceWindow"
+                sampling_method = "exactSourceWindow"
             else:
                 plan = plan_source_window_sample_grid(dataset, source_window)
                 sample = read_planned_sample_grid(dataset, plan, cancellation_requested)
-                method = "sampleGrid"
-            weights = sample_cell_ground_weights(
+                sampling_method = "sampleGrid"
+            sample_areas_hectares = estimate_sample_cell_areas_hectares(
                 dataset,
                 source_window,
                 sample.shape,
@@ -251,24 +254,30 @@ def read_raster_categorical_statistics(
             ):
                 selected_area.projected_geometries.close()
     values = numpy.asarray(numpy.ma.getdata(sample), dtype=numpy.float64)
-    valid = ~numpy.ma.getmaskarray(sample) & numpy.isfinite(values)
-    selected_valid = valid & (weights > 0)
-    sample = numpy.ma.array(values, mask=~selected_valid)
-    statistics = summarize_raster_sample(sample, source_window, sampling_area, method)
-    valid_area = float(weights[selected_valid].sum())
-    areas = [
-        float(weights[selected_valid & (values == code)].sum())
+    valid_sample_mask = ~numpy.ma.getmaskarray(sample) & numpy.isfinite(values)
+    selected_valid_sample_mask = valid_sample_mask & (sample_areas_hectares > 0)
+    sample = numpy.ma.array(values, mask=~selected_valid_sample_mask)
+    statistics = summarize_raster_sample(
+        sample, source_window, sampling_area, sampling_method
+    )
+    valid_area_hectares = float(sample_areas_hectares[selected_valid_sample_mask].sum())
+    category_areas_hectares = [
+        float(
+            sample_areas_hectares[selected_valid_sample_mask & (values == code)].sum()
+        )
         for code in category_values
     ]
-    unmapped = float(
-        weights[selected_valid & ~numpy.isin(values, category_values)].sum()
+    unmapped_area_hectares = float(
+        sample_areas_hectares[
+            selected_valid_sample_mask & ~numpy.isin(values, category_values)
+        ].sum()
     )
     distribution = RasterCategoricalDistribution(
         categoryValues=category_values,
-        areasHectares=areas,
-        unmappedAreaHectares=unmapped,
-        validAreaHectares=valid_area,
-        nodataAreaHectares=float(weights[~valid].sum()),
+        areasHectares=category_areas_hectares,
+        unmappedAreaHectares=unmapped_area_hectares,
+        validAreaHectares=valid_area_hectares,
+        nodataAreaHectares=float(sample_areas_hectares[~valid_sample_mask].sum()),
     )
     require_active_raster_read(cancellation_requested)
     return statistics.model_copy(update={"categorical_distribution": distribution})

@@ -1,4 +1,4 @@
-"""Provably bounded native-resolution source-window raster reads."""
+"""Read every source pixel in a window that fits the raster read limits."""
 
 import math
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ EXACT_SOURCE_MAX_DECODED_BYTES = 64 * 1024 * 1024
 
 @dataclass(frozen=True)
 class ExactSourceWindowPlan:
-    """Immutable proof for one bounded native-resolution source window.
+    """A raster window and the native blocks and decoded bytes needed to read it.
 
     Attributes:
         source_window: Integral source-pixel window clipped to the raster.
@@ -43,7 +43,7 @@ def plan_exact_source_window(
     dataset: rasterio.io.DatasetReader,
     source_window: Window,
 ) -> ExactSourceWindowPlan | None:
-    """Admit a source-pixel window under every exact-read work limit.
+    """Plan a complete source-window read if its size fits all read limits.
 
     Args:
         dataset: Open one-band raster with supported native validity metadata.
@@ -110,12 +110,12 @@ def read_exact_source_window(
     plan: ExactSourceWindowPlan,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> numpy.ma.MaskedArray:
-    """Read every pixel in an admitted window one native block at a time.
+    """Read every pixel in a planned window, one native block at a time.
 
     Args:
-        dataset: Open source that owns the already-established plan.
+        dataset: Open raster used to create the supplied plan.
         plan: Immutable exact source-window plan for this dataset.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Complete masked source window at native resolution. Each intersecting
@@ -123,7 +123,7 @@ def read_exact_source_window(
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
-        rasterio.errors.RasterioError: If an admitted native-block read fails.
+        rasterio.errors.RasterioError: If reading a planned native block fails.
     """
     source_window = plan.source_window
     row_start = int(source_window.row_off)

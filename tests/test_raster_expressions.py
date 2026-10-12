@@ -137,7 +137,7 @@ def test_counts_remain_lossless_decimal_integers() -> None:
     """Counts use integer accumulation and strings at the JSON boundary."""
     calculation = Calculation(compile_expression("count(a)", "a"))
     reduction = next(iter(calculation.reductions.values()))
-    reduction.valid = reduction.matched = 2**53 + 1
+    reduction.valid_pixel_count = reduction.matched_pixel_count = 2**53 + 1
     assert calculation.result()["value"] == "9007199254740993"
     assert calculation.result()["valueType"] == "integer"
 

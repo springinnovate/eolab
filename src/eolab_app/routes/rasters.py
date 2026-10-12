@@ -1,4 +1,4 @@
-"""FastAPI delivery boundary for raster publication."""
+"""HTTP routes for publishing catalog and model-result rasters as WMS layers."""
 
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -18,11 +18,10 @@ from eolab_app.source_files import SourceFileError
 
 @dataclass(frozen=True)
 class RasterFeature:
-    """One explicit raster feature boundary wired into the application.
+    """Raster publication routes and the registry authorizing their WMS layers.
 
     Attributes:
-        router: Prepared-raster publication route; analysis is exposed by its
-            sibling router.
+        router: Raster publication route; raster-analysis routes are separate.
         registry: Process-local authorization consulted by the WMS proxy.
     """
 
@@ -43,7 +42,7 @@ def create_raster_feature(
         session_owner: Composition-supplied current-session authority for run outputs.
 
     Returns:
-        Router and registry forming the explicit raster feature boundary.
+        Raster publication router and its layer-authorization registry.
     """
     router = APIRouter(prefix="/api/rendering", tags=["rendering"])
 
@@ -56,10 +55,10 @@ def create_raster_feature(
         http_request: Request,
         response: Response,
     ) -> PublishedRaster:
-        """Publish one authoritative mounted GeoTIFF as a WMS layer.
+        """Publish an authorized catalog or model-result GeoTIFF as a WMS layer.
 
         Args:
-            request: Authoritative Collection and Item identity.
+            request: Catalog identity or a session-owned model-result reference.
             http_request: HTTP session and same-origin request context.
             response: Private response headers for temporary publications.
 
@@ -67,7 +66,7 @@ def create_raster_feature(
             Published WMS layer identity and raster bounds.
 
         Raises:
-            HTTPException: If catalog, source, or GeoServer publication fails.
+            HTTPException: If source authorization or GeoServer publication fails.
         """
         try:
             owner = None

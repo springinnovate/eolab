@@ -1,4 +1,4 @@
-"""Neutral typed attribute predicates shared by exact readers and rendering."""
+"""Validate and evaluate the attribute filters used by source readers and rendering."""
 
 from collections.abc import Mapping
 from datetime import date
@@ -25,7 +25,7 @@ class AttributeFilterError(ValueError):
 
 
 class VectorFilterRule(BaseModel):
-    """One bounded, typed attribute comparison; never executable source text."""
+    """A field comparison with a fixed operator and a scalar value."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     field: StrictStr = Field(min_length=1, max_length=256)
@@ -37,7 +37,7 @@ class VectorFilterRule(BaseModel):
     @field_validator("field", "value")
     @classmethod
     def bounded_literal(cls, value: Any) -> Any:
-        """Reject unbounded or nonportable scalar input.
+        """Reject long or control-containing text and numbers unsafe for the browser.
 
         Args:
             value: Submitted property name or literal.
@@ -46,7 +46,8 @@ class VectorFilterRule(BaseModel):
             Unchanged safe scalar.
 
         Raises:
-            ValueError: If the value exceeds the portable literal contract.
+            ValueError: If text exceeds 256 characters or contains control characters,
+                or a number is nonfinite or exceeds the browser's safe numeric range.
         """
         if isinstance(value, str) and (
             len(value) > 256 or any(ord(c) < 32 for c in value)
@@ -64,7 +65,7 @@ class VectorFilterRule(BaseModel):
 
 
 class VectorFilter(BaseModel):
-    """Portable rule builder state, independent of visual appearance."""
+    """An enabled or disabled set of field comparisons combined with all or any."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: StrictBool = True

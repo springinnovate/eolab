@@ -1,4 +1,4 @@
-"""Serialize prepared raster jobs and reserve their output storage."""
+"""Serialize raster job plans and calculate the storage the job store must reserve."""
 
 from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
 from eolab_app.processing.clip_models import ClipSpec

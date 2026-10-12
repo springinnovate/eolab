@@ -1,4 +1,4 @@
-"""Installed outline algorithm and its path-free operation contract."""
+"""Create simplified catalog-feature outlines in a Jobs worker."""
 
 import asyncio
 import json
@@ -21,14 +21,14 @@ MAX_OUTLINE_GEOMETRY_BYTES = 256 * 1024
 
 
 class OutlineInput(BaseModel):
-    """Immutable Catalog identity and filter; never a path or geometry snapshot."""
+    """The catalog vector source and feature filter used to create a map outline."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     selection: CatalogSelection
 
 
 class OutlineResult(BaseModel):
-    """Bounded approximate display geometry, never an analysis mask."""
+    """A simplified GeoJSON map outline and its WGS 84 bounding box."""
 
     model_config = ConfigDict(extra="forbid")
     geometry: dict[str, JsonValue]
@@ -36,7 +36,7 @@ class OutlineResult(BaseModel):
 
     @model_validator(mode="after")
     def check_display(self) -> "OutlineResult":
-        """Enforce the existing serialized outline boundary.
+        """Require a FeatureCollection within the byte limit and ordered bounds.
 
         Returns:
             The validated display result.
@@ -70,7 +70,7 @@ def calculate_outline(inputs: OutlineInput) -> OutlineResult:
         inputs: Validated path-free immutable selection.
 
     Returns:
-        The existing display algorithm's bounded result.
+        A simplified GeoJSON FeatureCollection and its bounding box.
 
     Raises:
         SelectionUnavailableError: If Catalog/source identity changed.

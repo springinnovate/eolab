@@ -349,10 +349,10 @@ def test_admission_rechecks_identity_and_excludes_unpublished_files(
     parent, source, path = publish_input(model_boundary)
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     file = store.inspect_input_file(owner, source["jobId"], source["artifactId"])
-    from eolab_app.processing.raster_operations import queue_summary
+    from eolab_app.processing.raster_operations import build_summary_submission
     from eolab_app.processing.aggregate_models import AggregateJobRequest
 
-    plan = queue_summary(
+    plan = build_summary_submission(
         AggregateJobRequest(
             requestId=uuid4().hex,
             sources={"a": source},
@@ -691,7 +691,7 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
         store: Disposable PostgreSQL store.
     """
     from eolab_app.processing.aggregate_models import AggregateJobRequest
-    from eolab_app.processing.raster_operations import queue_summary
+    from eolab_app.processing.raster_operations import build_summary_submission
 
     client, _, _ = model_boundary
     _, source, _ = publish_input(model_boundary)
@@ -703,7 +703,9 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
         wholeRaster=True,
         calculations=[{"label": "Count", "expression": "count(a)"}],
     )
-    prepared = replace(queue_summary(request, None), work_key=None, input_files=(file,))
+    prepared = replace(
+        build_summary_submission(request, None), work_key=None, input_files=(file,)
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
         calls = [
             pool.submit(store.submit, owner, request.requestId, prepared, "a" * 64)

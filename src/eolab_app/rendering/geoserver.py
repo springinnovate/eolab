@@ -70,7 +70,7 @@ def sanitize_geoserver_error_excerpt(response_content: bytes) -> str:
 
 
 class GeoServerPublicationGateway:
-    """Enforce transport, status, sanitization, and failure-category contracts."""
+    """Send GeoServer requests and translate failures into safe publication errors."""
 
     def __init__(
         self,
@@ -82,7 +82,7 @@ class GeoServerPublicationGateway:
             [str, int, str], tuple[PublicationFailureCategory, str]
         ],
     ) -> None:
-        """Create the shared transport boundary.
+        """Configure authenticated GeoServer requests and publication error handling.
 
         Args:
             geoserver_client: Authenticated GeoServer REST client.

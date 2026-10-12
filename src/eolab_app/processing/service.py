@@ -72,7 +72,7 @@ from eolab_app.source_files import ResolvedSourceFile
 
 
 def require_operation(row: dict[str, Any], operation: str) -> None:
-    """Keep idempotent retries on their original operation.
+    """Reject a submission retry that names a different calculation operation.
 
     Args:
         row: Authorized job row.
@@ -81,6 +81,7 @@ def require_operation(row: dict[str, Any], operation: str) -> None:
     Raises:
         ProcessingError: When the supplied job belongs to a different operation.
     """
+
     actual = (
         row.get("operation")
         or (row.get("spec") or {}).get("operation")
@@ -94,8 +95,8 @@ def require_operation(row: dict[str, Any], operation: str) -> None:
         )
 
 
-def public_job(row: dict[str, Any]) -> dict[str, Any]:
-    """Project a durable row onto the path-free, owner-safe HTTP result contract.
+def serialize_processing_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Serialize an authorized job record as its browser-visible status and result links.
 
     Args:
         row: An already-authorized owned job record.
@@ -169,7 +170,7 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
 
 
 class ProcessingService:
-    """Own job lifecycle and supported operation commands through narrow providers."""
+    """Submit calculations and manage each browser session's jobs and result files."""
 
     def __init__(
         self,
@@ -183,7 +184,7 @@ class ProcessingService:
         hydrology_registry: PreparedHydrologyRegistry | None = None,
         hydrology_selections: CatalogSelectionReader | None = None,
     ) -> None:
-        """Compose job storage and currently supported raster-operation capabilities.
+        """Configure job storage, source access and the installed model and hydrology libraries.
 
         Args:
             jobs: Durable job and admission adapter.
@@ -310,7 +311,7 @@ class ProcessingService:
                     "That request ID has different model inputs.",
                     409,
                 )
-            return public_job(existing)
+            return serialize_processing_job(existing)
         definition = self.model_registry.get(request.model.id, request.model.version)
         hydrology = {}
         try:
@@ -367,7 +368,7 @@ class ProcessingService:
         row = await asyncio.to_thread(
             self.jobs.submit, owner, request.requestId, prepared, request_hash
         )
-        return public_job(row)
+        return serialize_processing_job(row)
 
     async def capture_input_file(
         self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan
@@ -489,7 +490,7 @@ class ProcessingService:
             decode_model_run_cursor(cursor),
         )
         return {
-            "jobs": [public_job(row) for row in rows[:limit]],
+            "jobs": [serialize_processing_job(row) for row in rows[:limit]],
             "nextCursor": (
                 encode_model_run_cursor(rows[limit - 1]) if len(rows) > limit else None
             ),
@@ -621,7 +622,7 @@ class ProcessingService:
                     "That request ID has different clip inputs.",
                     409,
                 )
-            return public_job(existing)
+            return serialize_processing_job(existing)
         row = await asyncio.to_thread(
             self.jobs.submit,
             owner,
@@ -630,7 +631,7 @@ class ProcessingService:
             request_hash,
         )
         require_operation(row, operation.id)
-        return public_job(row)
+        return serialize_processing_job(row)
 
     async def submit_calculation_inputs(
         self, owner: str, request: AggregateJobRequest
@@ -685,7 +686,11 @@ class ProcessingService:
                 submission.prepared,
                 request_hash,
             )
-        return (await self._observe_submitted_calculations(owner, [public_job(row)]))[0]
+        return (
+            await self._observe_submitted_calculations(
+                owner, [serialize_processing_job(row)]
+            )
+        )[0]
 
     async def build_calculation_submission(
         self,
@@ -772,7 +777,11 @@ class ProcessingService:
         return await self._observe_submitted_calculations(
             owner,
             [
-                result if isinstance(result, ProcessingError) else public_job(result)
+                (
+                    result
+                    if isinstance(result, ProcessingError)
+                    else serialize_processing_job(result)
+                )
                 for result in results
             ],
         )
@@ -845,7 +854,7 @@ class ProcessingService:
             Public lifecycle and ready download links.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
-        return public_job(row)
+        return serialize_processing_job(row)
 
     async def list_owned(self, owner: str) -> list[dict[str, Any]]:
         """Recover bounded recent jobs for the current browser session.
@@ -859,7 +868,7 @@ class ProcessingService:
         rows = await asyncio.to_thread(
             self.jobs.list_owned, owner, ("raster.clip.v1", "raster.aggregate.v1")
         )
-        return [public_job(row) for row in rows]
+        return [serialize_processing_job(row) for row in rows]
 
     async def read_job_statuses(
         self, owner: str, identifiers: list[str]
@@ -878,7 +887,11 @@ class ProcessingService:
         by_id = {row["id"]: row for row in rows}
         requested = list(dict.fromkeys(identifiers))
         return {
-            "jobs": [public_job(by_id[value]) for value in requested if value in by_id],
+            "jobs": [
+                serialize_processing_job(by_id[value])
+                for value in requested
+                if value in by_id
+            ],
             "unavailableJobIds": [value for value in requested if value not in by_id],
         }
 
@@ -897,7 +910,7 @@ class ProcessingService:
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
         require_operation(row, MODEL_OPERATION)
-        return public_job(
+        return serialize_processing_job(
             await asyncio.to_thread(
                 self.jobs.extend_result_lifetime,
                 identifier,
@@ -928,7 +941,7 @@ class ProcessingService:
                 await asyncio.to_thread(self.jobs.get, identifier, owner),
                 MODEL_OPERATION,
             )
-        return public_job(
+        return serialize_processing_job(
             await asyncio.to_thread(
                 self.jobs.cancel,
                 identifier,
@@ -958,7 +971,7 @@ class ProcessingService:
         require_operation(
             await asyncio.to_thread(self.jobs.get, identifier, owner), MODEL_OPERATION
         )
-        return public_job(
+        return serialize_processing_job(
             await asyncio.to_thread(
                 self.jobs.resolve_deletion,
                 identifier,

@@ -291,16 +291,15 @@ def read_raster_paired_statistics(
     the reference grid and sampling density. Swapping X and Y can therefore
     change sampled positions and counts when source grids differ. Each source
     without an embedded validity mask prefers one bounded internal-overview
-    read. Masked sources use their admitted native-block plan. At most 127 by
-    127 paired cells reach the
-    histogram.
+    read. Masked sources read the native blocks recorded in their sample plan.
+    The histogram receives at most 127 by 127 paired cells.
 
     Args:
         x_source_path: Authorized mounted X-reference GeoTIFF.
         y_source_path: Authorized mounted Y GeoTIFF.
         selected_bounds: Optional canonical WGS 84 sampling rectangle.
         catalog_selection: Optional immutable polygon selection; exclusive of bounds.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
+        cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
         Bounded 32-by-32 paired histogram, marginals, ranges, and provenance.
@@ -313,6 +312,7 @@ def read_raster_paired_statistics(
         rasterio.errors.RasterioError: If GDAL cannot open, transform, or read.
         ValueError: If source, grid, transform, or work limits are invalid.
     """
+
     require_active_raster_read(cancellation_requested)
     with (
         rasterio.open(x_source_path) as x_dataset,
@@ -396,31 +396,37 @@ def read_raster_paired_statistics(
             sample_transform = window_transform(x_window, x_dataset.transform) * rasterio.Affine.scale(
                 x_window.width / x_plan.width, x_window.height / x_plan.height,
             )
-            outside = ~pixels_inside_area(
+            samples_outside_selected_polygons = ~pixels_inside_area(
                 polygon_area.projected_geometries,
                 out_shape=x_sample.shape,
                 transform=sample_transform,
                 all_touched=RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
             )
-            x_sample = numpy.ma.array(numpy.ma.getdata(x_sample),
-                mask=numpy.logical_or(numpy.ma.getmaskarray(x_sample), outside))
+            x_sample = numpy.ma.array(
+                numpy.ma.getdata(x_sample),
+                mask=numpy.logical_or(
+                    numpy.ma.getmaskarray(x_sample), samples_outside_selected_polygons
+                ),
+            )
         require_active_raster_read(cancellation_requested)
 
-    paired_mask = numpy.logical_or(
+    invalid_pair_mask = numpy.logical_or(
         numpy.ma.getmaskarray(x_sample),
         numpy.ma.getmaskarray(y_sample),
     )
     x_values = numpy.asarray(
-        numpy.ma.array(numpy.ma.getdata(x_sample), mask=paired_mask).compressed(),
+        numpy.ma.array(numpy.ma.getdata(x_sample), mask=invalid_pair_mask).compressed(),
         dtype=numpy.float64,
     )
     y_values = numpy.asarray(
-        numpy.ma.array(numpy.ma.getdata(y_sample), mask=paired_mask).compressed(),
+        numpy.ma.array(numpy.ma.getdata(y_sample), mask=invalid_pair_mask).compressed(),
         dtype=numpy.float64,
     )
-    finite = numpy.logical_and(numpy.isfinite(x_values), numpy.isfinite(y_values))
-    x_values = x_values[finite]
-    y_values = y_values[finite]
+    finite_pair_mask = numpy.logical_and(
+        numpy.isfinite(x_values), numpy.isfinite(y_values)
+    )
+    x_values = x_values[finite_pair_mask]
+    y_values = y_values[finite_pair_mask]
     if x_values.size == 0:
         raise NoValidRasterSamplesError
 

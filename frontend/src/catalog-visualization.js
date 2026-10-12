@@ -1,13 +1,13 @@
-/** Format-neutral Catalog preparation and mixed map-layer coordination. */
+/** Prepare catalog datasets and add or remove their raster and vector map layers. */
 
 import { getCatalogItemKey } from "./catalog-item-identity.js";
 import { getCatalogVisualization } from "./catalog.js";
 import { assessCatalogVector } from "./vector/api.js";
 
-/** Coordinate dataset adapters without placing format checks in composition. */
+/** Select the raster or vector adapter used to prepare and display a catalog dataset. */
 export class CatalogVisualizationCoordinator {
     /**
-     * Create the coordinator over the shared mixed-layer viewer.
+     * Connect catalog visualization to the raster viewer and vector layer adapter.
      *
      * @param {Object} rasterViewer Raster-owned map and analysis boundary.
      * @param {Object} mapLayerController Neutral retained-layer controller.
@@ -39,10 +39,10 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Prepare one Item through its explicitly owned adapter.
+     * Check a vector dataset's display support, or pass through a raster dataset.
      *
-     * Prepared rasters need no browser preflight. Vectors retain their
-     * authoritative capability assessment before publication.
+     * The server supplies vector display metadata before publication.
+     * Rasters do not need this extra assessment request.
      *
      * @param {Object} item Selected supported STAC Item.
      * @return {Promise<Object>} Prepared Item; vectors carry fresh assessment.
@@ -56,7 +56,7 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Publish and retain one Item in the shared mixed layer lifecycle.
+     * Publish a dataset and add it to the map's layer list.
      *
      * @param {Object} item Selected supported and prepared STAC Item.
      * @return {Promise<Object|null>} Publication or null after invalidation.

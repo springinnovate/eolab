@@ -105,7 +105,7 @@ class PostgresNotifications:
 
 
 class PostgresJobWakeup(PostgresNotifications):
-    """Keep the existing worker's coalesced queue hint and polling fallback."""
+    """Wake the worker when queued jobs change, with timed polling as a fallback."""
 
     def __init__(self, conninfo: str = "") -> None:
         """Configure the worker listener without opening a connection.

@@ -1,4 +1,4 @@
-"""Application service for bounded, authorized composite map render plans."""
+"""Combine authorized layer styles into reusable WMS map-rendering plans."""
 
 import asyncio
 import json
@@ -33,7 +33,7 @@ class CompositeMapPlanUnavailableError(Exception):
 
 @dataclass(frozen=True)
 class AuthorizedCompositeMapPlan:
-    """One immutable plan and its complete server-owned rendering parameters.
+    """Layer styles and interpolation settings for drawing a combined map image.
 
     Attributes:
         request: Validated top-first layer appearances and identities.
@@ -48,7 +48,7 @@ class AuthorizedCompositeMapPlan:
 
 
 class CompositeMapPlanStore:
-    """Bound process-local composite plans by recent use."""
+    """Cache map-rendering plans and evict the least recently used when full."""
 
     def __init__(self, maximum_plans: int = MAX_RETAINED_COMPOSITE_PLANS) -> None:
         """Create an empty least-recently-used plan store.
@@ -79,7 +79,7 @@ class CompositeMapPlanStore:
                 self._plans.popitem(last=False)
 
     def get(self, plan_id: str) -> AuthorizedCompositeMapPlan:
-        """Return and touch one retained plan.
+        """Return a cached plan and mark it as the most recently used.
 
         Args:
             plan_id: Content-addressed lowercase hexadecimal identity.
@@ -102,14 +102,14 @@ class CompositeMapPlanStore:
 
 
 class CompositeMapRenderingService:
-    """Authorize feature-owned styles and retain immutable composite plans."""
+    """Authorize map layers and cache their combined styles for WMS rendering."""
 
     def __init__(
         self,
         published_layers: tuple[PublishedLayerRegistry, ...],
         store: CompositeMapPlanStore | None = None,
     ) -> None:
-        """Create the neutral plan service.
+        """Connect published-layer authorization with the map-rendering plan cache.
 
         Args:
             published_layers: Feature-owned current layer registries.

@@ -20,7 +20,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.service import public_job
+from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
@@ -80,11 +80,11 @@ def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
         "artifact": json.loads(json.dumps(asdict(artifact))),
         "updated_at": datetime.now(timezone.utc),
     }
-    response = AggregateJobResponse.model_validate(public_job(ready))
+    response = AggregateJobResponse.model_validate(serialize_processing_job(ready))
     assert float(response.result.rows[0].value) == 1
     assert str(path) not in response.model_dump_json()
     ready["status"] = "cancelled"
-    assert public_job(ready)["result"] is None
+    assert serialize_processing_job(ready)["result"] is None
 
 
 def configure_prepared_job_store(store: Mock, row: dict[str, Any]) -> None:
@@ -241,7 +241,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         # The owned SQL view exposes the public summary, never worker inputs.
         "spec": row["summary"],
     }
-    response = ModelJobResponse.model_validate(public_job(ready))
+    response = ModelJobResponse.model_validate(serialize_processing_job(ready))
     document = RunDocument.model_validate(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
@@ -283,13 +283,17 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         assert document.execution.outcome.raster.sha256 == artifact.sha256
         ready["retained_metadata"] = None
         assert (
-            ModelJobResponse.model_validate(public_job(ready)).result.kind == "raster"
+            ModelJobResponse.model_validate(serialize_processing_job(ready)).result.kind
+            == "raster"
         )
     else:
         assert response.result.rows and document.execution.outcome.statistics
     # Result names and labels outlive captured YAML metadata.
     ready["retained_metadata"] = None
-    assert ModelJobResponse.model_validate(public_job(ready)).result == response.result
+    assert (
+        ModelJobResponse.model_validate(serialize_processing_job(ready)).result
+        == response.result
+    )
     if not custom:
         legacy = dict(row["summary"])
         legacy.pop("output")
@@ -298,6 +302,8 @@ def test_model_worker_executes_native_results_and_exports_yaml(
             legacy.pop("grid")
         historical = {**ready, "summary": legacy, "spec": legacy}
         assert (
-            ModelJobResponse.model_validate(public_job(historical)).result.kind
+            ModelJobResponse.model_validate(
+                serialize_processing_job(historical)
+            ).result.kind
             == response.result.kind
         )

@@ -285,7 +285,7 @@ function validateLayer(candidate) {
             "Saved layer style kind must be raster or vector."
         );
     }
-    validateStyleEnvelope(candidate.style);
+    validateSavedStyleStructure(candidate.style);
     if (Object.hasOwn(candidate, "filter")) {
         requirePlainObject(candidate.filter, "Saved filter");
         if (JSON.stringify(candidate.filter).length > 8192) {
@@ -305,17 +305,18 @@ function validateLayer(candidate) {
 }
 
 /**
- * Validate portable style structure while leaving style meaning to its owner.
+ * Check which style fields may be stored in a saved map.
  *
- * Versioned raster envelopes retain both independent configurations. Legacy
- * raster envelopes remain unchanged so the raster owner can migrate them on
- * restoration. Definitions stay opaque and cannot add transport fields.
+ * Versioned raster styles retain continuous and categorical settings. Older
+ * styles remain unchanged for the raster adapter to migrate during restoration.
+ * This checks structure and size; each raster or vector adapter validates the
+ * actual colors, ranges and category rules before applying them.
  *
- * @param {Object} style Untrusted raster or vector style envelope.
+ * @param {Object} style Untrusted raster or vector style record.
  * @return {void}
- * @throws {SavedMapViewValidationError} If envelope fields or bounds are invalid.
+ * @throws {SavedMapViewValidationError} If required fields, versions or size limits are invalid.
  */
-function validateStyleEnvelope(style) {
+function validateSavedStyleStructure(style) {
     if (style.kind !== "raster" || !Object.hasOwn(style, "appearanceVersion")) {
         requireExactKeys(style, style.kind === "raster"
             ? ["kind", "definition", "paletteName"] : ["kind", "definition"],
@@ -348,9 +349,9 @@ function validateStyleEnvelope(style) {
 }
 
 /**
- * Require a bounded opaque definition at the portable appearance boundary.
+ * Check that saved style settings are an object whose JSON fits within 64 KiB.
  *
- * @param {unknown} definition Owner-specific JSON record.
+ * @param {unknown} definition Raster or vector style settings.
  * @return {void}
  * @throws {SavedMapViewValidationError} If shape or serialized size is invalid.
  */

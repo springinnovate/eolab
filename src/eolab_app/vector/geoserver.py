@@ -1,4 +1,4 @@
-"""Deployed-reader and convergent GeoServer adapters for catalog vectors."""
+"""Check GeoServer vector-reader support and publish styled vector layers."""
 
 import json
 import logging
@@ -128,7 +128,7 @@ class GeoServerVectorPublicationState:
 
 
 class GeoServerVectorPublisher:
-    """Converge exact mounted vector layers through the shared REST boundary.
+    """Publish mounted vector layers as styled GeoServer WMS layers.
 
     Transport handling, exact accepted-status enforcement, response
     sanitization, and stable failure categories are supplied by a neutral
@@ -166,7 +166,7 @@ class GeoServerVectorPublisher:
         layer_name: str,
         geometry_kind: VectorGeometryKind,
     ) -> str:
-        """Converge and style one exact vector feature type.
+        """Create or reuse a GeoServer vector layer and apply its default style.
 
         Args:
             resource_name: Stable configured feature type and WMS layer name.

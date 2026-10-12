@@ -1,4 +1,4 @@
-"""One reusable, killable native process; no application or operation policy."""
+"""Reuse a child process for sequential native operations with per-call deadlines."""
 
 import asyncio
 from collections.abc import Callable
@@ -17,38 +17,43 @@ from eolab_app.execution.bounded_process import (
 )
 
 
-class _Result:
-    """Capture one result until the entire target has returned."""
+class _CapturedProcessResult:
+    """Hold an operation's result until the function and its cleanup have finished."""
 
     def __init__(self) -> None:
         """Start with no emitted result."""
-        self.values = []
+        self.values: list[Any] = []
 
     def put(self, value: Any) -> None:
-        """Capture one owner-defined envelope without acknowledging completion.
+        """Store the operation's single result for delivery after it returns.
 
         Args:
             value: Picklable operation result.
+
+        Raises:
+            RuntimeError: If the operation already supplied a result.
         """
         if self.values:
             raise RuntimeError("A native operation must return exactly one result")
         self.values.append(value)
 
 
-def _invoke(target: Callable[..., None], arguments: tuple[Any, ...]) -> Any:
-    """Finish the target's stack, including context-manager cleanup, before reply.
+def _run_target_and_collect_result(
+    target: Callable[..., None], arguments: tuple[Any, ...]
+) -> Any:
+    """Call the operation and return its emitted result after its cleanup finishes.
 
     Args:
-        target: Preloaded, owner-supplied operation entry point.
-        arguments: One admitted request's native inputs.
+        target: Registered function accepting a result writer as its first argument.
+        arguments: Operation arguments passed after the result writer.
 
     Returns:
-        Opaque owner result after all target cleanup has completed.
+        The value emitted by the operation through its result writer.
 
     Raises:
-        RuntimeError: If the target returns without emitting one result.
+        RuntimeError: If the operation emits zero or more than one result.
     """
-    result = _Result()
+    result = _CapturedProcessResult()
     target(result, *arguments)
     if len(result.values) != 1:
         raise RuntimeError("Native operation returned no result")
@@ -85,13 +90,13 @@ def _memory_exceeded(limit: int) -> bool:
     raise ValueError("Linux process status has no peak-memory field")
 
 
-def _worker(
+def _serve_process_requests(
     connection: Connection,
     targets: tuple[Callable[..., None], ...],
     recycle_bytes: int,
     address_space_bytes: int | None,
 ) -> None:
-    """Load targets once, then run one fully acknowledged request at a time.
+    """Execute requests sequentially in the child and send each completed result.
 
     Args:
         connection: Child-only endpoint; parent death produces EOF while idle.
@@ -120,7 +125,7 @@ def _worker(
             if hasattr(signal, "setitimer"):
                 signal.signal(signal.SIGALRM, signal.SIG_DFL)
                 signal.setitimer(signal.ITIMER_REAL, remaining)
-            value = _invoke(targets[index], arguments)
+            value = _run_target_and_collect_result(targets[index], arguments)
             recycle = _memory_exceeded(recycle_bytes)
             payload = pickle.dumps((sequence, value, recycle))
             del value, arguments
@@ -136,12 +141,14 @@ def _worker(
         connection.close()
 
 
-def _exchange(connection: Connection, message: tuple) -> Any:
-    """Send and receive on the sole per-process I/O lane.
+def _exchange_process_request(
+    connection: Connection, message: tuple[int, int, tuple[Any, ...], float]
+) -> Any:
+    """Send one operation request to the child and wait for its reply.
 
     Args:
         connection: Parent endpoint, exclusively held for this request.
-        message: Admitted request and deadline.
+        message: Request sequence, operation index, arguments and deadline.
 
     Returns:
         Child response after its target returned and request cleanup finished.
@@ -151,16 +158,26 @@ def _exchange(connection: Connection, message: tuple) -> Any:
 
 
 @dataclass
-class _Child:
-    """One generation's process, pipe and startup acknowledgment."""
+class _ProcessConnection:
+    """A child process, its communication pipe and the task waiting for readiness.
+
+    Attributes:
+        process: Spawned multiprocessing process running registered operations.
+        connection: Parent endpoint of the bidirectional request/result pipe.
+        startup: Task waiting for the child's initial readiness message.
+    """
 
     process: Any
     connection: Connection
-    startup: asyncio.Task | None = None
+    startup: asyncio.Task[None] | None = None
 
 
 class ReusableProcess:
-    """One warm process, with no internal job queue or concurrent native work."""
+    """Run one native operation at a time in a reusable child process.
+
+    Concurrent calls are rejected rather than queued. Cancellation, failure or
+    excessive memory use stops the child; a later call can use its replacement.
+    """
 
     def __init__(
         self,
@@ -170,7 +187,9 @@ class ReusableProcess:
         startup_seconds: float = 15,
         address_space_bytes: int | None = None,
     ) -> None:
-        """Configure a neutral process lane; creation waits for warm/run.
+        """Configure registered operations and limits before starting a child.
+
+        The process starts when warm() or run() is called.
 
         Args:
             targets: Fixed operation entry points imported before readiness.
@@ -190,16 +209,16 @@ class ReusableProcess:
         if address_space_bytes is not None and address_space_bytes < 1:
             raise ValueError("Process address-space limit must be positive")
         self.address_space_bytes = address_space_bytes
-        self.child: _Child | None = None
+        self.child: _ProcessConnection | None = None
         self.active: asyncio.Task | None = None
         self.closed = False
         self.sequence = 0
 
-    def _retire(self, child: _Child) -> None:
-        """Confirm native exit synchronously before allowing admission to release.
+    def _stop_child_process(self, child: _ProcessConnection) -> None:
+        """Stop this child and close its pipe before another operation can start.
 
         Args:
-            child: Exact process generation to terminate and reap.
+            child: Child to terminate and wait for; replaced children are ignored.
         """
         if self.child is not child:
             return
@@ -217,18 +236,25 @@ class ReusableProcess:
             process.close()
         child.connection.close()
 
-    async def _ready(self, child: _Child) -> None:
-        """Bound startup and consume only this generation's readiness message.
+    async def _wait_until_child_ready(self, child: _ProcessConnection) -> None:
+        """Wait for the child's readiness message and stop it if startup fails.
 
         Args:
             child: Newly spawned process, exclusively owned until readiness.
+
+        Raises:
+            ProcessDeadlineError: If the child sends an unexpected startup message.
+            TimeoutError: If startup takes longer than startup_seconds.
+            EOFError: If the child closes its pipe before becoming ready.
+            OSError: If the startup message cannot be read.
+            asyncio.CancelledError: After stopping the child when startup is cancelled.
         """
         try:
             async with asyncio.timeout(self.startup_seconds):
                 if await asyncio.to_thread(child.connection.recv) != "ready":
                     raise ProcessDeadlineError("Native process did not become ready")
         except BaseException:
-            self._retire(child)
+            self._stop_child_process(child)
             raise
 
     def warm(self) -> None:
@@ -238,7 +264,7 @@ class ReusableProcess:
         context = get_context("spawn")
         parent, child_pipe = context.Pipe(duplex=True)
         process = context.Process(
-            target=_worker,
+            target=_serve_process_requests,
             args=(
                 child_pipe,
                 self.targets,
@@ -247,18 +273,18 @@ class ReusableProcess:
             ),
             daemon=True,
         )
-        child = _Child(process, parent)
+        child = _ProcessConnection(process, parent)
         self.child = child
         try:
             process.start()
-            child.startup = asyncio.create_task(self._ready(child))
+            child.startup = asyncio.create_task(self._wait_until_child_ready(child))
             # Background readiness failures are surfaced by run or replaced on
             # its next attempt; always retrieve them to avoid abandoned tasks.
             child.startup.add_done_callback(
                 lambda task: None if task.cancelled() else task.exception()
             )
         except BaseException:
-            self._retire(child)
+            self._stop_child_process(child)
             raise
         finally:
             child_pipe.close()
@@ -269,7 +295,7 @@ class ReusableProcess:
         arguments: tuple[Any, ...],
         timeout_seconds: float,
     ) -> Any:
-        """Run admitted work; cancellation/deadline/crash always retires its child.
+        """Run a registered operation and stop its child if the call cannot finish.
 
         Args:
             target: One of the preloaded entry points.
@@ -277,10 +303,10 @@ class ReusableProcess:
             timeout_seconds: Deadline including readiness, transfer and cleanup.
 
         Returns:
-            Opaque completed owner result.
+            The operation's result after its function and cleanup return.
 
         Raises:
-            RuntimeError: If closed or another operation is active on this lane.
+            RuntimeError: If closed or another operation is using the child.
             ValueError: If the target or timeout is outside the configured contract.
             ProcessDeadlineError: If startup, transport or native execution fails.
             asyncio.CancelledError: Only after native exit is confirmed.
@@ -299,7 +325,7 @@ class ReusableProcess:
                 await asyncio.shield(child.startup)
                 self.sequence += 1
                 response = await asyncio.to_thread(
-                    _exchange,
+                    _exchange_process_request,
                     child.connection,
                     (self.sequence, self.targets.index(target), arguments, deadline),
                 )
@@ -309,21 +335,21 @@ class ReusableProcess:
                         "Native response did not match its request"
                     )
                 if recycle:
-                    self._retire(child)
+                    self._stop_child_process(child)
                 return value
         except asyncio.CancelledError:
             if child is not None:
-                self._retire(child)
+                self._stop_child_process(child)
             raise
         except (TimeoutError, EOFError, OSError, ValueError) as error:
             if child is not None:
-                self._retire(child)
+                self._stop_child_process(child)
             raise ProcessDeadlineError(
                 "Native process failed or exceeded its deadline"
             ) from error
         except BaseException:
             if child is not None:
-                self._retire(child)
+                self._stop_child_process(child)
             raise
         finally:
             self.active = None
@@ -337,7 +363,7 @@ class ReusableProcess:
         if active and active is not asyncio.current_task():
             active.cancel()
         if child is not None:
-            self._retire(child)
+            self._stop_child_process(child)
         pending = [
             task
             for task in (active, child.startup if child else None)
@@ -353,7 +379,7 @@ async def run_process(
     timeout_seconds: float,
     reusable: ReusableProcess | None = None,
 ) -> Any:
-    """Use the supplied managed lane, retaining one-shot behavior for other callers.
+    """Run an operation in the supplied reusable process or a new child process.
 
     Args:
         target: Owner-supplied operation entry point.
@@ -362,10 +388,10 @@ async def run_process(
         reusable: Lifecycle-managed warm process supplied by composition, if any.
 
     Returns:
-        Completed owner result after native cleanup.
+        The operation's emitted result after native cleanup.
 
     Raises:
-        RuntimeError: If the supplied lane is closed or already active.
+        RuntimeError: If the supplied reusable process is closed or already active.
         ValueError: If the target or deadline is invalid.
         ProcessDeadlineError: If native execution fails or exceeds its deadline.
         asyncio.CancelledError: Only after native exit is confirmed.

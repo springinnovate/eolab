@@ -1,4 +1,4 @@
-/** Bounded CSV upload parsing for a raster layer's category table. */
+/** Import raster category codes, labels, colors and opacity from a CSV table. */
 import {
     DEFAULT_UNMAPPED_RASTER_APPEARANCE,
     MAX_CATEGORICAL_RASTER_CATEGORIES,
@@ -22,7 +22,7 @@ export const MAX_CATEGORICAL_RASTER_CSV_BYTES = MAX_CATEGORY_CSV_BYTES;
  * @return {number} Parsed number, with semantic bounds left to the style owner.
  * @throws {Error} If the field does not use the accepted numeric grammar.
  */
-function categoryCsvNumber(text, column, row) {
+function parseCategoryCsvNumber(text, column, row) {
     if (column === "opacity" && text === "") return 1;
     const pattern = column === "value"
         ? /^[+-]?\d+(?:\.0+)?$/
@@ -50,12 +50,12 @@ function categoryCsvNumber(text, column, row) {
  * sign and all-zero fractional suffix, never scientific or hexadecimal syntax.
  * Opacity allows decimal notation with an optional decimal exponent.
  *
- * The existing categorical boundary validates the entire table exactly once,
+ * The categorical-style validator checks the complete table,
  * including duplicate values, safe integers, labels, hex colors, opacity, and
  * serialized size. Errors identify the source record's starting physical row
  * and field when applicable. Row order is retained. The supplied unmapped
- * appearance is preserved; file I/O, previews, replacement and lifecycle belong
- * to the caller. Failure never returns a partially imported table.
+ * appearance is preserved. The caller reads the file and decides when to preview
+ * or apply the style. Failure never returns a partially imported table.
  *
  * @param {string} text CSV file contents decoded as UTF-8.
  * @param {Readonly<import("./categorical-style.js").UnmappedRasterAppearance>}
@@ -70,10 +70,10 @@ export function parseCategoricalRasterCsv(text, unmapped = DEFAULT_UNMAPPED_RAST
     const categories = data.map((record) => {
         const row = Object.fromEntries(Object.entries(categoryCsvCells(record, columns)).map(([column, cell]) => [column, cell.trim()]));
         return {
-            value: categoryCsvNumber(row.value, "value", record.row),
+            value: parseCategoryCsvNumber(row.value, "value", record.row),
             label: row.label,
             color: row.color,
-            opacity: row.opacity === undefined ? 1 : categoryCsvNumber(row.opacity, "opacity", record.row),
+            opacity: row.opacity === undefined ? 1 : parseCategoryCsvNumber(row.opacity, "opacity", record.row),
         };
     });
     try {

@@ -1,4 +1,4 @@
-"""HTTP boundary for vector-owned sampling selections."""
+"""HTTP routes for filtered vector analysis areas and optional display outlines."""
 
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any
@@ -12,10 +12,10 @@ from eolab_app.vector.sampling import VectorSamplingService
 
 
 def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
-    """Wrap the injected selection workflow in disconnect-aware HTTP delivery.
+    """Create selection routes that cancel source reads when the client disconnects.
 
     Args:
-        service: Composed Catalog identity and direct-source selection owner.
+        service: Validates catalog sources and measures their filtered polygons.
 
     Returns:
         Router accepting only Catalog identity and typed filters.
@@ -26,14 +26,15 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
     async def select_area(
         payload: CatalogVectorFilterRequest, request: Request
     ) -> dict[str, Any]:
-        """Create a bounded selection while its requesting client is connected.
+        """Measure filtered polygons and return their reusable selection descriptor.
 
         Args:
             payload: Catalog source and complete filter snapshot.
             request: HTTP disconnect observer.
 
         Returns:
-            Exact counts/bounds and immutable path-free Catalog descriptor.
+            Feature counts, geographic bounds and a descriptor containing the
+            catalog identity, source signature and filter, without file paths.
 
         Raises:
             HTTPException: For cancellation, invalid source, or bounded-read failure.

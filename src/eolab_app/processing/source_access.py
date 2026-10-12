@@ -9,7 +9,7 @@ from eolab_app.source_files import (
 )
 
 def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
-    """Expose the existing artifact authority without leaking Processing errors to readers.
+    """Adapt model-result ownership checks and file retention for raster source readers.
 
     Args:
         service: Existing owner of artifact access, retention and transfer limits.

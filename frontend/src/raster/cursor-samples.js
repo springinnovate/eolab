@@ -1,10 +1,10 @@
 /**
- * Debounced, bounded raster-stack sampling for one transient cursor position.
+ * Read raster cell values after the pointer pauses at a map location.
  *
- * This controller receives an already ordered set of Catalog participants. It
- * owns dwell timing, a fixed worker pool, cancellation, stale-result rejection,
- * and immutable progressive snapshots. Map-layer policy,
- * Leaflet, DOM presentation, rendering, and GeoServer remain outside it.
+ * The caller supplies rasters in display order. After a 200 ms pause, at most
+ * two requests read cells concurrently. Pointer movement cancels older work;
+ * immutable result snapshots arrive as reads finish. Rendering and panel
+ * visibility do not determine whether the supplied analysis client can read a raster.
  */
 import { isCanonicalWgs84Position } from "./geometry.js";
 
@@ -20,16 +20,17 @@ export const RASTER_CURSOR_SAMPLE_CONCURRENCY = 2;
  */
 
 /**
- * Validate and copy one ordered cursor participant list.
+ * Validate candidate rasters and select the first 50 for pointer sampling.
  *
- * The controller applies its server-owned-style fixed participant ceiling; the
- * caller cannot expand it through a UI or request parameter.
+ * Input order determines which rasters are sampled when the list exceeds 50.
+ * The omitted count lets the readout explain how many rasters were excluded.
  *
  * @param {RasterCursorSampleParticipant[]} participants Ordered candidates.
  * @return {{participants:RasterCursorSampleParticipant[],omittedCount:number}}
- * Bounded participants and the number omitted below the fixed ceiling.
+ * Selected rasters and the number excluded by the limit.
+ * @throws {TypeError} If the list contains invalid or duplicate raster identities.
  */
-function normalizeParticipants(participants) {
+function selectCursorSampleRasters(participants) {
     if (!Array.isArray(participants)) {
         throw new TypeError("Raster cursor participants must be an array");
     }
@@ -66,13 +67,14 @@ function normalizeParticipants(participants) {
 }
 
 /**
- * Normalize one pixel response to the cursor-result state union.
+ * Convert a pixel response into a value, NoData or outside-raster result.
  *
  * @param {unknown} pixel Candidate Catalog pixel response.
  * @return {{state:"value"|"nodata"|"outside",value:number|null,errorMessage:string}}
  * Presentation-neutral result fields.
+ * @throws {TypeError} If the response lacks valid coverage or numeric-value fields.
  */
-function normalizePixel(pixel) {
+function normalizeCursorSampleResult(pixel) {
     if (
         pixel === null ||
         typeof pixel !== "object" ||
@@ -92,7 +94,7 @@ function normalizePixel(pixel) {
     return { state: "value", value: pixel.value, errorMessage: "" };
 }
 
-/** Own one ephemeral cursor stack operation at a time. */
+/** Sample the latest pointer location across rasters after a short pause. */
 export class RasterCursorSamplesController {
     /**
      * Create a cursor sampler around the existing Catalog pixel client.
@@ -135,7 +137,7 @@ export class RasterCursorSamplesController {
      * @return {void}
      */
     move(participants, position) {
-        const normalized = normalizeParticipants(participants);
+        const normalized = selectCursorSampleRasters(participants);
         if (!isCanonicalWgs84Position(position)) {
             throw new TypeError("Raster cursor position must be canonical WGS 84");
         }
@@ -163,7 +165,7 @@ export class RasterCursorSamplesController {
         if (this.position === null) {
             return;
         }
-        const normalized = normalizeParticipants(participants);
+        const normalized = selectCursorSampleRasters(participants);
         const sameParticipants =
             normalized.omittedCount === this.omittedCount &&
             normalized.participants.length === this.participants.length &&
@@ -257,7 +259,7 @@ export class RasterCursorSamplesController {
                 }
                 this.results[index] = {
                     ...this.results[index],
-                    ...normalizePixel(pixel),
+                    ...normalizeCursorSampleResult(pixel),
                 };
             } catch (error) {
                 if (

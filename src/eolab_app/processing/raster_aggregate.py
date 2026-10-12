@@ -33,7 +33,7 @@ from eolab_app.processing.aggregate_models import (
     RasterAggregateLimits,
 )
 from eolab_app.processing.aggregate_windows import (
-    execution_plan,
+    plan_raster_read_windows,
     iter_raster_read_windows,
 )
 from eolab_app.processing.artifacts import write_progress
@@ -46,7 +46,7 @@ from eolab_app.processing.raster_expression import (
     walk,
 )
 from eolab_app.processing.raster_input import (
-    native_work,
+    estimate_native_raster_reads,
     validate_supported_raster,
     select_area,
 )
@@ -243,7 +243,7 @@ def prepare_raster_area_tools(
     )
 
 
-def grid(
+def plan_statistics_grid(
     dataset: Any,
     window: Window,
     node_count: int,
@@ -252,7 +252,7 @@ def grid(
     target_chunk_pixels: int | None = None,
     pixel_window: Window | None = None,
 ) -> AggregateGrid:
-    """Admit native work and bounded expression memory for one plan.
+    """Plan the statistics grid and estimate its raster-read and expression-memory costs.
 
     Args:
         dataset: Validated one-band source.
@@ -265,18 +265,20 @@ def grid(
             and area calculation, conservatively charged as another native block.
 
     Returns:
-        Deterministic metadata and conservative memory estimate.
+        Source grid metadata, read-window sizes and conservative resource estimates.
 
     Raises:
         ProcessingError: If native reads or expression memory exceed limits.
     """
     blocks, block_reads, decoded = (
-        native_work(dataset, window, limits.max_native_blocks, limits.max_decoded_bytes)
+        estimate_native_raster_reads(
+            dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
+        )
         if window.width and window.height
         else (0, 0, 0)
     )
     if pixel_window is not None and pixel_window.width:
-        extra_blocks, extra_reads, extra_decoded = native_work(
+        extra_blocks, extra_reads, extra_decoded = estimate_native_raster_reads(
             dataset, pixel_window, limits.max_native_blocks, limits.max_decoded_bytes
         )
         blocks += extra_blocks
@@ -295,7 +297,7 @@ def grid(
         else TILE_SIDE
     )
     execution = (
-        execution_plan(
+        plan_raster_read_windows(
             window,
             (bh, bw),
             dataset.width,
@@ -443,7 +445,7 @@ def plan_aggregate(
                 )
             if pixel_area_calculator is not None:
                 raster_window = pixel_area_calculator.window
-            result = grid(
+            result = plan_statistics_grid(
                 dataset,
                 raster_window,
                 nodes,
@@ -564,7 +566,7 @@ def calculate_raster_statistics_for_area(
             if calculation_plan.grid.execution:
                 raster_batch_plan = calculation_plan.grid.execution
             else:
-                raster_batch_plan = execution_plan(
+                raster_batch_plan = plan_raster_read_windows(
                     raster_area_tools.raster_window,
                     dataset.block_shapes[0],
                     dataset.width,

@@ -23,7 +23,7 @@ from eolab_app.processing.aggregate_models import (
     RasterAggregateLimits,
 )
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.area_coverage import AreaCoverage
+from eolab_app.processing.area_coverage import FractionalAreaCoverage
 from eolab_app.bounded_vector import polygon_features, native_bbox_for_grid
 
 # lat_ts=0 makes the x domain exactly +/- pi * WGS84's semimajor axis.
@@ -466,7 +466,7 @@ class PixelAreaCalculator:
             )[:, 1]
             if self.geometry is not None and self.rectangle is None:
                 oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = AreaCoverage(
+                self.coverage = FractionalAreaCoverage(
                     np.asarray(ring.coords)
                     for polygon in shapely.get_parts(oriented)
                     for ring in [polygon.exterior, *polygon.interiors]
@@ -578,7 +578,7 @@ class PixelAreaCalculator:
             )
             if self.rectilinear and self.rectangle is None:
                 oriented = shapely.orient_polygons(self.geometry)
-                self.coverage = AreaCoverage(
+                self.coverage = FractionalAreaCoverage(
                     np.asarray(ring.coords)
                     for polygon in shapely.get_parts(oriented)
                     for ring in [polygon.exterior, *polygon.interiors]
@@ -607,7 +607,7 @@ class PixelAreaCalculator:
                 * (east - west)[None, :]
                 / HECTARE_SQUARE_METRES
             )
-            return self.coverage.mask(xs, ys) * cell_hectares
+            return self.coverage.calculate_cell_coverage(xs, ys) * cell_hectares
         areas = np.zeros((height, width), dtype=np.float64)
         for row in range(height):
             for column in range(width):

@@ -1,4 +1,4 @@
-/** Vector-owned selection intent; source transport and map presentation are injected. */
+/** Select filtered polygons as an analysis area and track changes to that selection. */
 import { validateCatalogSelection, catalogSelectionsEqual } from "../selected-area.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./filter.js";
 
@@ -11,7 +11,7 @@ const samplingTargetIdentity = (target, filter = null) => target ? JSON.stringif
     target.selectionIdentity ? target.selectionIdentity(filter ?? target.filter) : target.item]) : "";
 
 /**
- * Conservatively classify the selection envelope before raster processing.
+ * Estimate a selection's bounding-box area to decide whether a size warning is needed.
  * @param {Object} area Complete server selection with canonical bbox and counts.
  * @return {{large:boolean,nearGlobal:boolean,envelopeKm2:number}} Review policy.
  */
@@ -82,7 +82,8 @@ export class VectorSamplingController {
         return key === this.state.key && this.state.selectionFilter ? structuredClone(this.state.selectionFilter) : null;
     }
     /**
-     * Select a committed predicate on one bounded lane, discarding obsolete replies.
+     * Request the selected layer's filtered polygons, one request at a time.
+     * A newer selection cancels the older request and discards its response.
      * @param {Object} [options={}] Explicit analysis selection options.
      * @param {Object|null} [options.filter=null] Committed analysis filter, independent of rendering.
      * @param {string} [options.key] Captured layer identity from the filter editor.

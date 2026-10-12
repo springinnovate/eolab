@@ -1,4 +1,4 @@
-"""Single-event-loop ownership of bounded ephemeral jobs and one execution lane."""
+"""Queue, run and expire in-memory jobs, executing one operation at a time."""
 
 import asyncio
 import hashlib
@@ -40,8 +40,22 @@ class JobError(Exception):
 
 
 @dataclass
-class Record:
-    """Private job ownership, immutable invocation, deadlines and retained result."""
+class JobRecord:
+    """An in-memory job's owner, request, execution state and retained result.
+
+    Attributes:
+        owner: Authenticated caller allowed to read or change this job.
+        key: Caller-scoped idempotency key used to recognize submission retries.
+        fingerprint: SHA-256 of the request, used to reject changed retries.
+        snapshot: Status and timestamps returned by the HTTP API.
+        payload: Serialized operation request passed to the child process.
+        sequence: Submission order used to break priority ties and paginate jobs.
+        queue_deadline: Monotonic time after which a waiting job expires.
+        execution_seconds: Maximum duration of the child process.
+        cancellation: Signal requesting termination of a running operation.
+        result: Validated output, present only after successful execution.
+        finished_clock: Monotonic completion time used to expire retained results.
+    """
 
     owner: str
     key: str
@@ -57,7 +71,7 @@ class Record:
 
 
 class JobManager:
-    """Serialize transitions on one event loop, with no unbounded task backlog.
+    """Manage a capacity-limited in-memory queue and execute one job at a time.
 
     All public methods run on the hosting ASGI loop. Non-awaiting methods make
     admission and state transitions atomic on that loop. The dispatcher creates
@@ -71,7 +85,7 @@ class JobManager:
             settings: Validated deployment capacity and timeout policy.
         """
         self.settings = settings
-        self.records: dict[UUID, Record] = {}
+        self.records: dict[UUID, JobRecord] = {}
         self.keys: dict[tuple[str, str], UUID] = {}
         self.sequence = 0
         self.wake = asyncio.Event()
@@ -93,8 +107,8 @@ class JobManager:
         if self.dispatcher is not None:
             await self.dispatcher
 
-    def _owned(self, owner: str, job_id: UUID) -> Record:
-        """Resolve owned retained state without disclosing another caller's IDs.
+    def _get_owned_job(self, owner: str, job_id: UUID) -> JobRecord:
+        """Find a job belonging to this caller after removing expired records.
 
         Args:
             owner: Authenticated principal.
@@ -106,14 +120,14 @@ class JobManager:
         Raises:
             JobError: If absent, expired or owned by another principal.
         """
-        self._maintain()
+        self._expire_queued_jobs_and_remove_old_records()
         record = self.records.get(job_id)
         if record is None or record.owner != owner:
             raise JobError("not_found", "Job not found")
         return record
 
     def submit(self, owner: str, key: str, request: SubmitJob) -> JobSnapshot:
-        """Admit one registered invocation or return its idempotent predecessor.
+        """Queue an operation or return the job from an identical submission retry.
 
         Args:
             owner: Authenticated principal, never a submitted owner field.
@@ -121,12 +135,12 @@ class JobManager:
             request: Validated HTTP request.
 
         Returns:
-            Independent authoritative snapshot.
+            A copy of the new or previously accepted job's current status.
 
         Raises:
             JobError: For invalid operations, conflicting retries or full capacity.
         """
-        self._maintain()
+        self._expire_queued_jobs_and_remove_old_records()
         fingerprint = hashlib.sha256(
             json.dumps(
                 request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
@@ -174,7 +188,7 @@ class JobManager:
             priority=request.priority,
             submittedAt=datetime.now(timezone.utc),
         )
-        self.records[job_id] = Record(
+        self.records[job_id] = JobRecord(
             owner,
             key,
             fingerprint,
@@ -207,7 +221,7 @@ class JobManager:
         Raises:
             JobError: If the owned job is unavailable.
         """
-        return self._owned(owner, job_id).snapshot.model_copy(deep=True)
+        return self._get_owned_job(owner, job_id).snapshot.model_copy(deep=True)
 
     def list(
         self, owner: str, status: JobStatus | None, limit: int, cursor: str | None
@@ -226,11 +240,11 @@ class JobManager:
         Raises:
             JobError: For an invalid or unavailable cursor.
         """
-        self._maintain()
+        self._expire_queued_jobs_and_remove_old_records()
         cursor_sequence = 0
         if cursor:
             try:
-                cursor_sequence = self._owned(owner, UUID(cursor)).sequence
+                cursor_sequence = self._get_owned_job(owner, UUID(cursor)).sequence
             except (ValueError, JobError):
                 raise JobError(
                     "invalid_request", "Listing cursor is invalid or expired"
@@ -262,7 +276,7 @@ class JobManager:
         Raises:
             JobError: If unavailable or no longer queued.
         """
-        record = self._owned(owner, job_id)
+        record = self._get_owned_job(owner, job_id)
         if record.snapshot.status != "queued":
             raise JobError("conflict", "Only queued job priority can change")
         record.snapshot.priority = priority
@@ -282,7 +296,7 @@ class JobManager:
         Raises:
             JobError: If the owned job is unavailable.
         """
-        record = self._owned(owner, job_id)
+        record = self._get_owned_job(owner, job_id)
         self._cancel(record)
         self.wake.set()
         return record.snapshot.model_copy(deep=True)
@@ -300,7 +314,7 @@ class JobManager:
         Raises:
             JobError: If unavailable or not succeeded.
         """
-        record = self._owned(owner, job_id)
+        record = self._get_owned_job(owner, job_id)
         if record.result is None:
             raise JobError(
                 "conflict", "Job has no successful result; inspect its status"
@@ -317,13 +331,13 @@ class JobManager:
         Raises:
             JobError: If unavailable or still active.
         """
-        record = self._owned(owner, job_id)
+        record = self._get_owned_job(owner, job_id)
         if record.snapshot.status not in TERMINAL:
             raise JobError("conflict", "Cancel active work before deleting it")
         self.records.pop(job_id)
         self.keys.pop((owner, record.key))
 
-    def _finish(self, record: Record, status: JobStatus) -> None:
+    def _finish(self, record: JobRecord, status: JobStatus) -> None:
         """Publish terminal state only after execution has released its resources.
 
         Args:
@@ -344,7 +358,7 @@ class JobManager:
                 }[status],
             )
 
-    def _cancel(self, record: Record) -> None:
+    def _cancel(self, record: JobRecord) -> None:
         """Apply an idempotent cancellation transition.
 
         Args:
@@ -356,8 +370,8 @@ class JobManager:
             record.snapshot.status = "cancelling"
             record.cancellation.set()
 
-    def _maintain(self) -> None:
-        """Expire waiting work and release terminal records after their TTL."""
+    def _expire_queued_jobs_and_remove_old_records(self) -> None:
+        """Expire overdue queued jobs and remove finished jobs past retention time."""
         now = time.monotonic()
         for job_id, record in list(self.records.items()):
             if record.snapshot.status == "queued" and now >= record.queue_deadline:
@@ -369,7 +383,7 @@ class JobManager:
                 self.records.pop(job_id)
                 self.keys.pop((record.owner, record.key))
 
-    async def _execute(self, record: Record) -> None:
+    async def _execute(self, record: JobRecord) -> None:
         """Own the execution slot until subprocess cleanup completes.
 
         Args:
@@ -398,7 +412,7 @@ class JobManager:
         """Run the highest-priority waiting job, reconciling expiry every 100 ms."""
         while self.accepting or self.active is not None:
             self.wake.clear()
-            self._maintain()
+            self._expire_queued_jobs_and_remove_old_records()
             if self.active is not None and self.active.done():
                 await self.active
                 self.active = None

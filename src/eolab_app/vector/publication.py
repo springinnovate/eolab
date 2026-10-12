@@ -5,8 +5,13 @@ import math
 from collections.abc import Callable
 from collections import OrderedDict
 from threading import Event
+from typing import Any
 from eolab_app.vector.filters import (
-    AppliedVectorFilter, CatalogVectorFilterRequest, VectorFilterCount, validate_filter,
+    AppliedVectorFilter,
+    CatalogVectorFilterRequest,
+    VectorFilter,
+    VectorFilterCount,
+    validate_filter,
 )
 from eolab_app.vector.metadata import catalog_vector_fields, catalog_vector_feature_count, require_assessed_metadata
 from eolab_app.rendering.errors import PublishedLayerNotAuthorizedError
@@ -189,8 +194,12 @@ class VectorPublicationService:
                 style=default_vector_style(geometry_kind),
             )
 
-    async def _filter_context(self, request: CatalogVectorFilterRequest):
-        """Validate a rule builder against the current authoritative source.
+    async def _prepare_published_filter(
+        self, request: CatalogVectorFilterRequest
+    ) -> tuple[
+        dict[str, Any], ResolvedVectorSource, VectorSourceSignature, VectorFilter, str
+    ]:
+        """Resolve the published vector source and validate its requested feature filter.
 
         Args:
             request: Catalog identity and bounded filter rules.
@@ -212,8 +221,8 @@ class VectorPublicationService:
                 raise VectorConflictError("The published vector source changed; reload the layer")
         except (OSError, PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise VectorConflictError("The vector publication is unavailable; reload the layer") from error
-        candidate = validate_filter(request.filter, catalog_vector_fields(item))
-        return item, source, signature, candidate, layer_name
+        validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
+        return item, source, signature, validated_filter, layer_name
 
     async def apply_filter(self, request: CatalogVectorFilterRequest) -> AppliedVectorFilter:
         """Authorize a per-map predicate without changing GeoServer layer state.
@@ -227,12 +236,18 @@ class VectorPublicationService:
         Raises:
             VectorConflictError: If the fields, source, or publication is stale.
         """
-        _, _, _, candidate, base = await self._filter_context(request)
+        _, _, _, validated_filter, published_layer_name = (
+            await self._prepare_published_filter(request)
+        )
         try:
-            layer_name = await asyncio.to_thread(self._vector_registry.authorize_filter, base, candidate)
+            layer_name = await asyncio.to_thread(
+                self._vector_registry.authorize_filter,
+                published_layer_name,
+                validated_filter,
+            )
         except (PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise VectorConflictError(str(error)) from error
-        return AppliedVectorFilter(layerName=layer_name, filter=candidate)
+        return AppliedVectorFilter(layerName=layer_name, filter=validated_filter)
 
     async def count_filter(
         self, request: CatalogVectorFilterRequest
@@ -254,11 +269,15 @@ class VectorPublicationService:
                 within the queue wait deadline.
             asyncio.CancelledError: If the requesting browser disconnects.
         """
-        item, source, signature, candidate, base = await self._filter_context(request)
+        item, source, signature, validated_filter, published_layer_name = (
+            await self._prepare_published_filter(request)
+        )
         total = catalog_vector_feature_count(item, "Filter count")
-        if not candidate.active:
+        if not validated_filter.active:
             return VectorFilterCount(matched=total, total=total, complete=True)
-        key = repr((base, signature)) + candidate.model_dump_json()
+        key = (
+            repr((published_layer_name, signature)) + validated_filter.model_dump_json()
+        )
         if key in self._filter_counts:
             self._filter_counts.move_to_end(key)
             return self._filter_counts[key]
@@ -270,14 +289,14 @@ class VectorPublicationService:
             asyncio.to_thread(
                 self._field_reader.count_filter,
                 source,
-                candidate,
+                validated_filter,
                 1_000_000,
                 cancel_event,
             )
         )
 
-        def finished(completed: asyncio.Task[VectorFilterCount]) -> None:
-            """Release capacity only after the actual bounded worker exits.
+        def release_filter_reader(completed: asyncio.Task[VectorFilterCount]) -> None:
+            """Release the filter-reader slot and collect any unobserved worker exception.
 
             Args:
                 completed: Finished worker task, including failures.
@@ -289,7 +308,7 @@ class VectorPublicationService:
             if not completed.cancelled():
                 completed.exception()
 
-        task.add_done_callback(finished)
+        task.add_done_callback(release_filter_reader)
         try:
             result = await asyncio.wait_for(asyncio.shield(task), timeout=21)
         except TimeoutError:

@@ -1,4 +1,4 @@
-"""Spawn and supervise one native operation without depending on its owner."""
+"""Run a native operation in a child process with a deadline and cancellation."""
 
 import asyncio
 from collections.abc import Callable
@@ -14,7 +14,7 @@ class ProcessDeadlineError(TimeoutError):
 
 
 class ProcessResultWriter:
-    """Queue-compatible one-result writer with no inherited parent write handle."""
+    """Send a child process's result through a pipe using a queue-like ``put`` method."""
 
     def __init__(self, connection: Connection) -> None:
         """Wrap the child-only sending endpoint.
@@ -28,7 +28,7 @@ class ProcessResultWriter:
         """Send a picklable result while the parent concurrently consumes it.
 
         Args:
-            value: Owner-defined success or sanitized failure envelope.
+            value: Operation result or error that is safe to return to its caller.
         """
         self.connection.send(value)
 
@@ -39,7 +39,11 @@ def _run_target(
     arguments: tuple[Any, ...],
     deadline: float,
 ) -> None:
-    """Keep a Linux child deadline even if its supervising worker dies abruptly.
+    """Run the target with a result pipe and a child-side deadline alarm.
+
+    On platforms supporting interval timers, the alarm stops the child even
+    if its supervising process dies. The supervisor enforces the deadline
+    on all platforms.
 
     Args:
         target: Importable native operation, independent of application services.
@@ -64,11 +68,12 @@ async def run_bounded_process(
     arguments: tuple[Any, ...],
     timeout_seconds: float,
 ) -> Any:
-    """Run a queue-writing target and reclaim the child before returning.
+    """Run a function in a child process and stop the process before returning.
 
     The target receives a single-result writer before its supplied arguments.
-    Its owner defines the result/error envelope. Read the queue before joining
-    so even a large result cannot deadlock the child's pipe writer. Cancellation
+    The function defines the result or error value sent through that writer.
+    The parent reads the pipe before waiting for process exit, so a large
+    result cannot deadlock the child's pipe writer. Cancellation
     terminates native work and waits for exit before releasing capacity.
 
     Args:
@@ -77,9 +82,10 @@ async def run_bounded_process(
         timeout_seconds: Positive deadline including process startup and exit.
 
     Returns:
-        The target's picklable result envelope.
+        The picklable value sent by the target through its result writer.
 
     Raises:
+        ValueError: If timeout_seconds is not positive.
         ProcessDeadlineError: If the target times out or exits without a result.
         asyncio.CancelledError: After stopping the child on caller cancellation.
     """

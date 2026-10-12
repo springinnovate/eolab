@@ -197,8 +197,8 @@ export class MapInspectionController {
     }
 
     /**
-     * Reveal Tools from its visible native invoker for an explicit restore intent.
-     * Composition lets the requesting owner focus its own command afterwards.
+     * Open the Tools menu using the button visible in the current layout.
+     * The caller can then focus the command it wants the user to return to.
      * @return {void}
      */
     showToolActions() {

@@ -24,7 +24,10 @@ from rasterio.warp import transform
 from rasterio.windows import Window
 from shapely.geometry import shape
 
-from eolab_app.bounded_geometry import GeometryValidationError, _geometry_positions
+from eolab_app.bounded_geometry import (
+    GeometryValidationError,
+    _iter_geometry_coordinates,
+)
 from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
@@ -194,7 +197,7 @@ def polygon_records(
                         )
                     raw = to_dict(feature.geometry)
                     for positions, _ in enumerate(
-                        _geometry_positions(raw, canonical=False), 1
+                        _iter_geometry_coordinates(raw, validate_wgs84_bounds=False), 1
                     ):
                         if positions > MAX_FEATURE_COORDINATES:
                             raise GeometryValidationError(
@@ -212,7 +215,9 @@ def polygon_records(
                         raise GeometryValidationError(
                             "Sampling requires valid polygons; repair the source first"
                         )
-                    for positions, _ in enumerate(_geometry_positions(geometry), 1):
+                    for positions, _ in enumerate(
+                        _iter_geometry_coordinates(geometry), 1
+                    ):
                         if positions > MAX_FEATURE_COORDINATES:
                             raise GeometryValidationError(
                                 "A transformed feature exceeds the bounded coordinate buffer"
