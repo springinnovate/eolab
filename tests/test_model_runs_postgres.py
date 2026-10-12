@@ -40,6 +40,136 @@ from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.processing.job_store import PostgresJobStore
 
 
+@pytest.mark.parametrize("state", ["cancelled", "failed", "interrupted"])
+def test_undo_restores_terminal_run_history(
+    model_boundary: Any, store: PostgresJobStore, state: str
+) -> None:
+    """Undo restores terminal history and saved inputs without restarting any work.
+
+    Args:
+        model_boundary: Real model HTTP and worker composition.
+        store: Isolated PostgreSQL lifecycle store.
+        state: Terminal outcome to restore, including subscriber cancellation.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    base = f"/api/processing/jobs/{run['jobId']}"
+    if state == "cancelled":
+        assert client.post(base + "/cancel", headers=HEADERS).status_code == 202
+    elif state == "interrupted":
+        store.interrupt_unfinished_jobs_on_restart()
+    else:
+        claimed = store.claim_next_job()
+        assert store.finish(
+            claimed["id"],
+            claimed["attempt_id"],
+            None,
+            {"code": "test_failure", "detail": "Test failure"},
+        )
+    before = client.get(base).json()
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    client.portal.call(worker.cleanup)
+    response = client.post(
+        base + "/deletion/undo",
+        json={"deletionId": offer["deletionId"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == state
+    assert response.json()["metadataExpiresAt"] == before["metadataExpiresAt"]
+    assert client.get(base + "/invocation").status_code == 200
+    assert not client.portal.call(worker.run_once)
+
+
+def test_undo_dismiss_and_cleanup_share_one_lifecycle_transition(
+    model_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Concurrent Undo, dismissal and cleanup never delete a successfully restored result.
+
+    Args:
+        model_boundary: Real model execution and HTTP composition.
+        store: Isolated store whose transactions share the lifecycle lock.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    assert client.portal.call(worker.run_once)
+    identifier = run["jobId"]
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    deleted = store.cancel(identifier, owner, delete=True, undo_seconds=30)
+    barrier = Barrier(3)
+
+    def compete(action: str) -> str:
+        """Run one lifecycle operation after all race participants are ready.
+
+        Args:
+            action: Undo, dismiss or gather cleanup candidates.
+
+        Returns:
+            Resulting job status, rejection code, or cleanup marker.
+        """
+        barrier.wait(timeout=5)
+        try:
+            if action == "cleanup":
+                store.cleanup_candidates()
+                return action
+            return store.resolve_deletion(
+                identifier, owner, deleted["deletion_id"], action == "undo"
+            )["status"]
+        except ProcessingError as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        outcomes = list(pool.map(compete, ("undo", "dismiss", "cleanup")))
+    assert outcomes[0] in {"ready", "undo_expired"}
+    assert outcomes[1] in {"ready", "deleted"}
+    assert outcomes[2] == "cleanup"
+    client.portal.call(worker.cleanup)
+    current = client.get(f"/api/processing/jobs/{identifier}").json()
+    assert current["status"] == ("ready" if outcomes[0] == "ready" else "deleted")
+    if current["status"] == "ready":
+        assert client.get(current["result"]["url"]).status_code == 200
+
+
+@pytest.mark.parametrize("rejection", ["owner", "origin", "identity", "body", "action"])
+def test_model_undo_requires_owner_origin_and_exact_deletion(
+    model_boundary: Any, rejection: str
+) -> None:
+    """Reject forged or stale Undo requests without changing the deletion hold.
+
+    Args:
+        model_boundary: Real model HTTP and worker composition.
+        rejection: External contract violation to exercise.
+    """
+    client, worker, _ = model_boundary
+    run = submit(client, model_request(client))
+    base = f"/api/processing/jobs/{run['jobId']}"
+    assert client.delete(base + "?undo=true", headers=HEADERS).status_code == 409
+    assert client.portal.call(worker.run_once)
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    cookie = client.cookies.get(COOKIE)
+    if rejection == "owner":
+        client.cookies.clear()
+    body = {
+        "deletionId": uuid4().hex if rejection == "identity" else offer["deletionId"]
+    }
+    if rejection == "body":
+        body["path"] = "/anything"
+    headers = {
+        **HEADERS,
+        **({"Origin": "https://elsewhere.test"} if rejection == "origin" else {}),
+    }
+    action = "unknown" if rejection == "action" else "undo"
+    response = client.post(base + f"/deletion/{action}", json=body, headers=headers)
+    assert (
+        response.status_code
+        == {"owner": 404, "origin": 403, "identity": 409, "body": 422, "action": 422}[
+            rejection
+        ]
+    ), response.text
+    client.cookies.set(COOKIE, cookie)
+    assert client.get(base).json()["deletionUndo"] == offer
+
+
 @pytest.mark.parametrize(
     "state",
     ["queued", "expired", "deleted", "details_expired", "foreign", "cross_origin"],

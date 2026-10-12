@@ -113,6 +113,11 @@ CREATE TABLE IF NOT EXISTS processing.job_subscribers (
 );
 CREATE INDEX IF NOT EXISTS subscribers_job ON processing.job_subscribers(job_id);
 CREATE INDEX IF NOT EXISTS subscribers_owner ON processing.job_subscribers(owner,created_at DESC);
+-- An explicit short Undo window hides a handle before its files can be removed.
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_id text;
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS deletion_undo_until timestamptz;
+ALTER TABLE processing.job_subscribers ADD COLUMN IF NOT EXISTS status_before_deletion text
+    CHECK (status_before_deletion IN ('cancelled','cancelling'));
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='processing'
                AND table_name='jobs' AND column_name='owner') THEN
@@ -173,7 +178,7 @@ SELECT s.id,s.owner,s.request_key,s.request_hash,s.presentation,s.job_id,
        j.reserved_bytes,j.attempt_id,j.lease_until,j.deadline_at,j.progress,
        CASE WHEN s.status IS NULL THEN j.artifact END AS artifact,
        CASE WHEN s.status IS NULL THEN j.error END AS error,
-       j.summary,j.metadata_expires_at,
+       j.summary,j.metadata_expires_at,s.deletion_id,s.deletion_undo_until,
        CASE WHEN s.status IS DISTINCT FROM 'deleted'
                  AND (j.metadata_expires_at IS NULL OR j.metadata_expires_at>now())
             THEN j.retained_metadata END AS retained_metadata,
@@ -262,3 +267,4 @@ CREATE TRIGGER processing_release_inputs AFTER UPDATE OF status ON processing.jo
 FOR EACH ROW EXECUTE FUNCTION processing.release_finished_inputs();
 INSERT INTO processing.schema_version VALUES (18) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (19) ON CONFLICT DO NOTHING;
+INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;

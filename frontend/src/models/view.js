@@ -44,8 +44,9 @@ export class ModelsView {
      */
     constructor(documentContext = globalThis.document) {
         this.document = documentContext; this.listeners = []; this.runCards = new Map();
+        this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recover", "query",
-            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml"]
+            "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
             .map(name => [name, documentContext.querySelector(`#models-${name}`)]));
         this.navigation = Object.fromEntries(["library", "setup", "runs"].map(name => [name, documentContext.querySelector(`#models-nav-${name}`)]));
         this.openers = ["open-models", "open-model-runs"].map(id => documentContext.querySelector(`#${id}`));
@@ -341,7 +342,7 @@ export class ModelsView {
         r.remove.hidden = !job || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted" || state.deleteConfirmation === job.jobId;
         r.remove.disabled = Boolean(state.actionBusy);
         r.confirmation.hidden = !job || job.status === "deleted" || state.deleteConfirmation !== job.jobId;
-        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. This cannot be undone.`;
+        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. You can undo this for 30 seconds.`;
         r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
         r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
         const signature = JSON.stringify([available, job?.result, job?.artifacts, state.outputPreviews]);
@@ -388,6 +389,36 @@ export class ModelsView {
         r.details.message.textContent = metadataAvailable ? `Recipe ${job.model.title} · ${job.model.version}` : "Saved recipe and inputs are no longer available.";
     }
 
+    /** Present separate Undo offers while keeping their focused buttons stable.
+     * @param {Object[]} notices Unexpired server-backed deletion offers.
+     * @return {void}
+     */
+    renderDeletions(notices) {
+        const ids = new Set(notices.map(value => value.deletionId));
+        for (const [id, notice] of this.deletionNotices) {
+            if (ids.has(id)) continue;
+            if (notice.root.contains(this.document.activeElement)) this.focusHeading();
+            notice.root.remove(); this.deletionNotices.delete(id);
+        }
+        for (const deletion of notices) {
+            let notice = this.deletionNotices.get(deletion.deletionId);
+            if (!notice) {
+                const root = this.element("div", "", "models-deletion-notice");
+                const message = this.element("p", `“${deletion.label}” deleted. Undo is available for 30 seconds.`);
+                message.setAttribute("role", "status");
+                const actions = this.element("div", "", "models-actions");
+                const undo = this.button("Undo", () => this.handlers.onUndoDelete(deletion.jobId));
+                const dismiss = this.button("Dismiss", () => this.handlers.onDismissDelete(deletion.jobId));
+                undo.setAttribute("aria-label", `Undo deletion of ${deletion.label}`);
+                dismiss.setAttribute("aria-label", `Dismiss Undo for ${deletion.label}`);
+                actions.append(undo, dismiss); root.append(message, actions);
+                notice = {root, undo, dismiss}; this.deletionNotices.set(deletion.deletionId, notice);
+                this.elements.deletions.append(root);
+            }
+            notice.undo.disabled = deletion.busy; notice.dismiss.disabled = deletion.busy;
+        }
+    }
+
     /** Update visible runs and controls, removing history cards no longer present.
      * @param {Object} state Controller snapshot.
      * @return {void}
@@ -400,6 +431,7 @@ export class ModelsView {
         this.elements.heading.textContent = ({library: "Model library", setup: "Model setup", runs: "Model runs", run: "Model run"})[state.page];
         const error = state.error || (state.page === "setup" ? "" : state.observationError) || "";
         this.elements.error.textContent = error; this.elements.error.hidden = !error;
+        this.renderDeletions(state.deletions ?? []);
         this.elements.recovery.hidden = !state.pending; this.elements.recover.disabled = state.submitting;
         const filtered = state.library.filter(model => `${model.title} ${model.description}`.toLowerCase().includes(state.query.toLowerCase()));
         const signature = JSON.stringify(filtered);

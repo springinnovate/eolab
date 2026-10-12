@@ -29,6 +29,146 @@ from test_raster_clips import SOURCE
 from uuid import uuid4
 
 
+@pytest.mark.parametrize("resolution", ["undo", "dismiss", "timeout"])
+def test_model_deletion_hold_preserves_files_and_reader_protection(
+    multiple_boundary: Any, store: PostgresJobStore, resolution: str
+) -> None:
+    """Undo restores all files; dismissal and timeout use the existing reader-safe cleanup.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated PostgreSQL lifecycle authority.
+        resolution: Restore within thirty seconds, dismiss early, or expire the hold.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    identifier = run["jobId"]
+    base = f"/api/processing/jobs/{identifier}"
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    files = ready["artifacts"]["files"]
+    contents = {file["artifactId"]: client.get(file["url"]).content for file in files}
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    record, lease = store.acquire_transfer(identifier, owner)
+    path = worker.artifacts.artifact_path(record["attempt_id"], "result.tif")
+    response = client.delete(base + "?undo=true", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    deleted = response.json()
+    offer = deleted["deletionUndo"]
+    with psycopg.connect(store.conninfo) as connection:
+        remaining, retained = connection.execute(
+            "SELECT s.deletion_undo_until-clock_timestamp(),j.reserved_bytes "
+            "FROM processing.job_subscribers s JOIN processing.jobs j ON j.id=s.job_id WHERE s.id=%s",
+            (identifier,),
+        ).fetchone()
+    assert timedelta(seconds=25) < remaining <= timedelta(seconds=30)
+    assert retained == record["reserved_bytes"]
+    assert (
+        client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+        == offer
+    )
+    assert identifier not in {
+        item["jobId"]
+        for item in client.get("/api/processing/model-runs").json()["jobs"]
+    }
+    assert client.get(base + "/invocation").status_code == 410
+    for file in files:
+        assert client.get(file["url"]).status_code == 409
+    client.portal.call(worker.cleanup)
+    assert path.exists()
+    action = {"deletionId": offer["deletionId"]}
+    if resolution == "undo":
+        response = client.post(base + "/deletion/undo", json=action, headers=HEADERS)
+        assert response.status_code == 200, response.text
+        restored = response.json()
+        assert restored["status"] == "ready" and restored["deletionUndo"] is None
+        assert restored["expiresAt"] == ready["expiresAt"]
+        assert restored["metadataExpiresAt"] == ready["metadataExpiresAt"]
+        assert restored["artifacts"] == ready["artifacts"]
+        assert (
+            client.post(base + "/deletion/undo", json=action, headers=HEADERS).json()
+            == restored
+        )
+        assert (
+            client.post(base + "/deletion/dismiss", json=action, headers=HEADERS).json()
+            == restored
+        )
+        for file in files:
+            assert client.get(file["url"]).content == contents[file["artifactId"]]
+        assert client.get(base + "/invocation").status_code == 200
+        store.transfer_heartbeat(lease, release=True)
+        client.portal.call(worker.cleanup)
+        assert path.exists()
+        newer = client.delete(base + "?undo=true", headers=HEADERS).json()[
+            "deletionUndo"
+        ]
+        assert newer["deletionId"] != offer["deletionId"]
+        for operation in ("undo", "dismiss"):
+            assert (
+                client.post(
+                    base + f"/deletion/{operation}", json=action, headers=HEADERS
+                ).status_code
+                == 409
+            )
+    else:
+        if resolution == "dismiss":
+            response = client.post(
+                base + "/deletion/dismiss", json=action, headers=HEADERS
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["deletionUndo"] is None
+        else:
+            with psycopg.connect(store.conninfo) as connection:
+                connection.execute(
+                    "UPDATE processing.job_subscribers SET deletion_undo_until=now()-interval '1 second' WHERE id=%s",
+                    (identifier,),
+                )
+        assert (
+            client.post(
+                base + "/deletion/undo", json=action, headers=HEADERS
+            ).status_code
+            == 409
+        )
+        client.portal.call(worker.cleanup)
+        assert path.exists(), "Existing transfers retain their usual protection"
+        store.transfer_heartbeat(lease, release=True)
+        client.portal.call(worker.cleanup)
+        assert not path.exists()
+        assert client.get(base).json()["status"] == "deleted"
+
+
+def test_undo_does_not_revive_results_expiring_during_its_window(
+    multiple_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Restore history after normal expiry without renewing or exposing expired files.
+
+    Args:
+        multiple_boundary: Native multi-output model, HTTP client and worker.
+        store: Isolated lifecycle authority used to advance the result deadline.
+    """
+    client, worker, _, body = multiple_boundary
+    run = submit(client, body)
+    base = f"/api/processing/jobs/{run['jobId']}"
+    assert client.portal.call(worker.run_once)
+    files = client.get(base).json()["artifacts"]["files"]
+    offer = client.delete(base + "?undo=true", headers=HEADERS).json()["deletionUndo"]
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (run["jobId"],),
+        )
+    client.portal.call(worker.cleanup)
+    restored = client.post(
+        base + "/deletion/undo",
+        json={"deletionId": offer["deletionId"]},
+        headers=HEADERS,
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["status"] == "expired"
+    for file in files:
+        assert client.get(file["url"]).status_code == 409
+
+
 def test_renewal_keeps_all_outputs_and_details_without_copying_files(
     multiple_boundary: Any, store: Any
 ) -> None:

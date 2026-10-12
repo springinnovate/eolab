@@ -49,6 +49,7 @@ from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
+    MODEL_DELETION_UNDO_SECONDS,
     MODEL_RUN_RETENTION_SECONDS,
     ModelRunRequest,
 )
@@ -906,7 +907,7 @@ class ProcessingService:
         )
 
     async def cancel(
-        self, owner: str, identifier: str, delete: bool = False
+        self, owner: str, identifier: str, delete: bool = False, undo: bool = False
     ) -> dict[str, Any]:
         """Request explicit cancellation or remove a terminal job's result.
 
@@ -914,12 +915,57 @@ class ProcessingService:
             owner: Current session hash.
             identifier: Owned opaque job ID.
             delete: Revoke a terminal result rather than cancel active work.
+            undo: Offer thirty seconds to undo a model run deletion.
 
         Returns:
             Updated public state; running cancellation completes after child exit.
+
+        Raises:
+            ProcessingError: If ownership, job kind or lifecycle rejects the action.
         """
+        if undo:
+            require_operation(
+                await asyncio.to_thread(self.jobs.get, identifier, owner),
+                MODEL_OPERATION,
+            )
         return public_job(
-            await asyncio.to_thread(self.jobs.cancel, identifier, owner, delete)
+            await asyncio.to_thread(
+                self.jobs.cancel,
+                identifier,
+                owner,
+                delete,
+                MODEL_DELETION_UNDO_SECONDS if undo else 0,
+            )
+        )
+
+    async def resolve_model_deletion(
+        self, owner: str, identifier: str, deletion_id: str, restore: bool
+    ) -> dict[str, Any]:
+        """Undo or dismiss the requesting browser's exact model run deletion.
+
+        Args:
+            owner: Hash of the browser session.
+            identifier: Owned model run ID.
+            deletion_id: Identity captured by the original delete action.
+            restore: Undo the deletion when true; end its Undo window otherwise.
+
+        Returns:
+            Updated public model run, without extending its original expiry.
+
+        Raises:
+            ProcessingError: If the run, deletion or Undo window is unavailable.
+        """
+        require_operation(
+            await asyncio.to_thread(self.jobs.get, identifier, owner), MODEL_OPERATION
+        )
+        return public_job(
+            await asyncio.to_thread(
+                self.jobs.resolve_deletion,
+                identifier,
+                owner,
+                deletion_id,
+                restore,
+            )
         )
 
     async def download(

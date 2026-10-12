@@ -11,13 +11,25 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Delete", "ConfirmDelete", "KeepRun"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
         runs: [], selectedRun: null, pending: null, error: "", yaml: null};
     view.render(state); return {doc, view, state, actions};
 }
+
+test("Undo and Dismiss remain stable through rendering and move focus when the notice disappears", () => {
+    const h = fixture(), deletion = {jobId: "1".repeat(32), deletionId: "d".repeat(32), label: "Cuba"};
+    h.state.deletions = [deletion]; h.view.render(h.state);
+    const notice = h.view.deletionNotices.get(deletion.deletionId);
+    notice.undo.focus(); h.view.render(h.state); assert.equal(h.doc.activeElement, notice.undo);
+    notice.undo.dispatchEvent(new Event("click")); notice.dismiss.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.slice(-2), [["UndoDelete", deletion.jobId], ["DismissDelete", deletion.jobId]]);
+    deletion.busy = true; h.view.render(h.state); assert.equal(notice.undo.disabled, true); assert.equal(notice.dismiss.disabled, true);
+    h.state.deletions = []; h.view.render(h.state);
+    assert.equal(h.view.elements.deletions.children.length, 0); assert.equal(h.doc.activeElement, h.view.elements.heading);
+});
 
 test("raster choices separate map layers from completed runs and explain unavailable results", () => {
     const h = fixture(), recipe = {...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}};

@@ -148,8 +148,15 @@ or losing that session loses access. Download files if you need your own copy.
 Choose **Delete run and results** in the run view, or beside its group name in
 Map layers, to review a confirmation naming the run. Deleting removes all its
 outputs from the map and makes them unavailable for new downloads or analyses.
+The run disappears from the list immediately. An **Undo** notice remains for
+30 seconds; **Dismiss** ends that offer sooner. Undo restores the run and the
+output layers removed with it, including their display settings. Reloading this
+tab can recover an unexpired Undo offer, but its previous map display settings
+are no longer available; open the restored run to show its outputs again.
+Undo does not extend the original expiry date or recover files that expired
+during those 30 seconds.
 The layer's ordinary remove control only removes it from the map and can be
-undone. Run deletion cannot be undone. Cancel an active run before deleting it.
+undone. Cancel an active run before deleting it.
 Existing downloads and accepted calculations finish using their protected inputs
 before the server removes those files; other runs are not deleted automatically.
 

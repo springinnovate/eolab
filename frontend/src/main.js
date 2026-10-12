@@ -1011,6 +1011,28 @@ async function initializeCatalog(
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         showOutput: (job, file) => outputLayers.show(job, file),
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),
+        /** Capture run displays before their source access is revoked.
+         * @param {string} id Model run identity.
+         * @return {Object[]} Existing map-layer restoration snapshots in display order.
+         * @throws {Error} If an owner cannot capture its layer for restoration.
+         */
+        captureRunLayers: id => mapLayerController.snapshots().filter(layer => layer.group?.id === id)
+            .map(layer => mapLayerController.copyLayerForUndo(layer.key)),
+        /** Restore deleted-run displays with the ordinary layer restoration path.
+         * @param {Object[]} snapshots Presentations captured before run deletion.
+         * @param {()=>boolean} isCurrent Whether the restored run remains available.
+         * @return {Promise<void>} Completion after attempting every captured layer.
+         * @throws {Error} If any layer cannot be restored; successful restores remain visible.
+         */
+        restoreRunLayers: async (snapshots, isCurrent) => {
+            const errors = [];
+            for (const snapshot of snapshots) {
+                if (!isCurrent()) break;
+                try { await mapLayerController.restoreLayerSnapshot(snapshot, isCurrent); }
+                catch (error) { errors.push(error.message); }
+            }
+            if (errors.length) throw new Error(errors.join(" "));
+        },
         onRunChange: job => {
             outputLayers.updateRun(job);
             if (job.status === "deleted") mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.jobId === job.jobId);

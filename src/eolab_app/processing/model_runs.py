@@ -523,6 +523,13 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         "model": summary["model"],
         "label": summary["label"],
         "metadataExpiresAt": row.get("metadata_expires_at"),
+        "deletionUndo": (
+            {"deletionId": row["deletion_id"], "expiresAt": row["deletion_undo_until"]}
+            if status == "deleted"
+            and row.get("deletion_undo_until")
+            and row["deletion_undo_until"] > datetime.now(timezone.utc)
+            else None
+        ),
         "progress": measured,
         "error": row["error"],
         "result": result,

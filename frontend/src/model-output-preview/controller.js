@@ -206,13 +206,13 @@ export class ModelOutputLayers {
     }
 
     /** Apply authoritative run expiry or deletion through composition or status reads.
-     * Older responses cannot restore a deleted run or shorten a renewed lifetime.
+     * Only a newer authoritative response can restore a deleted run after Undo.
      * @param {Object} job Owned run snapshot from the Processing API.
      * @return {void}
      */
     updateRun(job) {
         const previous = this.runStates.get(job.jobId);
-        if (previous && (previous.updatedAt > job.updatedAt || previous.status === "deleted" && job.status !== "deleted")) return;
+        if (previous && (previous.updatedAt > job.updatedAt || previous.status === "deleted" && job.status !== "deleted" && previous.updatedAt === job.updatedAt)) return;
         this.runStates.set(job.jobId, job);
         let changed = false;
         const available = job.status === "ready" && Date.parse(job.expiresAt) > Date.now();

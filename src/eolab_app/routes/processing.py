@@ -11,7 +11,7 @@ import json
 import re
 import secrets
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
@@ -49,6 +49,7 @@ from eolab_app.processing.model_run_contracts import (
     ModelRunList,
     ModelRunRequest,
     ModelArtifactManifest,
+    ModelDeletionAction,
 )
 from eolab_app.processing.prepared_hydrology import (
     HydrologyReference,
@@ -1029,7 +1030,7 @@ def create_processing_router(
         openapi_extra=MUTATION_SCHEMA,
     )
     async def delete_job(
-        job_id: JobId, request: Request, response: Response
+        job_id: JobId, request: Request, response: Response, undo: bool = False
     ) -> dict[str, Any]:
         """Delete a finished job's results from this browser session's history.
 
@@ -1037,6 +1038,7 @@ def create_processing_router(
             job_id: The job ID returned when the work was submitted.
             request: The HTTP request carrying the browser's Processing session cookie.
             response: The response receiving session-cookie and private-cache headers.
+            undo: Request thirty seconds to undo deletion of a model run.
 
         Returns:
             The deleted job status; file cleanup runs after active downloads finish.
@@ -1051,6 +1053,45 @@ def create_processing_router(
                 ),
                 job_id,
                 delete=True,
+                undo=undo,
+            )
+        )
+
+    @router.post(
+        "/jobs/{job_id}/deletion/{action}",
+        response_model=ModelJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def resolve_model_deletion(
+        job_id: JobId,
+        action: Literal["undo", "dismiss"],
+        body: ModelDeletionAction,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        """Restore a deleted model run or dismiss its thirty-second Undo offer.
+
+        Args:
+            job_id: Owned model run ID.
+            action: Undo the exact deletion or dismiss its remaining Undo time.
+            body: Identity returned by that deletion, preventing stale actions.
+            request: Same-origin request carrying the browser session cookie.
+            response: Response receiving refreshed session and private-cache headers.
+
+        Returns:
+            Current run state without changing its original expiry.
+
+        Raises:
+            HTTPException: If ownership, run kind, deletion identity or time rejects it.
+        """
+        return await _await_service_result(
+            service.resolve_model_deletion(
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
+                body.deletionId,
+                action == "undo",
             )
         )
 

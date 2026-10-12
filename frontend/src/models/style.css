@@ -28,6 +28,8 @@
 .models-details dd { margin: 3px 0 10px; overflow-wrap: anywhere; }
 .models-details dt { font-weight: 600; }
 .models-error { color: var(--status-danger); overflow-wrap: anywhere; }
+.models-deletion-notice { padding: 10px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
+.models-deletion-notice p { margin: 0; }
 #models-recovery { padding: 10px; border: 1px solid var(--status-warning); }
 #models-yaml { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; border: 1px solid var(--border-1); padding: 10px; max-height: 24rem; overflow: auto; }
 #models-panel [hidden] { display: none; }

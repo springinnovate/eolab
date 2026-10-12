@@ -194,10 +194,26 @@ run until at least seven days from the request. It uses the same browser cookie,
 same-origin mutation header and public job response as existing Processing
 actions. Renewal refreshes that cookie without changing ownership, aligns file
 and metadata expiry, preserves later deadlines and does not copy files or change
-their checksums. Expired/deleted runs and expired details cannot be revived.
+their checksums. Renewal cannot revive expired/deleted runs or expired details.
 Repeated requests renew from the present time, not the previous deadline.
 `DELETE /api/processing/jobs/{jobId}` remains the run-wide deletion operation;
 accepted readers keep their existing protections until they finish.
+Models requests `DELETE /api/processing/jobs/{jobId}?undo=true` to offer a
+30-second Undo window. The run immediately disappears from history and rejects
+new access. Its response includes `deletionUndo: {deletionId, expiresAt}` until
+that window ends. `POST /api/processing/jobs/{jobId}/deletion/undo` restores the
+exact deletion, and `/deletion/dismiss` ends its Undo window early. Both accept
+`{deletionId}`, use the usual owner cookie and same-origin mutation protections,
+and return the current model job. Repeated deletes preserve the original
+deadline; repeated Undo is idempotent. An old deletion ID cannot act on a later
+deletion of the same run. Omitting `undo=true` preserves immediate deletion.
+
+Schema 20 records each subscriber's deletion identity, deadline and previous
+cancellation state. Cleanup retains ready files and their storage charge during
+Undo, without extending their original expiry. Dismissal and timeout release
+that hold; accepted input grants and transfers still protect existing readers.
+Undo may restore expired history but cannot revive expired files or metadata.
+These transitions use the existing lifecycle lock and job-change notifications.
 
 Schema 19 adds a nullable captured result lifetime. Historical rows keep their
 existing deadlines until explicitly renewed; ordinary jobs use the unchanged

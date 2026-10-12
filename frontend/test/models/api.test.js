@@ -43,6 +43,26 @@ test("renewal uses the owned run endpoint and validates the returned job", async
     await assert.rejects(broken.api.renewModelRun(job().jobId), /invalid/);
 });
 
+test("model deletion requests Undo and scopes restoration and dismissal to that exact deletion", async () => {
+    const deletionUndo = {deletionId: "d".repeat(32), expiresAt: "2099-01-01T00:00:00Z"};
+    const deleted = job({status: "deleted", deletionUndo}), h = fixture(() => deleted);
+    assert.deepEqual(await h.api.deleteModelRun(deleted.jobId), deleted);
+    await h.api.undoModelDeletion(deleted.jobId, deletionUndo.deletionId);
+    await h.api.dismissModelDeletion(deleted.jobId, deletionUndo.deletionId);
+    assert.equal(h.calls[1].url, `/api/processing/jobs/${deleted.jobId}?undo=true`);
+    assert.equal(h.calls[1].options.method, "DELETE");
+    for (const [index, action] of [[2, "undo"], [3, "dismiss"]]) {
+        assert.equal(h.calls[index].url, `/api/processing/jobs/${deleted.jobId}/deletion/${action}`);
+        assert.deepEqual(JSON.parse(h.calls[index].options.body), {deletionId: deletionUndo.deletionId});
+        assert.equal(h.calls[index].options.headers["X-EOLab-Processing"], "1");
+    }
+    for (const change of [{status: "ready"}, {deletionUndo: {...deletionUndo, expiresAt: "bad"}},
+        {deletionUndo: {...deletionUndo, deletionId: "../other"}}]) {
+        const broken = fixture(() => ({...deleted, ...change}));
+        await assert.rejects(broken.api.deleteModelRun(deleted.jobId));
+    }
+});
+
 test("model results use the existing numeric-row and download safety validation", async () => {
     const result = {...statisticsResult, url: `/api/processing/jobs/${job().jobId}/result`, provenanceUrl: `/api/processing/jobs/${job().jobId}/provenance`, rows: [{label: "Sum", expression: "sum(a)", state: "ok", value: "not-a-number", valueType: "float", aggregates: []}]};
     const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));

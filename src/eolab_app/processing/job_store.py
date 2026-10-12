@@ -891,17 +891,21 @@ class PostgresJobStore:
         identifier: str,
         owner: str,
         delete: bool = False,
+        undo_seconds: int = 0,
     ) -> dict[str, Any]:
         """Cancel only this subscriber; stop computation when nobody needs it.
 
         Deleting a completed handle immediately removes that caller's access.
         Files remain while other subscribers, transfers or accepted dependent
-        jobs need them. Deletion does not cancel those dependent jobs.
+        jobs need them. Deletion does not cancel those dependent jobs. An explicit
+        Undo window retains the underlying completed job until dismissal or timeout.
 
         Args:
             identifier: Caller-owned public job handle.
             owner: Current session hash.
             delete: Delete a terminal handle instead of cancelling active work.
+            undo_seconds: Optional deletion Undo window, from zero to sixty seconds.
+                Retried deletion requests preserve the original window.
 
         Returns:
             Updated subscriber state, including cancelling while its last worker exits.
@@ -909,6 +913,8 @@ class PostgresJobStore:
         Raises:
             ProcessingError: If the handle is unowned or deletion targets active work.
         """
+        if not 0 <= undo_seconds <= 60 or undo_seconds and not delete:
+            raise ProcessingError("invalid_deletion", "Invalid deletion Undo window.")
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
@@ -925,16 +931,28 @@ class PostgresJobStore:
                     "Cancel this job and wait for it to stop before deleting it.",
                     409,
                 )
+            if delete and row["status"] == "deleted":
+                return row
             if delete or row["status"] in UNFINISHED:
                 cursor.execute(
-                    "UPDATE processing.job_subscribers SET status=%s,updated_at=clock_timestamp() WHERE id=%s",
-                    ("deleted" if delete else "cancelled", identifier),
+                    "UPDATE processing.job_subscribers SET status=%s,"
+                    "status_before_deletion=status,deletion_id=%s,"
+                    "deletion_undo_until=CASE WHEN %s>0 THEN clock_timestamp()+%s*interval '1 second' END,"
+                    "updated_at=clock_timestamp() WHERE id=%s",
+                    (
+                        "deleted" if delete else "cancelled",
+                        uuid4().hex if undo_seconds else None,
+                        undo_seconds,
+                        undo_seconds,
+                        identifier,
+                    ),
                 )
                 cursor.execute(
                     "UPDATE processing.jobs SET status=CASE "
                     "WHEN status='queued' THEN 'cancelled' WHEN status='running' THEN 'cancelling' "
                     "WHEN status='ready' THEN 'deleted' ELSE status END,updated_at=clock_timestamp() "
-                    "WHERE id=%s AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=%s AND status IS NULL) RETURNING status",
+                    "WHERE id=%s AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers WHERE job_id=%s "
+                    "AND (status IS NULL OR deletion_undo_until>clock_timestamp())) RETURNING status",
                     (row["job_id"], row["job_id"]),
                 )
                 stopped = cursor.fetchone()
@@ -947,6 +965,86 @@ class PostgresJobStore:
                 "SELECT * FROM processing.subscribed_jobs WHERE id=%s", (identifier,)
             )
             return cursor.fetchone()
+
+    def resolve_deletion(
+        self, identifier: str, owner: str, deletion_id: str, restore: bool
+    ) -> dict[str, Any]:
+        """Undo or finalize one exact deletion without changing result expiry.
+
+        Args:
+            identifier: Public job handle belonging to the requesting session.
+            owner: Hash of the browser session.
+            deletion_id: Identity returned by the deletion being acted on.
+            restore: Restore access before the deadline; otherwise end Undo now.
+
+        Returns:
+            Current owned job state, including an idempotent repeated restoration.
+
+        Raises:
+            ProcessingError: If ownership, deletion identity or the Undo window fails.
+        """
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT *,deletion_undo_until>clock_timestamp() AS can_undo "
+                "FROM processing.job_subscribers WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            subscriber = cursor.fetchone()
+            if subscriber is None:
+                raise ProcessingError(
+                    "job_not_found", "This processing job is unavailable.", 404
+                )
+            if subscriber["deletion_id"] != deletion_id:
+                raise ProcessingError(
+                    "deletion_changed",
+                    "This deletion has changed. Refresh the run list.",
+                    409,
+                )
+            if restore and subscriber["status"] == "deleted":
+                if not subscriber["can_undo"]:
+                    raise ProcessingError(
+                        "undo_expired", "The time to undo this deletion has ended.", 409
+                    )
+                cursor.execute(
+                    "UPDATE processing.job_subscribers SET status=status_before_deletion,"
+                    "deletion_undo_until=NULL,updated_at=clock_timestamp() "
+                    "WHERE id=%s AND deletion_undo_until>clock_timestamp() RETURNING id",
+                    (identifier,),
+                )
+                if cursor.fetchone() is None:
+                    raise ProcessingError(
+                        "undo_expired", "The time to undo this deletion has ended.", 409
+                    )
+            elif not restore and subscriber["status"] == "deleted":
+                cursor.execute(
+                    "UPDATE processing.job_subscribers SET deletion_undo_until=NULL,"
+                    "updated_at=clock_timestamp() WHERE id=%s",
+                    (identifier,),
+                )
+                self._finalize_deleted_jobs(cursor)
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            return cursor.fetchone()
+
+    def _finalize_deleted_jobs(self, cursor: Any) -> None:
+        """Release deletion holds whose Undo windows ended, within the lifecycle lock.
+
+        Args:
+            cursor: Cursor in the caller's locked Processing transaction.
+        """
+        cursor.execute(
+            "UPDATE processing.job_subscribers SET deletion_undo_until=NULL,updated_at=clock_timestamp() "
+            "WHERE deletion_undo_until<=clock_timestamp()"
+        )
+        cursor.execute(
+            "UPDATE processing.jobs j SET status='deleted',updated_at=clock_timestamp() "
+            "WHERE j.status='ready' AND EXISTS (SELECT 1 FROM processing.job_subscribers s "
+            "WHERE s.job_id=j.id AND s.status='deleted' AND s.deletion_id IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM processing.job_subscribers s WHERE s.job_id=j.id "
+            "AND (s.status IS NULL OR s.deletion_undo_until>clock_timestamp()))"
+        )
 
     def extend_result_lifetime(
         self, identifier: str, owner: str, seconds: int
@@ -1377,6 +1475,7 @@ class PostgresJobStore:
             cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             self._delete_old_job_records(cursor)
+            self._finalize_deleted_jobs(cursor)
             cursor.execute(
                 "UPDATE processing.jobs SET retained_metadata=NULL,retained_outcome=NULL "
                 "WHERE metadata_expires_at<=now() AND retained_metadata IS NOT NULL"
