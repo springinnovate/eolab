@@ -166,11 +166,11 @@ the entire network into the DEM or reading elevation cells.
 For each run, Processing follows the selected starting mask's downstream links
 to the real sinks. Before planning raster windows, it projects those watersheds,
 checks that the DEM contains their complete extent, and checks connected
-boundaries within one native DEM-pixel diagonal. Execution checks pixel-center
-coverage and the ordinary mask/NoData/nonfinite elevation policy before routing.
-Missing elevation in a required watershed fails that run with an actionable
-error; unrelated watersheds outside the DEM or containing NoData do not prevent
-installation or a covered run. Zero and negative elevations remain valid.
+boundaries within one native DEM-pixel diagonal. EOlab does not scan DEM pixels
+before execution or reject watersheds for having no native DEM pixel centers.
+The original WWF model reads elevations and handles NoData and masks through
+its existing calculation. Unrelated watersheds outside the DEM do not prevent
+installation or a covered run.
 Coverage means the full selected downstream watershed polygons, not just the
 starting mask or a route inferred from incomplete terrain. No drainage is silently
 clipped to the DEM. Resource, source-identity and cancellation checks still apply.

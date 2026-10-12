@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 import rasterio
-from rasterio.features import geometry_mask, geometry_window, shapes
+from rasterio.features import shapes
 from rasterio.windows import Window
 from shapely import get_num_coordinates
 from shapely.geometry import box, mapping, shape
@@ -450,7 +450,8 @@ def require_downstream_dem_coverage(
     """Require complete DEM extent and connected boundaries for the selected drainage.
 
     Check polygons before raster-window clipping so missing terrain cannot silently
-    shorten a run. No elevation cells are read here; execution checks their validity.
+    shorten a run. This checks metadata and polygons; the original model handles
+    elevation values when it reads the DEM.
 
     Args:
         dataset: Open prepared DEM with validated source metadata.
@@ -594,63 +595,6 @@ def group_watersheds_by_sink(
     return groups
 
 
-def require_downstream_dem_cells(
-    sources: DownstreamSources, spec: DownstreamPlan, limits: DownstreamLimits
-) -> None:
-    """Check required native terrain cells before passing the DEM to the WWF model.
-
-    Registration does not inspect elevation cells. This retains the per-run
-    checks for missing elevations and watersheds without pixel centers, without
-    changing the source DEM or the upstream calculation grid.
-
-    Args:
-        sources: Reauthorized terrain and original watershed source.
-        spec: Admitted watershed IDs and native DEM window.
-        limits: Existing source and geometry limits for this run.
-
-    Raises:
-        ProcessingError: If a required watershed has no valid terrain coverage.
-        SelectionUnavailableError: If the watershed source changed.
-        ValueError: If projection exceeds its coordinate budget.
-    """
-    network = read_downstream_watershed_network(
-        sources,
-        spec.inputs,
-        limits,
-        read_starting_area_geometry(sources, limits),
-        spec.watersheds,
-    )
-    with rasterio.open(sources.rasters["dem"]) as dataset:
-        projected = project_wgs84_polygons(
-            dataset,
-            tuple(mapping(network[item].geometry) for item in spec.watersheds),
-            limits.max_watershed_coordinates,
-        )
-        for polygon in projected:
-            window = geometry_window(dataset, (polygon,)).intersection(
-                Window(*spec.routingGrid.window)
-            )
-            covered = geometry_mask(
-                (polygon,),
-                out_shape=(int(window.height), int(window.width)),
-                transform=dataset.window_transform(window),
-                invert=True,
-            )
-            if not covered.any():
-                raise ProcessingError(
-                    "unsupported_dem_resolution",
-                    "A downstream watershed contains no DEM pixel centers. Choose a hydrology dataset with a finer terrain resolution.",
-                    422,
-                )
-            terrain = read_native_raster_window(dataset, window)
-            if np.any(covered & np.ma.getmaskarray(terrain)):
-                raise ProcessingError(
-                    "incomplete_dem",
-                    "The prepared DEM has missing elevation inside the downstream area. Repair terrain coverage.",
-                    422,
-                )
-
-
 def calculate_downstream(
     sources: DownstreamSources,
     spec: DownstreamPlan,
@@ -685,7 +629,6 @@ def calculate_downstream(
         raise ProcessingError(
             "source_changed", "The model inputs changed after preparation.", 409
         )
-    require_downstream_dem_cells(sources, spec, limits)
     from eolab_app.processing.downstream_runner import run_original_downstream
 
     workspace = directory.resolve()

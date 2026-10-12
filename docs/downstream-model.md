@@ -91,6 +91,8 @@ do not increase memory, storage, source-reading or execution-time budgets.
 
 EOlab adds preparation/rechecks, progress, checksums and publication overhead.
 Partitions execute sequentially; the standalone CLI can parallelize via TaskGraph.
+EOlab does not read DEM pixels in a separate validation pass before the original
+model runs. Terrain values, NoData and masks are handled by the original model.
 Measure representative data before claiming equal end-to-end runtime. Small
 parity fixtures print direct CLI, EOlab preparation and wrapped wall time. Earlier
 benchmarks of the removed implementation do not describe this wrapper.
