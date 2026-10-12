@@ -1,6 +1,7 @@
 """Adapt authorized EOlab inputs and outputs to the unchanged WWF model functions."""
 
 import hashlib
+from dataclasses import replace
 from importlib import import_module
 from importlib.resources import files
 import json
@@ -288,7 +289,8 @@ def run_original_downstream(
         starting: Combined starting geometry already checked by admission.
 
     Returns:
-        Statistics and unchanged upstream coverage, masked values and seed rasters.
+        Statistics and unchanged upstream coverage, masked values, seed rasters
+        and one pit-filled routing DEM per terminal drainage group.
 
     Raises:
         ProcessingError: If input adaptation or completed output validation fails.
@@ -316,6 +318,7 @@ def run_original_downstream(
     )
     partition_coverage_paths = []
     partition_starting_mask_paths = []
+    routing_dem_outputs: list[ProducedFile] = []
     for index, (identifier, partition_vector_path) in enumerate(
         watershed_partitions_by_sink.items()
     ):
@@ -362,6 +365,20 @@ def run_original_downstream(
             (
                 identifier,
                 str(partition_directory / ("mask_starting_" + starting_mask_path.name)),
+            )
+        )
+        # calc_flow_dir routes this exact pit-filled file. Keep separate grids
+        # for each drainage; a mosaic would resample or hide overlapping edges.
+        routing_dem_name = f"routing_dem_{identifier}"
+        retained_routing_dem_path = directory / f"{routing_dem_name}.tif"
+        (partition_directory / "pit_filled_dem.tif").replace(retained_routing_dem_path)
+        routing_dem_outputs.append(
+            replace(
+                describe_downstream_raster_output(
+                    retained_routing_dem_path, routing_dem_name
+                ),
+                output_name="routing_dem",
+                member_label=f"Drain {identifier.removeprefix('drain_')}",
             )
         )
     write_progress(directory, "writing_results", 0, 0)
@@ -445,5 +462,5 @@ def run_original_downstream(
         size=statistics_csv_path.stat().st_size,
         sha256=hashlib.sha256(statistics_csv_path.read_bytes()).hexdigest(),
         rows=statistics_rows,
-        additional_outputs=raster_outputs,
+        additional_outputs=(*raster_outputs, *routing_dem_outputs),
     )

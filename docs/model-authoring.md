@@ -50,7 +50,7 @@ into exported older recipes, preserving their checksums.
 | --- | --- | --- | --- | --- |
 | `raster.aggregate.v1` | `raster: raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
 | `raster.clip.v1` | `raster: raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
-| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression` | Statistics CSV, coverage GeoTIFF and optional starting-mask GeoTIFF | `downstream-small-region` |
+| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression`, `wgs84_pixel_size: number`, `travel_time_pixel_size_m: number` | Statistics CSV; masked values, coverage, starting mask and per-drain routing DEM GeoTIFFs | `downstream-small-region` |
 
 The `raster` input accepts either the existing `{collectionId, itemId}` catalog
 reference or `{kind: runArtifact, jobId, artifactId}` for an owned published
@@ -68,6 +68,15 @@ currently each produce one scientific result. `map` and
 `saveEligible` describe output capabilities; map previews and permanent saving
 are separate capabilities. Temporary map previews are available; permanent saving
 and YAML import from the browser are not yet available.
+
+An operation may declare a collection of files for one output. For example,
+`analysis.routing_dem` in the downstream model retains one pit-filled GeoTIFF per
+terminal drainage group. YAML selects the whole collection using the ordinary
+output declaration (`role: intermediate`, `presentation: map`). Each member gets
+its own download and Show on map action, keeps its unique operation-supplied file
+name, and appends its member label to the recipe's label. The operation must
+explicitly declare `multiple_files=True`; arbitrary extra files are rejected.
+Single-file output aliases and existing recipes keep their current behavior.
 
 ## Reuse a published raster
 

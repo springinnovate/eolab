@@ -57,12 +57,15 @@ class ProducedFile:
     """A completed operation output awaiting a recipe's retention declaration.
 
     Attributes:
-        name: Output name declared by the trusted operation.
+        name: Unique file name within the operation's returned inventory.
         storage_name: Flat, private workspace basename; never a public locator.
         filename: Safe suggested download basename.
         media_type: File format produced by the operation.
         size: Exact completed byte count.
         sha256: SHA-256 digest to verify before publication.
+        output_name: Declared collection output containing this file, or None
+            when name directly identifies a single-file output.
+        member_label: Human-readable distinction between collection members.
     """
 
     name: OutputName
@@ -71,6 +74,8 @@ class ProducedFile:
     media_type: MediaType
     size: ByteCount
     sha256: Digest
+    output_name: OutputName | None = None
+    member_label: Annotated[str, Field(min_length=1, max_length=80)] | None = None
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -78,7 +83,7 @@ class FileDeclaration:
     """One file the application authorizes storage to retain after completion.
 
     Attributes:
-        name: Recipe output alias, or the reserved provenance name.
+        name: Recipe alias, collection member name, or reserved provenance name.
         label: Human-readable description supplied by the application.
         role: Scientific result, retained intermediate, or provenance record.
         storage_name: Flat private workspace basename.
@@ -104,7 +109,7 @@ class PublishedFile:
 
     Attributes:
         id: Random public file identity, scoped to its owning job.
-        name: Declared output alias.
+        name: Recipe output alias or individually named collection member.
         label: User-facing file description.
         role: Result, intermediate, or provenance.
         storage_name: Private basename used only by the storage adapter.

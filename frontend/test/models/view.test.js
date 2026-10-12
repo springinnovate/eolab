@@ -152,6 +152,34 @@ test("stage feedback covers terminal states and an unknown total stays indetermi
     assert.equal(describeModelProgress(job({status: "running", progress: {phase: "preparing_polygon_mask"}})), "Creating the analysis mask…");
 });
 
+test("routing DEMs from separate drains have independent map and download controls", () => {
+    const h = fixture(), artifacts = fileManifest();
+    artifacts.files = ["2", "3"].map(drain => {
+        const artifactId = drain.repeat(32), name = `routing_dem_drain_${drain}`;
+        return {...artifacts.files[0], artifactId, name, filename: `${name}.tif`, role: "intermediate",
+            label: `Routing DEM (pit-filled) · Drain ${drain}`,
+            url: `/api/processing/jobs/${artifacts.jobId}/artifacts/${artifactId}`};
+    });
+    h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
+    h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: statisticsResult, artifacts})];
+    h.state.outputPreviews = Object.fromEntries(artifacts.files.map(file => [file.artifactId, {canShow: true}]));
+    h.view.render(h.state);
+    const cards = h.view.run.result.children.slice(-2);
+    for (const [index, card] of cards.entries()) {
+        const file = artifacts.files[index], button = card.children[3];
+        assert.equal(card.children[0].textContent, `Download ${file.label}`);
+        assert.equal(card.children[0].href, file.url);
+        assert.match(card.children[1].textContent, /Intermediate result/);
+        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.label}`);
+        button.dispatchEvent(new Event("click"));
+        assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
+    }
+    h.state.outputPreviews[artifacts.files[0].artifactId].onMap = true;
+    h.view.render(h.state);
+    assert.equal(h.view.run.result.children.at(-2).children[3].textContent, "On map");
+    assert.equal(h.view.run.result.children.at(-1).children[3].textContent, "Show on map");
+});
+
 
 test("area choices use histogram terminology and follow the map without Update controls", () => {
     const h = fixture();

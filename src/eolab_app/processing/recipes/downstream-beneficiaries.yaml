@@ -1,6 +1,6 @@
 schema: eolab.model/v1
 id: downstream-beneficiaries
-version: "2.0.0"
+version: "2.1.0"
 title: Downstream ecosystem beneficiaries
 description: >-
   Run the original WWF downstream model from one combined starting mask.
@@ -79,6 +79,11 @@ outputs:
     saveEligible: true
   starting_mask:
     source: analysis.starting_mask
+    role: intermediate
+    presentation: map
+    saveEligible: false
+  routing_dem:
+    source: analysis.routing_dem
     role: intermediate
     presentation: map
     saveEligible: false
