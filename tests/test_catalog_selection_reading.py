@@ -230,7 +230,6 @@ def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
             rtol=1e-11,
             atol=1e-7,
         )
-        print(f"large fractional area: {direct.budget.used} transformed positions")
 
 
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:3857", "EPSG:6933"])
