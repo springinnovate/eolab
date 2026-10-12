@@ -526,10 +526,10 @@ def test_job_store_admits_operation_data_without_raster_fields(
 
 
 @pytest.mark.parametrize("store", [RasterClipLimits()], indirect=True)
-def test_owner_disk_limits_and_transfer_lease_cleanup(
+def test_transfers_protect_files_without_blocking_queued_work(
     boundary: Any, store: PostgresJobStore
 ) -> None:
-    """Do not reclaim active downloads or release budgets before files are gone.
+    """Protect active downloads through expiry while later jobs can continue.
 
     Args:
         boundary: Real owners and worker fixture.
@@ -571,10 +571,9 @@ def test_owner_disk_limits_and_transfer_lease_cleanup(
     assert denied.status_code == 202
     assert asyncio.run(worker.run_once())
     assert asyncio.run(worker.run_once())
-    failed = client.get(f"/api/processing/jobs/{denied.json()['jobId']}").json()
-    assert asyncio.run(worker.run_once())
-    failed = client.get(f"/api/processing/jobs/{denied.json()['jobId']}").json()
-    assert failed["status"] == "ready"
+    completed = client.get(f"/api/processing/jobs/{denied.json()['jobId']}").json()
+    assert completed["status"] == "ready"
+    assert not asyncio.run(worker.run_once())
 
 
 def _paused_clip(queue: Any, operation: str, arguments: tuple) -> None:
@@ -901,8 +900,9 @@ def test_worker_restart_interrupts_unfinished_jobs(
         store.find_request("other-owner", "unfinished-request")["status"]
         == expected_status
     )
-    # Retain reservations until attempt files have been removed by normal cleanup.
-    assert interrupted["reserved_bytes"] == 4096
+    # Claimed jobs no longer reserve bytes, but still retain files for cleanup.
+    # Queued historical plans can carry estimates until their first claim.
+    assert interrupted["reserved_bytes"] == (4096 if status == "queued" else 0)
     assert pending["id"] in {row["id"] for row in store.cleanup_candidates()}
     if status != "queued":
         assert not store.heartbeat(pending["id"], pending["attempt_id"], {})
