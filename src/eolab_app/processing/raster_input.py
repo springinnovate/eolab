@@ -19,8 +19,6 @@ from eolab_app.raster.bounded_window import (
 )
 from eolab_app.raster.models import SelectedRasterArea, CanonicalWgs84Bounds
 from eolab_app.raster.source_contract import (
-    source_work_for_blocks,
-    source_block_indexes_for_window,
     require_signed_raster_dependencies,
     require_raster_analysis_georeferencing,
     require_bounded_source_structure,
@@ -56,7 +54,7 @@ def validate_supported_raster(dataset: Any, path: Path) -> None:
     try:
         require_signed_raster_dependencies(dataset, path)
         require_raster_analysis_georeferencing(dataset)
-        require_bounded_source_structure(dataset)
+        require_bounded_source_structure(dataset, maximum_block_bytes=None)
         if dataset.driver != "GTiff":
             raise ValueError("GeoTIFF required")
     except ValueError as error:
@@ -68,10 +66,10 @@ def select_area(
     kind: str,
     bounds: CanonicalWgs84Bounds | None,
     geometries: tuple[dict[str, object], ...],
-    max_coordinates: int,
+    max_coordinates: int | None,
     resolved: ResolvedCatalogSelection | None = None,
     *,
-    max_retained_polygon_bytes: int = 0,
+    max_retained_polygon_bytes: int | None = 0,
 ) -> SelectedRasterArea:
     """Locate a selected area on the raster grid and prepare its polygon-mask source.
 
@@ -80,7 +78,7 @@ def select_area(
         kind: Explicit box, catalog descriptor, or historical polygon variant.
         bounds: Canonical WGS84 rectangle.
         geometries: Immutable polygon selection polygons.
-        max_coordinates: Transformation budget.
+        max_coordinates: Transformation coordinate ceiling, or None for no ceiling.
         resolved: Reauthorized original vector source for catalog selections only.
         max_retained_polygon_bytes: Optional calculation-local polygon memory budget;
             zero preserves the streaming reader used by clips and planning.
@@ -103,6 +101,7 @@ def select_area(
                 resolved,
                 max_coordinates,
                 max_retained_polygon_bytes=max_retained_polygon_bytes,
+                read_limits=None,
             )
             return SelectedRasterArea(
                 source_window=reader.source_window, projected_geometries=reader
@@ -127,60 +126,26 @@ def select_area(
     except (ValueError, TypeError, OverflowError) as error:
         raise ProcessingError(
             "invalid_area",
-            "The selected area cannot be projected within the processing geometry limit.",
+            "The selected area could not be projected onto this raster. Check its geometry and coordinate system.",
         ) from error
 
 
-def estimate_native_raster_reads(
-    dataset: Any, window: Any, max_blocks: int, max_decoded_bytes: int
-) -> tuple[int, int, int]:
-    """Estimate raster block reads and decoded bytes, rejecting work above the limits.
+def count_native_raster_blocks(dataset: Any, window: Any) -> int:
+    """Count source blocks intersecting a window using grid metadata alone.
 
     Args:
-        dataset: Validated native dataset.
-        window: Integral requested source window.
-        max_blocks: Maximum data and mask block reads, including repeated masks.
-        max_decoded_bytes: Maximum decoded values and validity across those reads.
+        dataset: Validated native raster with regular block dimensions.
+        window: Integral source window.
 
     Returns:
-        Data-block count for progress, combined data/mask read count for admission,
-        and combined decoded byte count.
-
-    Raises:
-        ProcessingError: If the conservative block estimate or decoded byte
-            count exceeds its limit, with both amounts in the public detail.
+        Number of data blocks used for progress, without enumerating or reading
+        blocks or estimating the calculation's memory and disk requirements.
     """
-    bh, bw = dataset.block_shapes[0]
-    # Include one boundary block per axis to bound index allocation before
-    # constructing the tuple. This is an admission estimate, not an exact count.
-    estimated_blocks = (math.ceil(window.width / bw) + 1) * (
-        math.ceil(window.height / bh) + 1
+    height, width = dataset.block_shapes[0]
+    columns = math.ceil((window.col_off + window.width) / width) - math.floor(
+        window.col_off / width
     )
-    if estimated_blocks > max_blocks:
-        raise ProcessingError(
-            "source_work_too_large",
-            f"The selected area's conservative estimate is {estimated_blocks:,} "
-            f"native blocks; the limit is {max_blocks:,} "
-            f"({estimated_blocks - max_blocks:,} over the limit). "
-            f"Choose a smaller area with an estimate of {max_blocks:,} blocks or fewer.",
-            413,
-        )
-    blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
-    block_reads, decoded = source_work_for_blocks(dataset, blocks)
-    if block_reads > max_blocks:
-        raise ProcessingError(
-            "source_work_too_large",
-            f"The selected area requires {block_reads:,} data and validity-mask "
-            f"block reads; the limit is {max_blocks:,}. Choose a smaller area.",
-            413,
-        )
-    if decoded > max_decoded_bytes:
-        raise ProcessingError(
-            "source_work_too_large",
-            f"The selected area requires {decoded:,} decoded bytes for source "
-            f"values and validity masks; the limit is {max_decoded_bytes:,} bytes "
-            f"({decoded - max_decoded_bytes:,} bytes over). Choose a smaller area "
-            f"requiring at most {max_decoded_bytes:,} decoded bytes.",
-            413,
-        )
-    return len(blocks), block_reads, decoded
+    rows = math.ceil((window.row_off + window.height) / height) - math.floor(
+        window.row_off / height
+    )
+    return columns * rows

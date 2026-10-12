@@ -36,7 +36,7 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_results(tmp_path: P
 
     async def scenario():
         """Plan and execute two source versions with real warm children."""
-        limits = RasterClipLimits(free_space_floor=0)
+        limits = RasterClipLimits()
         executor = create_native_process(limits)
         executor.warm()
         authorizer = SimpleNamespace(authorize=AsyncMock())

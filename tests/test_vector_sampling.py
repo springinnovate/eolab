@@ -117,16 +117,20 @@ def test_selection_only_service_cannot_launch_local_outline(
 
 
 def test_actual_feature_and_coordinate_budgets(
-    source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
+    source: ResolvedCatalogSelection,
 ) -> None:
-    """Limits apply to retained feature geometry and actual scanned work."""
-    with monkeypatch.context() as patch:
-        patch.setattr("eolab_app.bounded_vector.MAX_SCANNED_FEATURES", 0)
-        with pytest.raises(GeometryValidationError, match="budget"):
-            selection_summary(source)
-    monkeypatch.setattr("eolab_app.bounded_vector.MAX_FEATURE_COORDINATES", 4)
+    """Interactive reads enforce feature and coordinate budgets; supervised work can opt out.
+
+    Args:
+        source: Authorized polygon fixture exceeding the reduced reader budgets.
+    """
+    from eolab_app.bounded_vector import VectorReadLimits
+
+    with pytest.raises(GeometryValidationError, match="budget"):
+        selection_summary(source, limits=VectorReadLimits(features=0))
     with pytest.raises(GeometryValidationError, match="coordinate buffer"):
-        selection_summary(source)
+        selection_summary(source, limits=VectorReadLimits(coordinates_per_feature=4))
+    assert selection_summary(source, limits=None) == selection_summary(source)
 
 
 @pytest.mark.parametrize(

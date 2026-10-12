@@ -71,7 +71,7 @@ async def measure(
         native.run(
             downstream_process_target,
             ("calculate", (sources, plan, scratch, limits)),
-            limits.runtime_seconds,
+            None,
         )
     )
     rss = disk = descendants = 0

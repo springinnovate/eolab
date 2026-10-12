@@ -80,19 +80,15 @@ accepts the job. A prior metadata lookup alone confers no access.
 Processing schema version 18 adds input grants tied to accepted computations,
 separate from short download leases. Expiry and explicit parent deletion reject
 new uses immediately; accepted children keep their original inputs. Cleanup waits
-for all children to stop, and the parent's full existing reservation accounts for
-its files once regardless of child count. Each job can retain at most 16 files
-(current operations use one); job-record and disk limits also apply. A dependent
-job must fit beside all currently retained input files, counted once per parent.
-Otherwise it fails with `storage_full`, rather than allowing queued jobs to hold
-one another's required space indefinitely. This check is conservative: even if
-another running job will release an input soon, retry the rejected job after that
-work finishes. Catalog jobs keep their existing queue behavior.
+for all children to stop. Each job can reference at most 16 input files
+(current operations use one). Processing does not estimate disk usage or reject a
+child because of retained parent files; ordinary filesystem failures are reported
+by the worker. The same worker-count queue applies to catalog and private inputs.
 
 Success, failure, queued cancellation and acknowledged running cancellation release
-grants transactionally. Lost workers retain grants until the existing hard deadline
-and exit grace; a lost heartbeat alone does not free files. Supported worker restart
-first stops old native processes, then interrupts unfinished jobs and releases grants.
+grants transactionally. A lost heartbeat alone does not free files or worker slots.
+Linux native processes stop when their supervisor dies. Supported worker restart
+first stops the previous container, then interrupts unfinished jobs and releases grants.
 Ordinary physical cleanup releases disk accounting only after file removal.
 
 The worker resolves original files through the grant and confined artifact storage,

@@ -39,14 +39,14 @@ class PreparedJobPlan:
     Attributes:
         specification: JSON-compatible, path-free operation specification.
         summary: Bounded public operation metadata, excluding large input payloads.
-        reserved_bytes: Conservative working/result storage reservation in bytes.
+        reserved_bytes: Historical byte estimate; new plans use zero and do not reserve storage.
         operation: Opaque versioned operation discriminator supplied by its owner.
         work_key: Complete computation identity; None means never join active work.
         presentation: Small caller-specific labels, separate from shared execution.
         retained_metadata: Optional operation details kept after scratch files are
             removed, for the configured metadata lifetime after the job finishes.
         input_files: Published files to authorize and retain atomically with admission.
-            Each input remains charged to its parent's existing disk reservation.
+            The parent retains each input until dependent work stops.
         minimum_retention_seconds: Optional minimum lifetime for both published
             results and saved details after completion. Storage captures the larger
             of this duration and the deployment's result and metadata lifetimes.
@@ -159,38 +159,18 @@ class JobStatusResponse(JobListResponse[JobResponseType], Generic[JobResponseTyp
 
 @dataclass(frozen=True)
 class ProcessingLimits:
-    """Deployment-wide scheduling, execution and retention limits.
+    """Configure Processing concurrency, ownership leases, retention and result caching.
 
-    Waiting-job limits count only queued work, not running attempts.
-    Each active attempt reserves process_memory_bytes before preparation.
-    max_execution_memory_bytes bounds their combined native address-space limits;
-    container memory must additionally cover idle processes and the supervisor.
-    max_job_records includes finished jobs and seven-day idempotency records.
-    Metadata retention uses record counts and individual request size limits.
-    metadata_ttl_seconds controls how long saved run details remain available
-    after the first completed, failed, cancelled or interrupted state. The chosen
-    duration is stored with each new job; seven days is the default.
-    max_stored_bytes bounds artifact and scratch disk reservations after preparation.
-
-    calculation_cache_capacity bounds the number of shared numerical results;
-    zero disables cache reads and writes. calculation_cache_ttl_seconds limits
-    reuse to 24 hours by default, independently of job/download expiry. Each
-    database cache payload is additionally limited to 32 KiB.
+    Calculations have no size, memory, disk or total-runtime ceiling. Worker slots
+    remain occupied until native work exits. Leases detect lost ownership; they
+    are renewed throughout execution rather than limiting its total duration.
+    Result and metadata lifetimes start when work finishes. Cache capacity bounds
+    reusable scalar results and evicts old entries without rejecting calculations.
     """
 
-    plan_timeout_seconds: float = 15
     worker_count: int = 1
-    process_memory_bytes: int = 2 * 1024**3
-    max_execution_memory_bytes: int = 2 * 1024**3
-    runtime_seconds: float = 600
     result_ttl_seconds: int = 86_400
     metadata_ttl_seconds: int = 7 * 86_400
-    max_waiting_jobs: int = 128
-    max_owner_waiting_jobs: int = 32
-    max_job_records: int = 4096
-    max_stored_bytes: int = 20 * 1024**3
-    free_space_floor: int = 2 * 1024**3
-    result_metadata_reservation_bytes: int = 9 * 1024**2
     lease_seconds: int = 20
     transfer_seconds: int = 120
     # Shared numerical results; independent of owned job/download lifetimes.

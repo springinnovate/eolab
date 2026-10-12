@@ -244,12 +244,10 @@ ClipJobsResponse = JobListResponse[ClipJobResponse]
 
 @dataclass(frozen=True)
 class RasterClipLimits(ProcessingLimits):
-    """Native raster/geometry budgets in addition to shared scheduling policy."""
+    """Configure clip job scheduling and result retention.
 
-    max_raw_bytes: int = 1024**3
-    max_decoded_bytes: int = 4 * 1024**3
-    max_native_blocks: int = 65_536
-    max_coordinates: int = 500_000
+    Clipping streams native blocks without a total-work or storage ceiling.
+    """
 
 
 @dataclass(frozen=True)

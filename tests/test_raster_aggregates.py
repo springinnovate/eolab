@@ -368,14 +368,6 @@ def test_mixed_pixel_and_area_formulas_keep_independent_selection_and_limits(
     assert artifact.rows[0]["aggregates"][0]["validPixels"] == 1
     assert artifact.rows[1]["aggregates"][0]["validPixels"] == 100
     area_only = make_spec(path, ["mean(a)"], area)
-    with pytest.raises(ProcessingError, match="together exceed"):
-        make_spec(
-            path,
-            ["pixelValue(a)+mean(a)"],
-            area,
-            limits=replace(LIMITS, max_decoded_bytes=area_only.grid.decodedBytes),
-            pixel_point=point,
-        )
 
 
 def test_outside_pixel_does_not_discard_independent_area_result(
@@ -620,12 +612,6 @@ def test_metadata_admission_and_csv_text(
     with monkeypatch.context() as patch:
         patch.setattr(kernel, "read_native_raster_block", forbidden)
         spec = make_spec(path, ["count(a)"])
-        with pytest.raises(ProcessingError):
-            make_spec(path, ["count(a)"], limits=replace(LIMITS, max_native_blocks=1))
-        with pytest.raises(ProcessingError):
-            make_spec(path, ["count(a)"], limits=replace(LIMITS, max_decoded_bytes=1))
-        with pytest.raises(ProcessingError):
-            make_spec(path, ["count(a)"], limits=replace(LIMITS, max_memory_bytes=1))
     spec = spec.model_copy(
         update={
             "calculations": (

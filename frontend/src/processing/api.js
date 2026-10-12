@@ -96,7 +96,7 @@ function validateGrid(grid, operation) {
 function validateExecution(execution) {
     chunkPixels(execution.targetChunkPixels);
     if (![execution.readWidth, execution.readHeight, execution.evaluationWidth, execution.evaluationHeight]
-        .every(n => Number.isSafeInteger(n) && n > 0) || !Number.isSafeInteger(execution.readWindows) || execution.readWindows < 0 || execution.readWindows > 65536 ||
+        .every(n => Number.isSafeInteger(n) && n > 0) || !Number.isSafeInteger(execution.readWindows) || execution.readWindows < 0 ||
         execution.evaluationWidth > execution.readWidth || execution.evaluationHeight > execution.readHeight) {
         throw new Error("Processing returned invalid batch dimensions.");
     }

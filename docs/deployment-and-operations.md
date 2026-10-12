@@ -100,41 +100,35 @@ The existing worker composition still owns startup reset and shutdown.
 
 Native children remain warm regardless of their completed operation count. On
 Linux, a child whose peak resident memory exceeds 1 GiB is replaced after its
-operation finishes. This recycling threshold is not a hard allocation limit;
-the configured native address-space and container memory limits still apply.
-Cancellation, deadlines and crashes also retire the affected child before its
-worker can accept another operation.
+operation finishes. This recycling threshold never rejects or interrupts work.
+Cancellation and native failures retire the affected child before another
+operation starts. Linux also kills a child when its supervisor exits abruptly.
 
-Set these variables in Coolify, then redeploy:
+Set `EOLAB_PROCESSING_WORKER_COUNT` in Coolify, then redeploy. The default is one
+simultaneous job; supported worker counts are 1 through 32. Claims reserve worker
+slots atomically across database connections. Cancelling jobs keep their slots
+until native work stops; a missed heartbeat alone never releases a slot.
 
-| Variable | Default | Meaning |
-| --- | ---: | --- |
-| `EOLAB_PROCESSING_WORKER_COUNT` | `1` | Maximum simultaneous native jobs, from 1 to 32 |
-| `EOLAB_PROCESSING_PROCESS_MEMORY_BYTES` | `2147483648` | Memory reserved per native process, including preparation |
-| `EOLAB_PROCESSING_MAX_EXECUTION_MEMORY_BYTES` | `2147483648` | Total budget for active native process reservations |
-| `EOLAB_PROCESSING_CONTAINER_MEMORY` | `3g` | Container RAM/swap ceiling, including the parent process and overhead |
+Processing has no application-imposed cell, feature/coordinate, memory, disk or
+total-runtime ceiling. It attempts each calculation without resource-size
+estimates or free-space admission checks. The Processing container has no
+Compose RAM/swap or PID ceiling. Actual allocation, native-library and filesystem
+failures still fail the run. GDAL caches, tile sizes and between-job recycling
+control how work is performed, without limiting total problem size.
 
-For two workers, a starting configuration is worker count `2`, total execution
-memory `4294967296` (4 GiB), and container memory `5g`. Keep the per-process limit
-at 2 GiB. This requires available host memory; it does not allocate memory in
-advance or guarantee a speedup. Benchmark the intended workload and leave memory
-for the app, database, Job service and GeoServer. The supplied container still has
-two CPUs; additional workers may compete for CPU or source-disk bandwidth.
+The former `EOLAB_PROCESSING_PROCESS_MEMORY_BYTES`,
+`EOLAB_PROCESSING_MAX_EXECUTION_MEMORY_BYTES`,
+`EOLAB_PROCESSING_CONTAINER_MEMORY`, `EOLAB_PROCESSING_MAX_STORED_BYTES`,
+`EOLAB_PROCESSING_FREE_SPACE_FLOOR_BYTES`,
+`EOLAB_PROCESSING_EXECUTION_TIMEOUT_SECONDS`, and
+`EOLAB_PROCESSING_DOWNSTREAM_MAX_*` variables are ignored and can be removed
+from Coolify. Recreate both app and worker containers to install this policy.
 
-The number of native processes is the smaller of the worker count and the number
-that fit in the total memory budget. Claims reserve capacity atomically across
-database connections. A cancelling job retains its slot until native work stops;
-a missed heartbeat alone does not release it. On Linux each native process also
-has an OS address-space ceiling, which includes loaded libraries and memory maps,
-not just raster arrays. Windows does not enforce that per-process OS ceiling.
-Existing operation-specific memory and work limits still apply.
-
-Prepared jobs that temporarily cannot reserve disk return to the same queue with
-their prepared inputs retained. They do not occupy a worker or repeat preparation.
-Completed files retain their reservation until expiry or deletion and cleanup.
-Capacity-release notifications wake waiting workers; the existing periodic check
-remains a fallback if a notification is missed. Cleanup is serialized between
-loops in this container.
+Source identity, valid geometry, ownership, input integrity, cancellation and
+expiry checks still apply. Interactive map reads keep their separate request
+budgets. Publication records actual retained file sizes for lifecycle accounting;
+these sizes do not reserve storage or block other jobs. Cleanup remains serialized
+between worker loops.
 
 Keep exactly one Processing container. Startup invalidates unfinished work once
 before starting the loops; replacing an individual native process does not run
@@ -448,14 +442,13 @@ Both operations retain the existing source, memory, work and disk limits.
 The independent planning API, database table, queue and native process have been
 removed. Reload older browser tabs after deployment. Unsubmitted legacy plan
 records are discarded; completed job downloads and calculation caches remain.
-Preparation retains a 15-second timeout within the job's overall deadline.
+Preparation shares the run's cancellable execution lifecycle and has no total-time ceiling.
 Status reads use the existing owner-scoped SSE hints and polling fallback.
 
-Calculation submissions retry `owner_queue_full`, `queue_full` and
-`previous_attempt_stopping` with the same request key, using cancellable backoff
-and `Retry-After`. Downloads retains an unconfirmed submission for an explicit
-retry. Result-storage and job-history exhaustion remain explicit errors requiring
-attention.
+Calculation submissions retry `previous_attempt_stopping` with the same request
+key, using cancellable backoff and `Retry-After`. Older quota responses remain
+recognized by the browser for compatibility during upgrades. Downloads retains
+an unconfirmed submission for an explicit retry.
 
 ### Durable calculation and clip queues
 
@@ -469,63 +462,39 @@ Files expire together using the existing result lifetime. Completed statistics
 still use the separate numerical-result cache.
 
 The computation owns its inputs, attempt, progress and files. Small database
-subscriber records retain ownership, retry identity and formula labels. Queue
-and disk limits count shared computation once; per-session waiting limits and
-the record limit count subscriber handles. Shared execution counts as a turn
-for each subscribed session. Deploy the app and worker together: this schema
-migration moves ownership fields to subscribers and preserves existing handles.
+subscriber records retain ownership, retry identity and formula labels. Shared
+execution counts as a turn for each subscribed session. Deploy the app and worker
+together: the subscriber schema preserves existing public job handles.
 
-Execution uses one global worker lane. Waiting jobs do not occupy that lane, and
-the running job does not count against its session's waiting allowance. The
-worker selects the least recently served session, then that session's oldest
-queued job. A session without an earlier execution start goes first; ties use
-the oldest queued job. Each start counts as a turn even if execution fails or is
-cancelled. Running work is never preempted, so another session can still wait
-up to the current job's execution deadline. This shares turns, not CPU seconds.
-Unfinished jobs are interrupted on worker startup. Deploy the app and worker
-together. Metadata retention is bounded by job/subscriber counts and individual
-request limits. Submission batches the job and subscriber accounting queries on
-one connection under the existing advisory lock; it does not measure or sum JSON
-bytes. The migration removes the old `input_bytes` column and measurement trigger.
-`EOLAB_PROCESSING_MAX_JOB_INPUT_BYTES` is retired and can be removed from Coolify.
-Disk admission happens after preparation, when the scratch/output reservation is
-known; that reservation remains held until files are cleaned up.
+Waiting jobs do not occupy execution slots. The worker selects the least recently
+served session, then that session's oldest queued job. A session without an earlier
+start goes first; ties use the oldest queued job. Each start counts as a turn even
+if execution fails or is cancelled. Running work is never preempted. Other sessions
+wait until a running job finishes or is cancelled; there is no fixed execution deadline.
 
-The defaults admit a burst of 32 jobs from one session plus four jobs each from
-twelve other sessions (80 waiting jobs). Execution waits for disk reservations to fit.
-`tests/test_processing_admission_postgres.py` exercises that workload with a held
-execution lane, then checks session turns and FIFO order within each session.
-Raising the backlog limits does not add workers or make individual jobs faster.
+There is no global/session backlog or job-history count ceiling. The former
+`EOLAB_PROCESSING_MAX_WAITING_JOBS`, `EOLAB_PROCESSING_MAX_OWNER_WAITING_JOBS`,
+`EOLAB_PROCESSING_MAX_JOB_RECORDS` and `EOLAB_PROCESSING_MAX_JOB_INPUT_BYTES`
+variables are ignored. Per-request schema sizes, paginated responses and the
+scalar-result cache keep their existing contracts; they do not measure raster
+size or reserve calculation resources.
 
-Set these deployment variables in Coolify or `.env`; Compose supplies the same
-values without the `EOLAB_` prefix to the app and worker. Blank or invalid values
-fail startup. Omitted values use the defaults below.
+The remaining retention settings are shared by app and worker. Compose supplies
+the same values without `EOLAB_` to each process. Blank or invalid active settings
+fail startup; omitted settings use these defaults.
 
 | Variable | Default | Meaning |
 | --- | ---: | --- |
-| `EOLAB_PROCESSING_MAX_WAITING_JOBS` | 128 | Global queued jobs, excluding running/cancelling work |
-| `EOLAB_PROCESSING_MAX_OWNER_WAITING_JOBS` | 32 | Queued jobs per browser session |
-| `EOLAB_PROCESSING_MAX_JOB_RECORDS` | 4096 | Subscriber handles, including retained results and idempotency records |
-| `EOLAB_PROCESSING_MAX_STORED_BYTES` | 21474836480 | Artifact/scratch disk reservations, unchanged 20 GiB default |
-| `EOLAB_PROCESSING_FREE_SPACE_FLOOR_BYTES` | 2147483648 | Physical free space to leave unused; zero disables the floor |
-| `EOLAB_PROCESSING_EXECUTION_TIMEOUT_SECONDS` | 600 | Maximum duration of an executing job, excluding queue wait |
-| `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Ordinary result lifetime; new model runs use at least seven days and preserve a longer configured value |
-| `EOLAB_PROCESSING_METADATA_TTL_SECONDS` | 604800 | Saved recipe, inputs and outcome lifetime after the first terminal state; new model runs preserve at least seven days and any longer result lifetime |
+| `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Ordinary result lifetime; new model runs retain at least seven days |
+| `EOLAB_PROCESSING_METADATA_TTL_SECONDS` | 604800 | Saved recipe, inputs and outcome lifetime after the first terminal state |
 
-Counts, durations and byte limits must be positive integers (the free-space
-floor may be zero; durations cannot exceed one year). Pending input reservations
-remain held after cancellation until cleanup succeeds. Small summaries and idempotency records remain bounded
-by the record limit after input payloads are removed. Cleaned terminal records
-become eligible for removal seven days after their last update, once any retained
-model metadata has also expired. The existing
-worker maintenance pass prunes them, including when there are no files to remove.
-Submission and individual file-cleanup acknowledgements do not prune history.
-Recent request keys remain recoverable even when new admission is full. If the
-record limit is reached before maintenance reclaims eligible records, submission
-returns `job_record_capacity`; retry after maintenance runs. All workers busy
-with long jobs can delay maintenance until a worker returns to its loop.
-Deleting a result releases its input/artifact reservations
-after cleanup, but does not immediately discard its idempotency record.
+Lifetimes must be positive integer seconds, at most one year. Files remain
+protected until native work, downloads and dependent calculations have stopped.
+Cleaned terminal records become eligible for removal seven days after their last
+update, once retained model metadata and deletion Undo windows have expired.
+The worker maintenance pass prunes them, including records without files.
+Submission and file-cleanup acknowledgements do not prune retry history. Busy
+workers can delay maintenance until a worker returns to its loop.
 
 Set `EOLAB_PROCESSING_METADATA_TTL_SECONDS` in Compose or Coolify to change how
 long Model/Run YAML remains downloadable. For example, `1209600` keeps it for
@@ -542,17 +511,14 @@ cookies are renewed on access and last at least as long as the configured result
 and metadata lifetimes, with a seven-day minimum. Clearing the cookie still
 removes that browser's access to its private runs.
 
-Submission returns distinct 429 error codes: `owner_queue_full` for the session's
-waiting allowance, `queue_full` for the global backlog, `job_record_capacity` for
-retained records, `job_input_capacity` for retained input bytes, and `storage_full`
-for artifact reservations. These are finite overload limits, not an indication
-that the one worker is merely busy. Existing accepted IDs/status/results and
-cancellation routes are unchanged. A cached calculation still needs its own
-bounded job record and download reservation.
+Submission no longer rejects work because of queue length, history count or
+estimated artifact storage. Existing accepted IDs, status, results and
+cancellation routes are unchanged. A cached calculation still gets its own
+session-owned job record and file lifecycle.
 
 Independent admission reads and ordered writes
 use two Psycopg pipeline batches under the existing transaction advisory lock.
-Capacity checks, deduplication and insertion remain atomic.
+Deduplication, ownership checks and insertion remain atomic.
 
 ### Removing calculation profiling
 

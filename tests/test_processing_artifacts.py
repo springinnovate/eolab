@@ -42,14 +42,14 @@ def test_prepare_does_not_scan_retained_outputs(
         "eolab_app.processing.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=100),
     )
-    limits = replace(ProcessingLimits(), free_space_floor=15, max_stored_bytes=8)
+    limits = ProcessingLimits()
     assert artifacts.prepare("b" * 32, 5, limits).is_dir()
 
 
-def test_prepare_preserves_physical_free_space_floor(
+def test_prepare_does_not_reserve_physical_free_space(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Disk reservations still need physical free space above the configured floor.
+    """Create the attempt without withholding filesystem space in advance.
 
     Args:
         tmp_path: Isolated private result volume.
@@ -61,17 +61,14 @@ def test_prepare_preserves_physical_free_space_floor(
         "eolab_app.processing.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=20),
     )
-    limits = replace(ProcessingLimits(), free_space_floor=15)
-    with pytest.raises(ProcessingError) as rejected:
-        artifacts.prepare("a" * 32, 6, limits)
-    assert rejected.value.code == "storage_full"
-    assert artifacts.prepare("a" * 32, 5, limits).is_dir()
+    limits = ProcessingLimits()
+    assert artifacts.prepare("a" * 32, 6, limits).is_dir()
 
 
-def test_prepare_fails_if_free_space_is_unavailable(
+def test_prepare_does_not_query_free_space(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Do not start a write when physical free space cannot be checked.
+    """Attempt creation does not depend on a free-space query.
 
     Args:
         tmp_path: Isolated private result volume.
@@ -92,6 +89,4 @@ def test_prepare_fails_if_free_space_is_unavailable(
         raise OSError("free space unavailable")
 
     monkeypatch.setattr("eolab_app.processing.artifacts.shutil.disk_usage", unavailable)
-    with pytest.raises(OSError, match="free space unavailable"):
-        artifacts.prepare("a" * 32, 1, ProcessingLimits())
-    assert not (tmp_path / "attempts" / ("a" * 32)).exists()
+    assert artifacts.prepare("a" * 32, 1, ProcessingLimits()).is_dir()

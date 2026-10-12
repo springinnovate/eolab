@@ -215,10 +215,10 @@ def test_polygon_masks_weights_and_mixed_statistics_across_batch_sizes(
             )
 
 
-def test_memory_planning_and_execution_without_grid_recheck(
+def test_metadata_planning_and_execution_without_grid_recheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Planning enforces memory limits; execution uses new and old saved plans.
+    """Planning reads metadata only; execution uses new and old saved plans.
 
     Args:
         tmp_path: Source fixture and output.
@@ -238,9 +238,8 @@ def test_memory_planning_and_execution_without_grid_recheck(
     with monkeypatch.context() as patch:
         patch.setattr(kernel, "read_native_raster_window", forbidden)
         patch.setattr(kernel, "read_native_raster_block", forbidden)
-        with pytest.raises(ProcessingError, match="memory") as error:
-            make_spec(path, ["sum(a)"], target_chunk_pixels=4194304)
-        assert error.value.code == "expression_memory_limit"
+        large_plan = make_spec(path, ["sum(a)"], target_chunk_pixels=4194304)
+        assert large_plan.grid.estimatedMemoryBytes == 0
         spec = make_spec(path, ["sum(a)"], target_chunk_pixels=65536)
     assert prepare_aggregate_job(spec, LIMITS).specification == spec.model_dump(
         mode="json", by_alias=True

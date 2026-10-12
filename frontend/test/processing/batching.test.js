@@ -44,3 +44,14 @@ test("out-of-coverage pixel calculations accept zero work and reject malformed e
         else await assert.rejects(()=>client.getJob(identifier),/invalid/);
     }
 });
+
+
+test("API accepts large total read counts while rejecting invalid counts",async()=>{
+    for (const count of [4_687_500, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        const api=new ProcessingApiClient(async()=>Response.json({
+            ...plan, grid:{...grid, execution:{...execution, readWindows:count}},
+        }));
+        if (count === 4_687_500) assert.equal((await api.getJob(plan.jobId)).grid.execution.readWindows, count);
+        else await assert.rejects(()=>api.getJob(plan.jobId),/batch dimensions/);
+    }
+});

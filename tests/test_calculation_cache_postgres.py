@@ -229,7 +229,7 @@ def test_cached_area_skips_geometry_work_even_after_entry_expires(
             "SELECT reserved_bytes FROM processing.jobs WHERE id=%s",
             (submitted["jobId"],),
         ).fetchone()
-        assert row == (worker.aggregate_limits.result_reservation_bytes,)
+        assert row == (0,)
     artifact = asyncio.run(worker._execute(claimed))
     assert store.finish(claimed["id"], claimed["attempt_id"], artifact)
     ready = client.get(f"/api/processing/jobs/{submitted['jobId']}").json()

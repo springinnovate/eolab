@@ -37,7 +37,7 @@ def workspace(
     """
     storage = LocalJobArtifacts(tmp_path)
     storage.initialize()
-    path = storage.prepare(ATTEMPT, 100_000, ProcessingLimits(free_space_floor=0))
+    path = storage.prepare(ATTEMPT, 100_000, ProcessingLimits())
     declarations = []
     for name, role, data in (
         ("result", "result", b"a,b\n1,2\n"),
@@ -70,7 +70,9 @@ def test_publish_only_declared_files_and_account_inventory(tmp_path: Path) -> No
         tmp_path: Real private artifact volume.
     """
     storage, path, declarations = workspace(tmp_path)
-    manifest = storage.publish(ATTEMPT, 100_000, declarations, Event())
+    for index in range(130):
+        (path / f"scratch{index}").touch()
+    manifest = storage.publish(ATTEMPT, 0, declarations, Event())
     published = tmp_path / "results" / ATTEMPT
     assert not path.exists()
     assert {file.name for file in published.iterdir()} == {
@@ -102,9 +104,7 @@ def test_publish_only_declared_files_and_account_inventory(tmp_path: Path) -> No
         "inventory",
         "hardlink",
         "symlink",
-        "overflow",
         "cancelled",
-        "count",
     ],
 )
 def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -> None:
@@ -112,7 +112,7 @@ def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -
 
     Args:
         tmp_path: Isolated artifact volume.
-        invalid: Distinct file, resource or cancellation boundary violation.
+        invalid: Distinct file-integrity or cancellation boundary violation.
     """
     storage, path, declarations = workspace(tmp_path)
     cancelled = Event()
@@ -146,13 +146,8 @@ def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -
                 os.link(outside, path / "link.csv")
         except OSError:
             pytest.skip("OS does not allow creating this link")
-    elif invalid == "overflow":
-        reservation = sum(file.stat().st_size for file in path.iterdir())
     elif invalid == "cancelled":
         cancelled.set()
-    elif invalid == "count":
-        for index in range(130):
-            (path / f"scratch{index}").touch()
     with pytest.raises((ProcessingError, ValidationError)):
         storage.publish(ATTEMPT, reservation, declarations, cancelled)
     assert not (tmp_path / "results" / ATTEMPT).exists()

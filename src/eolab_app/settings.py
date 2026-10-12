@@ -4,7 +4,7 @@ import json
 import math
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,29 +15,20 @@ APPLICATION_VERSION_PATH = Path("/app/version")
 
 
 def load_processing_limits() -> RasterClipLimits:
-    """Load queue, execution, storage and retention settings for the app and worker.
+    """Load shared Processing worker-count and result-retention settings.
+
+    Former work-size, memory, disk and execution-time environment variables are
+    ignored. Their presence in an older deployment does not limit new jobs.
 
     Returns:
-        Processing limits with validated worker count and resource budgets.
+        Validated concurrency and retention settings for the app and worker.
 
     Raises:
-        ValueError: If an override is blank, is not an integer, or is outside
-            its supported range. The error names the environment variable.
+        ValueError: If an active setting is blank, nonintegral or out of range.
     """
     defaults = RasterClipLimits()
     settings = {
         "PROCESSING_WORKER_COUNT": ("worker_count", 1),
-        "PROCESSING_PROCESS_MEMORY_BYTES": ("process_memory_bytes", 512 * 1024**2),
-        "PROCESSING_MAX_EXECUTION_MEMORY_BYTES": (
-            "max_execution_memory_bytes",
-            512 * 1024**2,
-        ),
-        "PROCESSING_MAX_WAITING_JOBS": ("max_waiting_jobs", 1),
-        "PROCESSING_MAX_OWNER_WAITING_JOBS": ("max_owner_waiting_jobs", 1),
-        "PROCESSING_MAX_JOB_RECORDS": ("max_job_records", 1),
-        "PROCESSING_MAX_STORED_BYTES": ("max_stored_bytes", 1),
-        "PROCESSING_FREE_SPACE_FLOOR_BYTES": ("free_space_floor", 0),
-        "PROCESSING_EXECUTION_TIMEOUT_SECONDS": ("runtime_seconds", 1),
         "PROCESSING_RESULT_TTL_SECONDS": ("result_ttl_seconds", 1),
         "PROCESSING_METADATA_TTL_SECONDS": ("metadata_ttl_seconds", 1),
     }
@@ -53,58 +44,26 @@ def load_processing_limits() -> RasterClipLimits:
                 f"{environment_name} must be between {minimum} and {2**63 - 1}"
             )
         if (
-            attribute
-            in {"runtime_seconds", "result_ttl_seconds", "metadata_ttl_seconds"}
+            attribute in {"result_ttl_seconds", "metadata_ttl_seconds"}
             and value > 31_536_000
         ):
             raise ValueError(f"{environment_name} must not exceed one year")
         values[attribute] = value
     if values["worker_count"] > 32:
         raise ValueError("PROCESSING_WORKER_COUNT must not exceed 32")
-    if values["max_execution_memory_bytes"] < values["process_memory_bytes"]:
-        raise ValueError(
-            "PROCESSING_MAX_EXECUTION_MEMORY_BYTES must fit PROCESSING_PROCESS_MEMORY_BYTES"
-        )
     return RasterClipLimits(**values)
 
 
 def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
-    """Load administrator downstream-work budgets while preserving Processing limits.
-
-    Unset or empty overrides use the defaults defined by DownstreamLimits.
+    """Use the shared Processing lifecycle settings for downstream calculations.
 
     Args:
-        limits: Validated job, source-read, memory and storage settings.
+        limits: Validated job concurrency, retention and cache settings.
 
     Returns:
-        Downstream settings for the worker's preparation and native execution.
-
-    Raises:
-        ValueError: If a nonempty override is nonintegral, nonpositive or exceeds
-            the signed 64-bit configuration range; names the offending variable.
+        Downstream settings without resource-size overrides.
     """
-    values = asdict(limits)
-    for attribute in (
-        "max_routing_cells",
-        "max_value_cells",
-        "max_mask_cells",
-        "max_watersheds",
-        "max_watershed_coordinates",
-        "max_terminals",
-        "max_distance_pairs",
-    ):
-        name = "PROCESSING_DOWNSTREAM_" + attribute.upper()
-        raw = os.environ.get(name)
-        if raw is None or raw == "":
-            continue
-        try:
-            value = int(raw)
-        except ValueError as error:
-            raise ValueError(f"{name} must be an integer") from error
-        if not 1 <= value <= 2**63 - 1:
-            raise ValueError(f"{name} must be between 1 and {2**63 - 1}")
-        values[attribute] = value
-    return DownstreamLimits(**values)
+    return DownstreamLimits.with_lifecycle(limits)
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""Shared app/worker configuration for durable Processing queue and storage limits."""
+"""Shared app/worker concurrency and retention configuration for Processing."""
 
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -11,17 +11,6 @@ from eolab_app.routes.processing import COOKIE
 
 OVERRIDES = {
     "PROCESSING_WORKER_COUNT": ("worker_count", 2),
-    "PROCESSING_PROCESS_MEMORY_BYTES": ("process_memory_bytes", 1024**3),
-    "PROCESSING_MAX_EXECUTION_MEMORY_BYTES": (
-        "max_execution_memory_bytes",
-        4 * 1024**3,
-    ),
-    "PROCESSING_MAX_WAITING_JOBS": ("max_waiting_jobs", 64),
-    "PROCESSING_MAX_OWNER_WAITING_JOBS": ("max_owner_waiting_jobs", 16),
-    "PROCESSING_MAX_JOB_RECORDS": ("max_job_records", 512),
-    "PROCESSING_MAX_STORED_BYTES": ("max_stored_bytes", 5 * 1024**3),
-    "PROCESSING_FREE_SPACE_FLOOR_BYTES": ("free_space_floor", 0),
-    "PROCESSING_EXECUTION_TIMEOUT_SECONDS": ("runtime_seconds", 120),
     "PROCESSING_RESULT_TTL_SECONDS": ("result_ttl_seconds", 3600),
     "PROCESSING_METADATA_TTL_SECONDS": ("metadata_ttl_seconds", 1209600),
 }
@@ -41,7 +30,7 @@ def isolated_processing_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_defaults_and_all_environment_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preserve defaults while allowing operators to size independent budgets.
+    """Apply worker-count and retention overrides consistently.
 
     Args:
         monkeypatch: Supplies explicit deployment settings.
@@ -59,14 +48,6 @@ def test_defaults_and_all_environment_overrides(
     [
         ("PROCESSING_WORKER_COUNT", "0"),
         ("PROCESSING_WORKER_COUNT", "33"),
-        ("PROCESSING_PROCESS_MEMORY_BYTES", "1"),
-        ("PROCESSING_MAX_EXECUTION_MEMORY_BYTES", str(1024**3)),
-        ("PROCESSING_MAX_WAITING_JOBS", ""),
-        ("PROCESSING_MAX_OWNER_WAITING_JOBS", "0"),
-        ("PROCESSING_MAX_JOB_RECORDS", "1.5"),
-        ("PROCESSING_MAX_STORED_BYTES", str(2**63)),
-        ("PROCESSING_FREE_SPACE_FLOOR_BYTES", "-1"),
-        ("PROCESSING_EXECUTION_TIMEOUT_SECONDS", "oops"),
         ("PROCESSING_RESULT_TTL_SECONDS", "0"),
         ("PROCESSING_RESULT_TTL_SECONDS", "31536001"),
         ("PROCESSING_METADATA_TTL_SECONDS", "0"),
@@ -141,3 +122,29 @@ def test_compose_shares_each_budget_with_app_and_worker() -> None:
         entry = f'"{name}=${{EOLAB_{name}-{value}}}"'
         assert entry in worker and entry in app
         assert f"EOLAB_{name}={value}" in example
+
+
+@pytest.mark.parametrize("value", ["1", "", "obsolete"])
+def test_removed_execution_settings_cannot_limit_new_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    """Ignore obsolete execution ceilings even when old deployments still define them.
+
+    Args:
+        monkeypatch: Supplies deployment settings without affecting other tests.
+        value: A tiny, empty or nonnumeric value that formerly blocked work or startup.
+    """
+    for suffix in (
+        "PROCESS_MEMORY_BYTES",
+        "MAX_EXECUTION_MEMORY_BYTES",
+        "CONTAINER_MEMORY",
+        "MAX_STORED_BYTES",
+        "FREE_SPACE_FLOOR_BYTES",
+        "EXECUTION_TIMEOUT_SECONDS",
+        "MAX_WAITING_JOBS",
+        "MAX_OWNER_WAITING_JOBS",
+        "MAX_JOB_RECORDS",
+    ):
+        monkeypatch.setenv("PROCESSING_" + suffix, value)
+    assert load_processing_limits() == RasterClipLimits()

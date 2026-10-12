@@ -359,11 +359,11 @@ class AggregateExecutionPlan(BaseModel):
     readHeight: Annotated[int, Field(gt=0)]
     evaluationWidth: Annotated[int, Field(gt=0)]
     evaluationHeight: Annotated[int, Field(gt=0)]
-    readWindows: Annotated[int, Field(ge=0, le=65_536)]
+    readWindows: Annotated[int, Field(ge=0)]
 
 
 class AggregateGrid(BaseModel):
-    """Native grid, value domain, and conservative work/memory admission."""
+    """Native grid, value domain and execution batches for a raster summary."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     crs: str
@@ -562,41 +562,26 @@ class AggregateBatchResponse(BaseModel):
 
 @dataclass(frozen=True)
 class RasterAggregateLimits(ProcessingLimits):
-    """Resource limits for raster calculations: RAM, disk, work and duration.
+    """Configure statistics job lifetimes and ground-area measurement accuracy.
 
-    ProcessingService and ProcessingWorker call with_lifecycle() to copy the
-    shared Processing job limits while keeping these calculation-specific
-    defaults. A standalone script can construct RasterAggregateLimits() or
-    override named fields, for example max_memory_bytes=256 * 1024**2.
-
-    max_memory_bytes bounds estimated calculation RAM. result_reservation_bytes
-    allows 12 MiB of disk space for CSV and provenance JSON per job. Inherited
-    max_stored_bytes bounds disk reservations across all Processing jobs;
-    free_space_floor is the disk space that must remain unused. These are
-    Python constructor settings, not browser parameters.
+    The edge tolerance and maximum segment length control geometric accuracy;
+    they do not cap the number of cells, coordinates or bytes in a calculation.
     """
 
-    max_decoded_bytes: int = 4 * 1024**3
-    max_native_blocks: int = 65_536
-    max_coordinates: int = 500_000
-    max_memory_bytes: int = 512 * 1024**2
-    result_reservation_bytes: int = 12 * 1024**2
     # Rectilinear grids use fractional masks and cached area weights, with no
     # pixel polygons. Other grids admit at most this many potential polygon cells.
-    max_area_geometry_cells: int = 2_000_000
-    max_area_transform_coordinates: int = 4_000_000
     area_edge_tolerance_metres: float = 0.1
     area_max_segment_metres: float = 10_000.0
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "RasterAggregateLimits":
-        """Copy shared job limits and keep calculation-specific resource defaults.
+        """Copy the shared job lifecycle settings for statistics calculations.
 
         Args:
             limits: The Processing limits instance used by this service or worker.
 
         Returns:
-            A new limits object with the same queue, timeout and disk settings.
+            Settings with the same concurrency, leases, retention and cache policy.
         """
         return cls(
             **{

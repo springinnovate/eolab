@@ -331,6 +331,8 @@ def test_input_retention_releases_after_every_terminal_path(
                     (child["jobId"],),
                 )
             assert store.claim_next_job() is None
+            assert input_counts(store) == (1, 0)
+            assert store.interrupt_unfinished_jobs_on_restart() == 1
     assert input_counts(store) == (0, 0)
     client.portal.call(worker.cleanup)
     assert not path.exists()
@@ -645,14 +647,14 @@ def test_new_yaml_recipe_reuses_private_raster_contract(
     assert input_counts(store) == (0, 0)
 
 
-def test_retained_parent_cannot_make_child_wait_forever_for_its_own_disk(
+def test_retained_parent_does_not_block_child_preparation(
     model_boundary: Any, store: Any
 ) -> None:
-    """Reject a reservation that fits alone but cannot fit beside its retained input.
+    """Retain a private input while preparing the child without disk reservations.
 
     Args:
-        model_boundary: Actual Models service and native worker.
-        store: Disposable PostgreSQL store.
+        model_boundary: Real model API and native worker.
+        store: Disposable PostgreSQL queue.
     """
     client, _, _ = model_boundary
     _, source, _ = publish_input(model_boundary)
@@ -664,20 +666,12 @@ def test_retained_parent_cannot_make_child_wait_forever_for_its_own_disk(
     )
     claimed = store.claim_next_job()
     prepared = PreparedJobPlan(
-        specification=claimed["spec"],
-        summary=claimed["summary"],
-        operation=claimed["operation"],
-        reserved_bytes=store.limits.max_stored_bytes,
+        claimed["spec"], claimed["summary"], 2**40, operation=claimed["operation"]
     )
-    with pytest.raises(ProcessingError) as denied:
-        store.save_prepared_job(child["jobId"], claimed["attempt_id"], prepared)
-    assert denied.value.code == "storage_full"
-    assert store.finish(
-        child["jobId"],
-        claimed["attempt_id"],
-        None,
-        {"code": "storage_full", "detail": "Storage unavailable"},
-    )
+    saved = store.save_prepared_job(child["jobId"], claimed["attempt_id"], prepared)
+    assert saved["status"] == "running" and saved["reserved_bytes"] == 0
+    assert input_counts(store) == (1, 0)
+    assert store.finish(child["jobId"], claimed["attempt_id"], None)
     assert input_counts(store) == (0, 0)
 
 
@@ -714,30 +708,25 @@ def test_concurrent_retries_retain_one_input_and_failed_admission_retains_none(
         rows = [call.result() for call in calls]
     assert rows[0]["id"] == rows[1]["id"]
     assert input_counts(store) == (1, 0)
-    store.limits = replace(store.limits, max_owner_waiting_jobs=1)
     with pytest.raises(ProcessingError) as denied:
-        store.submit(owner, uuid4().hex, prepared, "b" * 64)
-    assert denied.value.code == "owner_queue_full"
+        store.submit(owner, request.requestId, prepared, "b" * 64)
+    assert denied.value.code == "request_conflict"
     assert input_counts(store) == (1, 0)
     store.cancel(rows[0]["id"], owner)
     assert input_counts(store) == (0, 0)
 
 
-def test_retained_inputs_cannot_make_queued_jobs_wait_for_each_other(
+def test_retained_inputs_do_not_make_jobs_wait_for_storage(
     model_boundary: Any, store: Any
 ) -> None:
-    """Reject dependent work when collectively retained inputs would block its space.
+    """Each child can use its own retained input without storage admission deadlocks.
 
     Args:
-        model_boundary: Actual Models routes, publication and cleanup worker.
-        store: Disposable PostgreSQL store used for reservation admission.
+        model_boundary: Real Models routes and worker.
+        store: Disposable PostgreSQL queue.
     """
     client, worker, _ = model_boundary
     parents = [publish_input(model_boundary) for _ in range(2)]
-    with psycopg.connect(store.conninfo) as connection:
-        largest_parent = connection.execute(
-            "SELECT max(reserved_bytes) FROM processing.jobs"
-        ).fetchone()[0]
     children = [
         submit(
             client,
@@ -747,42 +736,13 @@ def test_retained_inputs_cannot_make_queued_jobs_wait_for_each_other(
         )
         for _, source, _ in parents
     ]
-    required = store.limits.max_stored_bytes - largest_parent
-    claimed = store.claim_next_job()
-    prepared = PreparedJobPlan(
-        specification=claimed["spec"],
-        summary=claimed["summary"],
-        operation=claimed["operation"],
-        reserved_bytes=required,
-    )
-    assert claimed["id"] == children[0]["jobId"]
-    with pytest.raises(ProcessingError) as denied:
-        store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
-    assert denied.value.code == "storage_full"
-    assert store.finish(
-        claimed["id"],
-        claimed["attempt_id"],
-        None,
-        {"code": "storage_full", "detail": "Storage unavailable"},
-    )
-    client.delete(f"/api/processing/jobs/{parents[0][0]['jobId']}", headers=HEADERS)
-    client.portal.call(worker.cleanup)
-    assert not parents[0][2].exists() and parents[1][2].exists()
-    assert input_counts(store) == (1, 0)
-    claimed = store.claim_next_job()
-    assert claimed["id"] == children[1]["jobId"]
-    prepared = replace(
-        prepared, specification=claimed["spec"], summary=claimed["summary"]
-    )
-    admitted = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
-    assert admitted["status"] == "running"
-    assert admitted["reserved_bytes"] == required
-    assert store.finish(
-        claimed["id"],
-        claimed["attempt_id"],
-        None,
-        {"code": "test_complete", "detail": "Reservation verified"},
-    )
+    assert input_counts(store) == (2, 0)
+    for child in children:
+        assert client.portal.call(worker.run_once)
+        assert (
+            client.get(f"/api/processing/jobs/{child['jobId']}").json()["status"]
+            == "ready"
+        )
     assert input_counts(store) == (0, 0)
 
 

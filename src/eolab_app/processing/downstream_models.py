@@ -26,41 +26,23 @@ FLOW_THRESHOLD = 100 * float_info.epsilon
 
 @dataclass(frozen=True)
 class DownstreamLimits(RasterClipLimits):
-    """Administrator budgets for native downstream work, in addition to job limits.
+    """Configure downstream job scheduling and result retention.
 
-    Defaults retain EOlab's existing small-region admission profile, not dataset
-    dimensions or upstream algorithmic maxima. Deployments can override them; memory,
-    disk, native-reader and execution-time limits still apply independently.
-
-    Attributes:
-        max_routing_cells: Sum of routing-window cells over separate sink groups.
-        max_value_cells: Native cells in the values-raster window.
-        max_mask_cells: Native cells read from a raster starting mask.
-        max_watersheds: Watershed records retained for one run.
-        max_watershed_coordinates: Coordinates retained across those polygons.
-        max_terminals: Independent sink groups routed sequentially.
-        max_distance_pairs: Historical setting retained for deployment compatibility;
-            the original model does not perform EOlab's former geodesic-pair work.
+    The original WWF model runs without EOlab cell, geometry, memory, disk or
+    total-runtime admission ceilings. Its numerical inputs are captured separately
+    in DownstreamRequest.
     """
-
-    max_routing_cells: int = 4_000_000
-    max_value_cells: int = 4_000_000
-    max_mask_cells: int = 4_000_000
-    max_watersheds: int = 100_000
-    max_watershed_coordinates: int = 2_000_000
-    max_terminals: int = 64
-    max_distance_pairs: int = 4_000_000
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
-        """Copy shared job and source budgets, leaving unrelated operation settings out.
+        """Copy shared job lifecycle settings for downstream calculations.
 
         Args:
             limits: Worker lifecycle settings, possibly with another operation's
                 additional budgets; matching downstream fields are preserved.
 
         Returns:
-            Downstream settings with the shared budgets and remaining defaults.
+            Downstream settings with the same job lifecycle policy.
         """
         accepted = {field.name for field in fields(cls)}
         return cls(
@@ -103,8 +85,8 @@ class DownstreamRequest(HydrologySchema):
     starting_mask: StartingMask
     hydrology: PreparedHydrologySnapshot
     values: RasterSourceReference
-    buffer_m: Annotated[float, Field(ge=0, le=100_000)]
-    cutoff_m: Annotated[float, Field(gt=0, le=1_000_000)] | None
+    buffer_m: Annotated[float, Field(ge=0)]
+    cutoff_m: Annotated[float, Field(gt=0)] | None
     wgs84_pixel_size: Annotated[float, Field(gt=0)] = 0.008333333333333
     travel_time_pixel_size_m: Annotated[float, Field(gt=0)] = 900
     summary: Annotated[str, Field(min_length=1, max_length=4096)]
@@ -148,7 +130,7 @@ class DownstreamPlan(HydrologySchema):
     grid: ClipGrid
     routingGrid: ClipGrid
     watersheds: tuple[NetworkId, ...] = Field(min_length=1)
-    reservedBytes: Annotated[int, Field(gt=0)]
+    reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
 
 

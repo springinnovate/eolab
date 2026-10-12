@@ -35,46 +35,12 @@ WINDOW_TOLERANCE_PIXELS = 0.01
 MAX_SUBDIVISIONS = 20
 
 
-class CoordinateBudget:
-    """Bound all projection input allocations within one planning/execution pass."""
-
-    def __init__(self, maximum: int) -> None:
-        """Start a coordinate-work counter.
-
-        Args:
-            maximum: Maximum positions passed through coordinate transformations.
-        """
-        self.maximum = maximum
-        self.used = 0
-
-    def consume(self, count: int) -> None:
-        """Reserve positions before allocating projection arrays.
-
-        Args:
-            count: Number of positions about to be projected.
-
-        Raises:
-            ProcessingError: When cumulative geometry work exceeds its limit.
-        """
-        self.used += count
-        if self.used > self.maximum:
-            raise ProcessingError(
-                "area_geometry_limit",
-                f"Ground-area measurement needs more than {self.maximum:,} transformed "
-                "coordinates. Choose a smaller area or filter the source more narrowly.",
-                413,
-            )
-
-
-def project_points(
-    points: np.ndarray, transformer: Transformer, budget: CoordinateBudget
-) -> np.ndarray:
-    """Transform bounded positions and reject undefined or wrapped coordinates.
+def project_points(points: np.ndarray, transformer: Transformer) -> np.ndarray:
+    """Transform positions and reject undefined or wrapped coordinates.
 
     Args:
         points: N by 2 source coordinates in conventional x/y order.
         transformer: Reusable, non-ballpark coordinate operation.
-        budget: Cumulative coordinate-work guard.
 
     Returns:
         Finite N by 2 transformed coordinates.
@@ -82,7 +48,6 @@ def project_points(
     Raises:
         ProcessingError: For unsupported/discontinuous projection input.
     """
-    budget.consume(len(points))
     try:
         x, y = transformer.transform(points[:, 0], points[:, 1], errcheck=True)
     except ProjError as error:
@@ -226,7 +191,7 @@ class PixelAreaCalculator:
             dataset: Authorized, validated native raster.
             area: Immutable box/polygon selection or whole-raster selection.
             limits: Processing-owned geometry and transformation policy.
-            planning: Use the smaller metadata-stage coordinate budget.
+            planning: Whether this instance describes a grid before execution.
 
         Raises:
             ProcessingError: For unsupported CRS/topology or excessive work.
@@ -235,11 +200,6 @@ class PixelAreaCalculator:
         self.catalog_source = area.resolved if area.kind == "catalogSelection" else None
         self.dataset = dataset
         self.limits = limits
-        self.budget = CoordinateBudget(
-            limits.max_coordinates
-            if planning
-            else limits.max_area_transform_coordinates
-        )
         crs = CRS.from_user_input(dataset.crs)
         if not (
             crs.is_geographic or crs.is_projected
@@ -293,7 +253,7 @@ class PixelAreaCalculator:
             Returns:
                 Floating column/row positions for conservative window admission.
             """
-            native = project_points(points, wgs_native, self.budget)
+            native = project_points(points, wgs_native)
             return np.column_stack(
                 (
                     inverse.a * native[:, 0] + inverse.b * native[:, 1] + inverse.c,
@@ -306,11 +266,9 @@ class PixelAreaCalculator:
         self.window = Window(0, 0, dataset.width, dataset.height)
         if area.kind == "catalogSelection":
             self.wgs_area = wgs_area
-            # A streaming planning pass uses the existing total transformation
-            # work ceiling while retaining only one feature at a time.
-            self.budget = CoordinateBudget(limits.max_area_transform_coordinates)
+            # Project one feature at a time to determine the selected pixel bounds.
             pixel_bounds = [math.inf, math.inf, -math.inf, -math.inf]
-            with polygon_features(self.catalog_source) as features:
+            with polygon_features(self.catalog_source, limits=None) as features:
                 for item in features:
                     projected = transformed_polygon(
                         shape(item), pixels, WINDOW_TOLERANCE_PIXELS, 64
@@ -349,19 +307,10 @@ class PixelAreaCalculator:
                     "invalid_area",
                     "Ground-area selection must contain valid polygons with positive area.",
                 )
-            if (
-                sum(shapely.get_num_coordinates(g) for g in originals)
-                > limits.max_coordinates
-            ):
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    "The polygon selection has too many coordinates for ground-area measurement. Simplify it.",
-                    413,
-                )
             if area.kind == "bounds" and self.rectilinear:
                 coordinates = np.asarray(originals[0].exterior.coords)
                 pixel_points = pixels(coordinates)
-                projected = project_points(coordinates, wgs_area, self.budget)
+                projected = project_points(coordinates, wgs_area)
                 self.geometry = box(
                     *np.min(projected, axis=0), *np.max(projected, axis=0)
                 )
@@ -370,7 +319,7 @@ class PixelAreaCalculator:
                 projected = [
                     transformed_polygon(
                         g,
-                        lambda p: project_points(p, wgs_area, self.budget),
+                        lambda p: project_points(p, wgs_area),
                         limits.area_edge_tolerance_metres,
                         limits.area_max_segment_metres,
                     )
@@ -382,13 +331,10 @@ class PixelAreaCalculator:
                     for g in originals
                 ]
                 pixel_bounds = shapely.total_bounds(native_polygons)
-            if (
-                not self.geometry.is_valid
-                or shapely.get_num_coordinates(self.geometry) > limits.max_coordinates
-            ):
+            if not self.geometry.is_valid:
                 raise ProcessingError(
                     "area_geometry_limit",
-                    "The polygon selection union exceeds the ground-area geometry limit. Simplify it.",
+                    "The selected polygons do not form a valid area. Repair the source polygons.",
                     413,
                 )
             left, top, right, bottom = pixel_bounds
@@ -407,12 +353,6 @@ class PixelAreaCalculator:
         geometry_cells = (
             0 if self.rectilinear else int(self.window.width * self.window.height)
         )
-        if geometry_cells > limits.max_area_geometry_cells:
-            raise ProcessingError(
-                "area_geometry_limit",
-                f"Ground-area measurement may need to check {geometry_cells:,} raster cells in the selected area's bounding rectangle; the limit is {limits.max_area_geometry_cells:,}. Choose a smaller area or a rectangular box on a north-up WGS84/Web Mercator grid.",
-                413,
-            )
         self.metadata = GroundAreaPlan(
             edgeToleranceMetres=limits.area_edge_tolerance_metres,
             maximumSegmentMetres=limits.area_max_segment_metres,
@@ -427,13 +367,7 @@ class PixelAreaCalculator:
         if self.rectilinear:
             # One cached coordinate per row/column, rather than repeated
             # projection for every pixel/tile in the selected raster window.
-            axis_count = int(self.window.width + self.window.height + 2)
-            if axis_count > limits.max_coordinates:
-                raise ProcessingError(
-                    "area_geometry_limit",
-                    f"The area grid needs {axis_count:,} axis coordinates; the limit is {limits.max_coordinates:,}. Choose a smaller area.",
-                    413,
-                )
+
             columns = np.arange(
                 self.window.col_off,
                 self.window.col_off + self.window.width + 1,
@@ -501,7 +435,7 @@ class PixelAreaCalculator:
         Raises:
             ProcessingError: For footprints wrapping outside the supported world.
         """
-        result = project_points(points, self.to_area, self.budget)
+        result = project_points(points, self.to_area)
         if np.any(np.abs(result[:, 0]) > MAXIMUM_X + 1e-6):
             raise ProcessingError(
                 "unsupported_area_crs",
@@ -534,41 +468,31 @@ class PixelAreaCalculator:
                 corners = self._project_native(self._corners(tile))
                 footprint = box(*corners.min(axis=0), *corners.max(axis=0))
             retained = []
-            count = 0
+
             bbox = native_bbox_for_grid(
                 self.catalog_source,
                 self.dataset.crs,
                 window_transform(tile, self.transform),
                 (height, width),
             )
-            with polygon_features(self.catalog_source, bbox) as features:
+            with polygon_features(self.catalog_source, bbox, limits=None) as features:
                 for item in features:
                     geometry = transformed_polygon(
                         shape(item),
-                        lambda p: project_points(p, self.wgs_area, self.budget),
+                        lambda p: project_points(p, self.wgs_area),
                         self.limits.area_edge_tolerance_metres,
                         self.limits.area_max_segment_metres,
                     )
                     if footprint is None or geometry.intersects(footprint):
-                        count += shapely.get_num_coordinates(geometry)
-                        if count > self.limits.max_coordinates:
-                            raise ProcessingError(
-                                "area_geometry_limit",
-                                "The current raster tile exceeds the retained geometry buffer.",
-                                413,
-                            )
+
                         retained.append(geometry)
             if not retained:
                 return np.zeros((height, width), dtype=np.float64)
             self.geometry = shapely.union_all(retained)
-            if (
-                not self.geometry.is_valid
-                or shapely.get_num_coordinates(self.geometry)
-                > self.limits.max_coordinates
-            ):
+            if not self.geometry.is_valid:
                 raise ProcessingError(
                     "area_geometry_limit",
-                    "The current raster tile exceeds the union geometry buffer.",
+                    "Selected polygons do not form a valid area in this tile. Repair the source polygons.",
                     413,
                 )
             self.rectangle = (
@@ -628,11 +552,5 @@ class PixelAreaCalculator:
                     )
                 if self.geometry is not None:
                     polygon = polygon.intersection(self.geometry)
-                if shapely.get_num_coordinates(polygon) > self.limits.max_coordinates:
-                    raise ProcessingError(
-                        "area_geometry_limit",
-                        "A clipped pixel exceeds the area coordinate limit. Simplify the polygon selection.",
-                        413,
-                    )
                 areas[row, column] = polygon.area / HECTARE_SQUARE_METRES
         return areas

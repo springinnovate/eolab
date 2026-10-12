@@ -244,7 +244,7 @@ def test_retained_masks_do_not_reopen_sources_and_remain_cancellable(
         assert reader.retained_bytes == 0
 
 
-def test_polygon_memory_shares_the_calculation_budget(tmp_path: Path) -> None:
+def test_processing_retains_polygons_without_memory_estimates(tmp_path: Path) -> None:
     """Raster buffers leave only their remaining memory for retained polygons.
 
     Args:
@@ -263,13 +263,11 @@ def test_polygon_memory_shares_the_calculation_budget(tmp_path: Path) -> None:
         resolved=selected,
     )
     plan = make_spec(path, ["sum(a)"], area).model_copy(update={"area": area})
-    limits = RasterAggregateLimits(
-        max_memory_bytes=plan.grid.estimatedMemoryBytes + 100
-    )
-    with rasterio.open(path) as dataset, pytest.raises(ProcessingError) as error:
-        kernel.prepare_raster_area_tools(dataset, plan, limits)
-    assert error.value.code == "polygon_memory_limit"
-    assert error.value.status == 413
+    limits = RasterAggregateLimits()
+    with rasterio.open(path) as dataset:
+        tools = kernel.prepare_raster_area_tools(dataset, plan, limits)
+        assert list(tools.selected_polygons.iter_projected_polygons())
+        tools.selected_polygons.close()
 
 
 @pytest.mark.parametrize("epsg", [4326, 3857, 6933])
@@ -325,13 +323,6 @@ def test_plan_uses_selection_envelope_without_reading_polygons(
     assert 0 < plan.grid.height <= 64
     assert plan.area.catalogSelection == selected.selection
     assert (plan.grid.groundArea is not None) == expression.startswith("areaha")
-    with pytest.raises(ProcessingError, match="decoded bytes"):
-        make_spec(
-            path,
-            [expression],
-            area,
-            limits=replace(RasterAggregateLimits(), max_decoded_bytes=1),
-        )
 
 
 def test_rotated_vector_planning_keeps_exact_polygon_window(tmp_path: Path) -> None:

@@ -31,8 +31,8 @@ def source(tmp_path: Path) -> ResolvedCatalogSelection:
 
 @pytest.mark.parametrize("timeout", [None, 10, 30])
 def test_read_uses_default_or_supplied_time_budget(
-    source: ResolvedCatalogSelection,
     monkeypatch: pytest.MonkeyPatch,
+    source: ResolvedCatalogSelection,
     timeout: int | None,
 ) -> None:
     """Allow a longer supervised read while retaining the ordinary 15-second default.
@@ -74,13 +74,12 @@ def test_read_rejects_invalid_time_budgets(
 @pytest.mark.parametrize(
     "setting,value,message",
     [
-        ("MAX_SCANNED_FEATURES", 1, "1-feature budget"),
-        ("MAX_FEATURE_COORDINATES", 4, "coordinate buffer"),
+        ("max_features", 1, "1-feature budget"),
+        ("max_feature_coordinates", 4, "coordinate buffer"),
     ],
 )
 def test_longer_reads_preserve_feature_and_coordinate_limits(
     source: ResolvedCatalogSelection,
-    monkeypatch: pytest.MonkeyPatch,
     setting: str,
     value: int,
     message: str,
@@ -89,14 +88,14 @@ def test_longer_reads_preserve_feature_and_coordinate_limits(
 
     Args:
         source: Original two-feature source.
-        monkeypatch: Reduce one native-reader budget.
-        setting: Budget constant to reduce for this fixture.
+        setting: Reader budget to reduce for this fixture.
         value: Limit below the fixture's required work.
         message: Distinct diagnostic expected for the exhausted budget.
     """
-    monkeypatch.setattr(f"eolab_app.bounded_vector.{setting}", value)
     with pytest.raises(GeometryValidationError, match=message):
-        with polygon_records(source, (), timeout_seconds=600) as records:
+        with polygon_records(
+            source, (), timeout_seconds=600, **{setting: value}
+        ) as records:
             list(records)
 
 

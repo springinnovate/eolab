@@ -265,12 +265,6 @@ def test_clips_reject_outside_empty_stale_and_excessive_work(tmp_path: Path) -> 
         make_spec(path, ClipArea(kind="bounds", bounds=(20, 20, 21, 21)))
     assert outside.value.code == "no_overlap"
     area = ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9))
-    with pytest.raises(ProcessingError) as large:
-        make_spec(path, area, replace(LIMITS, max_raw_bytes=100))
-    assert large.value.code == "clip_too_large"
-    with pytest.raises(ProcessingError) as work:
-        make_spec(path, area, replace(LIMITS, max_decoded_bytes=100))
-    assert work.value.code == "source_work_too_large"
     spec = make_spec(path, area)
     attempt = tmp_path / "attempt"
     attempt.mkdir()

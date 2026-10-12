@@ -10,19 +10,16 @@ from eolab_app.source_files import verify_source_file
 
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
-    """Configure a reusable subprocess for raster calculations and input-file checks.
-
-    The dedicated worker uses this process for preparation and execution after
-    claiming a job from the database queue.
+    """Configure a reusable native process for calculations and source checks.
 
     Args:
-        limits: Existing startup/planning deadline policy.
+        limits: Shared Processing policy; native calculations have no memory or
+            total-runtime ceiling.
 
     Returns:
-        Unstarted reusable process, replaced after exceeding 1 GiB Linux peak RSS. Completed
-        operation count does not trigger replacement.
-        The configured Linux address-space ceiling applies to preparation and
-        execution. Container limits additionally bound all children together.
+        An unstarted process with cancellation and Linux parent-death protection.
+        A child exceeding 1 GiB peak RSS is recycled after it finishes; this never
+        rejects or interrupts a calculation. Startup still has a readiness timeout.
     """
 
     return ReusableProcess(
@@ -34,6 +31,4 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
             verify_source_file,
         ),
         recycle_bytes=1024**3,
-        startup_seconds=limits.plan_timeout_seconds,
-        address_space_bytes=limits.process_memory_bytes,
     )

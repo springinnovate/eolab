@@ -63,8 +63,8 @@ INSERT INTO processing.schema_version VALUES (5) ON CONFLICT DO NOTHING;
 
 INSERT INTO processing.schema_version VALUES (6) ON CONFLICT DO NOTHING;
 
--- Metadata retention uses record counts and individual payload limits, not a
--- cumulative JSON byte budget. Recreate the dependent view below in this transaction.
+-- Retained input documents have individual payload limits, not a cumulative
+-- byte budget. Recreate the dependent view below in this transaction.
 DROP VIEW IF EXISTS processing.subscribed_jobs;
 DROP TRIGGER IF EXISTS processing_job_input_bytes ON processing.jobs;
 DROP FUNCTION IF EXISTS processing.measure_job_input_bytes();

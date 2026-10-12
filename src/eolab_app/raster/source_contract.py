@@ -11,7 +11,6 @@ from affine import TransformNotInvertibleError
 from rasterio.enums import MaskFlags
 from rasterio.windows import Window
 
-
 # Exact reads already admit no more than 64 MiB of cumulative decoded source
 # work. Applying that established ceiling to each streamed native block bounds
 # the reader's largest one-at-a-time value-plus-validity allocation without
@@ -109,16 +108,19 @@ def mask_invalid_raster_values(
 
 
 def _require_mask_block_memory(
-    dataset: rasterio.io.DatasetReader, value_block_bytes: int
+    dataset: rasterio.io.DatasetReader,
+    value_block_bytes: int,
+    maximum_block_bytes: int = BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
 ) -> None:
     """Bound mask decoding alongside the admitted value and boolean buffers.
 
     Args:
         dataset: Source whose signed dependencies were checked.
         value_block_bytes: One data block plus its returned boolean mask.
+        maximum_block_bytes: Combined data and mask allocation ceiling.
 
     Raises:
-        ValueError: If the combined native allocation exceeds 64 MiB.
+        ValueError: If the combined native allocation exceeds the caller's ceiling.
     """
     shape = internal_mask_block_shape(dataset)
     if shape is not None and (
@@ -126,9 +128,9 @@ def _require_mask_block_memory(
         + max(
             shape[0] * shape[1], dataset.block_shapes[0][0] * dataset.block_shapes[0][1]
         )
-        > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
+        > maximum_block_bytes
     ):
-        raise ValueError("Raster data and mask blocks exceed the 64 MiB memory limit")
+        raise ValueError("Raster data and mask blocks exceed the memory limit")
 
 
 def require_signed_raster_dependencies(
@@ -233,15 +235,19 @@ def require_pixel_source_structure(dataset: rasterio.io.DatasetReader) -> None:
 
 def require_bounded_source_structure(
     dataset: rasterio.io.DatasetReader,
+    *,
+    maximum_block_bytes: int | None = BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
 ) -> None:
-    """Require one band with byte-bounded blocks and signed validity metadata.
+    """Validate band structure and signed validity metadata, with optional block limits.
 
     Args:
         dataset: Open candidate raster dataset.
+        maximum_block_bytes: Decoded block ceiling, or None to validate structure
+            without restricting the native block allocation.
 
     Returns:
-        None when each native band-one block has a supported structure and a
-        conservatively bounded decoded value-plus-validity allocation.
+        None when band and validity structures are supported and any requested
+        block-allocation ceiling is satisfied.
 
     Raises:
         ValueError: If band, datatype, block, or validity structure is
@@ -253,23 +259,18 @@ def require_bounded_source_structure(
         raise ValueError("Bounded raster reads require native block metadata")
     if dataset.dtypes[0] not in SUPPORTED_RASTER_ANALYSIS_DATA_TYPES:
         raise ValueError(
-            "Bounded raster reads do not support "
-            f"{dataset.dtypes[0]} band values"
+            "Bounded raster reads do not support " f"{dataset.dtypes[0]} band values"
         )
-    block_height, block_width = (
-        int(value) for value in dataset.block_shapes[0]
-    )
+    block_height, block_width = (int(value) for value in dataset.block_shapes[0])
     if block_height < 1 or block_width < 1:
         raise ValueError("Bounded raster reads require positive native blocks")
     decoded_block_bytes = (
-        block_height
-        * block_width
-        * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
+        block_height * block_width * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
     )
-    if decoded_block_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES:
+    if maximum_block_bytes is not None and decoded_block_bytes > maximum_block_bytes:
         raise ValueError(
             "Bounded raster reads require each native block to decode to no "
-            f"more than {BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES} "
+            f"more than {maximum_block_bytes} "
             f"bytes; this layout requires {decoded_block_bytes} bytes per "
             "block"
         )
@@ -280,7 +281,11 @@ def require_bounded_source_structure(
         raise ValueError(
             "Bounded raster reads do not support alpha or unknown validity masks"
         )
-    _require_mask_block_memory(dataset, decoded_block_bytes)
+    if maximum_block_bytes is None:
+        # Validate embedded-mask identity and dimensions without sizing allocations.
+        internal_mask_block_shape(dataset)
+    else:
+        _require_mask_block_memory(dataset, decoded_block_bytes, maximum_block_bytes)
 
 
 def read_native_raster_block(

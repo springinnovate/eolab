@@ -154,7 +154,7 @@ def downstream_fixture(
         network,
         None,
     )
-    return sources, request, DownstreamLimits(free_space_floor=0)
+    return sources, request, DownstreamLimits()
 
 
 @pytest.mark.parametrize(
@@ -336,22 +336,6 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         plan_downstream(sources, request, limits)
 
 
-def test_requested_resolution_cannot_bypass_work_budgets(tmp_path: Path) -> None:
-    """Small native inputs cannot authorize an excessively fine calculation grid.
-
-    Args:
-        tmp_path: Small original inputs and private attempt directory.
-    """
-    sources, request, limits = downstream_fixture(tmp_path / "inputs")
-    request = request.model_copy(update={"wgs84_pixel_size": 0.000001})
-    plan = plan_downstream(sources, request, limits)
-    directory = tmp_path / "attempt"
-    directory.mkdir()
-    with pytest.raises(ProcessingError, match="calculation pixel size"):
-        calculate_downstream(sources, plan, directory, limits)
-    assert not list(directory.rglob("flow.tif"))
-
-
 def test_historical_numerical_policy_remains_readable() -> None:
     """Saved version-one runs retain their numerical description after replacement."""
     from eolab_app.processing.downstream_models import DownstreamNumericalPolicy
@@ -403,17 +387,6 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
         calculate_downstream(sources, spec, workspace, limits)
     assert Path.cwd() == previous
     assert (workspace / "upstream-relative-scratch").read_text() == "private"
-
-
-def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> None:
-    """Even tiny grids fail admission when the deployment memory budget cannot fit them.
-
-    Args:
-        tmp_path: Native reference sources.
-    """
-    sources, request, _ = downstream_fixture(tmp_path)
-    with pytest.raises(ProcessingError, match="native cells"):
-        plan_downstream(sources, request, DownstreamLimits(process_memory_bytes=1024))
 
 
 @pytest.mark.parametrize(
@@ -772,40 +745,6 @@ def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> N
         assert np.count_nonzero(dataset.read(1) == 1) == 4
 
 
-@pytest.mark.parametrize(
-    "budget,ceiling",
-    [
-        ("max_routing_cells", 23),
-        ("max_value_cells", 23),
-        ("max_mask_cells", 23),
-        ("max_watersheds", 2),
-        ("max_watershed_coordinates", 10),
-    ],
-)
-def test_downstream_uses_configured_work_budgets(
-    tmp_path: Path, budget: str, ceiling: int
-) -> None:
-    """Lower budgets reject work in preparation and when executing a saved plan.
-
-    Args:
-        tmp_path: Original sources and private attempt.
-        budget: Administrator setting for the measured input work.
-        ceiling: Less than the reference dataset requires.
-    """
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    spec = plan_downstream(sources, request, limits)
-    restricted = replace(limits, **{budget: ceiling})
-    with pytest.raises(ProcessingError, match=".") as preparing:
-        plan_downstream(sources, request, restricted)
-    assert preparing.value.code == "model_too_large"
-    directory = tmp_path / "attempt"
-    directory.mkdir()
-    with pytest.raises(ProcessingError) as running:
-        calculate_downstream(sources, spec, directory, restricted)
-    assert running.value.code == "model_too_large"
-    assert not list(directory.iterdir())
-
-
 @pytest.mark.parametrize("outside", ["north", "east"])
 def test_regional_dem_runs_with_network_extending_beyond_it(
     tmp_path: Path, outside: str
@@ -894,17 +833,23 @@ def test_run_rejects_missing_downstream_dem_extent(
 
 @pytest.mark.parametrize("invalid", [-9999, float("nan"), float("inf"), "mask"])
 @pytest.mark.parametrize("selected", [True, False])
-def test_run_checks_elevation_only_in_selected_watersheds(
-    tmp_path: Path, invalid: float | str, selected: bool
+def test_run_delegates_terrain_values_without_reading_dem_pixels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: float | str,
+    selected: bool,
 ) -> None:
-    """Reject invalid required terrain while allowing holes in unrelated drainages.
+    """Pass the unchanged DEM to the model without separately checking its pixels.
 
     Args:
         tmp_path: Isolated sources and result files.
+        monkeypatch: Observe source reads and replace the original-model boundary.
         invalid: NoData, nonfinite elevation or an embedded mask hole.
         selected: Whether the watershed containing the bad cell is needed by this run.
     """
     from shapely.geometry import box, mapping
+    from eolab_app.processing import downstream_calculation
+    from eolab_app.processing.aggregate_models import AggregateArtifact
 
     records = [
         {
@@ -937,29 +882,41 @@ def test_run_checks_elevation_only_in_selected_watersheds(
         HydrologyValidationLimits(),
     )
     request = request.model_copy(update={"hydrology": report})
+    pixel_reader = Mock(wraps=downstream_calculation.read_native_raster_window)
+    monkeypatch.setattr(
+        downstream_calculation, "read_native_raster_window", pixel_reader
+    )
+    expected = AggregateArtifact(
+        filename="result.csv", size=1, sha256="a" * 64, rows=[]
+    )
+    original_model = Mock(return_value=expected)
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.run_original_downstream", original_model
+    )
     spec = plan_downstream(sources, request, limits)
     directory = tmp_path / "run"
     directory.mkdir()
-    if selected:
-        with pytest.raises(ProcessingError, match="missing elevation") as error:
-            calculate_downstream(sources, spec, directory, limits)
-        assert error.value.code == "incomplete_dem"
-    else:
-        artifact = calculate_downstream(sources, spec, directory, limits)
-        assert float(artifact.rows[0]["value"]) == 8
+    assert calculate_downstream(sources, spec, directory, limits) is expected
+    original_model.assert_called_once()
+    assert original_model.call_args.args[0] is sources
+    read_paths = {Path(call.args[0].name) for call in pixel_reader.call_args_list}
+    assert sources.rasters["dem"] not in read_paths
+    assert sources.rasters["starting_mask"] in read_paths
 
 
 @pytest.mark.parametrize("tiny", [False, True])
-def test_selected_watersheds_require_connected_pixel_coverage(
-    tmp_path: Path, tiny: bool
+def test_run_keeps_boundary_checks_without_requiring_native_pixel_centers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiny: bool
 ) -> None:
-    """Defer spatial compatibility to the run without accepting gaps or empty basins.
+    """Keep polygon-boundary checks while leaving subpixel terrain to the model.
 
     Args:
         tmp_path: Native sources and private result directory.
+        monkeypatch: Replace the original-model boundary for subpixel terrain.
         tiny: Use a subpixel basin instead of a disconnected downstream boundary.
     """
     from shapely.geometry import box, mapping
+    from eolab_app.processing.aggregate_models import AggregateArtifact
 
     records = [
         {
@@ -975,11 +932,19 @@ def test_selected_watersheds_require_connected_pixel_coverage(
     )
     sources, request, limits = downstream_fixture(tmp_path, records=records)
     if tiny:
+        expected = AggregateArtifact(
+            filename="result.csv", size=1, sha256="a" * 64, rows=[]
+        )
+        original_model = Mock(return_value=expected)
+        monkeypatch.setattr(
+            "eolab_app.processing.downstream_runner.run_original_downstream",
+            original_model,
+        )
         spec = plan_downstream(sources, request, limits)
         directory = tmp_path / "run"
         directory.mkdir()
-        with pytest.raises(ProcessingError, match="contains no DEM pixel centers"):
-            calculate_downstream(sources, spec, directory, limits)
+        assert calculate_downstream(sources, spec, directory, limits) is expected
+        original_model.assert_called_once()
     else:
         with pytest.raises(
             ProcessingError, match="gap before its downstream partition"

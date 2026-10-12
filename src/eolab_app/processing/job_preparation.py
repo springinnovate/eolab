@@ -3,24 +3,19 @@
 from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
 from eolab_app.processing.clip_models import ClipSpec
 from eolab_app.processing.models import PreparedJobPlan
-from eolab_app.processing.raster_mask import estimate_calculation_disk_bytes
 
 
 def prepare_aggregate_job(
     spec: AggregateSpec, limits: RasterAggregateLimits
 ) -> PreparedJobPlan:
-    """Build the stored calculation job fields and its disk-space reservation.
+    """Serialize a prepared raster calculation for the job store.
 
     Args:
-        spec: Calculation plan containing the raster, formulas, area and grid.
-        limits: Calculation result and temporary mask reservation policy.
+        spec: Calculation inputs, formulas, selected area and native grid.
+        limits: Shared job and numerical settings; storage estimates are not required.
 
     Returns:
-        Stored job data, display summary, and the required
-        result and temporary mask storage reservation.
-
-    Raises:
-        ProcessingError: If mask and result reservations exceed the storage limit.
+        Path-free worker inputs and browser summary with no disk reservation.
     """
     data = spec.model_dump(mode="json", by_alias=True)
     return PreparedJobPlan(
@@ -29,19 +24,19 @@ def prepare_aggregate_job(
             **{key: data[key] for key in ("sources", "calculations", "grid")},
             "area": {"kind": spec.area.kind, "bounds": spec.area.bounds},
         },
-        reserved_bytes=estimate_calculation_disk_bytes(spec, limits),
+        reserved_bytes=0,
         operation=spec.operation,
     )
 
 
 def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
-    """Build the stored clip inputs, display details and disk reservation.
+    """Serialize prepared raster clip inputs and display metadata.
 
     Args:
-        spec: Raster identity, selected area, and output grid measured during preparation.
+        spec: Raster identity, selected area and output grid measured during preparation.
 
     Returns:
-        Clip inputs for the worker, details for the browser, and required disk space.
+        Path-free worker inputs and browser summary with no disk reservation.
     """
     return PreparedJobPlan(
         specification=spec.model_dump(mode="json", by_alias=True),
@@ -50,6 +45,6 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
             "grid": spec.grid.model_dump(mode="json"),
             "area": {"kind": spec.area.kind, "bounds": list(spec.area.bounds)},
         },
-        reserved_bytes=spec.grid.reservedBytes,
+        reserved_bytes=0,
         operation=spec.operation,
     )

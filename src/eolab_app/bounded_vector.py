@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 import math
 import json
 from time import monotonic
@@ -51,6 +52,23 @@ READ_SECONDS = 15.0
 MAX_FEATURE_COORDINATES = 500_000
 
 
+@dataclass(frozen=True)
+class VectorReadLimits:
+    """Bound elapsed time, feature work and memory for a native vector read.
+
+    Attributes:
+        seconds: Time allowed for consuming a feature stream.
+        features: Maximum candidate features scanned from the source.
+        coordinates_per_feature: Maximum coordinates in one source or projected feature.
+        memory_bytes: Linux address-space allowance for a supervised summary.
+    """
+
+    seconds: float = READ_SECONDS
+    features: int = MAX_SCANNED_FEATURES
+    coordinates_per_feature: int = MAX_FEATURE_COORDINATES
+    memory_bytes: int = 2 * 1024**3
+
+
 @contextmanager
 def _source_collection(
     resolved: ResolvedCatalogSelection,
@@ -86,6 +104,8 @@ def polygon_features(
     resolved: ResolvedCatalogSelection,
     bbox: tuple[float, float, float, float] | None = None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
 ) -> Iterator[Iterator[dict[str, Any]]]:
     """Open the original dataset and yield exact WGS84 polygons, one at a time.
 
@@ -95,6 +115,7 @@ def polygon_features(
         cancellation_requested: Optional callable returning True when the
                 caller wants this work to stop. Checked between expensive steps;
                 cancellation raises RasterReadCancelled.
+        limits: Source-read budgets, or None for caller-supervised unlimited work.
 
     Yields:
         An iterator whose geometries never outlive the owning source context.
@@ -103,7 +124,15 @@ def polygon_features(
         GeometryValidationError: For invalid topology or actual read-work limits.
         SelectionUnavailableError: If a source component changed.
     """
-    with polygon_records(resolved, (), bbox, cancellation_requested) as records:
+    with polygon_records(
+        resolved,
+        (),
+        bbox,
+        cancellation_requested,
+        timeout_seconds=limits.seconds if limits else None,
+        max_features=limits.features if limits else None,
+        max_feature_coordinates=limits.coordinates_per_feature if limits else None,
+    ) as records:
         yield (geometry for geometry, _ in records)
 
 
@@ -114,7 +143,9 @@ def polygon_records(
     bbox: tuple[float, float, float, float] | None = None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
     *,
-    timeout_seconds: float = READ_SECONDS,
+    timeout_seconds: float | None = READ_SECONDS,
+    max_features: int | None = MAX_SCANNED_FEATURES,
+    max_feature_coordinates: int | None = MAX_FEATURE_COORDINATES,
 ) -> Iterator[Iterator[tuple[dict[str, Any], dict[str, Any]]]]:
     """Stream validated WGS84 polygons and requested attributes from the original source.
 
@@ -128,10 +159,13 @@ def polygon_records(
         property_names: Source fields to include; absent fields are rejected.
         bbox: Conservative native-CRS candidate envelope, or no spatial filter.
         cancellation_requested: Optional request to stop between expensive steps.
-        timeout_seconds: Positive finite elapsed-time budget for the open stream,
+        timeout_seconds: Positive finite elapsed-time budget, or None, for the open stream,
             including time spent by its consumer between yielded features. This
             is checked between features; callers must supervise native calls to
             interrupt a blocked driver. Feature and coordinate ceilings still apply.
+        max_features: Candidate-feature ceiling, or None to consume the full stream.
+        max_feature_coordinates: Per-feature coordinate ceiling, or None to validate
+            coordinate values without limiting their count.
 
     Yields:
         An iterator of polygon/attribute pairs, valid only inside this context.
@@ -141,14 +175,14 @@ def polygon_records(
         GeometryValidationError: If a requested field is missing or geometry/work limits fail.
         SelectionUnavailableError: If a source component changed or cannot be read.
     """
-    if (
+    if timeout_seconds is not None and (
         type(timeout_seconds) not in (int, float)
         or not math.isfinite(timeout_seconds)
         or timeout_seconds <= 0
     ):
         raise ValueError("Vector read timeout must be a positive finite number")
     resolved.require_current()
-    deadline = monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else monotonic() + timeout_seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with _source_collection(resolved) as dataset:
             if set(property_names) - set(dataset.schema.get("properties", {})):
@@ -179,11 +213,11 @@ def polygon_records(
                     options["bbox"] = bbox
                 for count, feature in enumerate(dataset.filter(**options), 1):
                     require_active_raster_read(cancellation_requested)
-                    if count > MAX_SCANNED_FEATURES:
+                    if max_features is not None and count > max_features:
                         raise GeometryValidationError(
-                            f"Vector reading exceeded its {MAX_SCANNED_FEATURES:,}-feature budget"
+                            f"Vector reading exceeded its {max_features:,}-feature budget"
                         )
-                    if monotonic() > deadline:
+                    if deadline is not None and monotonic() > deadline:
                         raise GeometryValidationError(
                             f"Vector reading exceeded its {timeout_seconds:g}-second time budget after {count - 1:,} features"
                         )
@@ -199,7 +233,10 @@ def polygon_records(
                     for positions, _ in enumerate(
                         _iter_geometry_coordinates(raw, validate_wgs84_bounds=False), 1
                     ):
-                        if positions > MAX_FEATURE_COORDINATES:
+                        if (
+                            max_feature_coordinates is not None
+                            and positions > max_feature_coordinates
+                        ):
                             raise GeometryValidationError(
                                 "A source feature exceeds the bounded coordinate buffer"
                             )
@@ -218,7 +255,10 @@ def polygon_records(
                     for positions, _ in enumerate(
                         _iter_geometry_coordinates(geometry), 1
                     ):
-                        if positions > MAX_FEATURE_COORDINATES:
+                        if (
+                            max_feature_coordinates is not None
+                            and positions > max_feature_coordinates
+                        ):
                             raise GeometryValidationError(
                                 "A transformed feature exceeds the bounded coordinate buffer"
                             )
@@ -233,12 +273,15 @@ def polygon_records(
 def selection_summary(
     resolved: ResolvedCatalogSelection,
     cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
 ) -> dict[str, Any]:
     """Measure exact bounds/counts without collecting coordinates.
 
     Args:
         resolved: Authorized immutable selection.
         cancellation_requested: Optional cancellation predicate.
+        limits: Source-read budgets, or None for caller-supervised unlimited work.
 
     Returns:
         Bounds, counts, and measured coordinate/ring work.
@@ -249,7 +292,7 @@ def selection_summary(
     bounds = [math.inf, math.inf, -math.inf, -math.inf]
     matched = coordinates = rings = exact_bytes = 0
     with polygon_features(
-        resolved, cancellation_requested=cancellation_requested
+        resolved, cancellation_requested=cancellation_requested, limits=limits
     ) as features:
         for geometry in features:
             matched += 1
@@ -412,10 +455,11 @@ class PolygonRasterizer:
         self,
         dataset: DatasetReader,
         filtered_vector: ResolvedCatalogSelection,
-        maximum_coordinates: int,
+        maximum_coordinates: int | None,
         cancellation_requested: RasterReadCancellationCheck | None = None,
         *,
-        max_retained_polygon_bytes: int = 0,
+        max_retained_polygon_bytes: int | None = 0,
+        read_limits: VectorReadLimits | None = VectorReadLimits(),
     ) -> None:
         """Find the raster window covering filtered polygons and optionally keep them.
 
@@ -423,12 +467,13 @@ class PolygonRasterizer:
             dataset: Open raster whose CRS and pixel grid the polygons will use.
             filtered_vector: Vector source and filter identifying the features to read.
             maximum_coordinates: Maximum coordinate positions in one projected
-                feature; also limits how many points are added along its edges.
+                feature; None keeps the normal edge spacing without a count ceiling.
             cancellation_requested: Optional cancellation predicate.
             max_retained_polygon_bytes: Maximum estimated RAM, in bytes, for all
                 polygons retained by this rasterizer.
                 Zero reads/projects polygons again for each mask. A positive limit retains exact
-                polygons until close(); no files or cross-request cache are used.
+                polygons until close(); None retains them without estimating memory.
+            read_limits: Source-read budgets, or None for caller-supervised unlimited work.
 
         Raises:
             ProjectedGeometryMemoryError: If projected polygons cannot fit.
@@ -439,6 +484,7 @@ class PolygonRasterizer:
         self.filtered_vector = filtered_vector
         self.maximum_coordinates = maximum_coordinates
         self.cancellation_requested = cancellation_requested
+        self.read_limits = read_limits
         # None means reread/project features for each mask. An empty list
         # enables retention; each entry stores a feature's pixel-space bounds
         # and its polygons projected into the raster CRS.
@@ -447,29 +493,38 @@ class PolygonRasterizer:
                 tuple[tuple[float, float, float, float], tuple[dict[str, object], ...]]
             ]
             | None
-        ) = ([] if max_retained_polygon_bytes else None)
+        ) = ([] if max_retained_polygon_bytes != 0 else None)
         self.retained_bytes = (
             sys.getsizeof(self._retained) if self._retained is not None else 0
         )
         self._closed = False
         try:
-            summary = selection_summary(filtered_vector, cancellation_requested)
-            segments = summary["coordinates"] - summary["rings"]
-            self.densify = min(
-                BOUNDED_WGS84_DENSIFY_POINTS,
-                max(0, (maximum_coordinates - summary["rings"]) // segments - 1),
-            )
+            self.densify = BOUNDED_WGS84_DENSIFY_POINTS
+            if maximum_coordinates is not None:
+                summary = selection_summary(
+                    filtered_vector, cancellation_requested, limits=read_limits
+                )
+                segments = summary["coordinates"] - summary["rings"]
+                self.densify = min(
+                    BOUNDED_WGS84_DENSIFY_POINTS,
+                    max(0, (maximum_coordinates - summary["rings"]) // segments - 1),
+                )
             left = top = math.inf
             right = bottom = -math.inf
             inverse = ~dataset.transform
             with polygon_features(
-                filtered_vector, cancellation_requested=cancellation_requested
+                filtered_vector,
+                cancellation_requested=cancellation_requested,
+                limits=read_limits,
             ) as features:
                 for geometry in features:
                     # The callback returns True when this work is cancelled.
                     # Stop before allocating/projecting another feature.
                     require_active_raster_read(cancellation_requested)
-                    if self._retained is not None:
+                    if (
+                        self._retained is not None
+                        and max_retained_polygon_bytes is not None
+                    ):
                         rings = _polygon_rings(geometry)
                         count = sum(len(ring) - 1 for ring in rings) * (
                             self.densify + 1
@@ -510,11 +565,16 @@ class PolygonRasterizer:
                             projected_group,
                         )
                         retained_feature_bytes = (
-                            _estimate_geometry_memory_bytes(entry)
-                            + RETAINED_LIST_ENTRY_ALLOWANCE_BYTES
+                            0
+                            if max_retained_polygon_bytes is None
+                            else (
+                                _estimate_geometry_memory_bytes(entry)
+                                + RETAINED_LIST_ENTRY_ALLOWANCE_BYTES
+                            )
                         )
                         if (
-                            self.retained_bytes + retained_feature_bytes
+                            max_retained_polygon_bytes is not None
+                            and self.retained_bytes + retained_feature_bytes
                             > max_retained_polygon_bytes
                         ):
                             raise ProjectedGeometryMemoryError(
@@ -557,7 +617,7 @@ class PolygonRasterizer:
         """
         rings = _polygon_rings(geometry)
         count = sum(len(r) - 1 for r in rings) * (self.densify + 1) + len(rings)
-        if count > self.maximum_coordinates:
+        if self.maximum_coordinates is not None and count > self.maximum_coordinates:
             raise ValueError("A feature exceeds the transformed-coordinate buffer")
         return project_wgs84_polygons(self.dataset, (geometry,), count)
 
@@ -646,7 +706,10 @@ class PolygonRasterizer:
             self.filtered_vector, self.dataset.crs, affine, out_shape
         )
         with polygon_features(
-            self.filtered_vector, bbox, self.cancellation_requested
+            self.filtered_vector,
+            bbox,
+            self.cancellation_requested,
+            limits=self.read_limits,
         ) as features:
             for geometry in features:
                 projected = self.project(geometry)
@@ -699,8 +762,11 @@ def pixels_inside_area(
 
 
 @contextmanager
-def _limit_memory() -> Iterator[None]:
+def _limit_memory(maximum_bytes: int | None = 2 * 1024**3) -> Iterator[None]:
     """Bound Linux selection memory without changing later operations' limits.
+
+    Args:
+        maximum_bytes: Address-space ceiling, or None to leave OS policy unchanged.
 
     Yields:
         Control with at most 2 GiB of address space, respecting stricter existing
@@ -711,14 +777,15 @@ def _limit_memory() -> Iterator[None]:
         OSError: If the operating system cannot apply or restore the limit.
         ValueError: If the operating system rejects the configured limit.
     """
-    if sys.platform != "linux":
+    if maximum_bytes is None or sys.platform != "linux":
         yield
         return
     import resource
 
     previous = resource.getrlimit(resource.RLIMIT_AS)
     ceiling = min(
-        [2 * 1024**3] + [value for value in previous if value != resource.RLIM_INFINITY]
+        [maximum_bytes]
+        + [value for value in previous if value != resource.RLIM_INFINITY]
     )
     resource.setrlimit(resource.RLIMIT_AS, (ceiling, previous[1]))
     try:
@@ -728,17 +795,20 @@ def _limit_memory() -> Iterator[None]:
 
 
 def summary_process(
-    writer: ProcessResultWriter, resolved: ResolvedCatalogSelection
+    writer: ProcessResultWriter,
+    resolved: ResolvedCatalogSelection,
+    limits: VectorReadLimits | None = VectorReadLimits(),
 ) -> None:
     """Measure direct-source metadata in a supervised native process.
 
     Args:
         writer: Supervisor-owned result channel.
         resolved: Authorized original source and predicate.
+        limits: Read and memory budgets, or None for caller-supervised unlimited work.
     """
     try:
-        with _limit_memory():
-            result = selection_summary(resolved)
+        with _limit_memory(limits.memory_bytes if limits else None):
+            result = selection_summary(resolved, limits=limits)
         writer.put((True, result))
     except (GeometryValidationError, SelectionUnavailableError) as error:
         writer.put((False, str(error)))

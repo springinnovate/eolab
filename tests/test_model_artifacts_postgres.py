@@ -479,14 +479,14 @@ def test_missing_declared_intermediate_never_publishes(
     assert not list((worker.artifacts.root / "attempts").iterdir())
 
 
-def test_file_ids_cannot_cross_runs_and_finish_preserves_reservation(
+def test_file_ids_cannot_cross_runs_and_finish_records_actual_bytes(
     multiple_boundary: Any, store: Any
 ) -> None:
-    """Scope IDs to their run and reject oversized or late manifest publication.
+    """Scope IDs to their run, record actual bytes and reject late publication.
 
     Args:
         multiple_boundary: Actual model execution producing several retained files.
-        store: Durable reservation and attempt-fencing authority.
+        store: Durable file-ownership and attempt-fencing authority.
     """
     client, worker, _, body = multiple_boundary
     first = submit(client, body)
@@ -521,13 +521,19 @@ def test_file_ids_cannot_cross_runs_and_finish_preserves_reservation(
     )["id"]
     claimed = store.claim_next_job()
     assert claimed["id"] == identifier
-    with pytest.raises(ProcessingError) as error:
-        store.finish(identifier, claimed["attempt_id"], artifact)
-    assert error.value.code == "output_too_large"
-    unchanged = store.get(identifier, "fixture-owner")
-    assert unchanged["status"] == "running" and unchanged["artifact"] is None
-    assert unchanged["reserved_bytes"] == artifact.manifest.total_bytes - 1
+    assert claimed["reserved_bytes"] == 0
     assert not store.finish(identifier, "0" * 32, artifact)
+    assert store.finish(identifier, claimed["attempt_id"], artifact)
+    completed = store.get(identifier, "fixture-owner")
+    assert completed["status"] == "ready"
+    assert completed["reserved_bytes"] == artifact.manifest.total_bytes
+    assert not store.finish(identifier, claimed["attempt_id"], artifact)
+    identifier = store.submit(
+        "fixture-owner", uuid4().hex,
+        PreparedJobPlan({}, {}, 0, operation="fixture.files.v1"), uuid4().hex,
+    )["id"]
+    claimed = store.claim_next_job()
+    assert claimed["id"] == identifier
     assert store.finish(
         identifier,
         claimed["attempt_id"],

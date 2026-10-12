@@ -433,8 +433,8 @@ def record_model_preparation(
         {
             "state": "prepared",
             "limits": {
-                "runtimeSeconds": limits.runtime_seconds,
-                "processMemoryBytes": limits.process_memory_bytes,
+                "runtimeSeconds": None,
+                "processMemoryBytes": None,
                 "reservedBytes": prepared.reserved_bytes,
                 "resultTtlSeconds": limits.result_ttl_seconds,
             },

@@ -18,6 +18,7 @@ from eolab_app.processing.models import (
     JobInputFile,
 )
 
+
 class JobSubscription(Protocol):
     """A session-owned subscription that signals when job status should be reread."""
 
@@ -79,7 +80,7 @@ class JobWakeup(Protocol):
 
 
 class JobStore(Protocol):
-    """Persist Processing jobs and enforce their ownership, leases and storage limits."""
+    """Persist Processing jobs and enforce ownership, execution slots and renewable leases."""
 
     def inspect_input_file(
         self, owner: str, run_id: str, artifact_id: str
@@ -180,18 +181,18 @@ class JobStore(Protocol):
         attempt: str,
         prepared: PreparedJobPlan,
     ) -> dict[str, Any]:
-        """Publish prepared inputs and reserve execution storage for a live attempt.
+        """Store prepared inputs for the still-running worker attempt.
 
         Args:
             identifier: Running job ID.
             attempt: Current worker attempt, checked against cancellation and expiry.
-            prepared: Validated execution inputs, summary and required disk bytes.
+            prepared: Validated execution inputs and public summary.
 
         Returns:
-            Prepared running job, or queued job awaiting shared disk capacity.
+            Updated running job.
 
         Raises:
-            ProcessingError: If the attempt cannot proceed or storage is exhausted.
+            ProcessingError: If cancellation or a lost lease prevents the attempt from continuing.
         """
         ...
 
@@ -202,10 +203,9 @@ class JobStore(Protocol):
         expected: PreparedJobPlan,
         request_hash: str,
     ) -> dict[str, Any]:
-        """Join matching active work or queue a computation within resource budgets.
+        """Join matching active work or queue a computation owned by this session.
 
-        The running attempt is separate from the owner's pending-job allowance.
-        An idempotent retry returns its existing job even when admission is full.
+        An idempotent retry returns its existing job without queuing another.
         A work key identifies shared execution; each caller still owns a separate
         handle, cancellation and presentation. Storage does not interpret the key.
 
@@ -219,7 +219,7 @@ class JobStore(Protocol):
             Owned handle with current computation state and its small public summary.
 
         Raises:
-            ProcessingError: If global or owner limits are full.
+            ProcessingError: If the request identity conflicts or job storage is unavailable.
         """
         ...
 
@@ -341,17 +341,15 @@ class JobStore(Protocol):
         ...
 
     def claim_next_job(self) -> dict[str, Any] | None:
-        """Reserve capacity for a fitting job of the least recently served session.
+        """Claim the oldest eligible job for the least recently served session.
 
-        New sessions go first; ties use job admission order. Running jobs are
-        never preempted. Slots, native memory and disk are checked atomically.
-
-        Crash recovery waits through the previous hard deadline plus exit grace.
-        A lost DB connection cannot cause a second native child to start while
-        the old child could still be running under its supervisor deadline.
+        New sessions go first; ties use job admission order. Only the concurrent
+        worker count restricts admission. Lost leases do not release active slots:
+        the supervisor must stop native work before recording the terminal state.
+        Container startup recovers interrupted work after the previous worker exits.
 
         Returns:
-            Claimed job or None when no queued job fits current capacity.
+            Claimed job, or None when the queue is empty or all worker slots are occupied.
         """
         ...
 
@@ -366,7 +364,7 @@ class JobStore(Protocol):
             progress: Bounded, owner-defined progress fields.
 
         Returns:
-            False after cancellation, lost lease, or deadline expiration.
+            False after cancellation or loss of the worker lease.
         """
         ...
 
@@ -463,7 +461,7 @@ class JobStore(Protocol):
         and while a transfer is active. Run pruning even without removable files.
 
         Returns:
-            At most 100 rows with no active transfer; budgets remain reserved
+            At most 100 rows with no active transfer. File ownership remains recorded
             until the worker confirms filesystem cleanup.
 
         Raises:
@@ -492,24 +490,22 @@ class JobArtifactStore(Protocol):
     """Store job workspaces and publish, locate or remove their result files."""
 
     def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
-        """Check physical free space and create one unique private attempt.
+        """Create one unique private workspace for an authorized worker attempt.
 
-        The job store owns reservation admission. Preparation must not traverse
-        retained outputs to recalculate their total size.
+        There is no disk estimate or free-space preflight. Filesystem write errors
+        propagate to the worker and its ordinary failure/cleanup workflow.
 
         Args:
             attempt: Fenced worker attempt ID.
-            reservation: Admitted worst-case scratch/output byte reservation.
-            limits: Settings whose free_space_floor is the minimum number of bytes
-                that must remain free after allowing for this job's reservation.
+            reservation: Historical reservation field, accepted but not enforced.
+            limits: Processing lifecycle settings; no storage ceiling is applied.
 
         Returns:
             Empty attempt directory.
 
         Raises:
-            ProcessingError: If physical disk headroom is insufficient.
             ValueError: If the attempt ID or resolved path is not confined.
-            OSError: If free space cannot be read or the directory cannot be created.
+            OSError: If the private directory cannot be created.
         """
         ...
 
@@ -524,7 +520,7 @@ class JobArtifactStore(Protocol):
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
-            reservation: Admitted scratch/output ceiling, checked before publish.
+            reservation: Historical reservation field, accepted but not enforced.
             declarations: Files explicitly approved for retention by the application.
             cancelled: Signal checked during hashing and before publication. The
                 caller must wait for publication to exit before cleaning up.
@@ -533,7 +529,7 @@ class JobArtifactStore(Protocol):
             Verified files and exact retained bytes, including the manifest file.
 
         Raises:
-            ProcessingError: If the completed output exceeds its reservation.
+            ProcessingError: If a declared file is missing, changed or unsafe, or work is cancelled.
             OSError: If atomic publication fails.
         """
         ...
@@ -589,15 +585,15 @@ class JobArtifactStore(Protocol):
             attempt: Terminal job's strict internal attempt ID.
 
         Raises:
-            OSError: If cleanup failed; the caller must retain its reservation.
+            OSError: If cleanup failed; the caller must retain file ownership for retry.
         """
         ...
 
     def remove_orphans(self, retained: set[str], minimum_age_seconds: float) -> None:
-        """Reap abandoned attempts only after their maximum possible runtime.
+        """Remove abandoned workspaces after a short creation-race grace period.
 
         Args:
-            retained: IDs that still own database reservations or transfer leases.
-            minimum_age_seconds: Conservative hard-deadline plus exit grace.
+            retained: IDs still owned by active work, retained results or transfer leases.
+            minimum_age_seconds: Minimum directory age protecting concurrent workspace creation.
         """
         ...

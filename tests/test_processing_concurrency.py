@@ -45,19 +45,15 @@ def claim_from_process(
         jobs.close()
 
 
-def test_cross_process_claims_bound_memory_and_preserve_fairness(
+def test_cross_process_claims_bound_worker_count_and_preserve_fairness(
     store: PostgresJobStore,
 ) -> None:
-    """Independent claimers cannot overfill slots or memory; new owners get a turn.
+    """Independent claimers cannot overfill worker slots; new owners get a turn.
 
     Args:
         store: Disposable PostgreSQL queue.
     """
-    store.limits = replace(
-        store.limits,
-        worker_count=4,
-        max_execution_memory_bytes=2 * store.limits.process_memory_bytes,
-    )
+    store.limits = replace(store.limits, worker_count=2)
     for index in range(6):
         store.submit("stack", str(index), PreparedJobPlan({}, {}, 0), str(index))
     visitor = store.submit("visitor", "first", PreparedJobPlan({}, {}, 0), "visitor")
@@ -69,9 +65,9 @@ def test_cross_process_claims_bound_memory_and_preserve_fairness(
     assert len(active) == 2
     assert {row["owner"] for row in active} == {"stack", "visitor"}
     assert visitor["job_id"] in {row["id"] for row in active}
-    assert (
-        sum(row["execution_memory_bytes"] for row in active)
-        == store.limits.max_execution_memory_bytes
+    assert all(
+        row["execution_memory_bytes"] == 0 and row["deadline_at"] is None
+        for row in active
     )
     assert store.claim_next_job() is None
     # Cancellation and an expired heartbeat do not release native capacity.
@@ -87,49 +83,31 @@ def test_cross_process_claims_bound_memory_and_preserve_fairness(
     assert store.claim_next_job() is not None
 
 
-def test_prepared_job_waits_for_disk_without_repeating_preparation(
+def test_prepared_job_keeps_its_attempt_without_disk_admission(
     store: PostgresJobStore,
 ) -> None:
-    """Prepared inputs stay queued until a completed artifact releases its reservation.
+    """Preparation keeps its worker slot and attempt regardless of old reservation metadata.
 
     Args:
-        store: Disposable PostgreSQL queue.
+        store: Disposable PostgreSQL queue with two worker slots.
     """
-    store.limits = replace(
-        store.limits,
-        worker_count=2,
-        max_execution_memory_bytes=4 * 1024**3,
-        max_stored_bytes=100,
-        result_metadata_reservation_bytes=0,
+    store.limits = replace(store.limits, worker_count=2)
+    for owner in ("first", "second"):
+        store.submit(owner, "request", PreparedJobPlan({}, {}, 0), "hash")
+    first, second = store.claim_next_job(), store.claim_next_job()
+    saved = store.save_prepared_job(
+        second["id"],
+        second["attempt_id"],
+        PreparedJobPlan({"prepared": True}, {}, 2**40),
     )
-    first = store.submit("first", "first", PreparedJobPlan({}, {}, 80), "first")
-    one = store.claim_next_job()
-    second = store.submit(
-        "second", "second", PreparedJobPlan({"request": {}}, {}, 0), "second"
+    assert saved["status"] == "running" and saved["attempt_id"] == second["attempt_id"]
+    assert saved["reserved_bytes"] == 0
+    assert store.finish(
+        first["id"], first["attempt_id"], Artifact(80, "0" * 64, "result")
     )
-    two = store.claim_next_job()
-    prepared = PreparedJobPlan({"prepared": True}, {"grid": "retained"}, 50)
-    waiting = store.save_prepared_job(two["id"], two["attempt_id"], prepared)
-    assert waiting["status"] == "queued"
-    assert waiting["attempt_id"] is None
-    assert waiting["execution_memory_bytes"] == waiting["reserved_bytes"] == 0
-    assert store.claim_next_job() is None
-    assert store.finish(one["id"], one["attempt_id"], Artifact(80, "0" * 64, "result"))
-    assert store.claim_next_job() is None
-    store.cancel(first["id"], "first", delete=True)
-    store.cleaned(first["job_id"])
-    resumed = store.claim_next_job()
-    assert resumed["id"] == second["job_id"]
-    assert resumed["spec"] == {"prepared": True}
-    assert resumed["reserved_bytes"] == 50
-    assert resumed["summary"] == {"grid": "retained"}
-    assert not store.finish(two["id"], two["attempt_id"], Artifact(1, "old", "old"))
-    with pytest.raises(ProcessingError, match="configured limit"):
-        store.save_prepared_job(
-            resumed["id"],
-            resumed["attempt_id"],
-            replace(prepared, reserved_bytes=101),
-        )
+    assert store.finish(
+        second["id"], second["attempt_id"], Artifact(90, "1" * 64, "result")
+    )
 
 
 def test_release_wakes_idle_workers_before_fallback(store: PostgresJobStore) -> None:
@@ -173,9 +151,7 @@ def test_two_real_native_workers_execute_and_deduplicate(
         store: Disposable PostgreSQL queue.
     """
     client, template, _, _, _ = boundary
-    store.limits = replace(
-        store.limits, worker_count=2, max_execution_memory_bytes=4 * 1024**3
-    )
+    store.limits = replace(store.limits, worker_count=2)
     payload = request_body()
     inputs = [
         {**payload, "requestId": uuid4().hex},
@@ -251,9 +227,7 @@ def test_stopping_one_native_child_does_not_stop_other_jobs(
     import eolab_app.processing.worker as worker_module
 
     client, template, _, artifacts, _ = boundary
-    store.limits = replace(
-        store.limits, worker_count=2, max_execution_memory_bytes=4 * 1024**3
-    )
+    store.limits = replace(store.limits, worker_count=2)
     monkeypatch.setattr(
         "eolab_app.processing.raster_operations.clip_process_target", _paused_clip
     )

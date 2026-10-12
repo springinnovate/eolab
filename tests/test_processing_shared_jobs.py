@@ -37,7 +37,6 @@ def test_concurrent_subscribers_share_one_claim_and_reservation(
         store: Disposable PostgreSQL adapter.
     """
     plan = PreparedJobPlan({"input": "same"}, {}, 1024, work_key="same")
-    store.limits = replace(store.limits, max_waiting_jobs=1, max_stored_bytes=1024)
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=12) as clients:
         jobs = list(

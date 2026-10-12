@@ -425,9 +425,7 @@ def test_preparation_and_execution_are_observed_and_cancelled_through_one_job(
     asyncio.run(exercise())
 
 
-def test_preparation_rejects_insufficient_disk_before_execution(
-    boundary: Any, store: Any
-) -> None:
+def test_preparation_runs_without_disk_reservations(boundary: Any, store: Any) -> None:
     """Defer disk estimation, but reserve it before creating calculation files.
 
     Args:
@@ -435,13 +433,11 @@ def test_preparation_rejects_insufficient_disk_before_execution(
         store: Adapter whose aggregate reservation is intentionally constrained.
     """
     client, worker, _, artifacts, _ = boundary
-    store.limits = replace(store.limits, max_stored_bytes=1)
     response = client.post(
         ENDPOINT, json={**request_body(), "requestId": uuid4().hex}, headers=HEADERS
     )
     assert response.status_code == 202, response.text
     assert asyncio.run(worker.run_once())
     job = client.get(f"/api/processing/jobs/{response.json()['jobId']}").json()
-    assert job["status"] == "failed", job
-    assert job["error"]["code"] == "storage_full"
+    assert job["status"] == "ready", job
     assert not list((artifacts.root / "attempts").iterdir())

@@ -31,6 +31,8 @@ from eolab_app.processing.hydrology_validation import (
     validate_hydrology_sources,
     HydrologyValidationLimits,
 )
+from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.raster.source_identity import RasterSourceIdentity
 
 
 def assert_same_raster(actual: Path, expected: Path) -> None:
@@ -70,6 +72,7 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
         "multiple-drains",
         "virtual-link",
         "resampled-dem",
+        "dem-nodata",
     ],
 )
 def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> None:
@@ -81,7 +84,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
 
     Args:
         tmp_path: Independent reference and wrapper workspaces.
-        case: Exercise routing, buffering/cutoff or values-grid/value-domain rules.
+        case: Exercise routing, buffering/cutoff, terrain NoData or value rules.
     """
     original = files("wwf_es_beneficiaries") / "workflow_runner.py"
     sources, request, limits = downstream_fixture(tmp_path / "inputs")
@@ -106,6 +109,21 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             raster.write(values, 1)
         area = box(0, 0, 0.02, 4)
     reference_mask = sources.rasters["starting_mask"]
+    if case == "dem-nodata":
+        with rasterio.open(sources.rasters["dem"], "r+") as raster:
+            elevations = raster.read(1)
+            elevations[1, 4] = raster.nodata
+            raster.write(elevations, 1)
+        report = validate_hydrology_sources(
+            request.hydrology.definition,
+            AuthorizedRaster(
+                sources.rasters["dem"],
+                RasterSourceIdentity.read(sources.rasters["dem"]),
+            ),
+            sources.network,
+            HydrologyValidationLimits(),
+        )
+        request = request.model_copy(update={"hydrology": report})
     if case == "vector-filter":
         from eolab_app.attribute_filter import VectorFilter
 
