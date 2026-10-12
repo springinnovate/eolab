@@ -203,9 +203,7 @@ def submitted(
     return response.json()
 
 
-@pytest.mark.parametrize(
-    "store", [RasterClipLimits(max_owner_waiting_jobs=100)], indirect=True
-)
+@pytest.mark.parametrize("store", [RasterClipLimits()], indirect=True)
 def test_requested_statuses_are_complete_owned_and_independent_of_history(
     boundary: Any, store: PostgresJobStore
 ) -> None:
@@ -472,8 +470,8 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
             "UPDATE processing.jobs SET lease_until=now()-interval '1 minute' WHERE id=%s",
             (lost["id"],),
         )
-    # Even after lease loss, no replacement child starts before the old hard
-    # deadline; this protects against overlapping deployments/DB outages.
+    # A lost heartbeat and even historical deadline metadata cannot release a
+    # slot while its native child could still run.
     assert store.claim_next_job() is None
     with psycopg.connect(store.conninfo) as connection:
         connection.execute(
@@ -481,6 +479,9 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
             (lost["id"],),
         )
     assert store.claim_next_job() is None
+    assert store.get(lost["id"], "owner")["status"] == "running"
+    # Startup performs recovery only after the previous container has stopped.
+    assert store.interrupt_unfinished_jobs_on_restart() == 1
     assert store.get(lost["id"], "owner")["status"] == "interrupted"
 
 
@@ -508,10 +509,12 @@ def test_job_store_admits_operation_data_without_raster_fields(
         store.submit("owner", "summary-request", prepared, "fixture-input-hash")["id"]
         == submitted_job["id"]
     )
-    store.limits = replace(store.limits, max_owner_waiting_jobs=1)
-    with pytest.raises(ProcessingError) as refused:
-        store.submit("owner", "another-request", prepared, "fixture-input-hash")
-    assert refused.value.code == "owner_queue_full"
+    assert (
+        store.submit("owner", "another-request", prepared, "fixture-input-hash")[
+            "status"
+        ]
+        == "queued"
+    )
     claimed = store.claim_next_job()
     assert claimed["spec"] == prepared.specification
     assert store.heartbeat(
@@ -522,9 +525,7 @@ def test_job_store_admits_operation_data_without_raster_fields(
     assert store.get(claimed["id"], "owner")["status"] == "cancelled"
 
 
-@pytest.mark.parametrize(
-    "store", [RasterClipLimits(max_owner_waiting_jobs=2)], indirect=True
-)
+@pytest.mark.parametrize("store", [RasterClipLimits()], indirect=True)
 def test_owner_disk_limits_and_transfer_lease_cleanup(
     boundary: Any, store: PostgresJobStore
 ) -> None:
@@ -543,8 +544,7 @@ def test_owner_disk_limits_and_transfer_lease_cleanup(
         json={**plan, "requestId": uuid4().hex},
         headers=HEADERS,
     )
-    assert full.status_code == 429
-    assert full.json()["detail"]["code"] == "owner_queue_full"
+    assert full.status_code == 202
     assert asyncio.run(worker.run_once())
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     row, lease = store.acquire_transfer(first["jobId"], owner)
@@ -563,7 +563,6 @@ def test_owner_disk_limits_and_transfer_lease_cleanup(
     assert not result.exists()
     cleaned = store.get(first["jobId"], owner)
     assert cleaned["spec"] is None and cleaned["reserved_bytes"] == 0
-    store.limits = replace(store.limits, max_stored_bytes=1)
     denied = client.post(
         "/api/processing/raster-clips",
         json={**plan, "requestId": uuid4().hex},
@@ -573,7 +572,9 @@ def test_owner_disk_limits_and_transfer_lease_cleanup(
     assert asyncio.run(worker.run_once())
     assert asyncio.run(worker.run_once())
     failed = client.get(f"/api/processing/jobs/{denied.json()['jobId']}").json()
-    assert failed["error"]["code"] == "storage_full"
+    assert asyncio.run(worker.run_once())
+    failed = client.get(f"/api/processing/jobs/{denied.json()['jobId']}").json()
+    assert failed["status"] == "ready"
 
 
 def _paused_clip(queue: Any, operation: str, arguments: tuple) -> None:
@@ -773,8 +774,8 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         assert isinstance(worker, ProcessingWorker)
         composed_workers.append(worker)
         cleanup_locks.append(cleanup_lock)
-        assert worker.limits.max_waiting_jobs == 61
-        assert worker.limits.max_owner_waiting_jobs == 17
+        assert worker.limits.worker_count == 2
+        assert not hasattr(worker.limits, "max_waiting_jobs")
         assert isinstance(wakeup, composition.PostgresJobWakeup)
         assert store.get(pending["id"], "owner")["status"] == "interrupted"
         async with cleanup_lock:

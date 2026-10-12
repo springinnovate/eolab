@@ -393,7 +393,7 @@ class PostgresJobStore:
             cursor.execute(
                 "SELECT p.attempt_id,p.artifact,i.sha256,i.bytes FROM processing.input_files i "
                 "JOIN processing.jobs j ON j.id=i.job_id JOIN processing.jobs p ON p.id=i.parent_id "
-                "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running' AND j.lease_until>now() AND j.deadline_at>now() "
+                "WHERE j.id=%s AND j.attempt_id=%s AND j.status='running' AND j.lease_until>now() "
                 "AND i.run_id=%s AND i.artifact_id=%s",
                 (identifier, attempt, run_id, artifact_id),
             )
@@ -490,11 +490,7 @@ class PostgresJobStore:
         new_subscribers: list[tuple[Any, ...]] = []
         new_inputs: list[tuple[Any, ...]] = []
         with self._transaction(acquire_lock=True) as cursor:
-            with (
-                cursor.connection.cursor() as work_cursor,
-                cursor.connection.cursor() as count_cursor,
-                cursor.connection.cursor() as subscriber_cursor,
-            ):
+            with (cursor.connection.cursor() as work_cursor,):
                 with cursor.connection.pipeline():
                     cursor.execute(
                         "SELECT * FROM processing.subscribed_jobs WHERE owner=%s AND request_key=ANY(%s)",
@@ -502,26 +498,13 @@ class PostgresJobStore:
                     )
                     work_cursor.execute(
                         "SELECT id,work_key,status,(status='queued' OR "
-                        "(lease_until>now() AND deadline_at>now())) AS can_join "
+                        "(lease_until>now())) AS can_join "
                         "FROM processing.jobs WHERE work_key=ANY(%s) AND status IN ('queued','running')",
                         (work_keys,),
-                    )
-                    count_cursor.execute(
-                        "SELECT count(*) AS waiting FROM processing.jobs WHERE status='queued'"
-                    )
-                    subscriber_cursor.execute(
-                        "SELECT (SELECT count(*) FROM processing.job_subscribers) AS records,"
-                        "(SELECT count(*) FROM processing.job_subscribers s "
-                        "JOIN processing.jobs j ON j.id=s.job_id "
-                        "WHERE s.owner=%s AND s.status IS NULL AND j.status='queued') AS owned",
-                        (owner,),
                     )
                 existing_rows = cursor.fetchall()
                 requests = {row["request_key"]: row for row in existing_rows}
                 work = {row["work_key"]: row for row in work_cursor.fetchall()}
-                waiting = count_cursor.fetchone()["waiting"]
-                subscribers = subscriber_cursor.fetchone()
-            records, owned = subscribers["records"], subscribers["owned"]
             for item in submissions:
                 existing = requests.get(item.request_key)
                 if existing:
@@ -570,34 +553,7 @@ class PostgresJobStore:
                         )
                     )
                     continue
-                uses_waiting = not shared or shared["status"] == "queued"
-                if uses_waiting and owned >= self.limits.max_owner_waiting_jobs:
-                    outcomes.append(
-                        ProcessingError(
-                            "owner_queue_full",
-                            "This browser session has reached its waiting-job limit. Cancel a queued job or wait for one to start.",
-                            429,
-                        )
-                    )
-                    continue
-                if records >= self.limits.max_job_records:
-                    outcomes.append(
-                        ProcessingError(
-                            "job_record_capacity",
-                            "Processing job history is full. Try later or increase its record limit.",
-                            429,
-                        )
-                    )
-                    continue
-                if not shared and waiting >= self.limits.max_waiting_jobs:
-                    outcomes.append(
-                        ProcessingError(
-                            "queue_full",
-                            "The processing waiting queue is full. Wait for a job to start.",
-                            429,
-                        )
-                    )
-                    continue
+
                 identifier = uuid4().hex
                 job_id = shared["id"] if shared else identifier
                 if not shared:
@@ -635,7 +591,7 @@ class PostgresJobStore:
                             retained_seconds,
                         )
                     )
-                    waiting += 1
+
                     if expected.work_key:
                         work[expected.work_key] = {
                             "id": job_id,
@@ -661,8 +617,7 @@ class PostgresJobStore:
                     "request_hash": item.request_hash,
                     "operation": item.operation,
                 }
-                records += 1
-                owned += bool(uses_waiting)
+
                 outcomes.append(identifier)
             with cursor.connection.pipeline():
                 if new_jobs:
@@ -697,27 +652,24 @@ class PostgresJobStore:
         attempt: str,
         prepared: PreparedJobPlan,
     ) -> dict[str, Any]:
-        """Save preparation and reserve disk, or queue the prepared job until it fits.
+        """Save prepared inputs while the same worker still owns the running attempt.
 
         Args:
-            identifier: Running job ID.
-            attempt: Worker attempt that must still own the job.
-            prepared: Validated execution inputs, public summary and disk estimate.
+            identifier: Running computation ID.
+            attempt: Current worker attempt token.
+            prepared: Validated path-free inputs, display summary and retained run details.
 
         Returns:
-            Updated job with prepared inputs. Temporary disk contention returns
-            it to queued without an attempt; preparation created no attempt files.
-            Dependent jobs must fit beside all currently retained input files so
-            queued jobs cannot keep one another's required storage occupied.
+            Updated running job without reserving disk or returning it to the queue.
+            Historical reservation fields remain readable but are not admission limits.
 
         Raises:
-            ProcessingError: If ownership was lost, cancellation won, or this job
-                and currently retained inputs cannot fit the disk budget together.
+            ProcessingError: If ownership was lost, cancellation won or storage failed.
         """
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
                 "SELECT * FROM processing.jobs WHERE id=%s AND attempt_id=%s "
-                "AND status='running' AND lease_until>now() AND deadline_at>now() FOR UPDATE",
+                "AND status='running' AND lease_until>now() FOR UPDATE",
                 (identifier, attempt),
             )
             if cursor.fetchone() is None:
@@ -725,51 +677,14 @@ class PostgresJobStore:
                     "job_cancelled", "Job stopped during preparation.", 409
                 )
             cursor.execute(
-                "SELECT COALESCE(sum(reserved_bytes),0) AS bytes "
-                "FROM processing.jobs WHERE reserved_bytes>0 AND id<>%s",
-                (identifier,),
-            )
-            used = cursor.fetchone()
-            cursor.execute(
-                "SELECT coalesce(sum(reserved_bytes),0) AS bytes FROM processing.jobs "
-                "WHERE id IN (SELECT parent_id FROM processing.input_files) "
-                "AND EXISTS (SELECT 1 FROM processing.input_files WHERE job_id=%s)",
-                (identifier,),
-            )
-            retained = cursor.fetchone()["bytes"]
-            if prepared.reserved_bytes + retained > self.limits.max_stored_bytes:
-                raise ProcessingError(
-                    "storage_full",
-                    (
-                        "This calculation and the results being used as inputs exceed the configured limit for temporary storage. Try a smaller area, or retry after other jobs finish."
-                        if retained
-                        else "This calculation needs more temporary storage than the configured limit."
-                    ),
-                    422,
-                )
-            waiting = (
-                used["bytes"] + prepared.reserved_bytes > self.limits.max_stored_bytes
-            )
-            cursor.execute(
-                "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),reserved_bytes=%s,"
-                "required_disk_bytes=%s,status=%s,"
-                "attempt_id=CASE WHEN %s THEN NULL ELSE attempt_id END,"
-                "lease_until=CASE WHEN %s THEN NULL ELSE lease_until END,"
-                "deadline_at=CASE WHEN %s THEN NULL ELSE deadline_at END,"
-                "execution_memory_bytes=CASE WHEN %s THEN 0 ELSE execution_memory_bytes END,"
-                "progress=%s,updated_at=clock_timestamp() WHERE id=%s RETURNING *",
+                "UPDATE processing.jobs SET spec=%s,summary=%s,retained_metadata=COALESCE(%s,retained_metadata),"
+                "reserved_bytes=0,required_disk_bytes=0,progress=%s,updated_at=clock_timestamp() "
+                "WHERE id=%s RETURNING *",
                 (
                     Jsonb(prepared.specification),
                     Jsonb(prepared.summary),
                     serialize_retained_metadata(prepared.retained_metadata),
-                    0 if waiting else prepared.reserved_bytes,
-                    prepared.reserved_bytes,
-                    "queued" if waiting else "running",
-                    waiting,
-                    waiting,
-                    waiting,
-                    waiting,
-                    Jsonb({} if waiting else {"phase": "calculating"}),
+                    Jsonb({"phase": "calculating"}),
                     identifier,
                 ),
             )
@@ -1112,22 +1027,17 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def claim_next_job(self) -> dict[str, Any] | None:
-        """Claim a fitting queued job and reserve its execution capacity atomically.
+        """Claim the next session's queued job when a worker slot is available.
 
-        Sessions with no previous start go first. Ties use their oldest waiting
-        fitting job, and each session's fitting jobs remain FIFO. A large stack cannot
-        take another turn ahead of a session that has been waiting since its
-        previous turn. Running jobs are never preempted. Cancellation and failure
-        still count as a turn once execution starts.
-        Shared work serves all subscribed sessions in one turn. The returned
-        owner identifies the session whose turn selected it, not exclusive ownership.
-
-        Running and cancelling jobs keep slots and memory until native work exits
-        or its hard deadline plus exit grace passes. A lost heartbeat alone never
-        frees capacity. Prepared jobs waiting for disk reuse their saved inputs.
+        Sessions are served by their most recent start, with newcomers first and FIFO
+        order within each session. Shared work serves its subscribed sessions together.
+        Running and cancelling jobs retain their slots until native exit is confirmed.
+        A lost heartbeat never releases capacity. Container replacement interrupts
+        unfinished jobs only after the previous worker and its native children stop.
+        There is no execution deadline, memory reservation or disk admission gate.
 
         Returns:
-            Claimed job, or None when execution is busy or no job waits.
+            Claimed job with a new attempt token, or None when no worker slot/job is free.
 
         Raises:
             ProcessingError: If the database cannot complete the claim.
@@ -1135,55 +1045,32 @@ class PostgresJobStore:
 
         with self._transaction(acquire_lock=True) as cursor:
             cursor.execute(
-                "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
-                (
-                    Jsonb(
-                        {
-                            "code": "interrupted",
-                            "detail": "The worker stopped before this job completed. Submit a new job to retry.",
-                        }
-                    ),
-                ),
+                "SELECT count(*) AS active FROM processing.jobs WHERE status IN ('running','cancelling')"
             )
-            cursor.execute(
-                "SELECT count(*) FILTER (WHERE status IN ('running','cancelling')) AS active,"
-                "coalesce(sum(execution_memory_bytes) FILTER (WHERE status IN ('running','cancelling')),0) AS memory,"
-                "coalesce(sum(reserved_bytes),0) AS disk FROM processing.jobs "
-                "WHERE status IN ('running','cancelling') OR reserved_bytes>0"
-            )
-            capacity = cursor.fetchone()
-            if (
-                capacity["active"] >= self.limits.worker_count
-                or capacity["memory"] + self.limits.process_memory_bytes
-                > self.limits.max_execution_memory_bytes
-            ):
+            if cursor.fetchone()["active"] >= self.limits.worker_count:
                 return None
             cursor.execute(
                 "SELECT waiting.id,waiting.owner FROM ("
                 "SELECT DISTINCT ON (s.owner) j.id,s.owner,j.created_at FROM processing.jobs j "
                 "JOIN processing.job_subscribers s ON s.job_id=j.id "
                 "WHERE j.status='queued' AND s.status IS NULL "
-                "AND j.required_disk_bytes-j.reserved_bytes<=%s "
                 "ORDER BY s.owner,j.created_at,j.id) waiting "
                 "LEFT JOIN LATERAL (SELECT j.started_at FROM processing.jobs j "
                 "JOIN processing.job_subscribers s ON s.job_id=j.id "
                 "WHERE s.owner=waiting.owner AND j.started_at IS NOT NULL "
                 "ORDER BY j.started_at DESC LIMIT 1) served ON true "
                 "ORDER BY served.started_at NULLS FIRST,waiting.created_at,waiting.id LIMIT 1",
-                (self.limits.max_stored_bytes - capacity["disk"],),
             )
             row = cursor.fetchone()
             if not row:
                 return None
             cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=now()+%s*interval '1 second',"
-                "execution_memory_bytes=%s,reserved_bytes=greatest(reserved_bytes,required_disk_bytes),"
+                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=NULL,"
+                "execution_memory_bytes=0,reserved_bytes=0,required_disk_bytes=0,"
                 "started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
                 (
                     uuid4().hex,
                     self.limits.lease_seconds,
-                    self.limits.runtime_seconds + 15,
-                    self.limits.process_memory_bytes,
                     row["id"],
                 ),
             )
@@ -1206,7 +1093,7 @@ class PostgresJobStore:
         """
         with self._transaction() as cursor:
             cursor.execute(
-                "UPDATE processing.jobs SET lease_until=now()+%s*interval '1 second',progress=CASE WHEN %s::jsonb='{}'::jsonb THEN progress ELSE %s::jsonb END,updated_at=now() WHERE id=%s AND attempt_id=%s AND status='running' AND lease_until>now() AND deadline_at>now() RETURNING id",
+                "UPDATE processing.jobs SET lease_until=now()+%s*interval '1 second',progress=CASE WHEN %s::jsonb='{}'::jsonb THEN progress ELSE %s::jsonb END,updated_at=now() WHERE id=%s AND attempt_id=%s AND status='running' AND lease_until>now() RETURNING id",
                 (
                     self.limits.lease_seconds,
                     Jsonb(progress),
@@ -1258,21 +1145,13 @@ class PostgresJobStore:
             if not row:
                 return False
             if artifact is not None:
-                retained_bytes = (
-                    artifact.size + self.limits.result_metadata_reservation_bytes
-                )
+                retained_bytes = artifact.size
                 if artifact.manifest is not None:
                     retained_bytes = read_artifact_manifest(
                         artifact.manifest
                     ).total_bytes
-                    if retained_bytes > row["reserved_bytes"]:
-                        raise ProcessingError(
-                            "output_too_large",
-                            "Completed files exceed the job's reservation.",
-                            413,
-                        )
                 cursor.execute(
-                    "UPDATE processing.jobs SET status='ready',artifact=%s,reserved_bytes=%s,expires_at=now()+%s*interval '1 second',updated_at=now(),progress=%s WHERE id=%s AND status='running' AND lease_until>now() AND deadline_at>now() RETURNING id",
+                    "UPDATE processing.jobs SET status='ready',artifact=%s,reserved_bytes=%s,expires_at=now()+%s*interval '1 second',updated_at=now(),progress=%s WHERE id=%s AND status='running' AND lease_until>now() RETURNING id",
                     (
                         Jsonb(asdict(artifact)),
                         retained_bytes,

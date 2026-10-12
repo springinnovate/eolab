@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from eolab_app.bounded_vector import summary_process, READ_SECONDS
+from eolab_app.bounded_vector import summary_process
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     AggregateArtifact,
@@ -36,7 +36,6 @@ from eolab_app.processing.raster_aggregate import (
 )
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.job_preparation import prepare_aggregate_job, prepare_clip_job
-from eolab_app.processing.raster_mask import estimate_calculation_disk_bytes
 from eolab_app.processing.calculation_cache import (
     calculation_result_cache_keys,
     restore_cached_calculation_plan,
@@ -198,7 +197,7 @@ async def prepare_summary(
             )
         else:
             success, summary = await context.run_native(
-                summary_process, (resolved,), READ_SECONDS, context.native
+                summary_process, (resolved, None), None, context.native
             )
             if not success:
                 raise ProcessingError("selection_unavailable", summary, 409)
@@ -222,7 +221,7 @@ async def prepare_summary(
                     request.pixelPoint,
                 ),
             ),
-            context.limits.plan_timeout_seconds,
+            None,
             context.native,
         )
         if status != "ok":
@@ -274,7 +273,7 @@ async def prepare_clip(
             )
         resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
         success, summary = await context.run_native(
-            summary_process, (resolved,), READ_SECONDS, context.native
+            summary_process, (resolved, None), None, context.native
         )
         if not success:
             raise ProcessingError("selection_unavailable", summary, 409)
@@ -287,7 +286,7 @@ async def prepare_clip(
     status, grid = await context.run_native(
         clip_process_target,
         ("plan", (authorized.source_path, area, context.limits)),
-        context.limits.plan_timeout_seconds,
+        None,
         context.native,
     )
     if status != "ok":
@@ -574,12 +573,6 @@ def select_summary_execution(
     Raises:
         ProcessingError: If the reservation no longer covers the calculation.
     """
-    if reserved_bytes < estimate_calculation_disk_bytes(spec, context.aggregate_limits):
-        raise ProcessingError(
-            "insufficient_disk_reservation",
-            "This job reserved less disk space than its calculation now requires. Run the calculation again to reserve enough space.",
-            409,
-        )
     return aggregate_process_target, "calculate", context.aggregate_limits
 
 

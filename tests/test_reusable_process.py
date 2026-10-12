@@ -168,6 +168,114 @@ def test_shutdown_during_startup_and_between_calls() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_operation_without_deadline_still_obeys_cancellation(
+    tmp_path: Path, cancel: bool
+) -> None:
+    """Unlimited-duration calls complete normally or stop before releasing their child.
+
+    Args:
+        tmp_path: Native execution markers.
+        cancel: Whether to stop the calculation after it starts.
+    """
+
+    async def scenario() -> None:
+        """Run native work with no total deadline and verify its completion boundary."""
+        lane = ReusableProcess((slow, echo))
+        marker = tmp_path / "unlimited"
+        try:
+            task = asyncio.create_task(
+                lane.run(slow, (marker, 0.1 if not cancel else 30), None)
+            )
+            await started(marker)
+            pid = int(marker.read_text())
+            if cancel:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert pid not in {child.pid for child in active_children()}
+                assert not marker.with_suffix(".finished").exists()
+            else:
+                assert await task == "early"
+                assert marker.with_suffix(".finished").exists()
+            assert (await lane.run(echo, ("next",), None))[1] == "next"
+        finally:
+            await lane.close()
+
+    asyncio.run(scenario())
+
+
+def supervisor_exiting_during_native_work(marker: Path, reusable: bool) -> None:
+    """Simulate abrupt supervisor death while its native child is still executing.
+
+    Args:
+        marker: File containing the native PID after execution starts.
+        reusable: Select the reused or one-call process mechanism.
+    """
+    from eolab_app.execution.bounded_process import run_bounded_process
+
+    async def scenario() -> None:
+        """Exit without Python cleanup after the child confirms it has started."""
+        if reusable:
+            lane = ReusableProcess((slow,))
+            task = asyncio.create_task(lane.run(slow, (marker, 60), None))
+        else:
+            task = asyncio.create_task(run_bounded_process(slow, (marker, 60), None))
+        await started(marker)
+        os._exit(17)
+        await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux parent-death signal contract"
+)
+@pytest.mark.parametrize("reusable", [False, True])
+def test_supervisor_death_stops_native_work_without_deadline(
+    tmp_path: Path, reusable: bool
+) -> None:
+    """Abrupt worker death cannot leave an unlimited native calculation running.
+
+    Args:
+        tmp_path: Child PID and completion markers.
+        reusable: Exercise both existing native execution mechanisms.
+    """
+    from multiprocessing import get_context
+    import signal
+
+    marker = tmp_path / "orphan"
+    supervisor = get_context("spawn").Process(
+        target=supervisor_exiting_during_native_work, args=(marker, reusable)
+    )
+    supervisor.start()
+    native_pid = None
+    try:
+        supervisor.join(15)
+        assert supervisor.exitcode == 17
+        native_pid = int(marker.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = Path(f"/proc/{native_pid}/stat")
+            if not status.exists() or status.read_text().split()[2] == "Z":
+                native_pid = None
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("Native work survived its supervisor")
+        assert not marker.with_suffix(".finished").exists()
+    finally:
+        if supervisor.is_alive():
+            supervisor.kill()
+        supervisor.join()
+        supervisor.close()
+        if native_pid is not None:
+            try:
+                os.kill(native_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def test_startup_deadline_reaps_unready_child():
     """An interpreter that cannot become ready in time holds no native capacity."""
 

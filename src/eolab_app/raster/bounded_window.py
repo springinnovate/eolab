@@ -9,7 +9,6 @@ from rasterio.windows import Window
 
 from eolab_app.raster.models import CanonicalWgs84Bounds, SelectedRasterArea
 
-
 BOUNDED_WGS84_DENSIFY_POINTS = 21
 BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
 
@@ -166,7 +165,7 @@ def _polygon_rings(
 
 def _densify_polygon_rings(
     rings: tuple[tuple[tuple[float, float], ...], ...],
-    maximum_coordinates: int,
+    maximum_coordinates: int | None,
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
     """Densify Polygon edges without exceeding transformed-coordinate capacity.
 
@@ -183,16 +182,21 @@ def _densify_polygon_rings(
     segment_count = sum(max(0, len(ring) - 1) for ring in rings)
     if segment_count < 1:
         raise ValueError("Selection has no polygon edges")
-    if segment_count + len(rings) > maximum_coordinates:
+    if (
+        maximum_coordinates is not None
+        and segment_count + len(rings) > maximum_coordinates
+    ):
         raise ValueError("Selection exceeds the transformed-geometry limit")
-    densify_points = min(
-        BOUNDED_WGS84_DENSIFY_POINTS,
-        max(
-            0,
-            (maximum_coordinates - len(rings))
-            // segment_count
-            - 1,
-        ),
+    densify_points = (
+        BOUNDED_WGS84_DENSIFY_POINTS
+        if maximum_coordinates is None
+        else min(
+            BOUNDED_WGS84_DENSIFY_POINTS,
+            max(
+                0,
+                (maximum_coordinates - len(rings)) // segment_count - 1,
+            ),
+        )
     )
     denominator = densify_points + 1
     densified: list[tuple[tuple[float, float], ...]] = []
@@ -201,10 +205,12 @@ def _densify_polygon_rings(
         for start, end in zip(ring, ring[1:]):
             for step in range(1, denominator + 1):
                 fraction = step / denominator
-                result.append((
-                    start[0] + (end[0] - start[0]) * fraction,
-                    start[1] + (end[1] - start[1]) * fraction,
-                ))
+                result.append(
+                    (
+                        start[0] + (end[0] - start[0]) * fraction,
+                        start[1] + (end[1] - start[1]) * fraction,
+                    )
+                )
         densified.append(tuple(result))
     return tuple(densified)
 
@@ -266,7 +272,7 @@ def _source_window_for_projected_geometries(
 def project_wgs84_polygons(
     dataset: rasterio.io.DatasetReader,
     geometries: tuple[dict[str, object], ...],
-    maximum_coordinates: int,
+    maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
 ) -> tuple[dict[str, object], ...]:
     """Project bounded polygons without clipping their source-pixel envelope.
@@ -319,7 +325,7 @@ def project_wgs84_polygons(
     position_index = 0
     for ring in densified_rings:
         projected_rings.append(
-            projected_positions[position_index:position_index + len(ring)]
+            projected_positions[position_index : position_index + len(ring)]
         )
         position_index += len(ring)
 
@@ -337,13 +343,15 @@ def project_wgs84_polygons(
             ring_counts = [len(polygon) for polygon in coordinates]
         polygons = []
         for ring_count in ring_counts:
-            polygon_rings = projected_rings[ring_index:ring_index + ring_count]
+            polygon_rings = projected_rings[ring_index : ring_index + ring_count]
             ring_index += ring_count
             polygons.append(polygon_rings)
-        projected_geometries.append({
-            "type": geometry_type,
-            "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
-        })
+        projected_geometries.append(
+            {
+                "type": geometry_type,
+                "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
+            }
+        )
 
     return tuple(projected_geometries)
 
@@ -351,7 +359,7 @@ def project_wgs84_polygons(
 def selected_raster_area_for_wgs84_polygons(
     dataset: rasterio.io.DatasetReader,
     geometries: tuple[dict[str, object], ...],
-    maximum_coordinates: int,
+    maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
 ) -> SelectedRasterArea:
     """Project a bounded polygon union and clip its complete envelope to a raster.

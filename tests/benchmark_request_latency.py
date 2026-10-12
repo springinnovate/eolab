@@ -159,7 +159,7 @@ async def repeat_measurements(
         grid, planning = await measure(
             "plan",
             (path, signature, area, calculations, "a", limits, None),
-            limits.plan_timeout_seconds,
+            None,
             planner,
         )
         spec = AggregateSpec(
@@ -177,7 +177,7 @@ async def repeat_measurements(
         output = directory / str(repeat)
         output.mkdir()
         artifact, execution = await measure(
-            "calculate", (path, spec, output, limits), limits.runtime_seconds, executor
+            "calculate", (path, spec, output, limits), None, executor
         )
         assert float(artifact.rows[0]["value"]) == 7
         print(

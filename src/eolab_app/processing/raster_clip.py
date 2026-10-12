@@ -1,11 +1,10 @@
-"""Plan and create native-resolution raster clips within read and storage limits."""
+"""Plan and create native-resolution raster clips in private job storage."""
 
 from eolab_app.bounded_vector import pixels_inside_area
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
-import math
 from pathlib import Path
 import time
 from typing import Any, Literal
@@ -21,7 +20,7 @@ from eolab_app.processing.artifacts import write_progress as _progress
 from eolab_app.processing.raster_input import (
     validate_supported_raster as _validate_supported_raster,
     select_area,
-    estimate_native_raster_reads,
+    count_native_raster_blocks,
     raster_source_filename_prefix,
 )
 from eolab_app.processing.clip_models import (
@@ -47,7 +46,7 @@ def _select_clip_area(
     Args:
         dataset: Validated open native raster.
         area: Immutable clip bounds/polygon selection.
-        limits: Geometry budget owned by clipping.
+        limits: Shared clip job lifecycle settings.
 
     Returns:
         Native window and projected mask geometry.
@@ -57,7 +56,7 @@ def _select_clip_area(
         area.kind,
         area.bounds,
         area.geometries,
-        limits.max_coordinates,
+        None,
         area.resolved,
     )
 
@@ -65,34 +64,23 @@ def _select_clip_area(
 def _plan_clip_grid(
     dataset: Any, selected: SelectedRasterArea, limits: RasterClipLimits
 ) -> ClipGrid:
-    """Plan the clip grid and estimate its raster-read and output-storage costs.
+    """Describe the clip grid and count source blocks for progress.
 
     Args:
         dataset: Validated one-band native grid.
         selected: Projected area and integral source window.
-        limits: Work and output ceilings.
+        limits: Shared clip job lifecycle settings.
 
     Returns:
-        Exact grid metadata and conservative reservation.
+        Exact grid metadata without a storage reservation.
 
     Raises:
-        ProcessingError: If output or source work exceeds clip capacity.
+        ProcessingError: If the source grid or selected area is invalid.
     """
     window = selected.source_window
     width, height = int(window.width), int(window.height)
     raw_bytes = width * height * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
-    bh, bw = dataset.block_shapes[0]
-    # Conservative O(1) ceiling prevents allocating an unbounded index tuple.
-    possible_blocks = (math.ceil(width / bw) + 1) * (math.ceil(height / bh) + 1)
-    if raw_bytes > limits.max_raw_bytes or possible_blocks > limits.max_native_blocks:
-        raise ProcessingError(
-            "clip_too_large",
-            "This clip exceeds the native-resolution size or block limit. Choose a smaller area.",
-            413,
-        )
-    block_count, _, decoded = estimate_native_raster_reads(
-        dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
-    )
+    block_count = count_native_raster_blocks(dataset, window)
     return ClipGrid(
         crs=dataset.crs.to_wkt(),
         transform=tuple(window_transform(window, dataset.transform))[:6],
@@ -102,10 +90,10 @@ def _plan_clip_grid(
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
         nativeBlocks=block_count,
-        decodedBytes=decoded,
+        decodedBytes=0,
         estimatedRawBytes=raw_bytes,
-        # Source-window staging + COG and overviews + finalization scratch.
-        reservedBytes=4 * raw_bytes + 32 * 1024**2,
+        # Retained for saved-grid compatibility; new plans do not reserve disk.
+        reservedBytes=0,
     )
 
 

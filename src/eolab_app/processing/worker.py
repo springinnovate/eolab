@@ -67,10 +67,10 @@ class ProcessingWorker:
             authorizer: Independent catalog source authorization.
             jobs: Durable global admission and attempt fencing.
             artifacts: Confined scratch and atomic result-file storage.
-            limits: Deployment-wide bounded processing policy.
+            limits: Deployment-wide concurrency, retention and cache policy.
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
-            downstream_limits: Optional administrator settings for downstream work.
+            downstream_limits: Optional downstream job lifecycle settings.
         """
         self.areas = areas
         self.authorizer = authorizer
@@ -126,7 +126,7 @@ class ProcessingWorker:
         Raises:
             ProcessingError: If the accepted grant or file identity is invalid.
             RasterFeatureError: If catalog authorization fails.
-            ProcessDeadlineError: If bounded checksum verification times out.
+            ProcessDeadlineError: If the native checksum process exits without a result.
         """
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
@@ -143,7 +143,7 @@ class ProcessingWorker:
         identity = await run_process(
             verify_source_file,
             (path, file.size, file.sha256),
-            min(30, self.limits.plan_timeout_seconds),
+            None,
             self.native,
         )
         if identity is None:
@@ -203,14 +203,13 @@ class ProcessingWorker:
         """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:
-            row: Claimed job updated with its prepared specification and reservation.
+            row: Claimed job updated with its prepared specification.
 
         Returns:
             Authorized source and published checksum reusable in this attempt.
 
         Raises:
-            ProcessingError: If authorization, cancellation, planning or reservation fails.
-            TimeoutError: If preparation exceeds its time limit.
+            ProcessingError: If authorization or planning fails, or the attempt is cancelled.
         """
         model = (
             ModelRunSpec.model_validate(row["spec"])
@@ -221,53 +220,48 @@ class ProcessingWorker:
         identifier = data.operation if model else data["operation"]
         operation = get_model_operation(identifier)
         queued = operation.parse_specification(data)
-        async with asyncio.timeout(self.limits.plan_timeout_seconds):
-            if not await asyncio.to_thread(
-                self.jobs.heartbeat,
-                row["id"],
-                row["attempt_id"],
-                {"phase": "preparing"},
-            ):
-                raise ProcessingError(
-                    "job_cancelled", "Calculation stopped before preparation.", 409
-                )
-            authorized, checksum = await self._resolve_source(
-                row, operation.source(queued)
+        if not await asyncio.to_thread(
+            self.jobs.heartbeat,
+            row["id"],
+            row["attempt_id"],
+            {"phase": "preparing"},
+        ):
+            raise ProcessingError(
+                "job_cancelled", "Calculation stopped before preparation.", 409
             )
-            if (
-                model is not None
-                and model.sourceSignature is not None
-                and tuple(authorized.source_signature.to_catalog())
-                != model.sourceSignature
-            ):
-                raise ProcessingError(
-                    "source_changed",
-                    "The raster changed after this model run was accepted.",
-                    409,
-                )
-            context = self._operation_context(model is None, checksum)
-            context.rasters.update(
-                await self._resolve_additional_sources(row, model, queued, operation)
+        authorized, checksum = await self._resolve_source(row, operation.source(queued))
+        if (
+            model is not None
+            and model.sourceSignature is not None
+            and tuple(authorized.source_signature.to_catalog()) != model.sourceSignature
+        ):
+            raise ProcessingError(
+                "source_changed",
+                "The raster changed after this model run was accepted.",
+                409,
             )
-            prepared = await operation.prepare(context, queued, authorized)
-            if model is not None:
-                prepared = record_model_preparation(row, prepared, self.limits)
-            row.update(
-                await asyncio.to_thread(
-                    self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
-                )
+        context = self._operation_context(model is None, checksum)
+        context.rasters.update(
+            await self._resolve_additional_sources(row, model, queued, operation)
+        )
+        prepared = await operation.prepare(context, queued, authorized)
+        if model is not None:
+            prepared = record_model_preparation(row, prepared, self.limits)
+        row.update(
+            await asyncio.to_thread(
+                self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
             )
-            return authorized, checksum
+        )
+        return authorized, checksum
 
-    async def _execute(self, row: dict[str, Any]) -> Artifact | None:
+    async def _execute(self, row: dict[str, Any]) -> Artifact:
         """Authorize the inputs, reuse or calculate values, and publish result files.
 
         Args:
             row: Job claimed with a unique execution fencing token.
 
         Returns:
-            Result-file metadata, or None after preparation returns the job to
-            the existing queue until its disk reservation fits.
+            Metadata for the completed and published result files.
 
         Raises:
             ProcessingError: If the source, resources, or native operation fail.
@@ -298,8 +292,6 @@ class ProcessingWorker:
             authorized, checksum = await self._prepare_operation(row)
             if not handler.reuse_prepared_source:
                 authorized = None
-        if row["status"] == "queued":
-            return None
         calculation_spec = (
             ModelRunSpec.model_validate(row["spec"]).calculation
             if model
@@ -351,7 +343,7 @@ class ProcessingWorker:
         status, value = await run_process(
             target,
             (action, (native_sources, spec, directory, limits)),
-            self.limits.runtime_seconds,
+            None,
             self.native,
         )
         if status != "ok":
@@ -380,14 +372,14 @@ class ProcessingWorker:
         """Publish complete declared files without blocking heartbeats or racing cleanup.
 
         Args:
-            row: Running attempt with its admitted disk reservation and declarations.
+            row: Running attempt with its declared output files.
             artifact: Native result metadata; all native file handles are closed.
 
         Returns:
             The original scientific result with its verified immutable inventory.
 
         Raises:
-            ProcessingError: If file validation, retention limits or publication fail.
+            ProcessingError: If file validation or publication fails.
             asyncio.CancelledError: After the publication thread has stopped writing.
         """
         if row["spec"]["operation"] == MODEL_OPERATION:
@@ -461,47 +453,13 @@ class ProcessingWorker:
         task = asyncio.create_task(self._execute(row))
         finished = False
         try:
-            async with asyncio.timeout(self.limits.runtime_seconds):
-                while not task.done():
-                    progress = await asyncio.to_thread(self.artifacts.progress, attempt)
-                    if not await asyncio.to_thread(
-                        self.jobs.heartbeat, identifier, attempt, progress
-                    ):
-                        task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
-                        await asyncio.to_thread(
-                            self.jobs.finish,
-                            identifier,
-                            attempt,
-                            None,
-                            {
-                                "code": "interrupted",
-                                "detail": "The job was cancelled or its worker lease ended.",
-                            },
-                        )
-                        finished = True
-                        return True
-                    await asyncio.wait((task,), timeout=2)
-                artifact = task.result()
-                if artifact is None:
-                    # Preparation has stopped and durable storage owns the wait.
-                    finished = True
-                    return True
-                reusable_results = None
-                if row["spec"]["operation"] != MODEL_OPERATION:
-                    handler = get_model_operation(row["spec"]["operation"])
-                    if handler.reusable is not None:
-                        reusable_results = handler.reusable(
-                            handler.prepared_type.model_validate(row["spec"]), artifact
-                        )
-                finished = await asyncio.to_thread(
-                    self.jobs.finish,
-                    identifier,
-                    attempt,
-                    artifact,
-                    reusable_results=reusable_results,
-                )
-                if not finished:
+            while not task.done():
+                progress = await asyncio.to_thread(self.artifacts.progress, attempt)
+                if not await asyncio.to_thread(
+                    self.jobs.heartbeat, identifier, attempt, progress
+                ):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
                     await asyncio.to_thread(
                         self.jobs.finish,
                         identifier,
@@ -509,10 +467,39 @@ class ProcessingWorker:
                         None,
                         {
                             "code": "interrupted",
-                            "detail": "This job was cancelled before publication.",
+                            "detail": "The job was cancelled or its worker lease ended.",
                         },
                     )
                     finished = True
+                    return True
+                await asyncio.wait((task,), timeout=2)
+            artifact = task.result()
+            reusable_results = None
+            if row["spec"]["operation"] != MODEL_OPERATION:
+                handler = get_model_operation(row["spec"]["operation"])
+                if handler.reusable is not None:
+                    reusable_results = handler.reusable(
+                        handler.prepared_type.model_validate(row["spec"]), artifact
+                    )
+            finished = await asyncio.to_thread(
+                self.jobs.finish,
+                identifier,
+                attempt,
+                artifact,
+                reusable_results=reusable_results,
+            )
+            if not finished:
+                await asyncio.to_thread(
+                    self.jobs.finish,
+                    identifier,
+                    attempt,
+                    None,
+                    {
+                        "code": "interrupted",
+                        "detail": "This job was cancelled before publication.",
+                    },
+                )
+                finished = True
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -522,8 +509,8 @@ class ProcessingWorker:
                 detail = {"code": error.code, "detail": error.detail}
             elif isinstance(error, (TimeoutError, ProcessDeadlineError)):
                 detail = {
-                    "code": "time_limit",
-                    "detail": "The job exceeded its processing time limit. Choose a smaller area.",
+                    "code": "native_process_failed",
+                    "detail": "The calculation process stopped before returning its result. Retry the run or ask the administrator to check the worker logs.",
                 }
             elif isinstance(error, (RasterFeatureError, SelectionUnavailableError)):
                 detail = {
@@ -569,9 +556,7 @@ class ProcessingWorker:
                 await asyncio.to_thread(self.artifacts.remove, row["attempt_id"])
             await asyncio.to_thread(self.jobs.cleaned, row["id"])
         retained = await asyncio.to_thread(self.jobs.active_attempts)
-        await asyncio.to_thread(
-            self.artifacts.remove_orphans, retained, self.limits.runtime_seconds + 30
-        )
+        await asyncio.to_thread(self.artifacts.remove_orphans, retained, 30)
 
 
 async def serve(

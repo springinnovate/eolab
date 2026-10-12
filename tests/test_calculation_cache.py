@@ -369,7 +369,7 @@ def test_worker_reuses_results_after_authorization(
 
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
-    limits = RasterAggregateLimits(free_space_floor=0)
+    limits = RasterAggregateLimits()
     authorizer = SimpleNamespace(
         authorize=AsyncMock(
             return_value=AuthorizedRaster(
@@ -545,7 +545,7 @@ def test_cache_hit_skips_planning_and_pins_values(
     forbidden.assert_not_called()
     retained = AggregateSpec.model_validate(row["spec"])
     assert retained.cachedRows[0].value == "42"
-    assert row["reserved_bytes"] == worker.aggregate_limits.result_reservation_bytes
+    assert row["reserved_bytes"] == 0
     # The prepared copy retains values even after cache eviction.
     store.get_cached_calculation_results.return_value = {}
     assert retained.cachedRows[0].value == "42"

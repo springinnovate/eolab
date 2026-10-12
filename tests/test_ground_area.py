@@ -299,10 +299,6 @@ def test_execution_geometry_budget(tmp_path: Path) -> None:
         transform=Affine(0.01, 0.002, 10, 0.001, -0.01, 45),
     )
     spec = make_spec(path, ["areaha(a>0)"])
-    with pytest.raises(ProcessingError, match="transformed coordinates"):
-        calculate_raster_statistics_for_area(
-            path, spec, tmp_path, replace(LIMITS, max_area_transform_coordinates=100)
-        )
     assert not (tmp_path / "result.csv").exists()
 
 
@@ -352,21 +348,11 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
     spec = make_spec(path, ["areaha(a>0)"])
     assert spec.grid.groundArea.estimatedGeometryCells == 100
-    with pytest.raises(ProcessingError, match="100 raster cells.*99"):
-        make_spec(
-            path, ["areaha(a>0)"], limits=replace(LIMITS, max_area_geometry_cells=99)
-        )
-    with pytest.raises(ProcessingError, match="memory"):
-        make_spec(path, ["areaha(a>0)"], limits=replace(LIMITS, max_memory_bytes=1))
-    with pytest.raises(ProcessingError, match="decoded"):
-        make_spec(path, ["areaha(a>0)"], limits=replace(LIMITS, max_decoded_bytes=1))
     aoi = AggregateArea(
         kind="aoi",
         bounds=(10, 44.9, 10.1, 45),
         geometries=(mapping(Polygon([(10, 44.9), (10.1, 45), (10, 45)])),),
     )
-    with pytest.raises(ProcessingError, match="coordinates"):
-        make_spec(path, ["areaha(a>0)"], aoi, replace(LIMITS, max_coordinates=10))
 
 
 @pytest.mark.parametrize("rows", [1000, 1001])
@@ -399,16 +385,10 @@ def test_country_scale_mask_admission_is_independent_of_pixel_polygon_limit(
         pytest.fail("Area planning must not read source values")
 
     monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
-    spec = make_spec(
-        path, ["areaha(a>0)"], area, replace(LIMITS, max_area_geometry_cells=0)
-    )
+    spec = make_spec(path, ["areaha(a>0)"], area, LIMITS)
     assert spec.grid.groundArea.estimatedGeometryCells == 0
     assert spec.grid.groundArea.inclusion == "fractional_cell_intersection"
     assert spec.grid.width * spec.grid.height == rows * 2000
-    with pytest.raises(ProcessingError, match="decoded"):
-        make_spec(path, ["areaha(a>0)"], area, replace(LIMITS, max_decoded_bytes=1))
-    with pytest.raises(ProcessingError, match="memory"):
-        make_spec(path, ["areaha(a>0)"], area, replace(LIMITS, max_memory_bytes=1))
 
 
 def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
@@ -519,9 +499,7 @@ def test_projected_polygon_masks_match_independent_ground_area(
         kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
     )
     # Separate mask accuracy from the existing 0.1 m boundary-refinement policy.
-    limits = replace(
-        LIMITS, max_area_geometry_cells=0, area_edge_tolerance_metres=0.001
-    )
+    limits = replace(LIMITS, area_edge_tolerance_metres=0.001)
     spec = make_spec(path, ["areaha(a>0)"], area, limits)
     result = calculate_raster_statistics_for_area(path, spec, tmp_path, limits)
     assert float(result.rows[0]["value"]) == pytest.approx(

@@ -505,14 +505,15 @@ class ResolvedModelSource(ModelSchema):
 
 
 class ModelExecutionLimits(ModelSchema):
-    """The server's time, memory, disk and result-retention limits for this run.
+    """Execution allowances and output retention recorded for a model run.
 
-    These values record the settings used by the worker; a submitted recipe
-    cannot override them.
+    New runs have null time and memory ceilings and reserve zero bytes before
+    execution. Positive values remain readable in historical run documents.
+    A submitted recipe cannot change these server-owned records.
     """
 
-    runtimeSeconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
-    processMemoryBytes: Annotated[int, Field(gt=0)]
+    runtimeSeconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None
+    processMemoryBytes: Annotated[int, Field(gt=0)] | None
     reservedBytes: Annotated[int, Field(ge=0)]
     resultTtlSeconds: Annotated[int, Field(gt=0)]
 

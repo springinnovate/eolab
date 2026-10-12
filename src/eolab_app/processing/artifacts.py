@@ -114,31 +114,21 @@ class LocalJobArtifacts:
         return candidate
 
     def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
-        """Check physical free space and create one unique private attempt.
-
-        Retained outputs are not traversed or totaled. The caller has already
-        admitted this job's reservation through the job store.
+        """Create a unique private directory for a claimed calculation attempt.
 
         Args:
-            attempt: Fenced worker attempt ID.
-            reservation: Admitted worst-case scratch/output byte reservation.
-            limits: Settings whose free_space_floor is the minimum number of bytes
-                that must remain free after allowing for this job's reservation.
+            attempt: Current worker attempt ID.
+            reservation: Historical byte estimate accepted by the storage interface;
+                it does not restrict writes or trigger a free-space check.
+            limits: Shared lifecycle settings; there is no disk-space admission policy.
 
         Returns:
-            Empty attempt directory.
+            Empty attempt directory confined to private Processing storage.
 
         Raises:
-            ProcessingError: If physical disk headroom is insufficient.
             ValueError: If the attempt ID or resolved path is not confined.
-            OSError: If free space cannot be read or the directory cannot be created.
+            OSError: If the directory cannot be created, including actual filesystem exhaustion.
         """
-        if shutil.disk_usage(self.root).free < reservation + limits.free_space_floor:
-            raise ProcessingError(
-                "storage_full",
-                "There is not enough temporary storage for this job.",
-                429,
-            )
         path = self._directory(attempt, False)
         path.mkdir(exist_ok=False)
         return path
@@ -159,15 +149,15 @@ class LocalJobArtifacts:
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
-            reservation: Admitted scratch/output ceiling, checked before publish.
+            reservation: Historical storage estimate; completed files have no byte ceiling.
             declarations: Complete files approved by the owning application.
-            cancelled: Signal set when the worker loses its attempt or deadline.
+            cancelled: Signal set when the worker loses its attempt or is cancelled.
 
         Returns:
             Immutable file inventory and exact retained bytes, including manifest.json.
 
         Raises:
-            ProcessingError: If files are missing, unsafe, changed, over budget,
+            ProcessingError: If files are missing, unsafe, changed,
                 undeclared metadata is invalid, or publication was cancelled.
             OSError: If atomic publication fails.
         """
@@ -182,12 +172,7 @@ class LocalJobArtifacts:
                 "invalid_artifact", "Result file names conflict.", 500
             )
         children = {}
-        total = 0
         for child in path.iterdir():
-            if len(children) >= 128:
-                raise ProcessingError(
-                    "invalid_artifact", "Too many workspace files.", 500
-                )
             info = self._regular_file(child)
             if child.name.casefold() == "manifest.json" or child.name.casefold() in {
                 name.casefold() for name in children
@@ -196,13 +181,6 @@ class LocalJobArtifacts:
                     "invalid_artifact", "Workspace file names conflict.", 500
                 )
             children[child.name] = info
-            total += info.st_size
-        if total > reservation:
-            raise ProcessingError(
-                "output_too_large",
-                "The completed result exceeds its storage reservation.",
-                413,
-            )
         files = []
         for declaration in declarations:
             self._check_cancelled(cancelled)
@@ -247,12 +225,6 @@ class LocalJobArtifacts:
         inventory = encode_manifest_files(entries)
         retained_bytes = sum(item.size for item in entries) + len(inventory)
         manifest = ArtifactManifest(files=entries, total_bytes=retained_bytes)
-        if total + len(inventory) > reservation:
-            raise ProcessingError(
-                "output_too_large",
-                "The completed files exceed their storage reservation.",
-                413,
-            )
         self._check_cancelled(cancelled)
         (path / "manifest.json").write_bytes(inventory)
         for name in children:
@@ -264,7 +236,7 @@ class LocalJobArtifacts:
 
     @staticmethod
     def _check_cancelled(cancelled: Event) -> None:
-        """Stop file publication when the attempt loses its lease or deadline.
+        """Stop file publication when the attempt loses its lease or is cancelled.
 
         Args:
             cancelled: Cooperative signal owned by the worker.
@@ -386,7 +358,7 @@ class LocalJobArtifacts:
             attempt: Terminal job's strict internal attempt ID.
 
         Raises:
-            OSError: If cleanup failed; the caller must retain its reservation.
+            OSError: If cleanup failed; retain file ownership so cleanup can retry.
         """
         for published in (False, True):
             directory = self._directory(attempt, published)
@@ -394,11 +366,11 @@ class LocalJobArtifacts:
                 shutil.rmtree(directory)
 
     def remove_orphans(self, retained: set[str], minimum_age_seconds: float) -> None:
-        """Reap abandoned attempts only after their maximum possible runtime.
+        """Remove unowned workspaces after a short creation-race grace period.
 
         Args:
-            retained: IDs that still own database reservations or transfer leases.
-            minimum_age_seconds: Conservative hard-deadline plus exit grace.
+            retained: IDs owned by active jobs, retained results or transfer leases.
+            minimum_age_seconds: Minimum directory age protecting concurrent workspace creation.
         """
         for parent in ("attempts", "results"):
             for path in (self.root / parent).iterdir():

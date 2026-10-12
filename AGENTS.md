@@ -131,7 +131,7 @@ behavior into the nearest controller, route, viewer, service, or utility module.
   predicate descriptors. Read original sources through neutral bounded contracts;
   do not persist filtered vector copies or reusable geometry snapshots.
   Processing may prepare exact polygons and temporary raster masks for a single
-  calculation, within its memory and disk limits. Processing owns their cleanup;
+  calculation. Processing owns their cleanup;
   they must not become catalog sources or be shared across jobs.
   Optional display outlines must not authorize or gate analysis.
 
@@ -206,6 +206,18 @@ Recommend extraction only when the file contains demonstrably distinct
 ownership or dependency responsibilities.
 
 ## Programming-by-contract and validation
+
+Processing calculations intentionally have no application-imposed ceiling on
+cells, feature/coordinate counts, memory, disk use, or total planning/execution
+time. Attempt the requested calculation; do not add preflight data scans or
+resource estimates to reject large work. Preserve worker concurrency and wait
+for native exit before releasing a slot. Keep cancellation, worker-crash/restart
+recovery, source identity, authorization, valid-input checks, output integrity
+and expiry/cleanup. Numerical accuracy and convergence checks are still required.
+Interactive map readers retain their own request budgets; Processing uses the
+same neutral readers with explicit unlimited-work settings. The general
+resource-limit instructions below apply to limits that remain part of the
+owning component's contract, not to reinstating removed Processing ceilings.
 
 Preserve programming by contract: validate once at the component that owns the
 boundary, then rely on the established contract below it.

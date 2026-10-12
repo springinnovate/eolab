@@ -607,12 +607,7 @@ async def run_processing_worker() -> None:
                 await asyncio.sleep(5)
         cleanup_lock = asyncio.Lock()
         async with asyncio.TaskGroup() as workers:
-            for _ in range(
-                min(
-                    limits.worker_count,
-                    limits.max_execution_memory_bytes // limits.process_memory_bytes,
-                )
-            ):
+            for _ in range(limits.worker_count):
                 execution_native = create_native_process(limits)
                 lifecycle.push_async_callback(execution_native.close)
                 execution_native.warm()

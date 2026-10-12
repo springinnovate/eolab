@@ -19,14 +19,14 @@ class OperationContext:
     Attributes:
         jobs: Existing result-cache and lifecycle storage interface.
         areas: Reader for immutable catalog vector selections.
-        limits: Deployment clip and lifecycle limits.
-        aggregate_limits: Summary computation and mask limits.
+        limits: Processing concurrency, retention and cache settings.
+        aggregate_limits: Summary lifecycle and ground-area accuracy settings.
         native: Supervised native execution lane.
         run_native: Bounded execution function supplied by the worker.
         reuse_results: Whether this job may use the scalar-results cache.
         source_checksum: Verified published checksum for a private raster input.
         rasters: Additional raster inputs authorized for this operation attempt.
-        downstream_limits: Administrator budgets for downstream native work.
+        downstream_limits: Shared lifecycle settings for downstream work.
     """
 
     jobs: JobStore

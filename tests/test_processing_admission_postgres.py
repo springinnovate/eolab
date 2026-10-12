@@ -123,32 +123,22 @@ def test_twelve_sessions_and_full_stack_wait_then_take_turns(
     )
 
 
-@pytest.mark.parametrize(
-    "changes,code",
-    [
-        ({"max_owner_waiting_jobs": 1}, "owner_queue_full"),
-        ({"max_waiting_jobs": 1}, "queue_full"),
-        ({"max_job_records": 1}, "job_record_capacity"),
-    ],
-)
-def test_each_budget_rejects_explicitly_and_idempotency_still_recovers(
-    store: PostgresJobStore, changes: dict[str, int], code: str
-) -> None:
-    """Differentiate real exhaustion without rejecting retries of accepted jobs.
+def test_many_waiting_jobs_preserve_retry_identity(store: PostgresJobStore) -> None:
+    """Accept more than the former session backlog and recover each accepted retry.
 
     Args:
-        store: Disposable PostgreSQL store.
-        changes: Budget made deliberately too small for a second job.
-        code: Public error expected from that budget.
+        store: Disposable PostgreSQL queue.
     """
-    store.limits = replace(store.limits, **changes)
-    plan = make_plan(store, "one")
-    first = admit(store, "one", plan)
-    with pytest.raises(ProcessingError) as denied:
-        admit(store, "one", plan)
-    assert denied.value.code == code and denied.value.status == 429
-    retried = store.submit("one", first["request_key"], plan[1], "fixture-input-hash")
-    assert retried["id"] == first["id"]
+    plan = make_plan(store, "owner")
+    jobs = [admit(store, "owner", plan) for _ in range(140)]
+    assert len({job["id"] for job in jobs}) == 140
+    for job in (jobs[0], jobs[-1]):
+        assert (
+            store.submit("owner", job["request_key"], plan[1], "fixture-input-hash")[
+                "id"
+            ]
+            == job["id"]
+        )
 
 
 def test_running_job_does_not_use_waiting_allowance_and_new_session_goes_next(
@@ -159,14 +149,12 @@ def test_running_job_does_not_use_waiting_allowance_and_new_session_goes_next(
     Args:
         store: Disposable PostgreSQL store.
     """
-    store.limits = replace(store.limits, max_owner_waiting_jobs=2)
     plan = make_plan(store, "stack")
     admit(store, "stack", plan)
     active = store.claim_next_job()
     admit(store, "stack", plan)
     admit(store, "stack", plan)
-    with pytest.raises(ProcessingError, match="waiting-job limit"):
-        admit(store, "stack", plan)
+    admit(store, "stack", plan)
     newcomer = admit(store, "newcomer", make_plan(store, "newcomer"))
     finish(store, active)
     with ThreadPoolExecutor(max_workers=2) as workers:
@@ -176,15 +164,14 @@ def test_running_job_does_not_use_waiting_allowance_and_new_session_goes_next(
     assert claimed["id"] == newcomer["id"]
 
 
-def test_concurrent_owners_cannot_overfill_global_backlog(
+def test_concurrent_owners_can_queue_all_requested_jobs(
     store: PostgresJobStore,
 ) -> None:
-    """Serialize admission so excess concurrent requests get a clear overload error.
+    """Serialize admission without rejecting jobs based on backlog size.
 
     Args:
         store: Disposable PostgreSQL with room for four waiting jobs.
     """
-    store.limits = replace(store.limits, max_waiting_jobs=4)
     owners = [f"owner-{index}" for index in range(12)]
     plans = {owner: make_plan(store, owner) for owner in owners}
 
@@ -205,10 +192,8 @@ def test_concurrent_owners_cannot_overfill_global_backlog(
 
     with ThreadPoolExecutor(max_workers=12) as clients:
         results = list(clients.map(submit, owners))
-    assert results.count("queue_full") == 8
-    assert (
-        len({identifier for identifier in results if identifier != "queue_full"}) == 4
-    )
+    assert "queue_full" not in results
+    assert len(set(results)) == 12
 
 
 def test_duplicate_concurrent_submission_and_owner_cancel_are_isolated(
@@ -308,6 +293,7 @@ def test_admission_returns_after_commit_and_lock_release(
             "WHERE owner='owner' AND request_key='committed'"
         ).fetchone() == (accepted["id"],)
 
+
 def test_retry_precedes_stopping_work_and_capacity_decisions(
     store: PostgresJobStore,
 ) -> None:
@@ -316,7 +302,6 @@ def test_retry_precedes_stopping_work_and_capacity_decisions(
     Args:
         store: Disposable PostgreSQL store with one expired-lease worker.
     """
-    store.limits = replace(store.limits, max_job_records=1)
     plan = PreparedJobPlan({}, {}, 0, work_key="retry-work")
     original = store.submit("owner", "retry", plan, "hash")
     assert store.claim_next_job()["id"] == original["job_id"]
@@ -346,22 +331,17 @@ def test_record_capacity_recovers_after_worker_maintenance(
     Args:
         store: Disposable PostgreSQL store.
     """
-    store.limits = replace(store.limits, max_job_records=1)
     plan = make_plan(store, "owner")
     job = admit(store, "owner", plan)
     store.cancel(job["id"], "owner")
     store.cleaned(job["id"])
-    with pytest.raises(ProcessingError) as denied:
-        admit(store, "owner", plan)
-    assert denied.value.code == "job_record_capacity"
+    assert admit(store, "owner", plan)["status"] == "queued"
     with psycopg.connect(store.conninfo) as connection:
         connection.execute(
             "UPDATE processing.jobs SET updated_at=now()-interval '8 days' WHERE id=%s",
             (job["id"],),
         )
-    with pytest.raises(ProcessingError) as awaiting_maintenance:
-        admit(store, "owner", plan)
-    assert awaiting_maintenance.value.code == "job_record_capacity"
+    assert admit(store, "owner", plan)["status"] == "queued"
     assert store.find_request("owner", job["request_key"]) is not None
     assert store.cleanup_candidates() == []
     assert store.find_request("owner", job["request_key"]) is None
@@ -459,7 +439,6 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
     Args:
         store: Disposable PostgreSQL store.
     """
-    store.limits = replace(store.limits, max_job_records=1)
     plan = make_plan(store, "owner")
     old = admit(store, "owner", plan)
     store.cancel(old["id"], "owner")
@@ -481,12 +460,10 @@ def test_concurrent_maintenance_and_submission_preserve_record_limit(
                 assert error.code == "job_record_capacity"
     if not accepted:
         accepted.append(admit(store, "owner", plan))
-    assert len(accepted) == 1
+    assert len(accepted) == 12
     assert store.find_request("owner", old["request_key"]) is None
     assert store.find_request("owner", accepted[0]["request_key"]) is not None
-    with pytest.raises(ProcessingError) as full:
-        admit(store, "owner", plan)
-    assert full.value.code == "job_record_capacity"
+    assert admit(store, "owner", plan)["status"] == "queued"
 
 
 def test_migration_removes_metadata_accounting_and_preserves_jobs(
@@ -542,32 +519,21 @@ def test_migration_removes_metadata_accounting_and_preserves_jobs(
     assert store.heartbeat(first["id"], active["attempt_id"], {})
 
 
-def test_submission_defers_disk_admission_until_preparation(
-    store: PostgresJobStore,
-) -> None:
-    """Admit an unprepared request with full disk reservations, then wait for space.
+def test_retained_files_do_not_block_new_preparation(store: PostgresJobStore) -> None:
+    """Run new work without reserving space beside completed files.
 
     Args:
-        store: Disposable PostgreSQL with one retained result using its disk budget.
+        store: Disposable PostgreSQL with a retained result.
     """
-    store.limits = replace(
-        store.limits, max_stored_bytes=2048, result_metadata_reservation_bytes=2047
-    )
-    retained = admit(store, "first", make_plan(store, "first"))
+    admit(store, "first", make_plan(store, "first"))
     finish(store, store.claim_next_job())
-    # Lowering the budget below retained files must not reject an unprepared request.
-    store.limits = replace(store.limits, max_stored_bytes=1024)
     pending = store.submit("second", "new", PreparedJobPlan({}, {}, 0), "hash")
-    assert store.claim_next_job() is None
-    store.limits = replace(store.limits, max_stored_bytes=2048)
     claimed = store.claim_next_job()
-    prepared = PreparedJobPlan({"input": "prepared"}, {}, 2048)
-    waiting = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
-    assert waiting["status"] == "queued" and waiting["reserved_bytes"] == 0
-    assert store.claim_next_job() is None
-    store.cancel(retained["id"], "first", delete=True)
-    store.cleaned(retained["id"])
-    assert store.claim_next_job()["id"] == pending["job_id"]
+    assert claimed["id"] == pending["job_id"]
+    prepared = PreparedJobPlan({"input": "prepared"}, {}, 2**40)
+    saved = store.save_prepared_job(claimed["id"], claimed["attempt_id"], prepared)
+    assert saved["status"] == "running" and saved["reserved_bytes"] == 0
+    assert saved["attempt_id"] == claimed["attempt_id"]
 
 
 def test_identical_work_with_a_lost_lease_can_retry_after_attempt_stops(
@@ -612,7 +578,6 @@ def test_clip_and_calculation_http_report_session_backlog(
         operation: Public operation endpoint under test.
     """
     client, _, _, _, _ = boundary
-    store.limits = replace(store.limits, max_owner_waiting_jobs=3)
     plan = (
         clip_inputs(client)
         if operation == "raster-clips"
@@ -627,9 +592,9 @@ def test_clip_and_calculation_http_report_session_backlog(
         )
         for key in keys
     ]
-    assert [response.status_code for response in responses] == [202, 202, 202, 429]
+    assert [response.status_code for response in responses] == [202, 202, 202, 202]
     assert all(response.json()["status"] == "queued" for response in responses[:3])
-    assert responses[-1].json()["detail"]["code"] == "owner_queue_full"
+    assert responses[-1].json()["status"] == "queued"
 
 
 def test_shared_cancelled_and_deleted_handles_retain_history_capacity(
@@ -640,9 +605,6 @@ def test_shared_cancelled_and_deleted_handles_retain_history_capacity(
     Args:
         store: Disposable PostgreSQL with independent handle and queue limits.
     """
-    store.limits = replace(
-        store.limits, max_owner_waiting_jobs=1, max_job_records=4, max_waiting_jobs=1
-    )
     plan = PreparedJobPlan({}, {}, 0, work_key="shared-history")
     cancelled = store.submit("returning", "old", plan, "hash")
     deleted = store.submit("departed", "old", plan, "hash")
@@ -654,12 +616,8 @@ def test_shared_cancelled_and_deleted_handles_retain_history_capacity(
     replacement = store.submit("returning", "new", plan, "hash")
     assert replacement["job_id"] == keeper["job_id"] == cancelled["job_id"]
     assert replacement["id"] != cancelled["id"]
-    with pytest.raises(ProcessingError) as waiting_full:
-        store.submit("returning", "another", plan, "hash")
-    assert waiting_full.value.code == "owner_queue_full"
-    with pytest.raises(ProcessingError) as history_full:
-        store.submit("visitor", "new", plan, "hash")
-    assert history_full.value.code == "job_record_capacity"
+    assert store.submit("returning", "another", plan, "hash")["status"] == "queued"
+    assert store.submit("visitor", "new", plan, "hash")["status"] == "queued"
     assert store.submit("returning", "old", plan, "hash")["status"] == "cancelled"
     assert store.submit("departed", "old", plan, "hash")["status"] == "deleted"
 
@@ -692,20 +650,19 @@ def test_owner_waiting_budget_ignores_nonqueued_persisted_history(
                 "UPDATE processing.jobs SET status=%s WHERE id=%s",
                 (status, job["job_id"]),
             )
-    store.limits = replace(store.limits, max_owner_waiting_jobs=1)
     assert (
         store.submit("owner", "waiting", PreparedJobPlan({}, {}, 0), "hash")["status"]
         == "queued"
     )
-    with pytest.raises(ProcessingError) as denied:
-        store.submit("owner", "excess", PreparedJobPlan({}, {}, 0), "hash")
-    assert denied.value.code == "owner_queue_full"
+    assert (
+        store.submit("owner", "extra", PreparedJobPlan({}, {}, 0), "hash")["status"]
+        == "queued"
+    )
 
 
 @pytest.mark.parametrize("cancelling", [False, True])
-@pytest.mark.parametrize("budget", ["slots", "memory"])
 def test_zero_disk_active_attempt_still_occupies_execution_capacity(
-    store: PostgresJobStore, cancelling: bool, budget: str
+    store: PostgresJobStore, cancelling: bool
 ) -> None:
     """No disk reservation is needed to retain a live attempt's slot and memory.
 
@@ -714,13 +671,7 @@ def test_zero_disk_active_attempt_still_occupies_execution_capacity(
         cancelling: Whether the worker still owns a cancelled attempt.
         budget: Execution resource that deliberately permits only one attempt.
     """
-    store.limits = replace(
-        store.limits,
-        worker_count=1 if budget == "slots" else 2,
-        max_execution_memory_bytes=store.limits.process_memory_bytes
-        * (2 if budget == "slots" else 1),
-        result_metadata_reservation_bytes=0,
-    )
+    store.limits = replace(store.limits, worker_count=1)
     first = store.submit("first", "one", PreparedJobPlan({}, {}, 0), "hash")
     waiting = store.submit("second", "two", PreparedJobPlan({}, {}, 0), "hash")
     claimed = store.claim_next_job()
@@ -739,47 +690,31 @@ def test_zero_disk_active_attempt_still_occupies_execution_capacity(
 @pytest.mark.parametrize(
     "status", ["ready", "failed", "cancelled", "interrupted", "expired", "deleted"]
 )
-def test_retained_terminal_disk_blocks_preparation_until_cleanup(
+def test_retained_terminal_files_do_not_reserve_capacity(
     store: PostgresJobStore, status: str
 ) -> None:
-    """All retained files consume disk; replacing a current reservation counts once.
+    """All terminal file states allow new preparation while preserving their cleanup metadata.
 
     Args:
-        store: Disposable PostgreSQL with a bounded artifact and scratch budget.
-        status: Persisted terminal state whose files have not been acknowledged clean.
+        store: Disposable PostgreSQL queue.
+        status: Terminal state whose files have not yet been removed.
     """
-    store.limits = replace(
-        store.limits, max_stored_bytes=100, result_metadata_reservation_bytes=0
-    )
     retained = store.submit("retained", "old", PreparedJobPlan({}, {}, 80), "hash")
-    old_attempt = store.claim_next_job()
-    assert store.finish(
-        old_attempt["id"], old_attempt["attempt_id"], Artifact(80, "0" * 64, "old.csv")
-    )
-    # Model retained files following each persisted terminal lifecycle outcome.
+    old = store.claim_next_job()
+    assert store.finish(old["id"], old["attempt_id"], Artifact(80, "0" * 64, "old.csv"))
     with psycopg.connect(store.conninfo) as connection:
         connection.execute(
             "UPDATE processing.jobs SET status=%s WHERE id=%s",
             (status, retained["job_id"]),
         )
-    pending = store.submit("next", "new", PreparedJobPlan({}, {}, 0), "hash")
+    store.submit("next", "new", PreparedJobPlan({}, {}, 0), "hash")
     current = store.claim_next_job()
-    assert current["id"] == pending["job_id"]
-    fitting = PreparedJobPlan({"prepared": True}, {}, 20)
-    for _ in range(2):
-        saved = store.save_prepared_job(current["id"], current["attempt_id"], fitting)
-        assert saved["status"] == "running" and saved["reserved_bytes"] == 20
-
-    waiting = store.save_prepared_job(
-        current["id"],
-        current["attempt_id"],
-        PreparedJobPlan({"prepared": True}, {}, 21),
-    )
-    assert waiting["status"] == "queued" and waiting["reserved_bytes"] == 0
-    assert waiting["attempt_id"] is None
-    assert store.claim_next_job() is None
-    store.cancel(retained["id"], "retained", delete=True)
-    store.cleaned(retained["job_id"])
-    resumed = store.claim_next_job()
-    assert resumed["id"] == pending["job_id"] and resumed["reserved_bytes"] == 21
-    assert resumed["spec"] == {"prepared": True}
+    for reservation in (20, 2**40):
+        saved = store.save_prepared_job(
+            current["id"],
+            current["attempt_id"],
+            PreparedJobPlan({"prepared": True}, {}, reservation),
+        )
+        assert saved["status"] == "running" and saved["reserved_bytes"] == 0
+        assert saved["attempt_id"] == current["attempt_id"]
+    assert store.get(retained["id"], "retained")["reserved_bytes"] == 80

@@ -154,7 +154,7 @@ def downstream_fixture(
         network,
         None,
     )
-    return sources, request, DownstreamLimits(free_space_floor=0)
+    return sources, request, DownstreamLimits()
 
 
 @pytest.mark.parametrize(
@@ -336,22 +336,6 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         plan_downstream(sources, request, limits)
 
 
-def test_requested_resolution_cannot_bypass_work_budgets(tmp_path: Path) -> None:
-    """Small native inputs cannot authorize an excessively fine calculation grid.
-
-    Args:
-        tmp_path: Small original inputs and private attempt directory.
-    """
-    sources, request, limits = downstream_fixture(tmp_path / "inputs")
-    request = request.model_copy(update={"wgs84_pixel_size": 0.000001})
-    plan = plan_downstream(sources, request, limits)
-    directory = tmp_path / "attempt"
-    directory.mkdir()
-    with pytest.raises(ProcessingError, match="calculation pixel size"):
-        calculate_downstream(sources, plan, directory, limits)
-    assert not list(directory.rglob("flow.tif"))
-
-
 def test_historical_numerical_policy_remains_readable() -> None:
     """Saved version-one runs retain their numerical description after replacement."""
     from eolab_app.processing.downstream_models import DownstreamNumericalPolicy
@@ -403,17 +387,6 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
         calculate_downstream(sources, spec, workspace, limits)
     assert Path.cwd() == previous
     assert (workspace / "upstream-relative-scratch").read_text() == "private"
-
-
-def test_downstream_admission_rejects_excessive_native_work(tmp_path: Path) -> None:
-    """Even tiny grids fail admission when the deployment memory budget cannot fit them.
-
-    Args:
-        tmp_path: Native reference sources.
-    """
-    sources, request, _ = downstream_fixture(tmp_path)
-    with pytest.raises(ProcessingError, match="native cells"):
-        plan_downstream(sources, request, DownstreamLimits(process_memory_bytes=1024))
 
 
 @pytest.mark.parametrize(
@@ -770,40 +743,6 @@ def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> N
     calculate_downstream(sources, spec, directory, limits)
     with rasterio.open(directory / "starting_mask.tif") as dataset:
         assert np.count_nonzero(dataset.read(1) == 1) == 4
-
-
-@pytest.mark.parametrize(
-    "budget,ceiling",
-    [
-        ("max_routing_cells", 23),
-        ("max_value_cells", 23),
-        ("max_mask_cells", 23),
-        ("max_watersheds", 2),
-        ("max_watershed_coordinates", 10),
-    ],
-)
-def test_downstream_uses_configured_work_budgets(
-    tmp_path: Path, budget: str, ceiling: int
-) -> None:
-    """Lower budgets reject work in preparation and when executing a saved plan.
-
-    Args:
-        tmp_path: Original sources and private attempt.
-        budget: Administrator setting for the measured input work.
-        ceiling: Less than the reference dataset requires.
-    """
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    spec = plan_downstream(sources, request, limits)
-    restricted = replace(limits, **{budget: ceiling})
-    with pytest.raises(ProcessingError, match=".") as preparing:
-        plan_downstream(sources, request, restricted)
-    assert preparing.value.code == "model_too_large"
-    directory = tmp_path / "attempt"
-    directory.mkdir()
-    with pytest.raises(ProcessingError) as running:
-        calculate_downstream(sources, spec, directory, restricted)
-    assert running.value.code == "model_too_large"
-    assert not list(directory.iterdir())
 
 
 @pytest.mark.parametrize("outside", ["north", "east"])

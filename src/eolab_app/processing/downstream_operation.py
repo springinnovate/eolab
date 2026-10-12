@@ -175,7 +175,7 @@ async def resolve_downstream_sources(
 async def prepare_downstream(
     context: OperationContext, queued: QueuedDownstream, authorized: AuthorizedRaster
 ) -> PreparedJobPlan:
-    """Measure downstream watershed expansion and source work in the supervised process.
+    """Prepare selected downstream sources in the supervised native process.
 
     Args:
         context: Existing worker source, native and resource capabilities.
@@ -183,17 +183,17 @@ async def prepare_downstream(
         authorized: Primary values raster authorized by the worker.
 
     Returns:
-        Prepared native windows and the required disk reservation.
+        Prepared native windows and captured source identities.
 
     Raises:
         ProcessingError: If preparation or source verification fails.
-        ProcessDeadlineError: If preparation exceeds its admitted time.
+        ProcessDeadlineError: If the supervised process exits without a result.
     """
     sources = await resolve_downstream_sources(context, queued.request, authorized)
     status, result = await context.run_native(
         downstream_process_target,
         ("plan", (sources, queued.request, context.downstream_limits)),
-        context.limits.plan_timeout_seconds,
+        None,
         context.native,
     )
     if status != "ok":
@@ -257,12 +257,12 @@ async def check_downstream_execution(
 def select_downstream_execution(
     spec: DownstreamPlan, context: OperationContext, reserved_bytes: int
 ) -> tuple[Callable[..., None], str, DownstreamLimits]:
-    """Select sequential downstream execution after verifying the disk reservation.
+    """Select the original downstream model target for supervised execution.
 
     Args:
         spec: Prepared operation plan.
         context: Worker deployment limits.
-        reserved_bytes: Disk capacity granted by the existing job store.
+        reserved_bytes: Historical storage estimate; no byte ceiling is applied.
 
     Returns:
         The supervised native target, action and worker limits.
@@ -270,12 +270,6 @@ def select_downstream_execution(
     Raises:
         ProcessingError: If the reservation is insufficient.
     """
-    if reserved_bytes < spec.reservedBytes:
-        raise ProcessingError(
-            "insufficient_disk_reservation",
-            "The downstream run needs a new disk reservation. Submit it again.",
-            409,
-        )
     return downstream_process_target, "calculate", context.downstream_limits
 
 

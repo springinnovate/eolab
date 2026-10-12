@@ -65,29 +65,19 @@ implementations cannot silently execute new math.
 
 ## Resources and performance
 
-Existing source, geometry, memory, work, disk and time safeguards remain. These
-conservative admission estimates are **not measurements of upstream requirements**;
-they can still reject work that standalone upstream could run. Changing that
-policy is separate work. Checks also cover actual upstream partitions, output
-resolution and buffer allocation, rejecting oversized work without altering math.
+Processing attempts the requested calculation without cell, geometry, memory,
+disk or total-runtime ceilings. It does not estimate those resources, scan DEM
+pixels before execution, or reopen upstream partitions to size their work.
+The old `EOLAB_PROCESSING_DOWNSTREAM_MAX_*` settings are ignored and can be
+removed from Coolify. Buffer and cutoff inputs must be finite and nonnegative
+(the optional cutoff must be positive); there is no arbitrary distance ceiling.
 
-`DownstreamLimits` owns defaults; Compose only forwards optional overrides.
-Recreate both app and worker containers after changing deployment settings.
-
-| Deployment override | Default |
-| --- | ---: |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_ROUTING_CELLS` | 4000000 |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_VALUE_CELLS` | 4000000 |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_MASK_CELLS` | 4000000 |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHEDS` | 100000 |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_WATERSHED_COORDINATES` | 2000000 |
-| `EOLAB_PROCESSING_DOWNSTREAM_MAX_TERMINALS` | 64 |
-
-Omit `EOLAB_` for direct worker deployments. Historical
-`PROCESSING_DOWNSTREAM_MAX_DISTANCE_PAIRS` remains accepted for configuration
-compatibility; upstream does not use the former geodesic-pair calculation.
-Existing request caps of 100 km buffer and 1000 km cutoff remain. Cell overrides
-do not increase memory, storage, source-reading or execution-time budgets.
+Worker concurrency remains configurable through `EOLAB_PROCESSING_WORKER_COUNT`.
+Cancellation stops and joins the native child before releasing its slot. Linux
+kills native children when their supervisor dies. Replacing the single worker
+container interrupts unfinished runs after its predecessor stops; completed
+outputs remain subject to normal ownership and expiry. Actual OS or filesystem
+failures are reported by the worker rather than predicted through admission.
 
 EOlab adds preparation/rechecks, progress, checksums and publication overhead.
 Partitions execute sequentially; the standalone CLI can parallelize via TaskGraph.
@@ -119,7 +109,7 @@ independently prepared inputs. It requires exact coverage and masked pixels,
 validity masks, CRS, transforms, dimensions, types, NoData and total equality.
 Cases cover buffer/cutoff, resampled signed/NoData values, filtered vector starts,
 multiple drainages and virtual links. Worker tests retain publication, Run YAML,
-actual native cancellation and resource-budget coverage.
+actual native cancellation, worker recovery and large-grid planning coverage.
 
 ## Resilience configuration
 

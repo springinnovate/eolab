@@ -13,7 +13,6 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 import numpy as np
 import rasterio
-import fiona
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
@@ -126,7 +125,7 @@ def prepare_starting_inputs(
         spec: Captured model settings, including the upstream grid resolution.
         starting: Validated WGS84 geometry from the existing selection reader.
         directory: Private per-run input directory.
-        limits: Existing cell and disk budgets, also applied to the rasterized mask.
+        limits: Shared job lifecycle settings; rasterization uses the requested grid.
 
     Returns:
         AOI GeoJSON path and original or rasterized starting-mask path.
@@ -151,7 +150,6 @@ def prepare_starting_inputs(
     )
     if sources.starting is None:
         return starting_area_path, sources.rasters["starting_mask"]
-    check_calculation_grid(starting.bounds, spec, limits, limits.max_mask_cells)
     starting_mask_path = directory / "starting-mask.tif"
     starting_mask_dataset = gdal.Rasterize(
         str(starting_mask_path),
@@ -179,59 +177,6 @@ def prepare_starting_inputs(
     return starting_area_path, starting_mask_path
 
 
-def check_calculation_grid(
-    bounds: tuple[float, float, float, float],
-    spec: DownstreamPlan,
-    limits: DownstreamLimits,
-    cell_limit: int,
-) -> int:
-    """Check the upstream output grid against existing work, memory and disk budgets.
-
-    This only admits or rejects work; it never changes the model's resolution,
-    alignment, resampling or values. Two edge cells allow for upstream alignment.
-
-    Args:
-        bounds: WGS84 bounds of the mask or watershed partition.
-        spec: Captured resolution and existing disk reservation.
-        limits: Administrator memory and storage limits.
-        cell_limit: Existing mask or routing cell ceiling for this allocation.
-
-    Returns:
-        Conservative number of calculation cells.
-
-    Raises:
-        ProcessingError: If the requested resolution exceeds admitted resources.
-    """
-    from eolab_app.processing.downstream_calculation import (
-        ESTIMATED_MEMORY_BYTES_PER_CELL,
-        NATIVE_PROCESS_BASE_MEMORY_BYTES,
-        ESTIMATED_SCRATCH_BYTES_PER_CELL,
-        SCRATCH_FILE_OVERHEAD_BYTES,
-    )
-
-    resolution = spec.inputs.wgs84_pixel_size
-    width = (bounds[2] - bounds[0]) / resolution
-    height = (bounds[3] - bounds[1]) / resolution
-    if not math.isfinite(width) or not math.isfinite(height):
-        raise ProcessingError(
-            "model_too_large", "Choose a larger calculation pixel size.", 413
-        )
-    cells = (math.ceil(width) + 2) * (math.ceil(height) + 2)
-    if (
-        cells > cell_limit
-        or cells * ESTIMATED_MEMORY_BYTES_PER_CELL + NATIVE_PROCESS_BASE_MEMORY_BYTES
-        > limits.process_memory_bytes
-        or cells * ESTIMATED_SCRATCH_BYTES_PER_CELL + SCRATCH_FILE_OVERHEAD_BYTES
-        > spec.reservedBytes
-    ):
-        raise ProcessingError(
-            "model_too_large",
-            "The calculation pixel size exceeds this run's cell, memory or disk budget. Choose a larger pixel size or a smaller starting area.",
-            413,
-        )
-    return cells
-
-
 def summarize_downstream_covered_values(
     covered_values_path: Path,
     expression: str,
@@ -248,7 +193,7 @@ def summarize_downstream_covered_values(
         covered_values_path: Complete values raster masked by downstream coverage.
         expression: Validated EOlab scalar formula.
         original_model_sum: Sum returned by ``mask_population_with_coverage``.
-        limits: Existing area-calculation resource limits.
+        limits: Shared job lifecycle and area-measurement settings.
 
     Returns:
         Ordinary Processing statistics fields, including coverage counts.
@@ -337,16 +282,16 @@ def run_original_downstream(
 
     Args:
         sources: Authorized paths and immutable vector selections.
-        spec: Existing admitted calculation and resource reservation.
+        spec: Captured calculation inputs and source identities.
         directory: Empty private workspace owned by this job attempt.
-        limits: Existing input, native-process and storage safeguards.
+        limits: Shared job lifecycle settings.
         starting: Combined starting geometry already checked by admission.
 
     Returns:
         Statistics and unchanged upstream coverage, masked values and seed rasters.
 
     Raises:
-        ProcessingError: If admission, output or storage limits are exceeded.
+        ProcessingError: If input adaptation or completed output validation fails.
         Exception: If an upstream calculation fails; the existing native boundary
             sanitizes the failure before exposing it to the browser.
     """
@@ -369,66 +314,6 @@ def run_original_downstream(
             model_working_directory / "partitions",
         )
     )
-    if len(watershed_partitions_by_sink) > limits.max_terminals:
-        raise ProcessingError(
-            "model_too_large",
-            "The starting area exceeds the configured number of drainage partitions.",
-            413,
-        )
-    # Upstream may follow links beyond EOlab's admission footprint. Check its
-    # actual partitions without changing that traversal or clipping its results.
-    from shapely.geometry import box
-    from eolab_app.processing.downstream_calculation import plan_native_grid
-
-    routing_cell_count = watershed_count = 0
-    partition_bounds = []
-    for partition_vector_path in watershed_partitions_by_sink.values():
-        with fiona.open(partition_vector_path) as dataset:
-            bounds = rasterio.warp.transform_bounds(
-                dataset.crs, "EPSG:4326", *dataset.bounds
-            )
-            watershed_count += len(dataset)
-        routing_cell_count += check_calculation_grid(
-            bounds, spec, limits, limits.max_routing_cells
-        )
-        partition_bounds.append(bounds)
-        for name, ceiling in (
-            ("dem", limits.max_routing_cells),
-            ("values", limits.max_value_cells),
-        ):
-            with rasterio.open(sources.rasters[name]) as dataset:
-                plan_native_grid(dataset, box(*bounds), ceiling, limits)
-    if (
-        routing_cell_count > limits.max_routing_cells
-        or watershed_count > limits.max_watersheds
-    ):
-        raise ProcessingError(
-            "model_too_large",
-            "The upstream drainage partitions exceed the configured work budget.",
-            413,
-        )
-    if partition_bounds:
-        check_calculation_grid(
-            (
-                min(b[0] for b in partition_bounds),
-                min(b[1] for b in partition_bounds),
-                max(b[2] for b in partition_bounds),
-                max(b[3] for b in partition_bounds),
-            ),
-            spec,
-            limits,
-            limits.max_routing_cells,
-        )
-    buffer_radius_pixels = model_inputs.buffer_m / model_inputs.travel_time_pixel_size_m
-    if (
-        not math.isfinite(buffer_radius_pixels)
-        or (2 * round(buffer_radius_pixels) + 1) ** 2 > limits.max_routing_cells
-    ):
-        raise ProcessingError(
-            "model_too_large",
-            "The buffer exceeds the configured calculation-cell budget. Choose a larger pixel size for distances or a smaller buffer.",
-            413,
-        )
     partition_coverage_paths = []
     partition_starting_mask_paths = []
     for index, (identifier, partition_vector_path) in enumerate(
@@ -448,13 +333,6 @@ def run_original_downstream(
             [model_inputs.wgs84_pixel_size, -model_inputs.wgs84_pixel_size],
             partition_vector_path,
         )
-        with rasterio.open(partition_dem_path) as dataset:
-            if dataset.width * dataset.height > limits.max_routing_cells:
-                raise ProcessingError(
-                    "model_too_large",
-                    "The calculation grid exceeds the configured routing-cell limit.",
-                    413,
-                )
         beneficiaries_model.calc_flow_dir(
             partition_dem_path, partition_directory, flow_direction_path
         )
@@ -548,15 +426,6 @@ def run_original_downstream(
         ),
         encoding="utf-8",
     )
-    if (
-        sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
-        > spec.reservedBytes
-    ):
-        raise ProcessingError(
-            "output_too_large",
-            "Downstream scratch files exceeded the admitted disk reservation.",
-            413,
-        )
     # The upstream functions have returned and closed their files. Only this
     # attempt's known scratch subtree is removed; publication remains flat.
     if (

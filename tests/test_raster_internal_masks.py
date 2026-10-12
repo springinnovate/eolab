@@ -17,7 +17,7 @@ from eolab_app.processing.clip_models import ClipArea
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 from eolab_app.processing.raster_clip import create_clip
-from eolab_app.processing.raster_input import estimate_native_raster_reads
+from eolab_app.processing.raster_input import count_native_raster_blocks
 from eolab_app.raster import exact_source, sample_grid, source_contract
 from eolab_app.raster.categorical_statistics import read_raster_categorical_statistics
 from eolab_app.raster.exact_source import (
@@ -376,8 +376,7 @@ def test_mask_blocks_are_charged_before_reading_and_cancellation_is_preserved(
             5,
             32 * 32 * 3,
         )
-        with pytest.raises(ProcessingError, match="data and validity-mask block reads"):
-            estimate_native_raster_reads(source, Window(0, 0, 35, 35), 9, 1_000_000)
+        assert count_native_raster_blocks(source, Window(0, 0, 35, 35)) == 4
         monkeypatch.setattr(
             source_contract, "internal_mask_block_shape", lambda _: (8192, 8192)
         )

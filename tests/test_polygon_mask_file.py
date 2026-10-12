@@ -94,9 +94,7 @@ def test_file_mask_matches_full_grid_and_window_reads(
             np.testing.assert_array_equal(
                 mask.read(1, window=Window(7, 9, 10, 11)), expected[9:20, 7:17]
             )
-            assert Path(mask.name).stat().st_size <= masks.estimate_mask_disk_bytes(
-                35, 27
-            )
+            assert Path(mask.name).stat().st_size > 0
         assert not (tmp_path / "polygon-mask.tif").exists()
     assert len(calls) == 1
 
@@ -140,50 +138,38 @@ def test_partial_mask_is_removed_on_failure(
     assert not (tmp_path / "polygon-mask.tif").exists()
 
 
-def test_storage_admission_and_old_job_guard(
+def test_polygon_mask_writes_without_disk_estimates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Include scratch in job admission and reject old unreserved jobs.
+    """Write and clean the mask without a free-space query or prior reservation.
 
     Args:
         tmp_path: Isolated raster and attempt storage.
-        monkeypatch: Simulate exhausted scratch space.
+        monkeypatch: Rejects disk admission queries.
     """
+    import shutil
+
+    def forbidden(path: object) -> None:
+        """Reject disk preflight checks.
+
+        Args:
+            path: Unused volume path.
+        """
+        pytest.fail("Mask creation must not estimate available disk space")
+
+    monkeypatch.setattr(shutil, "disk_usage", forbidden)
     source = write_source(tmp_path / "source.tif", np.ones((8, 8), dtype="uint8"))
     with rasterio.open(source) as dataset:
         area = AggregateArea(kind="bounds", bounds=tuple(dataset.bounds))
-    plan = make_spec(source, ["sum(a)"], area)
-    limits = RasterAggregateLimits()
-    prepared = prepare_aggregate_job(plan, limits)
-    assert (
-        prepared.reserved_bytes
-        == limits.result_reservation_bytes
-        + masks.estimate_mask_disk_bytes(plan.grid.width, plan.grid.height)
-    )
-    authorizer, jobs, artifacts = Mock(), Mock(), Mock()
-    worker = ProcessingWorker(authorizer, jobs, artifacts, limits)
-    with pytest.raises(ProcessingError, match="reserved less disk space") as error:
-        asyncio.run(
-            worker._execute(
-                {
-                    "status": "running",
-                    "spec": plan.model_dump(mode="json", by_alias=True),
-                    "reserved_bytes": limits.result_reservation_bytes,
-                }
-            )
-        )
-    assert error.value.code == "insufficient_disk_reservation"
-    authorizer.authorize.assert_not_called()
-    artifacts.prepare.assert_not_called()
-    monkeypatch.setattr(masks.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
-    with rasterio.open(source) as dataset, pytest.raises(ProcessingError) as error:
+        plan = make_spec(source, ["sum(a)"], area)
+        assert prepare_aggregate_job(plan, RasterAggregateLimits()).reserved_bytes == 0
         with masks.temporary_polygon_mask(
             dataset,
             Window(0, 0, 8, 8),
-            (mapping(box(0, 0, 1, 1)),),
+            (mapping(box(*dataset.bounds)),),
             tmp_path,
-            limits,
-        ):
-            pytest.fail("insufficient disk must be rejected before rasterization")
-    assert error.value.code == "storage_full"
+            RasterAggregateLimits(),
+        ) as mask:
+            assert mask is not None
+            assert np.all(mask.read(1) == 1)
     assert not (tmp_path / "polygon-mask.tif").exists()

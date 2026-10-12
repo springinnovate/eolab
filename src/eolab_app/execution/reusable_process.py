@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from multiprocessing import get_context
 from multiprocessing.connection import Connection
 import pickle
+import os
 import signal
 import sys
 import time
@@ -14,6 +15,7 @@ from typing import Any
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
     run_bounded_process,
+    stop_if_parent_dies,
 )
 
 
@@ -95,6 +97,7 @@ def _serve_process_requests(
     targets: tuple[Callable[..., None], ...],
     recycle_bytes: int,
     address_space_bytes: int | None,
+    parent_pid: int,
 ) -> None:
     """Execute requests sequentially in the child and send each completed result.
 
@@ -104,8 +107,10 @@ def _serve_process_requests(
         recycle_bytes: Linux peak-RSS threshold for between-job replacement.
         address_space_bytes: Optional Linux address-space ceiling including native
             libraries and preparation; other platforms retain container limits.
+        parent_pid: Supervisor identity used to stop orphaned Linux native work.
     """
     try:
+        stop_if_parent_dies(parent_pid)
         if address_space_bytes is not None and sys.platform == "linux":
             import resource
 
@@ -119,12 +124,13 @@ def _serve_process_requests(
         connection.send("ready")
         while True:
             sequence, index, arguments, deadline = connection.recv()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            if hasattr(signal, "setitimer"):
-                signal.signal(signal.SIGALRM, signal.SIG_DFL)
-                signal.setitimer(signal.ITIMER_REAL, remaining)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                if hasattr(signal, "setitimer"):
+                    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+                    signal.setitimer(signal.ITIMER_REAL, remaining)
             value = _run_target_and_collect_result(targets[index], arguments)
             recycle = _memory_exceeded(recycle_bytes)
             payload = pickle.dumps((sequence, value, recycle))
@@ -142,7 +148,7 @@ def _serve_process_requests(
 
 
 def _exchange_process_request(
-    connection: Connection, message: tuple[int, int, tuple[Any, ...], float]
+    connection: Connection, message: tuple[int, int, tuple[Any, ...], float | None]
 ) -> Any:
     """Send one operation request to the child and wait for its reply.
 
@@ -270,6 +276,7 @@ class ReusableProcess:
                 self.targets,
                 self.recycle_bytes,
                 self.address_space_bytes,
+                os.getpid(),
             ),
             daemon=True,
         )
@@ -293,14 +300,15 @@ class ReusableProcess:
         self,
         target: Callable[..., None],
         arguments: tuple[Any, ...],
-        timeout_seconds: float,
+        timeout_seconds: float | None,
     ) -> Any:
         """Run a registered operation and stop its child if the call cannot finish.
 
         Args:
             target: One of the preloaded entry points.
             arguments: Immutable admitted operation inputs.
-            timeout_seconds: Deadline including readiness, transfer and cleanup.
+            timeout_seconds: Deadline including readiness, transfer and cleanup;
+                None continues until completion, cancellation or process failure.
 
         Returns:
             The operation's result after its function and cleanup return.
@@ -313,10 +321,14 @@ class ReusableProcess:
         """
         if self.closed or self.active is not None:
             raise RuntimeError("Native process lane is closed or already active")
-        if target not in self.targets or timeout_seconds <= 0:
+        if target not in self.targets or (
+            timeout_seconds is not None and timeout_seconds <= 0
+        ):
             raise ValueError("Invalid native process target or deadline")
         self.active = asyncio.current_task()
-        deadline = time.monotonic() + timeout_seconds
+        deadline = (
+            None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        )
         child = None
         try:
             self.warm()
@@ -376,7 +388,7 @@ class ReusableProcess:
 async def run_process(
     target: Callable[..., None],
     arguments: tuple[Any, ...],
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     reusable: ReusableProcess | None = None,
 ) -> Any:
     """Run an operation in the supplied reusable process or a new child process.
@@ -384,7 +396,8 @@ async def run_process(
     Args:
         target: Owner-supplied operation entry point.
         arguments: Admitted native inputs.
-        timeout_seconds: Complete operation deadline.
+        timeout_seconds: Complete operation deadline, or None to run until
+            completion, cancellation or process failure.
         reusable: Lifecycle-managed warm process supplied by composition, if any.
 
     Returns:

@@ -46,7 +46,7 @@ from eolab_app.processing.raster_expression import (
     walk,
 )
 from eolab_app.processing.raster_input import (
-    estimate_native_raster_reads,
+    count_native_raster_blocks,
     validate_supported_raster,
     select_area,
 )
@@ -63,27 +63,8 @@ from eolab_app.processing.raster_mask import temporary_polygon_mask
 TILE_SIDE = 256
 # Area intersections retain bounded GEOS objects alongside the numerical tile.
 AREA_TILE_SIDE = 64
-AREA_GEOMETRY_MEMORY_BYTES = 128 * 1024**2
-# Each native block retains its source values and one NumPy boolean validity mask.
-NATIVE_MASK_BYTES_PER_PIXEL = np.dtype(np.bool_).itemsize
-# GDAL's cache plus a separate 64 MiB allowance for geometry/native bookkeeping
-# make up the fixed 128 MiB portion of the conservative working-set estimate.
 GDAL_CACHE_BYTES = 64 * 1024**2
-NATIVE_BOOKKEEPING_BYTES = 64 * 1024**2
 GDAL_THREADS = 2
-# Additional calculation-local polygons must fit alongside the planned raster
-# buffers. This is a ceiling, not a cross-job cache or an unconditional allocation.
-RETAINED_POLYGON_MEMORY_BYTES = 128 * 1024**2
-# A cached expression node holds float64 values (8 bytes) and validity (1 byte).
-# Round up to 16 bytes per pixel to allow evaluation temporaries. Eight additional
-# tile-sized allocations cover input conversion, polygon selection/eligibility masks, selected
-# values and reduction temporaries. These are admission allowances, not measured
-# resident memory or a count of arrays every expression necessarily allocates.
-EXPRESSION_BYTES_PER_PIXEL = 16
-EXPRESSION_SCRATCH_ARRAYS = 8
-# Fractional coverage's row integrals, winding, masks and broadcast temporaries.
-# The fixed area allowance continues to cover cached axes, edges and GEOS setup.
-AREA_MASK_BYTES_PER_PIXEL = 160
 # Publish progress at most twice per second to bound filesystem update overhead.
 PROGRESS_INTERVAL_SECONDS = 0.5
 
@@ -120,7 +101,7 @@ def get_raster_window_and_mask_source(
     area: AggregateArea,
     limits: RasterAggregateLimits,
     *,
-    max_retained_polygon_bytes: int = 0,
+    max_retained_polygon_bytes: int | None = 0,
 ) -> tuple[Window, tuple[dict[str, object], ...] | RasterAreaMask]:
     """Get the raster pixel window and the source for per-tile area masks.
 
@@ -130,7 +111,7 @@ def get_raster_window_and_mask_source(
         dataset: Open raster with validated georeferencing.
         area: Sampling box, filtered catalog features, historical polygon
             geometry, or the whole raster.
-        limits: Processing limits; max_coordinates bounds geometry work here.
+        limits: Shared lifecycle and ground-area accuracy settings.
         max_retained_polygon_bytes: Optional allowance to retain catalog polygons
             for this calculation; zero uses the streaming reader.
 
@@ -141,7 +122,7 @@ def get_raster_window_and_mask_source(
 
     Raises:
         ProcessingError: If the area does not overlap the raster, cannot be
-            projected, or exceeds the geometry limits.
+            projected.
     """
     if area.kind == "wholeRaster":
         return Window(0, 0, dataset.width, dataset.height), ()
@@ -150,7 +131,7 @@ def get_raster_window_and_mask_source(
         area.kind,
         area.bounds,
         area.geometries,
-        limits.max_coordinates,
+        None,
         area.resolved,
         max_retained_polygon_bytes=max_retained_polygon_bytes,
     )
@@ -202,21 +183,9 @@ def prepare_raster_area_tools(
 
     Raises:
         ProcessingError: If the area cannot be read or projected, does not
-            overlap the raster, or exceeds geometry-processing limits.
+            overlap the raster.
     """
-    polygon_budget = 0
-    if calculation_plan.area.kind == "catalogSelection":
-        polygon_budget = min(
-            RETAINED_POLYGON_MEMORY_BYTES,
-            limits.max_memory_bytes - calculation_plan.grid.estimatedMemoryBytes,
-        )
-        if polygon_budget <= 0:
-            raise ProcessingError(
-                "polygon_memory_limit",
-                "The planned raster buffers leave no memory for selected polygons. "
-                "Use a smaller batch or simplify the calculation.",
-                413,
-            )
+    polygon_budget = None if calculation_plan.area.kind == "catalogSelection" else 0
     selection_window, selected_polygons = get_raster_window_and_mask_source(
         dataset,
         calculation_plan.area,
@@ -252,44 +221,31 @@ def plan_statistics_grid(
     target_chunk_pixels: int | None = None,
     pixel_window: Window | None = None,
 ) -> AggregateGrid:
-    """Plan the statistics grid and estimate its raster-read and expression-memory costs.
+    """Describe the statistics grid and choose windows for tiled execution.
 
     Args:
         dataset: Validated one-band source.
         window: Integral source window.
         node_count: Total bounded expression-tree nodes.
-        limits: Work and memory ceilings.
+        limits: Shared lifecycle and ground-area accuracy settings.
         ground_area: Optional ellipsoidal measurement metadata and geometry work.
         target_chunk_pixels: Opt-in total-pixel budget for combined windows/tiles.
         pixel_window: Optional additional single-cell read for a mixed point
             and area calculation, conservatively charged as another native block.
 
     Returns:
-        Source grid metadata, read-window sizes and conservative resource estimates.
+        Source grid metadata and read-window sizes; legacy byte estimates are zero.
 
     Raises:
-        ProcessingError: If native reads or expression memory exceed limits.
+        ProcessingError: If grid metadata cannot describe valid execution windows.
     """
-    blocks, block_reads, decoded = (
-        estimate_native_raster_reads(
-            dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
-        )
+    blocks = (
+        count_native_raster_blocks(dataset, window)
         if window.width and window.height
-        else (0, 0, 0)
+        else 0
     )
     if pixel_window is not None and pixel_window.width:
-        extra_blocks, extra_reads, extra_decoded = estimate_native_raster_reads(
-            dataset, pixel_window, limits.max_native_blocks, limits.max_decoded_bytes
-        )
-        blocks += extra_blocks
-        block_reads += extra_reads
-        decoded += extra_decoded
-        if block_reads > limits.max_native_blocks or decoded > limits.max_decoded_bytes:
-            raise ProcessingError(
-                "source_work_too_large",
-                "The area and selected pixel together exceed the native read limit.",
-                413,
-            )
+        blocks += count_native_raster_blocks(dataset, pixel_window)
     bh, bw = dataset.block_shapes[0]
     tile_side = (
         AREA_TILE_SIDE
@@ -319,34 +275,6 @@ def plan_statistics_grid(
         execution = execution.model_copy(
             update={"readWindows": execution.readWindows + 1}
         )
-    read_pixels = execution.readWidth * execution.readHeight
-    tile_pixels = execution.evaluationWidth * execution.evaluationHeight
-    # Sum the retained native block, fixed native overhead, and tile-sized
-    # expression/scratch budget. Counting all syntax nodes is conservative because
-    # scalar nodes and successive reductions need not hold full tiles together.
-    memory = (
-        (read_pixels if target_chunk_pixels else bh * bw)
-        * (np.dtype(dataset.dtypes[0]).itemsize + NATIVE_MASK_BYTES_PER_PIXEL + 1)
-        + GDAL_CACHE_BYTES
-        + NATIVE_BOOKKEEPING_BYTES
-        + (tile_pixels if target_chunk_pixels else TILE_SIDE**2)
-        * (node_count + EXPRESSION_SCRATCH_ARRAYS)
-        * EXPRESSION_BYTES_PER_PIXEL
-        + (AREA_GEOMETRY_MEMORY_BYTES if ground_area is not None else 0)
-        + (
-            tile_pixels * AREA_MASK_BYTES_PER_PIXEL
-            if target_chunk_pixels
-            and ground_area
-            and ground_area.strategy == "rectilinear"
-            else 0
-        )
-    )
-    if memory > limits.max_memory_bytes:
-        raise ProcessingError(
-            "expression_memory_limit",
-            f"The source, batch and expression need an estimated {memory / 1024**2:.1f} MiB of memory; the limit is {limits.max_memory_bytes / 1024**2:.0f} MiB. Choose a smaller batch, simplify the calculation or use a tiled source.",
-            413,
-        )
     return AggregateGrid(
         crs=dataset.crs.to_wkt(),
         transform=tuple(window_transform(window, dataset.transform))[:6],
@@ -361,8 +289,8 @@ def plan_statistics_grid(
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
         nativeBlocks=blocks,
-        decodedBytes=decoded,
-        estimatedMemoryBytes=memory,
+        decodedBytes=0,
+        estimatedMemoryBytes=0,
         scale=str(dataset.scales[0]),
         offset=str(dataset.offsets[0]),
         storedUnit=dataset.units[0],
@@ -380,10 +308,10 @@ def plan_aggregate(
     target_chunk_pixels: int | None = None,
     pixel_point: PixelPoint | None = None,
 ) -> AggregateGrid:
-    """Estimate raster reads and memory needed for the requested formulas.
+    """Plan the native grid and calculation batches for the requested formulas.
 
     For north-up WGS84, Web Mercator and equal-area cylindrical rasters,
-    estimate filtered-vector work from its server-measured bounding rectangle.
+    use the filtered vector's server-measured bounding rectangle.
     These projections have independent, monotonic longitude/latitude axes, so
     the rectangle contains the selected polygons. Read and project the exact
     polygons later, in the cancellable calculation job. Other grids retain
@@ -394,17 +322,17 @@ def plan_aggregate(
         area: Selected box, filtered vector, historical polygons or whole raster.
         calculations: Labeled formulas to evaluate, such as sum(a).
         alias: Variable representing the raster in those formulas, such as a.
-        limits: Maximum raster reads, memory, and geometry work.
+        limits: Shared lifecycle and ground-area accuracy settings.
         target_chunk_pixels: Optional maximum pixels per read/calculation batch.
         pixel_point: Exact selected map position required by pixelValue.
             Point-only formulas ignore the area and admit only one source cell.
 
     Returns:
-        Raster grid and conservative read/memory estimates, without reading
-        pixel values. The saved calculation keeps the exact area descriptor.
+        Raster grid and block counts from metadata, without reading pixel values
+        or estimating memory consumption. The saved calculation keeps the exact area descriptor.
 
     Raises:
-        ProcessingError: If the area misses the raster or exceeds work limits.
+        ProcessingError: If the area misses the raster or cannot be projected.
         rasterio.errors.RasterioIOError: If the raster cannot be opened.
     """
     roots = [compile_expression(item.expression, alias) for item in calculations]
@@ -488,7 +416,7 @@ def calculate_raster_statistics_for_area(
         calculation_plan: Expressions to evaluate, area to summarize,
             catalog source identity, and grid produced by plan_aggregate.
         directory: Existing directory for result files and progress updates.
-        limits: Limits on raster reads, memory use, and geometry processing.
+        limits: Shared lifecycle and ground-area accuracy settings.
 
     Returns:
         An AggregateArtifact containing the calculated values and the CSV
@@ -496,7 +424,7 @@ def calculate_raster_statistics_for_area(
 
     Raises:
         ProcessingError: If the raster or area is unsupported, or the
-            calculation exceeds a processing limit.
+            calculation inputs are invalid.
     """
     completed_blocks = 0
     alias = next(iter(calculation_plan.sources))
