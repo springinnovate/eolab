@@ -131,53 +131,38 @@ test("run controls and open details remain stable through progress updates", () 
 });
 
 test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
-    const h = fixture(), artifacts = fileManifest(), file = artifacts.files[0];
+    const h = fixture(), artifacts = fileManifest();
+    const rasterFiles = artifacts.files.filter(file => file.mediaType === "image/tiff");
+    const firstFile = rasterFiles[0];
     h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
     h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
-    h.state.outputPreviews = {[file.artifactId]: {canShow: true}};
+    h.state.outputPreviews = Object.fromEntries(rasterFiles.map(file => [file.artifactId, {canShow: true}]));
     h.view.render(h.state);
-    let button = h.view.run.result.children[2].children[3];
-    assert.equal(button.textContent, "Show on map"); button.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
-    h.state.outputPreviews[file.artifactId].busy = true; h.view.render(h.state);
-    button = h.view.run.result.children[2].children[3];
+    for (const [index, file] of rasterFiles.entries()) {
+        const card = h.view.run.result.children[index + 2], button = card.children[3];
+        assert.equal(card.children[0].textContent, `Download ${file.label}`);
+        assert.equal(card.children[0].href, file.url);
+        assert.equal(button.textContent, "Show on map");
+        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.label}`);
+        button.dispatchEvent(new Event("click"));
+        assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
+    }
+    h.state.outputPreviews[firstFile.artifactId].busy = true; h.view.render(h.state);
+    const button = h.view.run.result.children[2].children[3];
     assert.equal(button.textContent, "Adding to map…"); assert.equal(button.disabled, true);
-    h.state.outputPreviews[file.artifactId] = {canShow: true, onMap: true}; h.view.render(h.state);
+    assert.equal(h.view.run.result.children[3].children[3].textContent, "Show on map");
+    assert.equal(h.view.run.result.children[3].children[3].disabled, false);
+    h.state.outputPreviews[firstFile.artifactId] = {canShow: true, onMap: true}; h.view.render(h.state);
     assert.equal(h.view.run.result.children[2].children[3].textContent, "On map");
+    assert.equal(h.view.run.result.children[2].children[3].disabled, true);
+    assert.equal(h.view.run.result.children[3].children[3].textContent, "Show on map");
+    assert.equal(h.view.run.result.children[3].children[3].disabled, false);
 });
 
 test("stage feedback covers terminal states and an unknown total stays indeterminate", () => {
     for (const status of ["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired"])
         assert.ok(describeModelProgress(job({status})));
     assert.equal(describeModelProgress(job({status: "running", progress: {phase: "preparing_polygon_mask"}})), "Creating the analysis mask…");
-});
-
-test("routing DEMs from separate drains have independent map and download controls", () => {
-    const h = fixture(), artifacts = fileManifest();
-    artifacts.files = ["2", "3"].map(drain => {
-        const artifactId = drain.repeat(32), name = `routing_dem_drain_${drain}`;
-        return {...artifacts.files[0], artifactId, name, filename: `${name}.tif`, role: "intermediate",
-            label: `Routing DEM (pit-filled) · Drain ${drain}`,
-            url: `/api/processing/jobs/${artifacts.jobId}/artifacts/${artifactId}`};
-    });
-    h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
-    h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: statisticsResult, artifacts})];
-    h.state.outputPreviews = Object.fromEntries(artifacts.files.map(file => [file.artifactId, {canShow: true}]));
-    h.view.render(h.state);
-    const cards = h.view.run.result.children.slice(-2);
-    for (const [index, card] of cards.entries()) {
-        const file = artifacts.files[index], button = card.children[3];
-        assert.equal(card.children[0].textContent, `Download ${file.label}`);
-        assert.equal(card.children[0].href, file.url);
-        assert.match(card.children[1].textContent, /Intermediate result/);
-        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.label}`);
-        button.dispatchEvent(new Event("click"));
-        assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
-    }
-    h.state.outputPreviews[artifacts.files[0].artifactId].onMap = true;
-    h.view.render(h.state);
-    assert.equal(h.view.run.result.children.at(-2).children[3].textContent, "On map");
-    assert.equal(h.view.run.result.children.at(-1).children[3].textContent, "Show on map");
 });
 
 
