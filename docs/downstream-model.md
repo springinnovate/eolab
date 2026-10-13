@@ -68,7 +68,7 @@ stitching, nearest-neighbor value resampling, positive-value inclusion and NoDat
 EOlab does not substitute native-grid totals, geodesic distances or new routing.
 
 Version 3.0.0 passes `treat_nodata_as_closed=True` and
-the configured `max_pixel_fill_count` (100 by default) to the WWF workflow's
+the configured `max_pixel_fill_count` (1000 by default) to the WWF workflow's
 existing pit-filling step.
 During filling, NoData holes and the outer raster boundary cannot serve as
 drains. The cutoff is EcoShard's existing per-search exploration budget, not
@@ -78,18 +78,18 @@ are unchanged. MFD still uses its original downhill and NoData-fallback rules;
 this does not force every flow path to the ocean or a selected terminal basin.
 
 To change the search budget, set
-`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=1000` in Coolify and redeploy
-the app and worker. Missing or blank values use the code default of 100;
+`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=10000` in Coolify and redeploy
+the app and worker. Missing or blank values use the code default of 1000;
 `-1` or `0` means unlimited search. The worker captures this setting when it
 prepares a run, then records it in the run plan, numerical policy, provenance and
 Run YAML. Changing the setting does not rewrite completed runs. Redeployment
 interrupts unfinished runs under the existing worker restart policy.
 
 For a matching standalone WWF run, add these options under `inputs` in its YAML,
-using the search budget recorded for the EOlab run (100 here):
+using the search budget recorded for the EOlab run (1000 here):
 
 ```yaml
-max_pixel_fill_count: 100
+max_pixel_fill_count: 1000
 treat_nodata_as_closed: true
 ```
 

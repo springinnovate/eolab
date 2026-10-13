@@ -44,9 +44,10 @@ def test_obsolete_downstream_limits_are_ignored(
 @pytest.mark.parametrize(
     "value,expected",
     [
-        (None, 100),
-        ("", 100),
-        ("  ", 100),
+        (None, 1000),
+        ("", 1000),
+        ("  ", 1000),
+        ("100", 100),
         ("1000", 1000),
         ("-1", -1),
         ("0", 0),

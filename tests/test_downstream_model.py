@@ -386,25 +386,28 @@ def test_historical_numerical_policy_remains_readable(version: int) -> None:
     )
 
 
-@pytest.mark.parametrize("pit_fill_search_limit", [100, 1000, -1, 0, 2**63 - 1])
+@pytest.mark.parametrize("pit_fill_search_limit", [None, 100, 1000, -1, 0, 2**63 - 1])
 def test_closed_edge_policy_records_current_filling_settings(
-    tmp_path: Path, pit_fill_search_limit: int
+    tmp_path: Path, pit_fill_search_limit: int | None
 ) -> None:
     """New runs record the requested filling behavior without changing old policies.
 
     Args:
         tmp_path: Isolated native source metadata for a prepared plan.
-        pit_fill_search_limit: Configured EcoShard search cutoff.
+        pit_fill_search_limit: Configured EcoShard search cutoff, or deployment default.
     """
     from eolab_app.processing.downstream_operation import describe_downstream_policy
     from eolab_app.processing.downstream_models import DownstreamPolicy
 
     sources, request, limits = downstream_fixture(tmp_path)
-    limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
+    if pit_fill_search_limit is not None:
+        limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
     policy = describe_downstream_policy(plan_downstream(sources, request, limits))
     saved = policy.model_dump(mode="json")
     assert saved["version"] == "hydrology.downstream_beneficiaries.v3"
-    assert saved["pitFillSearchLimit"] == pit_fill_search_limit
+    assert saved["pitFillSearchLimit"] == (
+        1000 if pit_fill_search_limit is None else pit_fill_search_limit
+    )
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
@@ -464,6 +467,26 @@ def test_historical_plan_uses_original_pit_fill_cutoff(
     restored = DownstreamPlan.model_validate(historical)
     assert restored.pit_fill_search_limit == 100
     assert describe_downstream_policy(restored).pitFillSearchLimit == 100
+
+
+def test_historical_closed_edge_policy_uses_original_pit_fill_cutoff(
+    tmp_path: Path,
+) -> None:
+    """Policies without a saved cutoff retain 100 when the deployment default changes.
+
+    Args:
+        tmp_path: Isolated native sources for a historical numerical policy.
+    """
+    from eolab_app.processing.downstream_models import DownstreamPolicy
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    historical = describe_downstream_policy(
+        plan_downstream(sources, request, limits)
+    ).model_dump(mode="json")
+    historical.pop("pitFillSearchLimit")
+    restored = DownstreamPolicy.model_validate(historical)
+    assert restored.root.pitFillSearchLimit == 100
 
 
 @pytest.mark.parametrize("value", [True, "100", 1.5, -2, 2**63])

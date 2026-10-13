@@ -21,7 +21,7 @@ from eolab_app.raster.source_models import RasterSourceReference
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
 BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
-PIT_FILL_SEARCH_LIMIT = 100
+DEFAULT_PIT_FILL_SEARCH_LIMIT = 1000
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 FLOW_THRESHOLD = 100 * float_info.epsilon
 
@@ -42,7 +42,7 @@ class DownstreamLimits(RasterClipLimits):
             Values -1 and 0 leave the search unlimited.
     """
 
-    pit_fill_search_limit: int = PIT_FILL_SEARCH_LIMIT
+    pit_fill_search_limit: int = DEFAULT_PIT_FILL_SEARCH_LIMIT
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
@@ -145,7 +145,8 @@ class DownstreamPlan(HydrologySchema):
     watersheds: tuple[NetworkId, ...] = Field(min_length=1)
     reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
-    pit_fill_search_limit: PitFillSearchLimit = PIT_FILL_SEARCH_LIMIT
+    # Missing fields describe older runs, not the current deployment default.
+    pit_fill_search_limit: PitFillSearchLimit = 100
 
 
 class DownstreamNumericalPolicy(HydrologySchema):
@@ -210,6 +211,7 @@ class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
 
     The search limit uses EcoShard's exploration cutoff, not an exact count of
     changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    Historical policies without the cutoff retain the original default of 100.
     """
 
     version: Literal["hydrology.downstream_beneficiaries.v3"] = (
@@ -221,7 +223,7 @@ class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )
-    pitFillSearchLimit: PitFillSearchLimit = PIT_FILL_SEARCH_LIMIT
+    pitFillSearchLimit: PitFillSearchLimit = 100
     pitFillTreatNodataAsClosed: Literal[True] = PIT_FILL_TREAT_NODATA_AS_CLOSED
 
 

@@ -110,9 +110,9 @@ slots atomically across database connections. Cancelling jobs keep their slots
 until native work stops; a missed heartbeat alone never releases a slot.
 
 For downstream beneficiaries, set
-`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=1000` in Coolify to change
+`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=10000` in Coolify to change
 the pit-filling search budget, then redeploy both app and worker. Missing or
-blank values use the code default of 100; `-1` or `0` means unlimited search.
+blank values use the code default of 1000; `-1` or `0` means unlimited search.
 Compose passes the setting through without defining another default. This
 controls how far EcoShard searches for a pit's pour point, not the total run
 size or the exact number of elevations changed. Closed NoData edges apply
