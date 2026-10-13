@@ -10,8 +10,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
-    "wwf-es-beneficiaries==0.0.0+g7e32ae28540a",
-    "ecoshard @ https://github.com/springinnovate/ecoshard/archive/f7e2adba2a4d41128aea941bb747470418d2dce9.tar.gz#sha256=a2439488aec725acf3ff69a4ce491643212a604cf0e47c13b61077fb09cfdb40",
+    "wwf-es-beneficiaries==0.0.0+g3f577e27deb3",
+    "ecoshard @ https://github.com/springinnovate/ecoshard/archive/6bd106862a2cb2517f91f9bd7ca8bb071ccb6013.tar.gz#sha256=e751808a1dc57dfc2236e96f41209ed82dfa85ee492d146da339a8249a001f3b",
     "scipy>=1.14,<2",
     "numexpr>=2.10,<3",
     "psutil>=7,<8",

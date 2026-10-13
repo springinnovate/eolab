@@ -74,10 +74,11 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
         "resampled-dem",
         "dem-nodata",
         "dem-pit",
+        "closed-dem-edge",
     ],
 )
 def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> None:
-    """The unchanged CLI and EOlab return identical results and routing terrain.
+    """The CLI and EOlab return identical results with the same pit-filling options.
 
     The reference prepares canonical HydroBASINS fields and a known AOI itself;
     it does not use EOlab's input conversion or calculation helpers. The original
@@ -89,6 +90,8 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
     """
     original = files("wwf_es_beneficiaries") / "workflow_runner.py"
     sources, request, limits = downstream_fixture(tmp_path / "inputs")
+    if case == "closed-dem-edge":
+        limits = replace(limits, pit_fill_search_limit=1000)
     area = box(0, 0, 1, 4)
     if case == "resampled-dem":
         sources, request, limits = scaled_downstream_fixture(
@@ -110,11 +113,13 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             raster.write(values, 1)
         area = box(0, 0, 0.02, 4)
     reference_mask = sources.rasters["starting_mask"]
-    if case in {"dem-nodata", "dem-pit"}:
+    if case in {"dem-nodata", "dem-pit", "closed-dem-edge"}:
         with rasterio.open(sources.rasters["dem"], "r+") as raster:
             elevations = raster.read(1)
             if case == "dem-nodata":
                 elevations[1, 4] = raster.nodata
+            elif case == "closed-dem-edge":
+                elevations[0, 2] = 0
             else:
                 elevations[1, 2] = -50
             raster.write(elevations, 1)
@@ -289,6 +294,8 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
                     "buffer_size_m": request.buffer_m,
                     "taskgraph_workers": 1,
                     "gdal_cachemax_mb": 128,
+                    "max_pixel_fill_count": limits.pit_fill_search_limit,
+                    "treat_nodata_as_closed": True,
                 },
                 "sections": [
                     {
@@ -388,6 +395,10 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             rasterio.open(clipped_path) as clipped,
         ):
             assert np.any(filled.read(1) != clipped.read(1))
+    if case == "closed-dem-edge":
+        # This edge depression drained immediately with the old open-edge rule.
+        with rasterio.open(next(iter(reference_routing_dems.values()))) as filled:
+            assert filled.read(1)[0, 2] > 0
     with next(output.glob("comparison_*.csv")).open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 1

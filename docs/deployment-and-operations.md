@@ -109,6 +109,20 @@ simultaneous job; supported worker counts are 1 through 32. Claims reserve worke
 slots atomically across database connections. Cancelling jobs keep their slots
 until native work stops; a missed heartbeat alone never releases a slot.
 
+For downstream beneficiaries, set
+`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=10000` in Coolify to change
+the pit-filling search budget, then redeploy both app and worker. Missing or
+blank values use the code default of 1000; `-1` or `0` means unlimited search.
+Compose passes the setting through without defining another default. This
+controls how far EcoShard searches for a pit's pour point, not the total run
+size or the exact number of elevations changed. Closed NoData edges apply
+during filling; the subsequent MFD routing is unchanged.
+
+The worker captures the setting while preparing each downstream run. Its run
+plan, numerical policy, provenance and Run YAML retain that value. Completed
+runs are unchanged; redeployment interrupts unfinished runs under the existing
+restart policy, so submit them again afterward.
+
 Processing has no application-imposed cell, feature/coordinate, memory, disk or
 total-runtime ceiling. It attempts each calculation without resource-size
 estimates or free-space admission checks. The Processing container has no
@@ -567,7 +581,7 @@ The downstream model also builds the hash-pinned EcoShard archive in
 NumPy headers and tested Cython 3.0.12 compiler. Its legacy setup needs these build
 dependencies installed before wheel generation; both the application and disposable
 PostgreSQL test images build it without an isolated backend. The distribution
-version is fixed by `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d`.
+version is fixed by `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g6bd106862a2c`.
 
 For local development, install GDAL 3.10.x with NumPy support using your native
 package manager (for example, conda-forge). Install NumPy, Cython 3.0.12,

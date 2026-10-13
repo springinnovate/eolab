@@ -1,6 +1,9 @@
 # Linux x86_64 / CPython 3.12 wheels. See docs/deployment-and-operations.md#build-information.
 # Generated from the deployed resolution; review changes before building.
 
+# Required by the pinned EcoShard package; pure Python wheel.
+filelock==3.20.0 --hash=sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2
+
 # Required by the unchanged WWF beneficiaries workflow; Linux CPython 3.12.
 geopandas==1.1.1 --hash=sha256:589e61aaf39b19828843df16cb90234e72897e2579be236f10eee0d052ad98e8
 packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c

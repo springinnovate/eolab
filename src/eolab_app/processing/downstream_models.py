@@ -19,19 +19,30 @@ from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
-ECOSHARD_REVISION = "f7e2adba2a4d41128aea941bb747470418d2dce9"
-BENEFICIARIES_REVISION = "7e32ae28540ab53178248758a6f40affea8d6ff6"
+ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
+BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
+DEFAULT_PIT_FILL_SEARCH_LIMIT = 1000
+PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 FLOW_THRESHOLD = 100 * float_info.epsilon
+
+PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
+"""EcoShard's signed-64-bit pit-search cutoff; -1 and 0 allow unlimited searches."""
 
 
 @dataclass(frozen=True)
 class DownstreamLimits(RasterClipLimits):
-    """Configure downstream job scheduling and result retention.
+    """Configure downstream job scheduling, result retention and pit filling.
 
     The original WWF model runs without EOlab cell, geometry, memory, disk or
-    total-runtime admission ceilings. Its numerical inputs are captured separately
-    in DownstreamRequest.
+    total-runtime admission ceilings. The worker captures the pit-search cutoff
+    in each prepared plan; it controls terrain conditioning, not job admission.
+
+    Attributes:
+        pit_fill_search_limit: EcoShard's maximum search steps for one pit.
+            Values -1 and 0 leave the search unlimited.
     """
+
+    pit_fill_search_limit: int = DEFAULT_PIT_FILL_SEARCH_LIMIT
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
@@ -118,11 +129,13 @@ class QueuedDownstream(HydrologySchema):
 
 
 class DownstreamPlan(HydrologySchema):
-    """Record admitted native windows and watershed identities without retaining geometry.
+    """Record source grids, watershed identities and pit-filling settings for one run.
 
     Resolved selections are ephemeral worker arguments and never enter storage.
-    These grids measure native input work for admission. The original model
-    constructs its own calculation grid using the captured pixel-size setting.
+    The original model constructs its own calculation grid using the captured
+    pixel-size setting. The worker saves its pit-search cutoff during preparation;
+    execution uses this value even if supplied different worker settings later.
+    Historical plans without the cutoff retain the original default of 100.
     """
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
@@ -132,6 +145,8 @@ class DownstreamPlan(HydrologySchema):
     watersheds: tuple[NetworkId, ...] = Field(min_length=1)
     reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
+    # Missing fields describe older runs, not the current deployment default.
+    pit_fill_search_limit: PitFillSearchLimit = 100
 
 
 class DownstreamNumericalPolicy(HydrologySchema):
@@ -139,7 +154,7 @@ class DownstreamNumericalPolicy(HydrologySchema):
 
     version: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        ECOSHARD_REVISION
+        "f7e2adba2a4d41128aea941bb747470418d2dce9"
     )
     routing: Literal["mfd_prepared_dem_native_grid"] = "mfd_prepared_dem_native_grid"
     seeds: Literal["cell_center_positive_valid_raster_or_filtered_vector"] = (
@@ -165,16 +180,16 @@ class DownstreamNumericalPolicy(HydrologySchema):
 
 
 class WrappedDownstreamNumericalPolicy(HydrologySchema):
-    """Record the original model version and the numerical settings passed to it."""
+    """Read historical WWF runs that allowed drainage to NoData during filling."""
 
     version: Literal["hydrology.downstream_beneficiaries.v2"] = (
         "hydrology.downstream_beneficiaries.v2"
     )
     beneficiariesRevision: Literal["7e32ae28540ab53178248758a6f40affea8d6ff6"] = (
-        BENEFICIARIES_REVISION
+        "7e32ae28540ab53178248758a6f40affea8d6ff6"
     )
     ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        ECOSHARD_REVISION
+        "f7e2adba2a4d41128aea941bb747470418d2dce9"
     )
     calculation: Literal["unchanged_upstream_functions"] = (
         "unchanged_upstream_functions"
@@ -191,10 +206,33 @@ class WrappedDownstreamNumericalPolicy(HydrologySchema):
     cutoffMetres: float | None = None
 
 
+class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
+    """Record closed-edge pit filling before the original WWF MFD calculation.
+
+    The search limit uses EcoShard's exploration cutoff, not an exact count of
+    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    Historical policies without the cutoff retain the original default of 100.
+    """
+
+    version: Literal["hydrology.downstream_beneficiaries.v3"] = (
+        "hydrology.downstream_beneficiaries.v3"
+    )
+    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
+        BENEFICIARIES_REVISION
+    )
+    ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
+        ECOSHARD_REVISION
+    )
+    pitFillSearchLimit: PitFillSearchLimit = 100
+    pitFillTreatNodataAsClosed: Literal[True] = PIT_FILL_TREAT_NODATA_AS_CLOSED
+
+
 class DownstreamPolicy(
     RootModel[
         Annotated[
-            DownstreamNumericalPolicy | WrappedDownstreamNumericalPolicy,
+            DownstreamNumericalPolicy
+            | WrappedDownstreamNumericalPolicy
+            | ClosedEdgeDownstreamNumericalPolicy,
             Field(discriminator="version"),
         ]
     ]

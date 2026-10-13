@@ -1,7 +1,7 @@
 # Downstream ecosystem beneficiaries
 
-`downstream-beneficiaries` version **2.1.0** wraps the original
-[WWF workflow at 7e32ae28540ab53178248758a6f40affea8d6ff6](https://github.com/springinnovate/wwf_es_beneficiaries/tree/7e32ae28540ab53178248758a6f40affea8d6ff6).
+`downstream-beneficiaries` version **3.0.0** wraps the original
+[WWF workflow at 3f577e27deb347cd4520977eb99474fb81e990fc](https://github.com/springinnovate/wwf_es_beneficiaries/tree/3f577e27deb347cd4520977eb99474fb81e990fc).
 Its source is packaged byte for byte. Processing calls the original partitioning,
 DEM preparation, flow routing, conditional coverage, stitching and population
 masking functions in their original order, sequentially in the existing supervised
@@ -67,13 +67,45 @@ convolution with a pixel-based circular buffer, distance cutoff, threshold order
 stitching, nearest-neighbor value resampling, positive-value inclusion and NoData.
 EOlab does not substitute native-grid totals, geodesic distances or new routing.
 
+Version 3.0.0 passes `treat_nodata_as_closed=True` and
+the configured `max_pixel_fill_count` (1000 by default) to the WWF workflow's
+existing pit-filling step.
+During filling, NoData holes and the outer raster boundary cannot serve as
+drains. The cutoff is EcoShard's existing per-search exploration budget, not
+an exact maximum number of changed elevations or a lake-size classification.
+When the search gives up, the unresolved depression remains. NoData pixels
+are unchanged. MFD still uses its original downhill and NoData-fallback rules;
+this does not force every flow path to the ocean or a selected terminal basin.
+
+To change the search budget, set
+`EOLAB_PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT=10000` in Coolify and redeploy
+the app and worker. Missing or blank values use the code default of 1000;
+`-1` or `0` means unlimited search. The worker captures this setting when it
+prepares a run, then records it in the run plan, numerical policy, provenance and
+Run YAML. Changing the setting does not rewrite completed runs. Redeployment
+interrupts unfinished runs under the existing worker restart policy.
+
+For a matching standalone WWF run, add these options under `inputs` in its YAML,
+using the search budget recorded for the EOlab run (1000 here):
+
+```yaml
+max_pixel_fill_count: 1000
+treat_nodata_as_closed: true
+```
+
+Existing WWF configurations that omit them retain unlimited, open-edge filling.
+New EOlab runs record these settings and both dependency revisions in their
+provenance and Run YAML. Rerun a model to inspect the newly conditioned routing
+DEM; files and recorded policies from older runs are not rewritten.
+
 Default `sum(a)` returns the exact total from upstream
 `mask_population_with_coverage`, including zero when no positive values contribute.
 Other formulas are **EOlab postprocessing of the upstream masked-values output**.
 They do not alter coverage or the original total.
 
 Version 1.0.0 used the replaced EOlab calculation. Historical numerical policies
-remain readable. New runs record version-2 policy and upstream revision. Recipe
+remain readable, including the version-2 open-edge WWF policy. New runs record
+version-3 policy and upstream revisions. Recipe
 version and implementation checksums change so stale selections and queued
 implementations cannot silently execute new math.
 
@@ -109,8 +141,11 @@ metadata around unchanged `workflow_runner.py` and the original
 `shortest_distances` extension. Installed provenance includes the runner checksum.
 Application and disposable PostgreSQL images use this same builder.
 
-The calculation uses the existing reviewed EcoShard revision
-`f7e2adba2a4d41128aea941bb747470418d2dce9`. Runtime wheels have reviewed hashes.
+The calculation uses EcoShard revision
+`6bd106862a2cb2517f91f9bd7ca8bb071ccb6013`, which includes the optional closed-edge
+flag and keeps optional Float16 types compatible with the application's GDAL 3.10.
+Its declared `filelock` dependency is included in the runtime wheel lock.
+Runtime wheels have reviewed hashes.
 The application build verifies imports; model checksums and build inventory record
 numerical package versions. Revision changes require a reviewed build change.
 
@@ -118,12 +153,13 @@ For native development, run `python deployment/build-beneficiaries.py --manifest
 deployment/beneficiaries-source.json --output /tmp/beneficiaries-wheels`, install
 the generated wheels, then install EOlab.
 
-`tests/test_downstream_upstream.py` invokes the unchanged CLI separately with
-independently prepared inputs. It requires exact coverage, masked values and each
+`tests/test_downstream_upstream.py` invokes the original CLI separately with
+independently prepared inputs and the same pit-filling options. It requires exact coverage, masked values and each
 drainage group's pit-filled routing DEM pixels,
 validity masks, CRS, transforms, dimensions, types, NoData and total equality.
 Cases cover buffer/cutoff, resampled signed/NoData values, filtered vector starts,
-multiple drainages and virtual links. Worker tests retain publication, Run YAML,
+multiple drainages, virtual links and a depression beside the raster edge.
+Worker tests retain publication, Run YAML,
 actual native cancellation, worker recovery and large-grid planning coverage.
 
 ## Resilience configuration

@@ -26,6 +26,8 @@ from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.downstream_models import (
     BENEFICIARIES_REVISION,
+    ECOSHARD_REVISION,
+    PIT_FILL_TREAT_NODATA_AS_CLOSED,
     DownstreamLimits,
     DownstreamPlan,
 )
@@ -279,7 +281,9 @@ def run_original_downstream(
 
     EOlab supplies authorized inputs and runs the same functions sequentially in
     its supervised native process. No upstream numerical function is replaced or
-    patched. Only complete declared files remain for normal artifact publication.
+    patched. Pit filling ignores NoData exits using the saved pit-search cutoff;
+    subsequent MFD routing is unchanged. Only complete declared files remain for
+    normal artifact publication.
 
     Args:
         sources: Authorized paths and immutable vector selections.
@@ -337,7 +341,11 @@ def run_original_downstream(
             partition_vector_path,
         )
         beneficiaries_model.calc_flow_dir(
-            partition_dem_path, partition_directory, flow_direction_path
+            partition_dem_path,
+            partition_directory,
+            flow_direction_path,
+            max_pixel_fill_count=spec.pit_fill_search_limit,
+            treat_nodata_as_closed=PIT_FILL_TREAT_NODATA_AS_CLOSED,
         )
         partition_downstream_coverage_path = partition_directory / "coverage.tif"
         write_progress(
@@ -428,8 +436,11 @@ def run_original_downstream(
             {
                 "operation": spec.operation,
                 "beneficiariesRevision": BENEFICIARIES_REVISION,
+                "ecoshardRevision": ECOSHARD_REVISION,
                 "inputs": model_inputs.model_dump(mode="json", by_alias=True),
                 "numericalPolicy": {
+                    "pitFillSearchLimit": spec.pit_fill_search_limit,
+                    "pitFillTreatNodataAsClosed": PIT_FILL_TREAT_NODATA_AS_CLOSED,
                     "wgs84PixelSize": model_inputs.wgs84_pixel_size,
                     "distancePixelSizeMetres": model_inputs.travel_time_pixel_size_m,
                     "bufferMetres": model_inputs.buffer_m,

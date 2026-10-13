@@ -1,6 +1,7 @@
 """Reference grids and real Processing boundaries for downstream model execution."""
 
 import asyncio
+import json
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -275,23 +276,37 @@ def test_field_comparison_stops_virtual_downstream_links() -> None:
         rule.matches({"NEXT_SINK": "12", "HYBAS_ID": 12})
 
 
+@pytest.mark.parametrize("pit_fill_search_limit", [100, 1000])
 def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     tmp_path: Path,
+    pit_fill_search_limit: int,
 ) -> None:
     """The original model masks positive values on its coverage grid.
 
     Args:
         tmp_path: Isolated prepared sources and calculation artifacts.
+        pit_fill_search_limit: Numerical cutoff captured during preparation.
     """
     pytest.importorskip("ecoshard.geoprocessing.routing")
     data = np.arange(-12, 12, dtype="int16").reshape(4, 6)
     sources, request, limits = downstream_fixture(tmp_path / "sources", values=data)
+    limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
     spec = plan_downstream(sources, request, limits)
     directory = tmp_path / "run"
     directory.mkdir()
-    artifact = calculate_downstream(sources, spec, directory, limits)
+    artifact = calculate_downstream(
+        sources, spec, directory, replace(limits, pit_fill_search_limit=1)
+    )
     assert float(artifact.rows[0]["value"]) == float(data[data > 0].sum())
     assert spec.watersheds == (1, 2, 3)
+    provenance = json.loads((directory / "provenance.json").read_text())
+    assert provenance["numericalPolicy"]["pitFillSearchLimit"] == pit_fill_search_limit
+    assert provenance["numericalPolicy"]["pitFillTreatNodataAsClosed"] is True
+    assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
+    assert (
+        provenance["beneficiariesRevision"]
+        == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
     with rasterio.open(directory / "coverage.tif") as coverage:
@@ -337,17 +352,168 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         plan_downstream(sources, request, limits)
 
 
-def test_historical_numerical_policy_remains_readable() -> None:
-    """Saved version-one runs retain their numerical description after replacement."""
-    from eolab_app.processing.downstream_models import DownstreamNumericalPolicy
+@pytest.mark.parametrize("version", [1, 2])
+def test_historical_numerical_policy_remains_readable(version: int) -> None:
+    """Saved runs keep their original revisions and numerical descriptions.
+
+    Args:
+        version: Historical reimplementation or original open-edge WWF policy.
+    """
+    from eolab_app.processing.downstream_models import (
+        DownstreamNumericalPolicy,
+        WrappedDownstreamNumericalPolicy,
+    )
     from eolab_app.processing.model_operations import get_model_operation
 
-    historical = DownstreamNumericalPolicy(bufferMetres=5000).model_dump(mode="json")
+    historical = (
+        DownstreamNumericalPolicy(bufferMetres=5000)
+        if version == 1
+        else WrappedDownstreamNumericalPolicy(
+            bufferMetres=5000, wgs84PixelSize=1, distancePixelSizeMetres=100000
+        )
+    ).model_dump(mode="json")
+    assert historical["ecoshardRevision"] == "f7e2adba2a4d41128aea941bb747470418d2dce9"
+    if version == 2:
+        assert (
+            historical["beneficiariesRevision"]
+            == "7e32ae28540ab53178248758a6f40affea8d6ff6"
+        )
+    assert "pitFillSearchLimit" not in historical
     operation = get_model_operation("hydrology.downstream_beneficiaries.v1")
     assert (
         operation.policy_type.model_validate(historical).model_dump(mode="json")
         == historical
     )
+
+
+@pytest.mark.parametrize("pit_fill_search_limit", [None, 100, 1000, -1, 0, 2**63 - 1])
+def test_closed_edge_policy_records_current_filling_settings(
+    tmp_path: Path, pit_fill_search_limit: int | None
+) -> None:
+    """New runs record the requested filling behavior without changing old policies.
+
+    Args:
+        tmp_path: Isolated native source metadata for a prepared plan.
+        pit_fill_search_limit: Configured EcoShard search cutoff, or deployment default.
+    """
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+    from eolab_app.processing.downstream_models import DownstreamPolicy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    if pit_fill_search_limit is not None:
+        limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
+    policy = describe_downstream_policy(plan_downstream(sources, request, limits))
+    saved = policy.model_dump(mode="json")
+    assert saved["version"] == "hydrology.downstream_beneficiaries.v3"
+    assert saved["pitFillSearchLimit"] == (
+        1000 if pit_fill_search_limit is None else pit_fill_search_limit
+    )
+    assert saved["pitFillTreatNodataAsClosed"] is True
+    assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
+    assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert DownstreamPolicy.model_validate(saved).model_dump(mode="json") == saved
+
+
+def test_saved_plan_preserves_pit_filling_after_settings_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Execute the saved cutoff even when source checks use different worker settings.
+
+    Args:
+        tmp_path: Isolated prepared sources and run directory.
+        monkeypatch: Observe the plan sent across the upstream model boundary.
+    """
+    from eolab_app.processing.downstream_models import DownstreamPlan
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+
+    sources, request, limits = downstream_fixture(tmp_path / "sources")
+    planned = plan_downstream(
+        sources, request, replace(limits, pit_fill_search_limit=17)
+    )
+    saved = DownstreamPlan.model_validate_json(planned.model_dump_json(by_alias=True))
+    assert saved.pit_fill_search_limit == 17
+    runner = Mock(side_effect=RuntimeError("observed saved plan"))
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.run_original_downstream", runner
+    )
+    directory = tmp_path / "run"
+    directory.mkdir()
+    with pytest.raises(RuntimeError, match="observed saved plan"):
+        calculate_downstream(
+            sources, saved, directory, replace(limits, pit_fill_search_limit=1000)
+        )
+    assert runner.call_args.args[1].pit_fill_search_limit == 17
+    assert describe_downstream_policy(saved).pitFillSearchLimit == 17
+
+
+def test_historical_plan_uses_original_pit_fill_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plans without a saved cutoff retain 100 regardless of the current environment.
+
+    Args:
+        tmp_path: Isolated native sources for a historical plan.
+        monkeypatch: Supply a different current administrator setting.
+    """
+    from eolab_app.processing.downstream_models import DownstreamPlan
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    historical = plan_downstream(sources, request, limits).model_dump(
+        mode="json", by_alias=True
+    )
+    historical.pop("pit_fill_search_limit")
+    monkeypatch.setenv("PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT", "1000")
+    restored = DownstreamPlan.model_validate(historical)
+    assert restored.pit_fill_search_limit == 100
+    assert describe_downstream_policy(restored).pitFillSearchLimit == 100
+
+
+def test_historical_closed_edge_policy_uses_original_pit_fill_cutoff(
+    tmp_path: Path,
+) -> None:
+    """Policies without a saved cutoff retain 100 when the deployment default changes.
+
+    Args:
+        tmp_path: Isolated native sources for a historical numerical policy.
+    """
+    from eolab_app.processing.downstream_models import DownstreamPolicy
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    historical = describe_downstream_policy(
+        plan_downstream(sources, request, limits)
+    ).model_dump(mode="json")
+    historical.pop("pitFillSearchLimit")
+    restored = DownstreamPolicy.model_validate(historical)
+    assert restored.root.pitFillSearchLimit == 100
+
+
+@pytest.mark.parametrize("value", [True, "100", 1.5, -2, 2**63])
+def test_saved_pit_fill_cutoff_rejects_invalid_values(
+    tmp_path: Path, value: Any
+) -> None:
+    """Reject malformed or unrepresentable cutoffs in persisted plans and policies.
+
+    Args:
+        tmp_path: Isolated sources for otherwise valid saved contracts.
+        value: Invalid value supplied by stored JSON.
+    """
+    from pydantic import ValidationError
+
+    from eolab_app.processing.downstream_models import DownstreamPlan, DownstreamPolicy
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    plan = plan_downstream(sources, request, limits)
+    saved_plan = plan.model_dump(mode="json", by_alias=True)
+    saved_plan["pit_fill_search_limit"] = value
+    with pytest.raises(ValidationError, match="pit_fill_search_limit"):
+        DownstreamPlan.model_validate(saved_plan)
+    saved_policy = describe_downstream_policy(plan).model_dump(mode="json")
+    saved_policy["pitFillSearchLimit"] = value
+    with pytest.raises(ValidationError, match="pitFillSearchLimit"):
+        DownstreamPolicy.model_validate(saved_policy)
 
 
 def test_upstream_relative_scratch_stays_in_run_after_failure(
@@ -362,7 +528,9 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
     from eolab_app.processing.downstream_runner import load_beneficiaries
 
     sources, request, limits = downstream_fixture(tmp_path / "inputs")
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(
+        sources, request, replace(limits, pit_fill_search_limit=1000)
+    )
     workspace = tmp_path / "attempt"
     workspace.mkdir()
     previous = Path.cwd()
@@ -378,6 +546,8 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
             OSError: Always, after creating a run-local scratch marker.
         """
         assert Path.cwd() == workspace.resolve()
+        assert kwargs["max_pixel_fill_count"] == 1000
+        assert kwargs["treat_nodata_as_closed"] is True
         Path("upstream-relative-scratch").write_text("private")
         raise OSError("upstream fixture failure")
 
@@ -509,7 +679,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     registry = ModelRegistry.load_installed()
-    definition = registry.get("downstream-beneficiaries", "2.1.0")
+    definition = registry.get("downstream-beneficiaries", "3.0.0")
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
@@ -595,6 +765,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         artifacts,
         limits,
         native=native,
+        downstream_limits=replace(limits, pit_fill_search_limit=1000),
         areas=SimpleNamespace(
             resolve_for_sampling=AsyncMock(return_value=sources.network)
         ),
@@ -640,6 +811,10 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
     assert set(document.execution.additionalSources) == {"dem", "starting_mask"}
+    policy = document.execution.numericalPolicy.model_dump(mode="json")
+    assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
+    assert policy["pitFillSearchLimit"] == 1000
+    assert policy["pitFillTreatNodataAsClosed"] is True
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
 
 
