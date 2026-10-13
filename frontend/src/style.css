@@ -3747,23 +3747,26 @@ article.raster-histogram-summary {
   font-weight: 650;
 }
 
-/* The map-center exploration alternative remains compact and independent. */
+/* One toolbar stays anchored while independent tool panels open beside the map. */
 .map-tool-openers {
-  position: absolute;
+  position: fixed;
   top: 16px;
   right: 20px;
   z-index: 800;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  max-width: calc(100% - 40px);
+  flex-direction: column;
+  width: min(var(--inspection-width), calc(100vw - 40px));
+  padding: 4px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: var(--elevation-panel);
 }
-.map-tool-openers .secondary-button,
-.map-tool-openers > .analysis-panel-action { box-shadow: var(--elevation-panel); }
-.map-tool-openers > .analysis-panel-action { background: var(--surface-1); }
+.map-tools-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.map-tools-toolbar-actions > [hidden] { display: none; }
+#map-tools-more-summary { gap: 6px; }
 
-/* Supporting panel actions share a quiet treatment and a visible focus ring. */
+/* Compact enabled controls retain clear boundaries, contrast and focus rings. */
 .analysis-panel-action {
   display: inline-flex;
   align-items: center;
@@ -3772,12 +3775,13 @@ article.raster-histogram-summary {
   min-width: 32px;
   min-height: 32px;
   padding: 4px 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-1);
   border-radius: var(--radius);
-  background: transparent;
+  background: var(--surface-2);
   color: var(--brand-hover);
   font: inherit;
   font-size: 0.78rem;
+  font-weight: 600;
   cursor: pointer;
 }
 .analysis-panel-action:hover:not(:disabled) { background: var(--surface-hover); }
@@ -3836,24 +3840,25 @@ article.raster-histogram-summary {
 .workspace-tool-action:active:not(:disabled) { background: var(--surface-selected); }
 @media (pointer: coarse) {
   .workspace-tool-action,
-  #map-tools-more-summary,
-  #map-inspection-more-summary { min-height: 44px; }
+  #map-tools-more-summary { min-height: 44px; }
 }
 
 #map-inspection {
   box-sizing: border-box;
   position: fixed;
-  inset: 16px 20px 16px auto;
+  inset: calc(16px + var(--map-tools-height, 42px)) 20px 16px auto;
   display: flex;
-  height: calc(100dvh - 32px);
-  max-height: calc(100dvh - 32px);
+  height: calc(100dvh - 32px - var(--map-tools-height, 42px));
+  max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   margin: 0;
-  width: min(var(--inspection-width), calc(100vw - 32px));
-  border: 0;
+  width: min(var(--inspection-width), calc(100vw - 40px));
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
   padding: 0;
-  background: transparent;
+  background: var(--surface-1);
+  box-shadow: var(--elevation-panel);
   color: var(--text-1);
   container: map-inspection / inline-size;
   overflow: visible;
@@ -3868,27 +3873,27 @@ article.raster-histogram-summary {
   --inspection-space: calc(var(--inspection-width) + var(--workspace-gap));
 }
 
-#map-inspection[data-minimized="true"],
 #map-inspection[data-active-tool=""] {
-  top: 42px;
-  right: 85px;
   inset-block-end: auto;
   height: auto;
-  max-height: none;
 }
+#map-inspection[data-minimized="true"] { display: none; }
 
 .map-inspection-dock-header {
   pointer-events: auto;
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   min-width: 0;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
+  border-bottom: 1px solid var(--border-1);
   background: var(--surface-1);
   padding: 6px;
-  box-shadow: var(--elevation-panel);
+}
+#map-inspection:not([data-active-tool=""]) .map-inspection-dock-header {
+  max-height: 45%;
+  overflow-y: auto;
 }
 
 .map-inspection-dock-title {
@@ -4083,17 +4088,15 @@ article.raster-histogram-summary {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: 0;
   background: var(--surface-1);
-  box-shadow: var(--elevation-panel);
 }
 
 #map-inspection:not(:popover-open),
 #open-calculations[hidden],
 #open-calculations-dock[hidden],
 #map-tools-more-summary[hidden],
-#map-inspection-more-summary[hidden],
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
@@ -4933,7 +4936,7 @@ summary:hover > .raster-disclosure-chevron {
 @media (max-width: 1199px) {
   /* Reserve result space below the raster navigation on short screens. */
   #app { --inspection-space: 0px; --inspection-compact-height: 0px; --inspection-dock-height: max(45dvh, min(420px, 75dvh)); }
-  #app[data-inspection-open="true"]:not([data-inspection-expanded="true"]) {
+  #app:not([data-inspection-expanded="true"]) {
     --inspection-space: calc(var(--inspection-compact-height) + 16px);
   }
   #app[data-inspection-expanded="true"] {
@@ -4942,25 +4945,24 @@ summary:hover > .raster-disclosure-chevron {
   #map, #app.is-control-panel-collapsed #map {
     inset: 0 0 var(--inspection-space);
   }
-  #app[data-inspection-open="true"] #control-panel {
+  #app #control-panel {
     top: 16px;
     bottom: calc(var(--inspection-space) + 16px);
     height: auto;
     max-height: calc(100dvh - var(--inspection-space) - 32px);
   }
   #map-inspection {
-    inset: auto 8px 8px;
+    inset: auto 8px calc(8px + var(--map-tools-height, 42px));
     width: auto;
-    height: calc(var(--inspection-dock-height) - 16px);
-    max-height: calc(var(--inspection-dock-height) - 16px);
+    height: calc(var(--inspection-dock-height) - 16px - var(--map-tools-height, 42px));
+    max-height: calc(var(--inspection-dock-height) - 16px - var(--map-tools-height, 42px));
   }
-  #map-inspection[data-minimized="true"],
   #map-inspection[data-active-tool=""] {
-    inset: auto 8px 8px;
-    width: auto;
+    inset-block-end: calc(8px + var(--map-tools-height, 42px));
     height: auto;
-    max-height: calc(100dvh - 32px);
+    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
   }
+  .map-tool-openers { inset: auto 8px 8px; width: auto; flex-direction: column-reverse; }
   .map-inspection-tabs, .map-click-summary {
     min-height: 0;
     max-height: calc((45dvh - 80px) / 3);
@@ -4993,32 +4995,25 @@ summary:hover > .raster-disclosure-chevron {
 .vector-filter-help { color: var(--text-2); font-size: 0.8rem; }
 #vector-filter-status.is-error { color: #b42318; }
 .map-layer-filter-status { grid-column: 2 / -1; justify-self: start; font-size: 0.75rem; }
-.map-filter-indicators { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: 5px; max-height: min(120px, 20dvh); overflow-y: auto; pointer-events: auto; }
-#map-filter-indicators { max-width: min(420px, 55vw); }
-.map-filter-indicators[hidden],
-#app[data-inspection-open="true"] #map-filter-indicators { display: none; }
+.map-filter-indicators { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; max-height: min(120px, 20dvh); overflow-y: auto; pointer-events: auto; }
+.map-filter-indicators[hidden] { display: none; }
 .map-filter-indicator {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: 2px 6px;
   width: 100%;
   max-width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-1);
+  padding: 4px;
+  border-top: 1px solid var(--border-1);
   overflow-wrap: anywhere;
   white-space: normal;
   text-align: left;
-  font-size: 0.78rem;
+  font-size: 0.74rem;
 }
 .map-filter-information { flex: 1 1 180px; min-width: 0; }
 .map-filter-layer, .map-filter-summary { display: block; }
-.map-filter-summary { margin-top: 3px; color: var(--text-2); }
-@media (max-width: 600px) {
-  #map-filter-indicators { max-width: calc(100vw - 80px); max-height: 16vh; }
-}
+.map-filter-summary { margin-top: 2px; color: var(--text-2); }
 #raster-clips-panel {
     padding: 1rem;
     overflow-wrap: anywhere;

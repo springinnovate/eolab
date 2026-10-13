@@ -14,7 +14,16 @@ export class FakeRasterControlElement extends EventTarget {
         this.hidden = false;
         this.disabled = false;
         this.title = "";
-        this.style = {};
+        this.style = {
+            /** Read an inline CSS custom property.
+             * @param {string} name Property name. @return {string} Stored value or empty text.
+             */
+            getPropertyValue(name) { return this[name] ?? ""; },
+            /** Set an inline CSS custom property.
+             * @param {string} name Property name. @param {string} value CSS value. @return {void}
+             */
+            setProperty(name, value) { this[name] = value; },
+        };
         this.children = [];
         this.attributes = new Map();
         this.classNames = [];

@@ -266,7 +266,8 @@ export class EomapLayoutController {
      * @param {boolean} layout.open Whether the map-tool popover is open.
      * @param {boolean} layout.expanded Whether it occupies space for an active panel.
      * @param {boolean} layout.wide Whether its active panel uses the wider layout.
-     * @param {number} layout.compactHeight Compact dock border-box height in CSS pixels.
+     * @param {number} layout.compactHeight Toolbar plus visible compact dock
+     * height in CSS pixels; includes the toolbar when the dock is closed.
      * @return {void}
      */
     setInspectionLayout({ open, expanded, wide, compactHeight }) {

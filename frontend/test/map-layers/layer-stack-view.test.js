@@ -194,7 +194,6 @@ class FakeLayerStackDocument {
       ["#dismiss-layer-removal", new FakeLayerStackElement("button", this)],
       ["#map-layer-removal-error", new FakeLayerStackElement("p", this)],
       ["#map-filter-indicators", new FakeLayerStackElement("div", this)],
-      ["#map-inspection-filter-indicators", new FakeLayerStackElement("div", this)],
     ]);
     this.elements.get("#raster-layer-stack").parentElement =
       this.layerScrollContainer;
@@ -349,56 +348,50 @@ test("active filter strips show full layer names and status beside explicit edit
   const filter = actionControl(documentContext.querySelector("#raster-layer-list").children[0], "filter");
   assert.equal(filter.classList.contains("has-active-filter"), true);
   assert.match(filter.getAttribute("aria-label"), /^Edit active filter for /);
-  for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
-    const slot = documentContext.querySelector(selector);
-    assert.equal(slot.hidden, false);
-    assert.equal(slot.children.length, 1);
-    const strip = slot.children[0];
-    assert.equal(strip.tagName, "DIV");
-    assert.equal(elementsByClass(strip, "map-filter-layer")[0].textContent, layer.label);
-    assert.equal(elementsByClass(strip, "map-filter-summary")[0].textContent, layer.filterStatus);
-    strip.dispatchEvent(new Event("click"));
-    const edit = elementsByClass(strip, "map-filter-edit")[0];
-    assert.equal(edit.textContent, "Edit filter");
-    assert.equal(edit.getAttribute("aria-label"), `Edit filter for ${layer.label}`);
-    assert.match(edit.title, /Counts cover the whole layer/);
-    edit.dispatchEvent(new Event("click"));
-  }
-  assert.deepEqual(opened, [layer.key, layer.key]);
+  const slot = documentContext.querySelector("#map-filter-indicators");
+  assert.equal(slot.hidden, false);
+  assert.equal(slot.children.length, 1);
+  const strip = slot.children[0];
+  assert.equal(strip.tagName, "DIV");
+  assert.equal(elementsByClass(strip, "map-filter-layer")[0].textContent, layer.label);
+  assert.equal(elementsByClass(strip, "map-filter-summary")[0].textContent, layer.filterStatus);
+  strip.dispatchEvent(new Event("click"));
+  const edit = elementsByClass(strip, "map-filter-edit")[0];
+  assert.equal(edit.textContent, "Edit filter");
+  assert.equal(edit.getAttribute("aria-label"), `Edit filter for ${layer.label}`);
+  assert.match(edit.title, /Counts cover the whole layer/);
+  edit.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [layer.key]);
   view.render([{ ...layer, visible: false }], layer.key);
-  for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
-    assert.equal(documentContext.querySelector(selector).hidden, true);
-    assert.equal(documentContext.querySelector(selector).children.length, 0);
-  }
+  assert.equal(slot.hidden, true);
+  assert.equal(slot.children.length, 0);
 });
 
-test("filter count and error updates retain each slot's editing control and focus", () => {
-  for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
-    const documentContext = new FakeLayerStackDocument();
-    const view = new MapLayerStackView(documentContext);
-    const opened = [];
-    view.bind({ onFilter: key => opened.push(key) });
-    let layer = { ...LAYERS[0], canFilter: true, filterActive: true,
-      filterStatus: "Filter active · Counting…" };
+test("filter count and error updates retain the persistent editing control and focus", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const opened = [];
+  view.bind({ onFilter: key => opened.push(key) });
+  let layer = { ...LAYERS[0], canFilter: true, filterActive: true,
+    filterStatus: "Filter active · Counting…" };
+  view.render([layer], layer.key);
+  const slot = documentContext.querySelector("#map-filter-indicators");
+  const strip = slot.children[0];
+  const edit = elementsByClass(strip, "map-filter-edit")[0];
+  edit.focus();
+  for (const filterStatus of ["5 of 100 features match", "Filter active · Count unavailable",
+    "Filter active · Count queue full; apply filter again to retry",
+    "Filter active · Count wait expired; apply filter again to retry"]) {
+    layer = {...layer, label: "Renamed catchments", filterStatus};
     view.render([layer], layer.key);
-    const slot = documentContext.querySelector(selector);
-    const strip = slot.children[0];
-    const edit = elementsByClass(strip, "map-filter-edit")[0];
-    edit.focus();
-    for (const filterStatus of ["5 of 100 features match", "Filter active · Count unavailable",
-      "Filter active · Count queue full; apply filter again to retry",
-      "Filter active · Count wait expired; apply filter again to retry"]) {
-      layer = {...layer, label: "Renamed catchments", filterStatus};
-      view.render([layer], layer.key);
-      assert.equal(slot.children[0], strip);
-      assert.equal(elementsByClass(strip, "map-filter-edit")[0], edit);
-      assert.equal(documentContext.activeElement, edit);
-      assert.equal(elementsByClass(strip, "map-filter-summary")[0].textContent, filterStatus);
-      assert.equal(edit.getAttribute("aria-label"), "Edit filter for Renamed catchments");
-    }
-    edit.dispatchEvent(new Event("click"));
-    assert.deepEqual(opened, [layer.key]);
+    assert.equal(slot.children[0], strip);
+    assert.equal(elementsByClass(strip, "map-filter-edit")[0], edit);
+    assert.equal(documentContext.activeElement, edit);
+    assert.equal(elementsByClass(strip, "map-filter-summary")[0].textContent, filterStatus);
+    assert.equal(edit.getAttribute("aria-label"), "Edit filter for Renamed catchments");
   }
+  edit.dispatchEvent(new Event("click"));
+  assert.deepEqual(opened, [layer.key]);
 });
 
 test("filter strips retain independent actions while layers reorder, hide or clear filters", () => {
@@ -409,7 +402,7 @@ test("filter strips retain independent actions while layers reorder, hide or cle
   const first = {...LAYERS[0], canFilter: true, filterActive: true, filterStatus: "1 of 100 features match"};
   const second = {...first, key: "second-filter", label: "Second catchment layer", filterStatus: "2 of 200 features match"};
   view.render([first, second], first.key);
-  const slot = documentContext.querySelector("#map-inspection-filter-indicators");
+  const slot = documentContext.querySelector("#map-filter-indicators");
   const firstStrip = slot.children[0], secondStrip = slot.children[1];
   const firstEdit = elementsByClass(firstStrip, "map-filter-edit")[0];
   const secondEdit = elementsByClass(secondStrip, "map-filter-edit")[0];

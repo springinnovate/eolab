@@ -5,19 +5,22 @@ results, and understand the calculation limits.
 
 Use **Raster statistics** to calculate statistics over a sampling box, a filtered
 [vector layer](vector-sampling.md), or an explicitly selected whole raster.
-Open it from **Raster analysis → Statistics** in the right dock, the right-side map
-opener when the dock is closed, or a layer/histogram shortcut. The dock heading
+Open it from **Tools → Raster statistics**, **Raster analysis → Statistics** in
+the dock, or a layer/histogram shortcut. The dock heading
 identifies the active task; its context line shows the summary's raster bindings
 and selected area. Switching tools preserves each tool's own context.
 **Distributions** and **Raster stack** are adjacent raster-analysis destinations.
-Point inspection remains under **Features at clicked point**, visible alongside
+Point inspection remains under **Features at inspected point**, visible alongside
 raster analysis with its own updating, unavailable and new-result feedback.
 Both navigation groups stay visible across tool switches and result updates;
 **Minimize** collapses the whole dock.
 Raster distribution feedback stays in the raster-analysis group.
 **Tools** opens one shared list of analysis, export and map-display actions. Its
-button appears in the dock while open and on the map when the dock is closed;
-press Escape or click outside the list to dismiss it.
+button stays in the same toolbar while panels open, minimize or close. Choose
+**Raster statistics** to open its controls, or **Inspect map center** to inspect
+visible data at the center of the map. Press Escape or click outside the list
+to dismiss it. The toolbar stays above the dock on large screens and below it
+on small screens; filters and their editing actions remain available there.
 By default, **Rasters → Enabled rasters in this area** runs each configured formula
 independently over every enabled raster whose Catalog extent overlaps the query.
 Unknown extents remain candidates; the source reader determines whether valid

@@ -14,29 +14,31 @@ export class MapInspectionController {
      * @param {function({open: boolean, expanded: boolean, wide: boolean, compactHeight: number}):void}
      * [dependencies.onLayoutChange] Receives initial layout and subsequent changes.
      * Expanded means an open, non-minimized panel has an active tool; wide selects
-     * the wider vector-chart presentation. Compact height is the rendered dock's
-     * border-box height in CSS pixels, zero when closed or expanded. Result updates
-     * report a change only when they change this presentation geometry.
+     * the wider vector-chart presentation. Compact height includes the persistent
+     * toolbar and any visible dock content in CSS pixels, zero only when expanded.
+     * Result updates report a change only when they change this presentation geometry.
      */
     constructor({ documentContext = document, onLayoutChange = () => {} } = {}) {
         this.document = documentContext;
         this.onLayoutChange = onLayoutChange;
         this.reportedLayout = null;
         this.root = documentContext.querySelector("#map-inspection");
+        this.toolbar = documentContext.querySelector("#map-tools-toolbar");
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
-        this.calculationOpener = documentContext.querySelector("#open-calculations");
         this.dockCalculationOpener = documentContext.querySelector("#open-calculations-dock");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
         this.mapToolsButton = documentContext.querySelector("#map-tools-more-summary");
-        this.dockToolsButton = documentContext.querySelector("#map-inspection-more-summary");
         this.toolActionsOpen = false;
         /** @type {(event:ToggleEvent)=>void} Track native open/closed state synchronously. */
         this.onToolActionsBeforeToggle = event => { this.toolActionsOpen = event.newState === "open"; };
-        /** @type {()=>void} Place the opened popover or reposition it after a resize. */
-        this.onToolActionsLayout = () => this.#positionToolActions();
+        /** @type {()=>void} Keep toolbar spacing and the opened menu aligned after reflow. */
+        this.onToolActionsLayout = () => {
+            this.#reportLayoutChange();
+            this.#positionToolActions();
+        };
         /** @type {(event:MouseEvent)=>void} Dismiss before an action reaches its independent owner. */
         this.onToolActionsCommand = event => {
             const button = /** @type {Element} */ (event.target).closest("button");
@@ -84,9 +86,6 @@ export class MapInspectionController {
         );
         this.vectorFeatureProfile = documentContext.querySelector(
             "#vector-feature-profile"
-        );
-        this.analysisToolsButton = documentContext.querySelector(
-            "#open-analysis-tools"
         );
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
@@ -194,16 +193,17 @@ export class MapInspectionController {
             : null;
         this.dockObserver?.observe(this.root);
         this.dockObserver?.observe(this.toolActions);
+        this.dockObserver?.observe(this.toolbar);
     }
 
     /**
-     * Open the Tools menu using the button visible in the current layout.
+     * Open the Tools menu from its persistent toolbar button.
      * The caller can then focus the command it wants the user to return to.
      * @return {void}
      */
     showToolActions() {
         if (!this.toolActionsOpen) {
-            (this.isOpen ? this.dockToolsButton : this.mapToolsButton).click();
+            this.mapToolsButton.click();
         }
     }
 
@@ -221,7 +221,7 @@ export class MapInspectionController {
     #positionToolActions() {
         if (!this.toolActionsOpen) return;
         const { innerWidth, innerHeight } = this.document.defaultView;
-        const anchor = (this.isOpen ? this.dockToolsButton : this.mapToolsButton).getBoundingClientRect();
+        const anchor = this.mapToolsButton.getBoundingClientRect();
         const menu = this.toolActions.getBoundingClientRect();
         const below = anchor.bottom + 6;
         const top = below + menu.height <= innerHeight - 8 ? below : anchor.top - menu.height - 6;
@@ -436,7 +436,7 @@ export class MapInspectionController {
         const updating = feature.snapshot?.state === "loading";
         const unavailable = feature.snapshot?.state === "error";
         const unread = feature.unread;
-        this.pointNavigationLabel.textContent = "Features at clicked point" +
+        this.pointNavigationLabel.textContent = "Features at inspected point" +
             (updating ? " · Updating…" : "") + (unavailable ? " · Some unavailable" : "") +
             (unread ? " · New results" : "");
         this.clickContext.textContent = this.clickLabel;
@@ -772,8 +772,9 @@ export class MapInspectionController {
     }
 
     /**
-     * Synchronize the dock, close transient Tools on a home change and preserve
-     * focus when its invoker moves between the map and the dock.
+     * Synchronize retained panels while keeping Tools above a newly opened dock.
+     * Commands dismiss the native menu before their owner runs; passive opening
+     * raises an already open menu again and restores its focused command.
      *
      * @return {void}
      */
@@ -790,17 +791,22 @@ export class MapInspectionController {
             this.minimized = false;
         }
         const openChanged = shouldOpen !== this.isOpen;
-        if (openChanged) this.#closeToolActions();
-        const toolsFocused = openChanged &&
-            [this.mapToolsButton, this.dockToolsButton].includes(this.document.activeElement);
         this.isOpen = shouldOpen;
         this.#renderDock();
-        this.analysisToolsButton.hidden = shouldOpen;
         if (openChanged) {
-            if (shouldOpen) this.root.showPopover();
+            if (shouldOpen) {
+                const restoreMenu = this.toolActionsOpen;
+                const focusedCommand = this.toolActions.contains(this.document.activeElement)
+                    ? this.document.activeElement : null;
+                this.root.showPopover();
+                if (restoreMenu) {
+                    this.#closeToolActions();
+                    this.showToolActions();
+                    focusedCommand?.focus({ preventScroll: true });
+                }
+            }
             else this.root.hidePopover();
             this.#reportLayoutChange();
-            if (toolsFocused) (shouldOpen ? this.dockToolsButton : this.mapToolsButton).focus();
         }
     }
 
@@ -821,6 +827,7 @@ export class MapInspectionController {
      * Opening or updating a tool never replaces its focused raster destination.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
+     * Return focus to Tools if closing the last panel removes its minimize action.
      *
      * @return {void}
      */
@@ -836,9 +843,9 @@ export class MapInspectionController {
             : { source: "", scope: "" });
         this.dockContext.textContent = [context.source, context.scope].filter(Boolean).join(" · ");
         this.dockContext.hidden = !this.dockContext.textContent;
-        this.calculationOpener.hidden = this.isOpen;
-        this.mapToolsButton.hidden = this.isOpen;
-        this.dockToolsButton.hidden = !this.isOpen;
+        const restoreToolbarFocus = !this.isOpen && this.document.activeElement === this.minimizeButton;
+        this.minimizeButton.hidden = !this.isOpen;
+        if (restoreToolbarFocus) this.mapToolsButton.focus();
         this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
         this.minimizeButton.setAttribute(
             "aria-expanded", String(!this.minimized)
@@ -877,20 +884,25 @@ export class MapInspectionController {
         this.#reportLayoutChange();
     }
 
-    /** Report only changes that affect the space or placement of map tools.
-     * Compact height follows the dock's rendered border box, including wrapping
-     * after viewport or text-size changes. The composition root forwards it to
-     * the app layout owner; neither controller inspects its peer's implementation.
+    /** Position panels below the measured toolbar and report occupied compact space.
+     * Compact height includes the persistent toolbar and any visible dock content,
+     * including wrapping after viewport or text-size changes. The composition root
+     * forwards it to the app layout owner; neither controller inspects its peer's implementation.
      * @return {void}
      */
     #reportLayoutChange() {
+        const toolbarHeight = Math.ceil(this.toolbar.getBoundingClientRect().height);
+        const toolbarHeightValue = `${toolbarHeight}px`;
+        if (this.root.style.getPropertyValue("--map-tools-height") !== toolbarHeightValue) {
+            this.root.style.setProperty("--map-tools-height", toolbarHeightValue);
+        }
         const expanded = this.isOpen && !this.minimized && this.activeTool !== null;
         const layout = {
             open: this.isOpen,
             expanded,
             wide: this.activeTool === "time-series" || this.activeTool === "feature-profile",
-            compactHeight: this.isOpen && !expanded
-                ? Math.ceil(this.root.getBoundingClientRect().height) : 0,
+            compactHeight: expanded ? 0 : toolbarHeight +
+                (this.isOpen ? Math.ceil(this.root.getBoundingClientRect().height) : 0),
         };
         const previous = this.reportedLayout;
         if (previous && previous.open === layout.open &&

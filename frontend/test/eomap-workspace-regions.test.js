@@ -219,7 +219,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
     assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Raster analysis"/);
     assert.match(inspection.source, /id="open-calculations-dock"[\s\S]*?aria-controls="calculations-panel"/);
-    assert.match(inspection.source, /id="map-inspection-more-summary"[\s\S]*?popovertarget="workspace-tool-actions"/);
+    assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
     assert.match(
         inspection.source,
         /id="style-inspected-vector-layer"[\s\S]*?aria-controls="layer-style-editor"/
@@ -257,7 +257,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(rendering.source, /id="raster-layer-stack"/);
     assert.doesNotMatch(MARKUP, /id="open-histogram-map-layers"/);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*position:\s*fixed/s);
-    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*height:\s*calc\(100dvh - 32px\)/s);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     assert.match(STYLESHEET, /\.map-inspection-tabs\s*\{[^}]*flex-wrap:\s*wrap[^}]*overflow:\s*visible/s);
     assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\] \.map-inspection-tabs\s*\{[^}]*display:\s*none/s);
@@ -395,13 +395,14 @@ test("inspection header groups three raster destinations separately from clicked
     assert.ok(raster.end < point.start);
     assert.match(point.source, /^<nav[^>]*aria-labelledby="map-click-navigation-label"/);
     assert.match(requireElementRange("map-click-navigation-label").source,
-        /^<strong[^>]*>Features at clicked point<\/strong>$/);
+        /^<strong[^>]*>Features at inspected point<\/strong>$/);
     assert.doesNotMatch(point.source, /<details\b|<summary\b/);
     assert.equal(countMarkupId("map-click-disclosure"), 0);
     assert.equal(countMarkupId("map-click-navigation"), 1);
     assert.equal(countMarkupId("map-click-navigation-label"), 1);
-    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\],\s*#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px\)/s);
-    assert.match(point.source, /Features at clicked point/);
+    assert.match(STYLESHEET, /#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
+    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\]\s*\{\s*display:\s*none/s);
+    assert.match(point.source, /Features at inspected point/);
     for (const [id, panel, caption] of [
         ["map-click-histogram", "map-histogram-panel", "Distributions"],
         ["open-calculations-dock", "calculations-panel", "Statistics"],
@@ -440,7 +441,7 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("map-histogram-scope"));
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
-    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*16px 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px\)/s);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*calc\(16px \+ var\(--map-tools-height, 42px\)\) 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     assert.match(STYLESHEET, /#map-histogram-panel,[^{]*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
@@ -452,7 +453,7 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
     assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
-    assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Analysis tools<\/button>/);
+    assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Inspect map center<\/button>/);
     assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);
 });
 
@@ -606,31 +607,52 @@ test("workspace overflow shares one native action list and keeps statistics sett
     const summary = requireElementRange("calculations-panel");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
-    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+    for (const id of ["open-calculations", "open-analysis-tools", "open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }
-    for (const id of ["map-tools-more-summary", "map-inspection-more-summary"]) {
-        assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools<\/button>/);
+    for (const id of ["map-tools-more-summary"]) {
+        assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools <span aria-hidden="true">▾<\/span><\/button>/);
     }
     assert.match(summary.source, /id="summary-auto"/);
     assert.doesNotMatch(actions.source, /id="summary-auto"/);
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
+test("one persistent toolbar owns Tools, minimize and active filters outside retained panels", () => {
+    const toolbar = requireElementRange("map-tools-toolbar");
+    const dock = requireElementRange("map-inspection");
+    const actions = requireElementRange("workspace-tool-actions");
+    assert.ok(toolbar.end < dock.start);
+    for (const id of ["map-tools-more-summary", "toggle-map-inspection-dock", "map-filter-indicators"]) {
+        const control = requireElementRange(id);
+        assert.ok(control.start > toolbar.start && control.end < toolbar.end);
+        assert.equal(countMarkupId(id), 1);
+    }
+    assert.equal(countMarkupId("map-inspection-more-summary"), 0);
+    assert.equal(countMarkupId("map-inspection-filter-indicators"), 0);
+    for (const id of ["open-calculations", "open-analysis-tools"]) {
+        const command = requireElementRange(id);
+        assert.ok(command.start > actions.start && command.end < actions.end);
+    }
+    assert.match(requireElementRange("open-analysis-tools").source,
+        /aria-label="Inspect visible data at the map center">Inspect map center<\/button>/);
+    assert.doesNotMatch(COMPOSITION_SOURCE, /\.append\(document\.querySelector\("\.map-tool-openers"\)\)/);
+});
+
 test("supporting analysis controls preserve native buttons, clear names and disclosure targets", () => {
-    for (const id of ["map-tools-more-summary", "map-inspection-more-summary"]) {
+    for (const id of ["map-tools-more-summary"]) {
         const {source} = requireElementRange(id);
         assert.match(source, /^<button\b[^>]*\btype="button"/);
         assert.match(source, /aria-label="Map and analysis tools"/);
         assert.match(source, /aria-controls="workspace-tool-actions"/);
         assert.match(source, /popovertarget="workspace-tool-actions"/);
-        assert.match(source, />Tools<\/button>$/);
+        assert.match(source, />Tools <span aria-hidden="true">▾<\/span><\/button>$/);
     }
     const minimize = requireElementRange("toggle-map-inspection-dock").source;
     assert.match(minimize, /^<button\b[^>]*\btype="button"/);
     assert.match(minimize, /aria-expanded="true"/);
-    assert.match(minimize, /aria-controls="map-click-navigation map-inspection-tabs map-inspection-panels"/);
+    assert.match(minimize, /aria-controls="map-inspection"/);
     assert.match(minimize, />Minimize<\/button>$/);
     for (const id of ["workspace-tool-actions", "map-click-navigation", "map-inspection-tabs", "map-inspection-panels"]) {
         assert.equal(countMarkupId(id), 1, `supporting control target ${id} exists once`);

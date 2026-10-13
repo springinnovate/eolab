@@ -561,18 +561,23 @@
         type="button"
         hidden
       >Pixel picker hidden · Press P to show</button>
-      <div class="map-tool-openers">
-        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Raster statistics</button>
+      <div id="map-tools-toolbar" class="map-tool-openers" role="region" aria-label="Map tools">
+        <div class="map-tools-toolbar-actions">
+          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
+            type="button" aria-controls="map-inspection"
+            aria-expanded="true" hidden>Minimize</button>
+          <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
+            popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
+            aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
+        </div>
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
-        <button id="open-analysis-tools" class="secondary-button" type="button"
-          aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
-        <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
-          popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
-          aria-label="Map and analysis tools">Tools</button>
       </div>
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Analysis</strong>
+          <button id="open-calculations" class="workspace-tool-action" type="button" aria-controls="calculations-panel">Raster statistics</button>
+          <button id="open-analysis-tools" class="workspace-tool-action" type="button"
+            aria-label="Inspect visible data at the map center">Inspect map center</button>
           <button id="open-models" class="workspace-tool-action" type="button" aria-controls="models-panel">Models</button>
           <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Model runs</button>
           <button id="open-raster-series" class="workspace-tool-action" type="button"
@@ -589,15 +594,8 @@
         </div>
       </div>
       <aside id="map-inspection" popover="manual" aria-labelledby="map-inspection-dock-title" aria-describedby="map-inspection-context">
-        <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
           <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
-          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
-            type="button" aria-controls="map-click-navigation map-inspection-tabs map-inspection-panels"
-            aria-expanded="true">Minimize</button>
-          <button id="map-inspection-more-summary" class="analysis-panel-action" type="button"
-            popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
-            aria-label="Map and analysis tools">Tools</button>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Raster analysis">
             <strong>Raster analysis</strong>
@@ -612,7 +610,7 @@
             <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
           <nav id="map-click-navigation" class="map-click-navigation" aria-labelledby="map-click-navigation-label" hidden>
-          <strong id="map-click-navigation-label">Features at clicked point</strong>
+          <strong id="map-click-navigation-label">Features at inspected point</strong>
           <section id="map-click-summary" class="map-click-summary" aria-labelledby="map-click-context" hidden>
             <p id="map-click-context" class="map-inspection-context"></p>
             <div class="map-click-results">

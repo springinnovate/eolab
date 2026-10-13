@@ -191,7 +191,8 @@ async function loadAppGlobalConfiguration() {
 
 /**
  * Create the map, coordinate guide and viewport resize observation.
- * Place map controls inside that viewport so docked panels cannot cover them.
+ * Place coordinate feedback inside the map's allocated viewport.
+ * The persistent tool toolbar remains anchored outside that changing viewport.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @return {L.Map} The initialized Leaflet map.
@@ -200,12 +201,6 @@ function initializeMap(appGlobalConfiguration) {
     const leafletMap = createSingleWorldMap(L, appGlobalConfiguration, control => { basemapControl = control; });
     observeMapViewportSize(leafletMap);
     addMapCoordinateGuide(L, leafletMap);
-
-    // These presentation controls follow the map's allocated viewport.
-    leafletMap.getContainer().append(document.querySelector(".map-tool-openers"));
-    L.DomEvent.disableClickPropagation(document.querySelector(".map-tool-openers"));
-    L.DomEvent.disableScrollPropagation(document.querySelector(".map-tool-openers"));
-    L.DomEvent.on(document.querySelector(".map-tool-openers"), "keydown", L.DomEvent.stopPropagation);
 
     const mapPositionElement = document.querySelector("#map-position");
     leafletMap.getContainer().append(mapPositionElement);

@@ -35,11 +35,16 @@ function fixture(configureDocument = () => {}) {
     const close = doc.querySelector("#close-map-histogram");
     histogram.append(close);
     const calls = [];
-    root.showPopover = () => calls.push("show");
-    root.hidePopover = () => calls.push("hide");
+    const presentationOrder = [];
+    let surfaceOpen = false;
+    root.showPopover = () => { surfaceOpen = true; calls.push("show"); presentationOrder.push("dock-open"); };
+    root.hidePopover = () => { surfaceOpen = false; calls.push("hide"); };
+    root.getBoundingClientRect = () => ({ width: 420,
+        height: surfaceOpen && root.getAttribute("data-minimized") !== "true" ? 48 : 0 });
+    const toolbar = doc.querySelector("#map-tools-toolbar");
+    toolbar.getBoundingClientRect = () => ({ height: 44 });
     const toolActions = doc.querySelector("#workspace-tool-actions");
     const mapToolsButton = doc.querySelector("#map-tools-more-summary");
-    const dockToolsButton = doc.querySelector("#map-inspection-more-summary");
     for (const [id, caption] of [
         ["map-click-histogram", "Distributions"],
         ["open-calculations-dock", "Statistics"],
@@ -51,7 +56,6 @@ function fixture(configureDocument = () => {}) {
     }
     const toolActionsCalls = [];
     let actionsOpen = false;
-    let invoker = mapToolsButton;
     /** Model native state events and focus return; dismissal itself is browser-tested.
      * @param {boolean} open Whether to open the popover. @return {void}
      */
@@ -61,13 +65,12 @@ function fixture(configureDocument = () => {}) {
         Object.defineProperty(event, "newState", { value: open ? "open" : "closed" });
         toolActions.dispatchEvent(event);
         toolActionsCalls.push(open ? "show" : "hide");
-        if (!open && toolActions.contains(doc.activeElement)) invoker.focus();
+        presentationOrder.push(open ? "tools-open" : "tools-close");
+        if (!open && toolActions.contains(doc.activeElement)) mapToolsButton.focus();
         toolActions.dispatchEvent(new Event("toggle"));
     };
-    for (const button of [mapToolsButton, dockToolsButton]) {
-        button.click = () => { invoker = button; changeActions(!actionsOpen); };
-        button.getBoundingClientRect = () => ({ top: 16, bottom: 56, left: 820, right: 920 });
-    }
+    mapToolsButton.click = () => changeActions(!actionsOpen);
+    mapToolsButton.getBoundingClientRect = () => ({ top: 16, bottom: 56, left: 820, right: 920 });
     toolActions.hidePopover = () => changeActions(false);
     toolActions.getBoundingClientRect = () => ({ width: 240, height: 240 });
     configureDocument(doc);
@@ -77,7 +80,7 @@ function fixture(configureDocument = () => {}) {
     });
     return {
         layouts,
-        toolActions, mapToolsButton, dockToolsButton, toolActionsCalls,
+        toolActions, mapToolsButton, toolbar, toolActionsCalls, presentationOrder,
         doc,
         histogram,
         style,
@@ -102,29 +105,38 @@ function fixture(configureDocument = () => {}) {
     };
 }
 
-test("Tools has one visible home, dismisses on a home change and transfers invoker focus", () => {
+test("Tools retains its invoker and open menu through panel opening, minimization and closing", () => {
     const h = fixture();
     const command = h.doc.createElement();
     h.toolActions.append(command);
     assert.equal(h.mapToolsButton.hidden, false);
-    assert.equal(h.dockToolsButton.hidden, true);
+    assert.equal(h.minimizeButton.hidden, true);
     h.controller.showToolActions();
     h.controller.showToolActions();
     assert.deepEqual(h.toolActionsCalls, ["show"], "a restore request does not toggle an open popover closed");
     command.focus();
     h.controller.showStyle("Resistance");
-    assert.deepEqual(h.toolActionsCalls, ["show", "hide"]);
-    assert.equal(h.mapToolsButton.hidden, true);
-    assert.equal(h.dockToolsButton.hidden, false);
-    assert.equal(h.doc.activeElement, h.dockToolsButton);
-
-    h.controller.showToolActions();
-    command.focus();
+    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show"]);
+    assert.deepEqual(h.presentationOrder, ["tools-open", "dock-open", "tools-close", "tools-open"],
+        "the menu is raised after the manual dock enters the native top layer");
+    assert.equal(h.mapToolsButton.hidden, false);
+    assert.equal(h.minimizeButton.hidden, false);
+    assert.equal(h.doc.activeElement, command);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.mapToolsButton.hidden, false);
+    assert.equal(h.doc.activeElement, command);
+    assert.equal(h.controller.minimized, true);
     h.controller.hideStyle();
     assert.equal(h.mapToolsButton.hidden, false);
-    assert.equal(h.dockToolsButton.hidden, true);
-    assert.equal(h.doc.activeElement, h.mapToolsButton);
-    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show", "hide"]);
+    assert.equal(h.minimizeButton.hidden, true);
+    assert.equal(h.doc.activeElement, command);
+    assert.deepEqual(h.toolActionsCalls, ["show", "hide", "show"]);
+    h.toolActions.hidePopover();
+    assert.equal(h.doc.activeElement, h.mapToolsButton, "native dismissal returns to the same persistent invoker");
+    h.controller.showStyle("Resistance");
+    assert.equal(h.doc.activeElement, h.mapToolsButton, "passive opening leaves toolbar focus in place");
+    h.controller.hideStyle();
+    assert.equal(h.doc.activeElement, h.mapToolsButton, "closing leaves toolbar focus in place");
     h.map.focus();
     h.controller.showStyle("Resistance");
     assert.equal(h.doc.activeElement, h.map, "passive presentation never steals focus");
@@ -135,6 +147,32 @@ test("Tools has one visible home, dismisses on a home change and transfers invok
     h.mapToolsButton.click();
     h.controller.destroy();
     assert.equal(h.toolActionsCalls.length, count + 1, "destroy detaches popover state listeners");
+});
+
+test("map-center and statistics menu actions remain enabled in every panel state", () => {
+    const h = fixture();
+    for (const update of [() => {}, () => h.controller.showHistogram(),
+        () => h.minimizeButton.dispatchEvent(new Event("click")),
+        () => h.controller.closeHistogram()]) {
+        update();
+        for (const id of ["open-analysis-tools", "open-calculations"]) {
+            const action = h.doc.querySelector(`#${id}`);
+            assert.equal(action.hidden, false, `${id} remains available`);
+            assert.equal(action.disabled, false, `${id} remains enabled`);
+        }
+    }
+    h.controller.destroy();
+});
+
+test("closing the last panel returns a focused minimize action to the persistent Tools button", () => {
+    const h = fixture();
+    h.controller.showStyle("Resistance");
+    h.minimizeButton.focus();
+    h.controller.hideStyle();
+    assert.equal(h.minimizeButton.hidden, true);
+    assert.equal(h.doc.activeElement, h.mapToolsButton);
+    assert.equal(h.mapToolsButton.hidden, false);
+    h.controller.destroy();
 });
 
 test("Tools placement flips above a low invoker and clamps both viewport edges", () => {
@@ -184,7 +222,7 @@ test("automatic presentation does not move focus and close retains results", () 
     assert.deepEqual(h.calls, ["show"]);
     assert.equal(h.doc.activeElement, h.map);
     assert.equal(h.histogram.hidden, false);
-    assert.equal(h.analysisToolsButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, false);
 
     h.close.dispatchEvent(new Event("click"));
     assert.equal(h.histogram.hidden, true);
@@ -313,16 +351,19 @@ test("persistent point navigation keeps its feedback separate from area distribu
     assert.equal(navigation.hidden, true, "area results do not create point-feature navigation");
     h.controller.setClickResult("feature", { state: "loading", message: "Inspecting this point" });
     assert.equal(navigation.hidden, false);
-    assert.match(label.textContent, /Updating/);
+    assert.equal(label.textContent, "Features at inspected point · Updating…");
     h.controller.setClickResult("histogram", { state: "error", message: "No overlap" });
     assert.doesNotMatch(label.textContent, /unavailable/);
+    assert.equal(label.textContent, "Features at inspected point · Updating…");
     assert.match(h.doc.querySelector("#map-click-histogram-status").textContent, /No overlap.*New results/);
     h.controller.setClickResult("feature", { state: "error", message: "Point inspection failed" });
     assert.equal(navigation.hidden, false, "result updates keep point navigation visible");
-    assert.match(label.textContent, /Some unavailable.*New results/);
+    assert.equal(label.textContent, "Features at inspected point · Some unavailable · New results");
     h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
     assert.equal(navigation.hidden, false);
-    assert.doesNotMatch(label.textContent, /New results/);
+    assert.equal(label.textContent, "Features at inspected point · Some unavailable");
+    h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
+    assert.equal(label.textContent, "Features at inspected point");
     h.controller.showCalculations();
     assert.equal(navigation.hidden, false, "switching tasks keeps point navigation visible");
     h.controller.closeHistogram();
@@ -505,10 +546,10 @@ test("active-tool subscriptions report expanded presentation, support detachment
 
 test("layout reports follow dock transitions, not repeated result updates", () => {
     const h = fixture();
-    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false, compactHeight: 0 }]);
+    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false, compactHeight: 44 }]);
     h.controller.beginMapClick({ lat: 0, lng: 0 });
     h.controller.setClickResult("feature", { state: "empty", message: "No features" });
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 48 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 92 });
     h.controller.showHistogram();
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
     const count = h.layouts.length;
@@ -520,31 +561,65 @@ test("layout reports follow dock transitions, not repeated result updates", () =
     h.controller.showVectorTimeSeries();
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, compactHeight: 48 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, compactHeight: 44 });
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
     h.controller.hideVectorTimeSeries();
     assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
     h.controller.closeHistogram();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 48 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 92 });
     h.controller.destroy();
-    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false, compactHeight: 0 });
+    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false, compactHeight: 44 });
 });
 
-test("compact geometry follows dock reflow without losing tools or reporting unchanged sizes", () => {
+test("closed toolbar reserves its current height as filter rows reflow", () => {
+    let notifyResize;
+    let height = 44;
+    const h = fixture(doc => {
+        doc.querySelector("#map-tools-toolbar").getBoundingClientRect = () => ({ height });
+        doc.defaultView.ResizeObserver = class {
+            /** Capture native geometry notifications.
+             * @param {ResizeObserverCallback} callback Geometry callback.
+             */
+            constructor(callback) { notifyResize = callback; }
+            /** Accept each observed presentation element.
+             * @param {Element} _element Observed element. @return {void}
+             */
+            observe(_element) {}
+            /** Release the test observer. @return {void} */
+            disconnect() {}
+        };
+    });
+    const rootStyle = h.doc.querySelector("#map-inspection").style;
+    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, compactHeight: 44});
+    height = 119.5;
+    notifyResize();
+    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, compactHeight: 120});
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "120px");
+    assert.deepEqual(h.calls, [], "filter geometry does not open the dock");
+    const count = h.layouts.length;
+    notifyResize();
+    assert.equal(h.layouts.length, count, "unchanged filter geometry does not rewrite layout");
+    height = 44;
+    notifyResize();
+    assert.equal(h.layouts.at(-1).compactHeight, 44, "clearing filters releases their reserved space");
+    h.controller.destroy();
+});
+
+test("toolbar reflow positions panels and updates compact space without losing retained tools", () => {
     let notifyResize;
     const observed = [];
     let disconnected = false;
     let height = 48;
     const h = fixture(doc => {
-        doc.querySelector("#map-inspection").getBoundingClientRect = () => ({ height });
+        doc.querySelector("#map-tools-toolbar").getBoundingClientRect = () => ({ height });
         doc.defaultView.ResizeObserver = class {
             /** Capture the native resize callback for deterministic delivery.
              * @param {ResizeObserverCallback} callback Geometry notification.
              */
             constructor(callback) { notifyResize = callback; }
             /** Record each owned presentation element.
-             * @param {Element} element Observed dock or Tools popover.
+             * @param {Element} element Observed dock, toolbar or Tools popover.
              * @return {void}
              */
             observe(element) { observed.push(element); }
@@ -552,7 +627,9 @@ test("compact geometry follows dock reflow without losing tools or reporting unc
             disconnect() { disconnected = true; }
         };
     });
-    assert.deepEqual(observed, [h.doc.querySelector("#map-inspection"), h.toolActions]);
+    assert.deepEqual(observed, [h.doc.querySelector("#map-inspection"), h.toolActions, h.toolbar]);
+    const rootStyle = h.doc.querySelector("#map-inspection").style;
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "48px");
     h.controller.showHistogram();
     h.controller.showStyle("Countries");
     h.minimizeButton.dispatchEvent(new Event("click"));
@@ -563,6 +640,7 @@ test("compact geometry follows dock reflow without losing tools or reporting unc
     height = 72.25;
     notifyResize();
     assert.equal(h.layouts.at(-1).compactHeight, 73);
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "73px");
     assert.equal(h.histogram.hidden, false);
     assert.equal(h.style.hidden, false);
     assert.equal(h.controller.activeTool, "style");
@@ -571,6 +649,7 @@ test("compact geometry follows dock reflow without losing tools or reporting unc
     height = 96;
     notifyResize();
     assert.equal(h.layouts.at(-1).compactHeight, 0);
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "96px");
     h.controller.destroy();
     assert.equal(disconnected, true);
     assert.equal(h.layouts.at(-1).open, false);
@@ -586,16 +665,16 @@ test("compact opening measures its visible popover before a resize notification"
     });
     h.controller.beginMapClick({ lat: 0, lng: 0 });
     h.controller.setClickResult("feature", { state: "empty", message: "No features" });
-    assert.equal(h.layouts.at(-1).compactHeight, 64);
+    assert.equal(h.layouts.at(-1).compactHeight, 108);
     assert.equal(h.layouts.at(-1).expanded, false);
     h.controller.destroy();
-    assert.equal(h.layouts.at(-1).compactHeight, 0);
+    assert.equal(h.layouts.at(-1).compactHeight, 44);
 });
 
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
     h.controller.showStyle("Coastal resistance.tif");
-    assert.equal(h.analysisToolsButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
     assert.equal(h.styleTab.textContent, "Style · Coastal resistance.tif");
@@ -612,7 +691,7 @@ test("histogram and style have independent visibility on one persistent surface"
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
-    assert.equal(h.analysisToolsButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, false);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.showHistogram();
     h.controller.hideStyle();

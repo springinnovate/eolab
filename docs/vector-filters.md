@@ -4,9 +4,10 @@ Each retained vector layer has a dedicated **Filter** panel. Add up to 12
 field/comparison/value conditions, then choose Match all (AND) or Match any (OR).
 Complete edits apply after 450 ms. Invalid drafts show a message and leave the
 previous applied filter in use. Disable preserves rules; Clear removes them.
-The layer row and the map's top controls link back to the filter. With map tools
-open, the summary appears above the dock so the panel cannot cover it. Active counts
-describe the whole layer, never the current viewport or a sampled estimate.
+The layer row and **Edit filter** in the map toolbar link back to the filter.
+Active filter summaries remain in the toolbar whether an analysis
+panel is open, minimized or closed. Counts describe the whole layer, never the
+current viewport or a sampled estimate.
 
 The initial operators are numeric comparisons, case-sensitive text equality,
 inequality and literal substring matching, Boolean equality/inequality, ISO
