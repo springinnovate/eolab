@@ -520,12 +520,12 @@ export class ModelsView {
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
-                const root = this.element("article", "", "models-history-row"); const button = this.button(job.name ?? job.label, () => this.handlers.onRun(job.jobId));
+                const root = this.element("article", "", "models-history-row"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId));
                 button.classList.add("models-compact-name");
                 const status = this.element("small"); root.append(button, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
                 this.elements["runs-list"].append(root);
             }
-            card.button.textContent = job.name ?? job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
+            card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
             card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
         // Move retained nodes only when ordering changes, keeping focus during status reads.

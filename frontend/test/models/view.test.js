@@ -153,7 +153,7 @@ test("compact run names keep the timestamp visible and full run and artifact nam
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts});
     Object.assign(h.state, {page: "run", selectedRun: ready.jobId, runs: [ready]}); h.view.render(h.state);
     const card = h.view.runCards.get(ready.jobId);
-    assert.equal(card.button.textContent, ready.name); assert.equal(card.button.title, ready.label);
+    assert.equal(card.button.textContent, ready.label); assert.equal(card.button.title, ready.label);
     assert.equal(card.button.getAttribute("aria-label"), ready.label); assert.match(card.status.textContent, /2026-10-08 00:00:00/);
     assert.equal(h.view.run.nameDetails.name.textContent, ready.label);
     h.view.run.nameDetails.copy.dispatchEvent(new Event("click")); await Promise.resolve();
@@ -164,6 +164,27 @@ test("compact run names keep the timestamp visible and full run and artifact nam
     assert.equal(details.children[2].textContent, artifacts.files[0].filename);
     details.children[3].dispatchEvent(new Event("click")); await Promise.resolve();
     assert.equal(copied.at(-1), artifacts.files[0].displayName);
+});
+
+test("run history shows distinct complete names and refreshes a renamed run without losing focus", () => {
+    const h = fixture(), first = job({name: "Downstream ecosystem beneficiaries"});
+    const second = job({jobId: "2".repeat(32), name: first.name, nameTimestamp: "2026_10_08_00_00_01"});
+    Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
+    const firstButton = h.view.runCards.get(first.jobId).button;
+    const secondButton = h.view.runCards.get(second.jobId).button;
+    assert.equal(firstButton.textContent, first.label);
+    assert.equal(secondButton.textContent, second.label);
+    assert.notEqual(firstButton.textContent, secondButton.textContent);
+    firstButton.focus();
+    const renamed = job({...first, name: "Cuba biomass"});
+    h.state.runs = [renamed, second]; h.view.render(h.state);
+    assert.equal(h.view.runCards.get(first.jobId).button, firstButton);
+    assert.equal(h.doc.activeElement, firstButton);
+    assert.equal(firstButton.textContent, `Cuba biomass · ${first.nameTimestamp}`);
+    assert.equal(firstButton.title, renamed.label);
+    assert.equal(firstButton.getAttribute("aria-label"), renamed.label);
+    firstButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["Run", first.jobId]);
 });
 
 test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
