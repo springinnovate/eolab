@@ -6,12 +6,11 @@ import { SummaryControlDocument } from "../../test-support/processing/summary-do
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
- * @param {Clipboard|undefined} [clipboard] Optional clipboard for copying complete names.
  * @return {Object} View, document, mutable state and action log.
  */
-function fixture(clipboard) {
+function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
-    const view = new ModelsView(doc, clipboard);
+    const view = new ModelsView(doc);
     const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
@@ -115,7 +114,7 @@ test("run files distinguish coverage from results and replace legacy duplicate l
     assert.equal(children.length, 5); // Primary scientific card, heading, three file cards.
     assert.equal(children[1].textContent, "Files from this run");
     assert.match(children[3].children[1].textContent, /Intermediate result/);
-    assert.equal(children[4].children[0].textContent, "Download Calculation details");
+    assert.equal(children[4].children[0].textContent, `Download ${artifacts.files[2].displayName}`);
     for (let index = 0; index < 3; index++) assert.equal(children[index + 2].children[0].href, artifacts.files[index].url);
     h.state.runs[0].expiresAt = "2000-01-01T00:00:00Z";
     h.view.render(h.state);
@@ -148,22 +147,44 @@ test("the inline run name survives progress updates and closes only after a succ
     await h.view.saveRunName(); assert.equal(h.view.run.nameEditor.hidden, true); assert.equal(h.doc.activeElement, h.view.run.rename);
 });
 
-test("compact run names keep the timestamp visible and full run and artifact names can be copied", async () => {
-    const copied = [], h = fixture({writeText: async value => { copied.push(value); }}), artifacts = fileManifest();
+test("run headings and output links show complete names without a disclosure", () => {
+    const h = fixture(), artifacts = fileManifest();
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts});
     Object.assign(h.state, {page: "run", selectedRun: ready.jobId, runs: [ready]}); h.view.render(h.state);
     const card = h.view.runCards.get(ready.jobId);
-    assert.equal(card.button.textContent, ready.name); assert.equal(card.button.title, ready.label);
+    assert.equal(card.button.textContent, ready.label); assert.equal(card.button.title, ready.label);
     assert.equal(card.button.getAttribute("aria-label"), ready.label); assert.match(card.status.textContent, /2026-10-08 00:00:00/);
-    assert.equal(h.view.run.nameDetails.name.textContent, ready.label);
-    h.view.run.nameDetails.copy.dispatchEvent(new Event("click")); await Promise.resolve();
-    assert.deepEqual(copied, [ready.label]); assert.equal(h.view.run.nameDetails.status.textContent, "Name copied.");
-    const fileCard = h.view.run.result.children[2], details = fileCard.children.at(-1);
-    assert.equal(fileCard.children[2].title, artifacts.files[0].filename);
-    assert.equal(details.children[1].textContent, artifacts.files[0].displayName);
-    assert.equal(details.children[2].textContent, artifacts.files[0].filename);
-    details.children[3].dispatchEvent(new Event("click")); await Promise.resolve();
-    assert.equal(copied.at(-1), artifacts.files[0].displayName);
+    assert.equal(h.view.run.title.textContent, ready.label);
+    assert.equal(h.view.elements.run.querySelectorAll("summary").some(summary => summary.textContent === "Full name"), false);
+    for (const [index, file] of artifacts.files.entries()) {
+        const fileCard = h.view.run.result.children[index + 2];
+        assert.equal(fileCard.children[0].textContent, `Download ${file.displayName}`);
+        assert.equal(fileCard.children[2].textContent, file.filename);
+        assert.equal(fileCard.children.length, 3);
+    }
+    h.state.runs = [job({...ready, name: "Cuba biomass"})]; h.view.render(h.state);
+    assert.equal(h.view.run.title.textContent, `Cuba biomass · ${ready.nameTimestamp}`);
+});
+
+test("run history shows distinct complete names and refreshes a renamed run without losing focus", () => {
+    const h = fixture(), first = job({name: "Downstream ecosystem beneficiaries"});
+    const second = job({jobId: "2".repeat(32), name: first.name, nameTimestamp: "2026_10_08_00_00_01"});
+    Object.assign(h.state, {page: "runs", runs: [first, second]}); h.view.render(h.state);
+    const firstButton = h.view.runCards.get(first.jobId).button;
+    const secondButton = h.view.runCards.get(second.jobId).button;
+    assert.equal(firstButton.textContent, first.label);
+    assert.equal(secondButton.textContent, second.label);
+    assert.notEqual(firstButton.textContent, secondButton.textContent);
+    firstButton.focus();
+    const renamed = job({...first, name: "Cuba biomass"});
+    h.state.runs = [renamed, second]; h.view.render(h.state);
+    assert.equal(h.view.runCards.get(first.jobId).button, firstButton);
+    assert.equal(h.doc.activeElement, firstButton);
+    assert.equal(firstButton.textContent, `Cuba biomass · ${first.nameTimestamp}`);
+    assert.equal(firstButton.title, renamed.label);
+    assert.equal(firstButton.getAttribute("aria-label"), renamed.label);
+    firstButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["Run", first.jobId]);
 });
 
 test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
@@ -176,10 +197,10 @@ test("file cards show independent opt-in map actions and display loading and map
     h.view.render(h.state);
     for (const [index, file] of rasterFiles.entries()) {
         const card = h.view.run.result.children[index + 2], button = card.children[3];
-        assert.equal(card.children[0].textContent, `Download ${file.label}`);
+        assert.equal(card.children[0].textContent, `Download ${file.displayName}`);
         assert.equal(card.children[0].href, file.url);
         assert.equal(button.textContent, "Show on map");
-        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.label}`);
+        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.displayName}`);
         button.dispatchEvent(new Event("click"));
         assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
     }
@@ -294,8 +315,7 @@ test("clip results offer a GeoTIFF with dimensions, expire correctly and retain 
     h.state.runs = [job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: clipResult})];
     h.view.render(h.state);
     assert.equal(h.view.run.result.children[0].children[0].textContent, "Clipped raster");
-    assert.equal(h.view.run.result.children[0].children[1].title, clipResult.filename);
-    assert.equal(h.view.run.result.children[0].children[1].tabIndex, 0);
+    assert.equal(h.view.run.result.children[0].children[1].textContent, clipResult.filename);
     assert.equal(h.view.run.result.children[0].children[2].textContent, "10 × 10 pixels · 90 valid pixels");
     const links = h.view.run.result.children[1].children;
     assert.equal(links[0].textContent, "Download GeoTIFF"); assert.equal(links[0].href, clipResult.url);

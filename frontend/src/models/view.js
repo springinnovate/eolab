@@ -1,7 +1,7 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { renderModelResult, renderModelFiles, createModelNameDetails } from "./result-view.js";
+import { renderModelResult, renderModelFiles } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { HydrologyInputView, hydrologyDetails } from "./hydrology-view.js";
 
@@ -49,10 +49,9 @@ export function describeModelProgress(job) {
 export class ModelsView {
     /** Bind the existing Models panel markup.
      * @param {Document} [documentContext=globalThis.document] Owning document.
-     * @param {Clipboard|undefined} [clipboard=globalThis.navigator?.clipboard] Browser clipboard for full names.
      */
-    constructor(documentContext = globalThis.document, clipboard = globalThis.navigator?.clipboard) {
-        this.document = documentContext; this.clipboard = clipboard; this.listeners = []; this.runCards = new Map();
+    constructor(documentContext = globalThis.document) {
+        this.document = documentContext; this.listeners = []; this.runCards = new Map();
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
@@ -309,7 +308,7 @@ export class ModelsView {
      */
     buildRun(id) {
         const heading = this.element("div", "", "models-run-heading");
-        const title = this.element("h3", "", "models-compact-name"); title.tabIndex = 0;
+        const title = this.element("h3", "", "models-name");
         const rename = this.button("Rename run", () => this.openRunNameEditor()); heading.append(title, rename);
         const created = this.element("p", "", "models-help");
         const nameEditor = this.element("form", "", "models-run-name-editor"); nameEditor.hidden = true;
@@ -322,7 +321,6 @@ export class ModelsView {
         nameEditor.addEventListener("keydown", event => {
             if (event.key === "Escape" && !this.state.actionBusy) { event.preventDefault(); event.stopPropagation(); this.closeRunNameEditor(); }
         });
-        const nameDetails = createModelNameDetails(this.element.bind(this), this.clipboard);
         const status = this.element("p"); status.setAttribute("role", "status");
         const progress = this.element("progress"); progress.setAttribute("aria-label", "Current model stage progress");
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
@@ -343,8 +341,8 @@ export class ModelsView {
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(heading, created, nameEditor, nameDetails.root, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
-        this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, nameDetails, editingName: false,
+        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
+        this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, editingName: false,
             status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
@@ -384,11 +382,9 @@ export class ModelsView {
         const id = state.selectedRun; if (!id) return;
         if (this.run?.id !== id) this.buildRun(id);
         const r = this.run; const job = state.runs.find(run => run.jobId === id);
-        r.title.textContent = job?.name ?? job?.label ?? "Model run"; r.title.title = job?.label ?? "Model run";
+        r.title.textContent = job?.label ?? "Model run"; r.title.title = job?.label ?? "Model run";
         r.title.setAttribute("aria-label", job?.label ?? "Model run");
         r.created.textContent = job ? `Created ${formatModelRunCreatedTime(job)}` : "";
-        if (r.nameDetails.name.textContent !== job?.label) r.nameDetails.status.textContent = "";
-        r.nameDetails.name.textContent = job?.label ?? ""; r.nameDetails.root.hidden = !job;
         r.rename.hidden = !job || job.status === "deleted" || r.editingName;
         r.rename.disabled = Boolean(state.actionBusy);
         r.nameEditor.hidden = !r.editingName || !job || job.status === "deleted";
@@ -415,7 +411,7 @@ export class ModelsView {
             if (available && job.result) {
                 const filesAvailable = job.artifacts?.availability === "available";
                 renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
-                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput, this.clipboard);
+                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
             }
         }
         r.expiry.hidden = job?.status === "deleted";
@@ -520,12 +516,12 @@ export class ModelsView {
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
-                const root = this.element("article", "", "models-history-row"); const button = this.button(job.name ?? job.label, () => this.handlers.onRun(job.jobId));
-                button.classList.add("models-compact-name");
+                const root = this.element("article", "", "models-history-row"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId));
+                button.classList.add("models-name");
                 const status = this.element("small"); root.append(button, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
                 this.elements["runs-list"].append(root);
             }
-            card.button.textContent = job.name ?? job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
+            card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
             card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
         // Move retained nodes only when ordering changes, keeping focus during status reads.
