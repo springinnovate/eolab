@@ -170,8 +170,8 @@ contains the Resilience catalog DEM and level-06 watershed references under
 `ID` and `MAIN_BAS` do not participate in upstream calculations. See
 [model hydrology configuration](prepared-hydrology.md) for deployment instructions.
 
-There is no registration report or hydrology suitability preflight. A run opens
-the current configured sources and lets the original model use them. Missing or
-unreadable sources fail at access with the affected input identified. Source
-consistency within a run, catalog authorization and ordinary job lifecycle checks
-remain enforced. Historical Run YAML registration records remain readable.
+Each run opens the configured DEM and watershed layer and uses them in the
+original model. If a source is missing or unreadable, the run identifies the
+affected input. Processing manages catalog authorization, consistent inputs
+throughout the calculation, cancellation and result expiry. Saved Run YAML keeps
+the model configuration and historical records available for inspection.

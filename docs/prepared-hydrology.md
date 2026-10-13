@@ -1,9 +1,8 @@
 # Configure model hydrology
 
-The downstream beneficiaries model gets its DEM and watershed layer from its
-installed Model YAML. Users choose a starting mask and values to summarize; there
-is no Prepared hydrology selector, registration command or validation report to
-install after a restart.
+Configure the downstream beneficiaries model's DEM and watershed layer in its
+installed Model YAML. Users choose a starting mask, values to summarize and model
+parameters. The application loads the model configuration whenever it starts.
 
 ## Server configuration
 
@@ -11,8 +10,8 @@ Edit `src/eolab_app/processing/recipes/downstream-beneficiaries.yaml`, then buil
 and deploy the application and Processing worker together. The complete
 [Model YAML example](model-examples/downstream-beneficiaries.model.yaml) matches
 the bundled recipe. Use the catalog identities for the mounted data on your
-server. These references resolve through the catalog to the current files; no
-filesystem paths appear in the model API or browser.
+server. The catalog resolves these references to the current files inside the
+server's allowed data mounts.
 
 The fixed binding is under the operation's inputs:
 
@@ -41,43 +40,41 @@ steps:
             terminalIdField: NEXT_SINK
 ```
 
-This fragment uses the Resilience catalog sources previously configured in the
-standalone hydrology file. Other servers must supply their own catalog IDs and
-field mappings. The full recipe also declares parameters, outputs and an execution
-profile. Give a changed recipe an appropriate semantic version; its definition
-checksum captures the configuration in saved runs. Version 4.0.0 removes the
-user-facing hydrology input from the bundled model.
+This fragment uses the Resilience catalog sources. Other servers must supply
+their own catalog IDs and field mappings. The full recipe also declares
+parameters, outputs and an execution profile. Give a changed recipe an appropriate
+semantic version; its definition checksum captures the configuration in saved
+runs. Version 4.0.0 supplies the bundled model's hydrology through this
+configuration.
 
 The watershed source is the complete configured layer. The original WWF model
 uses integer IDs and the configured downstream and terminal fields. The model
-operator is responsible for choosing suitable data. EOlab does not preflight
-network connectivity, terrain conditioning, DEM coverage or model suitability.
-The original algorithm still performs its own DEM preparation and pit filling.
+operator chooses suitable data for the intended analysis, including terrain
+coverage and watershed connectivity. The original algorithm performs DEM
+preparation and pit filling during the calculation.
 
 ## Runtime behavior
 
 At submission, ordinary catalog authorization captures the current DEM identity.
-The worker opens the current watershed layer when it prepares the run. No source
-is compared against a historical registration report. Restarting the server does
-not require hydrology re-registration.
+The worker opens the current watershed layer when it prepares the run. After a
+server restart, new runs use the sources identified in the installed Model YAML.
 
-Missing or unreadable files fail at the source access boundary with the affected
-input identified. Catalog mount confinement and authorization still apply.
-Once a run captures its inputs, changes during that calculation are rejected so
-the result cannot silently combine different revisions. Cancellation, session
-ownership and result expiry continue to use the existing Processing lifecycle.
+If a file is missing or unreadable, the run identifies the affected input.
+Catalog authorization confines file access to the server's allowed data mounts.
+Processing keeps inputs consistent throughout each calculation and manages
+cancellation, session ownership and result expiry.
 The captured model definition and raster identities are retained in Run YAML;
 the calculation provenance also records the current watershed selection.
 
 ## Upgrading from registration reports
 
-Remove `EOLAB_PREPARED_HYDROLOGY_DIRECTORY` (or the direct-service
-`PREPARED_HYDROLOGY_DIRECTORY`) from server configuration. The application no
-longer reads it. Transfer the catalog DEM, watershed and topology fields from the
-old configuration into the Model YAML fixed binding above, and deploy both
-application and worker. No `.hydrology.json` report is required.
+Transfer the catalog DEM, watershed and topology fields from the old configuration
+into the Model YAML fixed binding above. Remove `EOLAB_PREPARED_HYDROLOGY_DIRECTORY`
+(or the direct-service `PREPARED_HYDROLOGY_DIRECTORY`) from server configuration,
+then deploy both application and worker.
 
-The registration CLI and `/api/processing/prepared-hydrology` discovery/resolve
-endpoints have been removed. Older saved Run YAML documents retain their embedded
-reports and checksums for historical display; those reports do not authorize new
-runs. The mask and values selections remain explicit user choices.
+Update deployment scripts to install the configured Model YAML in place of
+running the registration CLI or calling `/api/processing/prepared-hydrology`
+endpoints. Older saved Run YAML documents retain their embedded reports and
+checksums for historical display. Users continue choosing the mask and values
+for each new run.

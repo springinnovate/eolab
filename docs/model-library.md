@@ -11,10 +11,9 @@ downstream area.
 
 Select the **Downstream ecosystem beneficiaries** card. Its elevation raster,
 watershed network and connection fields are configured in the model YAML.
-You do not need to add those layers to the map or select a prepared dataset.
-The model opens its configured sources when it runs; if a source is missing or
-unreadable, the run reports that error. There is no separate hydrology
-registration or source check to complete before running.
+Choose your starting mask, values and parameters below. The model opens its
+configured sources when it runs; if a source is missing or unreadable, the run
+identifies the affected input.
 
 For **Starting mask**, choose a vector layer and edit its filter in the same
 panel, or choose **Raster cells greater than zero** and a starting raster from
@@ -39,7 +38,7 @@ summary progress, with cancellation and downloads. Coverage and the starting
 mask use the ordinary **Show on map** actions under that run. **Duplicate with
 changes** copies the starting mask, values and parameters when the same model
 version remains installed. Its configured elevation and watershed sources come
-from that model, without a separate dataset selection or registration check.
+from that model.
 
 ## Choose inputs
 
