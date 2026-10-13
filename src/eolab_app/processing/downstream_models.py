@@ -25,15 +25,24 @@ PIT_FILL_SEARCH_LIMIT = 100
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 FLOW_THRESHOLD = 100 * float_info.epsilon
 
+PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
+"""EcoShard's signed-64-bit pit-search cutoff; -1 and 0 allow unlimited searches."""
+
 
 @dataclass(frozen=True)
 class DownstreamLimits(RasterClipLimits):
-    """Configure downstream job scheduling and result retention.
+    """Configure downstream job scheduling, result retention and pit filling.
 
     The original WWF model runs without EOlab cell, geometry, memory, disk or
-    total-runtime admission ceilings. Its numerical inputs are captured separately
-    in DownstreamRequest.
+    total-runtime admission ceilings. The worker captures the pit-search cutoff
+    in each prepared plan; it controls terrain conditioning, not job admission.
+
+    Attributes:
+        pit_fill_search_limit: EcoShard's maximum search steps for one pit.
+            Values -1 and 0 leave the search unlimited.
     """
+
+    pit_fill_search_limit: int = PIT_FILL_SEARCH_LIMIT
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
@@ -120,11 +129,13 @@ class QueuedDownstream(HydrologySchema):
 
 
 class DownstreamPlan(HydrologySchema):
-    """Record admitted native windows and watershed identities without retaining geometry.
+    """Record source grids, watershed identities and pit-filling settings for one run.
 
     Resolved selections are ephemeral worker arguments and never enter storage.
-    These grids measure native input work for admission. The original model
-    constructs its own calculation grid using the captured pixel-size setting.
+    The original model constructs its own calculation grid using the captured
+    pixel-size setting. The worker saves its pit-search cutoff during preparation;
+    execution uses this value even if supplied different worker settings later.
+    Historical plans without the cutoff retain the original default of 100.
     """
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
@@ -134,6 +145,7 @@ class DownstreamPlan(HydrologySchema):
     watersheds: tuple[NetworkId, ...] = Field(min_length=1)
     reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
+    pit_fill_search_limit: PitFillSearchLimit = PIT_FILL_SEARCH_LIMIT
 
 
 class DownstreamNumericalPolicy(HydrologySchema):
@@ -209,7 +221,7 @@ class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
     ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )
-    pitFillSearchLimit: Literal[100] = PIT_FILL_SEARCH_LIMIT
+    pitFillSearchLimit: PitFillSearchLimit = PIT_FILL_SEARCH_LIMIT
     pitFillTreatNodataAsClosed: Literal[True] = PIT_FILL_TREAT_NODATA_AS_CLOSED
 
 

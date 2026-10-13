@@ -453,12 +453,12 @@ def require_downstream_dem_coverage(
 def plan_downstream(
     sources: DownstreamSources, request: DownstreamRequest, limits: DownstreamLimits
 ) -> DownstreamPlan:
-    """Prepare the selected drainage and native grids without reading DEM pixels.
+    """Prepare source grids and pit-filling settings without reading DEM pixels.
 
     Args:
         sources: Authorized native source paths and vector descriptors.
         request: Validated captured model inputs.
-        limits: Shared job lifecycle settings.
+        limits: Job lifecycle settings and the pit-search cutoff to save for this run.
 
     Returns:
         Path-free calculation plan without a scratch reservation.
@@ -503,6 +503,7 @@ def plan_downstream(
         routingGrid=routing,
         watersheds=identifiers,
         reservedBytes=0,
+        pit_fill_search_limit=limits.pit_fill_search_limit,
     )
 
 

@@ -90,6 +90,8 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
     """
     original = files("wwf_es_beneficiaries") / "workflow_runner.py"
     sources, request, limits = downstream_fixture(tmp_path / "inputs")
+    if case == "closed-dem-edge":
+        limits = replace(limits, pit_fill_search_limit=1000)
     area = box(0, 0, 1, 4)
     if case == "resampled-dem":
         sources, request, limits = scaled_downstream_fixture(
@@ -292,7 +294,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
                     "buffer_size_m": request.buffer_m,
                     "taskgraph_workers": 1,
                     "gdal_cachemax_mb": 128,
-                    "max_pixel_fill_count": 100,
+                    "max_pixel_fill_count": limits.pit_fill_search_limit,
                     "treat_nodata_as_closed": True,
                 },
                 "sections": [

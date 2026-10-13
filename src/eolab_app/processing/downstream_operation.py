@@ -285,6 +285,7 @@ def describe_downstream_policy(
         Versioned numerical rules for Run YAML and provenance.
     """
     return ClosedEdgeDownstreamNumericalPolicy(
+        pitFillSearchLimit=spec.pit_fill_search_limit,
         bufferMetres=spec.inputs.buffer_m,
         cutoffMetres=spec.inputs.cutoff_m,
         wgs84PixelSize=spec.inputs.wgs84_pixel_size,
