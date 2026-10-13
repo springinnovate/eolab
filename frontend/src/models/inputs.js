@@ -1,6 +1,5 @@
 /** Build model drafts from catalog identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
-import { hydrologyReference } from "../processing/hydrology.js";
 
 /** Check whether a model declares an input of the requested type.
  * @param {Object} model Installed recipe.
@@ -111,8 +110,7 @@ export function createModelDraft(model, context, id) {
         sourceReason: Object.values(model.inputs).some(input => input.type === "raster") ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
-        maskRaster: null, hydrology: null, hydrologyChoices: [], hydrologyKey: "", hydrologyLoading: false,
-        hydrologyChecking: false, hydrologyError: "", hydrologyReason: "",
+        maskRaster: null,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };
 }
@@ -141,8 +139,6 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         if (!draft.area) throw new Error(draft.selectionError || (usesStartingMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
         if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose an area supported by this model.");
     }
-    if (modelHasInput(draft.model, "prepared_hydrology") && (!draft.hydrology || draft.hydrologyLoading || draft.hydrologyChecking))
-        throw new Error(draft.hydrologyError || "Choose a prepared hydrology dataset and wait for its source check.");
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
@@ -151,7 +147,6 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
         else if (input.type === "mask_source") inputs[name] = draft.areaMode === "raster" ?
             {kind: "catalogRaster", source: {collectionId: draft.maskRaster.collectionId, itemId: draft.maskRaster.itemId}} : structuredClone(draft.area);
-        else if (input.type === "prepared_hydrology") inputs[name] = hydrologyReference(draft.hydrology);
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
     const area = draft.area;

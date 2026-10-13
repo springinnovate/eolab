@@ -349,39 +349,26 @@ def test_ordinary_clip_retention_and_renewal_boundary_are_unchanged(
     )
 
 
-def test_application_starts_with_registered_hydrology(
+def test_application_starts_with_model_hydrology_without_registration(
     configured_environment: None,
     version_file_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     store: PostgresJobStore,
 ) -> None:
-    """Start the real application lifespan with a registration report and PostgreSQL.
+    """Start the application with hydrology configured in its installed model YAML.
 
     Args:
         configured_environment: Complete application environment without production credentials.
         version_file_path: Isolated application version file.
-        tmp_path: Native fixture sources, installed report and private output directory.
-        monkeypatch: Set deployment paths and the validated disposable database connection.
+        tmp_path: Empty mounted-source directory and private output storage.
+        monkeypatch: Set deployment paths and the disposable database connection.
         store: Migrated disposable PostgreSQL store supplied by the guarded test fixture.
     """
     from eolab_app.main import create_app
-    from eolab_app.processing.model_yaml import encode_canonical_json
-    from test_downstream_model import downstream_fixture
 
-    _, request, _ = downstream_fixture(tmp_path / "sources", register_only=True)
-    document = request.hydrology.model_dump(mode="json", by_alias=True)
-    assert document["validation"]["validator"] == "eolab.hydrology-registration/v1"
-    assert document["validation"]["demCellsChecked"] == 0
-    assert (
-        not {"watershedCount", "terminalCount", "bounds"}
-        & document["validation"].keys()
-    )
-    reports = tmp_path / "registered"
-    reports.mkdir()
-    report = reports / "example.hydrology.json"
-    original = encode_canonical_json(document)
-    report.write_bytes(original)
+    sources = tmp_path / "sources"
+    sources.mkdir()
     for parameter, variable in (
         ("host", "PGHOST"),
         ("port", "PGPORT"),
@@ -392,15 +379,29 @@ def test_application_starts_with_registered_hydrology(
         monkeypatch.setenv(
             variable, psycopg.conninfo.conninfo_to_dict(store.conninfo)[parameter]
         )
-    monkeypatch.setenv("PREPARED_HYDROLOGY_DIRECTORY", str(reports))
-    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path / "sources"))
+    monkeypatch.delenv("PREPARED_HYDROLOGY_DIRECTORY", raising=False)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(sources))
     monkeypatch.setenv("PROCESSING_DATA_PATH", str(tmp_path / "private"))
     with TestClient(create_app(version_file_path)) as client:
         assert client.get("/healthz").status_code == 200
-        response = client.get("/api/processing/prepared-hydrology")
+        response = client.get("/api/processing/models")
         assert response.status_code == 200
-        assert response.json()["configurations"] == [document]
-    assert report.read_bytes() == original
+        model = next(
+            item
+            for item in response.json()["models"]
+            if item["id"] == "downstream-beneficiaries"
+        )
+        assert set(model["inputs"]) == {"starting_mask", "values"}
+        assert set(model["steps"][0]["inputs"]["hydrology"]["value"]) == {
+            "dem",
+            "watersheds",
+            "topology",
+        }
+        assert (
+            "/api/processing/prepared-hydrology"
+            not in client.get("/openapi.json").json()["paths"]
+        )
+    assert not list(sources.iterdir())
 
 
 @pytest.fixture
@@ -420,7 +421,6 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
     from test_downstream_model import downstream_fixture
     from eolab_app.processing.artifacts import LocalJobArtifacts
     from eolab_app.processing.native_processes import create_native_process
-    from eolab_app.processing.prepared_hydrology import PreparedHydrologyRegistry
     from eolab_app.raster.catalog import StacRasterCatalog
     from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
     from eolab_app.raster.sources import MountedRasterResolver
@@ -431,7 +431,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
     sources, request, _ = downstream_fixture(tmp_path / "sources")
     references = {
         "values": request.values,
-        "dem": request.hydrology.definition.dem,
+        "dem": request.hydrology_sources.dem,
         "starting_mask": request.starting_mask.source,
     }
     items = {
@@ -469,12 +469,21 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
     worker = worker_module.ProcessingWorker(
         authorizer, store, artifacts, store.limits, areas=reader, native=native
     )
+    definitions = []
+    for document in ModelRegistry.load_installed().list_models():
+        document.pop("definitionSha256")
+        if document["id"] == "downstream-beneficiaries":
+            document["steps"][0]["inputs"]["hydrology"] = {
+                "value": request.hydrology_sources.model_dump(
+                    mode="json", by_alias=True
+                )
+            }
+        definitions.append(ModelDefinition.model_validate(document))
     service = ProcessingService(
         store,
         artifacts,
         model_authorizer=authorizer,
-        hydrology_registry=PreparedHydrologyRegistry((request.hydrology,)),
-        hydrology_selections=reader,
+        model_registry=ModelRegistry(tuple(definitions)),
     )
     app = FastAPI()
     app.include_router(create_processing_router(service))
@@ -540,7 +549,6 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
             "starting_mask": request.starting_mask.model_dump(
                 mode="json", by_alias=True
             ),
-            "hydrology": request.hydrology.reference.model_dump(),
             "values": values,
         },
         parameters={
@@ -554,10 +562,14 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
     pending = parse_yaml(
         client.get(f"/api/processing/jobs/{identifier}/run-yaml").content, run=True
     )
+    assert pending["invocation"]["inputs"] == body["inputs"]
+    assert pending["invocation"]["model"]["definition"]["steps"][0]["inputs"][
+        "hydrology"
+    ]["value"] == request.hydrology_sources.model_dump(mode="json", by_alias=True)
     assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
     if change_source in {"dem", "starting_mask"}:
         reference = (
-            request.hydrology.definition.dem
+            request.hydrology_sources.dem
             if change_source == "dem"
             else request.starting_mask.source
         )

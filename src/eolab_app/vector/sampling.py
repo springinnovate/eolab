@@ -8,6 +8,8 @@ an unavailable outline does not prevent numeric analysis of the selection.
 
 from collections.abc import Awaitable, Callable
 from typing import Any
+from eolab_app.catalog.vector_contract import CatalogVectorRequest
+from eolab_app.attribute_filter import VectorFilter
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
@@ -80,6 +82,32 @@ class VectorSamplingService:
                 "The catalog vector identity changed; select it again."
             )
         return resolved
+
+    async def resolve_source(
+        self, source: CatalogVectorRequest
+    ) -> ResolvedCatalogSelection:
+        """Authorize a current full catalog layer without scanning its features.
+
+        Args:
+            source: Configured catalog collection and item, with no saved signature.
+
+        Returns:
+            Full-layer selection and file identities for one calculation.
+
+        Raises:
+            SelectionUnavailableError: If catalog access or source inspection fails.
+        """
+        request = CatalogVectorFilterRequest(
+            collectionId=source.collection_id,
+            itemId=source.item_id,
+            filter=VectorFilter(),
+        )
+        try:
+            return await resolve_selection(self.catalog, self.resolver, request)
+        except (VectorFeatureError, OSError, ValueError) as error:
+            raise SelectionUnavailableError(
+                "The configured catalog vector source is missing or unreadable."
+            ) from error
 
     async def select(self, request: CatalogVectorFilterRequest) -> dict[str, Any]:
         """Queue a filtered-feature measurement without retaining coordinates.

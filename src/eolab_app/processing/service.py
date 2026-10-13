@@ -33,18 +33,8 @@ from eolab_app.processing.ports import (
     JobChanges,
     JobSubscription,
 )
+from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
-from eolab_app.catalog_selection import (
-    CatalogSelectionReader,
-    SelectionUnavailableError,
-)
-from eolab_app.raster.source_identity import RasterSourceIdentity
-from eolab_app.processing.prepared_hydrology import (
-    HydrologyReference,
-    PreparedHydrologyRegistry,
-    PreparedHydrologySnapshot,
-)
-from pydantic import ValidationError
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import (
@@ -67,7 +57,6 @@ from eolab_app.processing.model_runs import (
     build_model_calculation_request,
 )
 from eolab_app.processing.model_yaml import (
-    compute_document_checksum,
     encode_canonical_json,
     export_yaml,
 )
@@ -184,10 +173,8 @@ class ProcessingService:
         submission_wait_seconds: float = 0.45,
         model_registry: ModelRegistry | None = None,
         model_authorizer: RasterSourceAuthorizer | None = None,
-        hydrology_registry: PreparedHydrologyRegistry | None = None,
-        hydrology_selections: CatalogSelectionReader | None = None,
     ) -> None:
-        """Configure job storage, source access and the installed model and hydrology libraries.
+        """Configure job storage, source access and the installed model library.
 
         Args:
             jobs: Durable job and admission adapter.
@@ -200,8 +187,6 @@ class ProcessingService:
                 eagerly when omitted, failing readiness if invalid.
             model_authorizer: Catalog-only source authority for capturing model
                 inputs at admission. Existing raster endpoints retain their behavior.
-            hydrology_registry: Installed validated dataset configurations; empty when omitted.
-            hydrology_selections: Existing catalog authority for rechecking complete networks.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -218,64 +203,6 @@ class ProcessingService:
             else ModelRegistry.load_installed()
         )
         self.model_authorizer = model_authorizer
-        self.hydrology_registry = hydrology_registry or PreparedHydrologyRegistry()
-        self.hydrology_selections = hydrology_selections
-
-    async def list_prepared_hydrology(self) -> dict[str, Any]:
-        """Describe installed hydrology configurations without rescanning elevation data.
-
-        Returns:
-            Validated configuration reports. Selection rechecks source availability;
-            discovery alone does not authorize model execution.
-        """
-        return {
-            "configurations": [
-                snapshot.model_dump(mode="json", by_alias=True)
-                for snapshot in self.hydrology_registry.list_configurations()
-            ]
-        }
-
-    async def resolve_prepared_hydrology(
-        self, reference: HydrologyReference
-    ) -> PreparedHydrologySnapshot:
-        """Reauthorize the exact catalog sources recorded in a prepared configuration.
-
-        Args:
-            reference: ID, version and effective checksum selected in model setup.
-
-        Returns:
-            Validated snapshot to capture with the run, without source paths.
-
-        Raises:
-            ProcessingError: If the configuration or its original sources changed or are unavailable.
-            RasterFeatureError: If the catalog rejects the DEM's source identity.
-        """
-        snapshot = self.hydrology_registry.get(reference)
-        if self.model_authorizer is None or self.hydrology_selections is None:
-            raise ProcessingError(
-                "hydrology_unavailable", "Hydrology source access is unavailable.", 503
-            )
-        dem = await self.model_authorizer.authorize(snapshot.definition.dem)
-        try:
-            current = await asyncio.to_thread(
-                RasterSourceIdentity.read, dem.source_path
-            )
-            if (
-                current != dem.source_signature
-                or compute_document_checksum(current.to_catalog())
-                != snapshot.demSignature
-            ):
-                raise SelectionUnavailableError("The prepared DEM changed")
-            await self.hydrology_selections.resolve_for_sampling(
-                snapshot.watershedSelection
-            )
-        except (OSError, SelectionUnavailableError) as error:
-            raise ProcessingError(
-                "hydrology_changed",
-                "The prepared DEM or watershed source changed or is unavailable. Ask the administrator to validate the configuration again.",
-                409,
-            ) from error
-        return snapshot
 
     async def submit_model_run(
         self, owner: str, request: ModelRunRequest
@@ -294,8 +221,8 @@ class ProcessingService:
             The newly queued run, or the original run for an unchanged retry.
 
         Raises:
-            ProcessingError: If the retry conflicts, model inputs are invalid, or
-                the configured queue or storage limits prevent submission.
+            ProcessingError: If the retry conflicts, model inputs are invalid,
+                an additional source is unavailable, or submission cannot be admitted.
             RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
         request_data = request.model_dump(mode="json", exclude={"requestId"})
@@ -315,22 +242,8 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        definition = self.model_registry.get(request.model.id, request.model.version)
-        hydrology = {}
-        try:
-            for name, role in definition.inputs.items():
-                if role.type == "prepared_hydrology":
-                    reference = HydrologyReference.model_validate(
-                        request.inputs.get(name)
-                    )
-                    hydrology[name] = await self.resolve_prepared_hydrology(reference)
-        except ValidationError as error:
-            raise ProcessingError(
-                "invalid_model_inputs",
-                "Choose and review a prepared hydrology configuration.",
-            ) from error
         calculation, invocation = build_model_calculation_request(
-            request, self.model_registry, hydrology=hydrology
+            request, self.model_registry
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation)
@@ -356,9 +269,22 @@ class ProcessingService:
                         "invalid_model_inputs",
                         "Additional model inputs require catalog rasters.",
                     )
-                authorized_input = await self.model_authorizer.authorize(
-                    additional_source
-                )
+                if self.model_authorizer is None:
+                    raise ProcessingError(
+                        "models_unavailable",
+                        "Model source authorization is unavailable.",
+                        503,
+                    )
+                try:
+                    authorized_input = await self.model_authorizer.authorize(
+                        additional_source
+                    )
+                except RasterFeatureError as error:
+                    raise ProcessingError(
+                        "source_unavailable",
+                        f"The model's {name} input is unavailable. {error.detail}",
+                        422,
+                    ) from error
                 additional_signatures[name] = tuple(
                     authorized_input.source_signature.to_catalog()
                 )

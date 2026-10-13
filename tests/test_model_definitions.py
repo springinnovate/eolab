@@ -6,10 +6,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
-from eolab_app.processing.model_run_contracts import ModelRunRequest, RunDocument
+from eolab_app.processing.model_run_contracts import (
+    ModelInvocation,
+    ModelRunRequest,
+    RunDocument,
+)
 from eolab_app.processing.model_runs import build_model_calculation_request
 from eolab_app.processing.model_yaml import (
     encode_canonical_json,
@@ -560,3 +564,427 @@ def test_saved_policy_must_include_the_registered_numerical_facts(
                 "numericalPolicy": policy,
             }
         )
+
+
+def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() -> None:
+    """Capture configured sources from YAML while users supply only mask and values."""
+    from eolab_app.processing.downstream_models import DownstreamRequest
+    from eolab_app.processing.model_definitions import FixedInputBinding
+    from eolab_app.processing.model_run_contracts import ModelInvocation
+
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("downstream-beneficiaries", "4.0.0")
+    assert set(definition.inputs) == {"starting_mask", "values"}
+    binding = definition.steps[0].inputs["hydrology"]
+    assert isinstance(binding, FixedInputBinding)
+    submitted = ModelRunRequest(
+        requestId="a" * 32,
+        label="Configured source run",
+        model={
+            "id": definition.id,
+            "version": definition.version,
+            "definitionSha256": definition.digest,
+        },
+        inputs={
+            "starting_mask": {
+                "kind": "catalogRaster",
+                "source": {
+                    "collectionId": "eolab-mounted-geotiffs",
+                    "itemId": "geotiff-" + "1" * 24,
+                },
+            },
+            "values": {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": "geotiff-" + "2" * 24,
+            },
+        },
+    )
+    calculation, invocation = build_model_calculation_request(submitted, registry)
+    assert isinstance(calculation, DownstreamRequest)
+    assert calculation.hydrology_sources == binding.value
+    assert "hydrology" not in invocation.model_dump(mode="json", by_alias=True)
+    saved_invocation = invocation.model_dump(mode="json", by_alias=True)
+    explicit_empty_metadata = ModelInvocation.model_validate(
+        {**saved_invocation, "hydrology": {}}
+    )
+    assert (
+        explicit_empty_metadata.model_dump(mode="json", by_alias=True)
+        == saved_invocation
+    )
+    assert (
+        ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
+        == invocation
+    )
+    configured = definition.to_document()["steps"][0]["inputs"]["hydrology"]["value"]
+    assert set(configured) == {"dem", "watersheds", "topology"}
+    assert set(configured["dem"]) == {"collectionId", "itemId"}
+    for unknown in ("hydrology", "dem", "watersheds"):
+        changed = submitted.model_copy(
+            update={"inputs": {**submitted.inputs, unknown: configured}}
+        )
+        with pytest.raises(ProcessingError, match="exactly the model's inputs"):
+            build_model_calculation_request(changed, registry)
+
+
+@pytest.mark.parametrize(
+    "problem", ["missing_source", "path", "unknown_field", "wrong_argument"]
+)
+def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) -> None:
+    """Fixed source bindings retain typed catalog identities and operation arguments.
+
+    Args:
+        problem: Invalid field, missing identity or mismatched operation argument.
+    """
+    document = (
+        ModelRegistry.load_installed()
+        .get("downstream-beneficiaries", "4.0.0")
+        .to_document()
+    )
+    binding = document["steps"][0]["inputs"]["hydrology"]
+    if problem == "missing_source":
+        del binding["value"]["dem"]
+    elif problem == "path":
+        binding["value"]["dem"] = {"path": "/private/terrain.tif"}
+    elif problem == "unknown_field":
+        binding["value"]["eligibility"] = True
+    else:
+        document["steps"][0]["inputs"]["values"] = binding
+        document["inputs"].pop("values")
+    with pytest.raises((ValidationError, ProcessingError)):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+def test_legacy_recipe_round_trip_preserves_its_original_checksum() -> None:
+    """Adding fixed bindings does not add fields to historical user-input recipes."""
+    from eolab_app.processing.model_run_contracts import CapturedModel
+    from eolab_app.processing.model_yaml import compute_document_checksum
+
+    document = (
+        ModelRegistry.load_installed()
+        .get("downstream-beneficiaries", "4.0.0")
+        .to_document()
+    )
+    document["version"] = "3.0.0"
+    document["inputs"]["hydrology"] = {
+        "type": "prepared_hydrology",
+        "label": "Prepared hydrology",
+    }
+    document["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
+    original_checksum = compute_document_checksum(document)
+    captured = CapturedModel.model_validate(
+        {
+            "id": document["id"],
+            "version": document["version"],
+            "definitionSha256": original_checksum,
+            "definition": document,
+        }
+    )
+    assert captured.definition.to_document() == document
+    assert captured.definition.digest == original_checksum
+    assert (
+        ModelRegistry((captured.definition,)).get(document["id"], "3.0.0")
+        == captured.definition
+    )
+
+
+class CalibrationSettings(BaseModel):
+    """Supply an integer multiplier to a fixture operation's calibration argument."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    multiplier: int = Field(strict=True, ge=1)
+
+
+@pytest.fixture
+def calibration_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, Any], list[Any]]:
+    """Register a non-hydrology operation with its own configurable input schema.
+
+    Args:
+        monkeypatch: Isolated operation registration restored after the test.
+
+    Returns:
+        Recipe document and the calibration arguments received by its binder.
+    """
+    from eolab_app.processing.aggregate_models import AggregateJobRequest
+
+    document = (
+        ModelRegistry.load_installed().get("raster-summary", "1.1.0").to_document()
+    )
+    original = operation_registry.get_model_operation("raster.aggregate.v1")
+    captured: list[Any] = []
+
+    def bind_calibrated_summary(
+        inputs: dict[str, Any],
+        parameters: dict[str, Any],
+        request_id: str,
+        label: str,
+    ) -> AggregateJobRequest:
+        """Record the validated calibration argument before binding ordinary summary inputs.
+
+        Args:
+            inputs: User-selected rasters and area plus the calibration configuration.
+            parameters: Summary formula values supplied by the generic model binder.
+            request_id: Submission retry identity.
+            label: User-visible name for the calculation.
+
+        Returns:
+            Existing summary request after removing the fixture-only argument.
+
+        Raises:
+            ValidationError: If the calibration does not match the registered schema.
+        """
+        captured.append(inputs["calibration"])
+        CalibrationSettings.model_validate(inputs["calibration"])
+        return original.bind(
+            {name: value for name, value in inputs.items() if name != "calibration"},
+            parameters,
+            request_id,
+            label,
+        )
+
+    operation = replace(
+        original,
+        id="fixture.calibrated_summary.v1",
+        inputs=(*original.inputs, ("calibration", "fixture_calibration")),
+        fixed_input_models=(("calibration", CalibrationSettings),),
+        input_adapters=(("fixture_calibration", TypeAdapter(CalibrationSettings)),),
+        bind=bind_calibrated_summary,
+    )
+    registry = {**operation_registry.OPERATIONS, operation.id: operation}
+    monkeypatch.setattr(operation_registry, "OPERATIONS", registry)
+    monkeypatch.setattr(definitions, "OPERATIONS", registry)
+    document["id"] = "calibrated-summary"
+    document["steps"][0]["operation"] = operation.id
+    document["steps"][0]["inputs"]["calibration"] = {"value": {"multiplier": 3}}
+    return document, captured
+
+
+@pytest.mark.parametrize("binding_kind", ["fixed", "user"])
+def test_operation_owns_fixed_and_user_input_schemas(
+    calibration_recipe: tuple[dict[str, Any], list[Any]], binding_kind: str
+) -> None:
+    """Bind an unfamiliar operation's configuration through its registered schemas.
+
+    Args:
+        calibration_recipe: Fixture operation, YAML recipe and captured binder arguments.
+        binding_kind: Supply calibration from the recipe or a declared user input.
+    """
+    document, captured = calibration_recipe
+    body = summary_request()
+    if binding_kind == "user":
+        document["inputs"]["adjustment"] = {
+            "type": "fixture_calibration",
+            "label": "Calibration",
+        }
+        document["steps"][0]["inputs"]["calibration"] = {"input": "adjustment"}
+        body["inputs"]["adjustment"] = {"multiplier": 3}
+    definition = ModelDefinition.model_validate(parse_yaml(export_yaml(document)))
+    registry = ModelRegistry((definition,))
+    body["model"] = {
+        "id": definition.id,
+        "version": definition.version,
+        "definitionSha256": definition.digest,
+    }
+    calculation, invocation = build_model_calculation_request(
+        ModelRunRequest.model_validate(body), registry
+    )
+    assert calculation.calculations[0].expression == "sum(a)"
+    assert invocation.inputs == body["inputs"]
+    assert len(captured) == 1
+    assert CalibrationSettings.model_validate(captured[0]).multiplier == 3
+    if binding_kind == "fixed":
+        assert isinstance(captured[0], CalibrationSettings)
+        with pytest.raises(ValidationError):
+            captured[0].multiplier = 4
+    restored = ModelInvocation.model_validate(
+        parse_yaml(
+            export_yaml(invocation.model_dump(mode="json", by_alias=True), run=True),
+            run=True,
+        )
+    )
+    assert restored.model.definition.to_document() == definition.to_document()
+    assert restored.model.definition.digest == definition.digest
+    assert restored.inputs == invocation.inputs
+    if binding_kind == "user":
+        body["inputs"]["adjustment"]["multiplier"] = "3"
+        with pytest.raises(ProcessingError, match="invalid"):
+            build_model_calculation_request(
+                ModelRunRequest.model_validate(body), registry
+            )
+
+
+@pytest.mark.parametrize(
+    "problem", ["unknown_field", "missing_field", "wrong_type", "undeclared_argument"]
+)
+def test_operation_rejects_fixed_configuration_outside_its_schema(
+    calibration_recipe: tuple[dict[str, Any], list[Any]], problem: str
+) -> None:
+    """Reject malformed or undeclared fixed arguments without a domain-specific branch.
+
+    Args:
+        calibration_recipe: Recipe and registered calibration schema.
+        problem: Unsupported setting, absent value, invalid type or unregistered argument.
+    """
+    document, _ = calibration_recipe
+    bindings = document["steps"][0]["inputs"]
+    value = bindings["calibration"]["value"]
+    if problem == "unknown_field":
+        value["unrecognized"] = True
+    elif problem == "missing_field":
+        value.pop("multiplier")
+    elif problem == "wrong_type":
+        value["multiplier"] = "3"
+    else:
+        bindings["unregistered"] = bindings.pop("calibration")
+    with pytest.raises((ProcessingError, ValidationError)):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+def historical_downstream_run(tmp_path: Path) -> dict[str, Any]:
+    """Build an old Run YAML document with its original hydrology registration metadata.
+
+    Args:
+        tmp_path: Temporary original-source fixtures for historical report checksums.
+
+    Returns:
+        A path-free version 3 model run using the historical invocation wire format.
+    """
+    from eolab_app.processing.model_yaml import compute_document_checksum
+    from test_prepared_hydrology import legacy_snapshot, prepare_sources
+
+    source_definition, dem, watersheds, _ = prepare_sources(tmp_path)
+    report = legacy_snapshot(source_definition, dem, watersheds)
+    definition = (
+        ModelRegistry.load_installed()
+        .get("downstream-beneficiaries", "4.0.0")
+        .to_document()
+    )
+    definition["version"] = "3.0.0"
+    definition["inputs"]["hydrology"] = {
+        "type": "prepared_hydrology",
+        "label": "Prepared hydrology",
+    }
+    definition["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
+    return {
+        "schema": "eolab.run/v1",
+        "jobId": "a" * 32,
+        "capturedAt": "2026-01-01T00:00:00Z",
+        "invocation": {
+            "model": {
+                "id": definition["id"],
+                "version": definition["version"],
+                "definitionSha256": compute_document_checksum(definition),
+                "definition": definition,
+            },
+            "inputs": {
+                "starting_mask": {
+                    "kind": "catalogRaster",
+                    "source": source_definition.dem.model_dump(by_alias=True),
+                },
+                "values": source_definition.dem.model_dump(by_alias=True),
+                "hydrology": report.reference.model_dump(),
+            },
+            "parameters": {
+                name: value["default"]
+                for name, value in definition["parameters"].items()
+            },
+            "label": "Historical calculation",
+            "hydrology": {"hydrology": report.model_dump(mode="json", by_alias=True)},
+        },
+        "execution": {
+            "state": "pending",
+            "applicationBuild": "historical-test",
+            "operations": {
+                "analysis": {
+                    "id": definition["steps"][0]["operation"],
+                    "implementationRevision": "b" * 64,
+                }
+            },
+            "sources": {"values": {"sourceSignature": "c" * 64, "band": 1}},
+        },
+    }
+
+
+def test_historical_run_preserves_operation_metadata_and_model_checksum(
+    tmp_path: Path,
+) -> None:
+    """Read and export an old run without moving or changing its operation-owned metadata.
+
+    Args:
+        tmp_path: Sources used to construct the historical registration record.
+    """
+    saved = historical_downstream_run(tmp_path)
+    restored = RunDocument.model_validate(
+        parse_yaml(export_yaml(saved, run=True), run=True)
+    )
+    exported = restored.model_dump(mode="json", by_alias=True, exclude_unset=True)
+    assert exported == saved
+    assert (
+        restored.invocation.model.definition.digest
+        == saved["invocation"]["model"]["definitionSha256"]
+    )
+    assert (
+        RunDocument.model_validate(
+            parse_yaml(export_yaml(exported, run=True), run=True)
+        )
+        == restored
+    )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing",
+        "empty",
+        "unknown_extra",
+        "unknown_report",
+        "mismatched_reference",
+        "malformed_report",
+    ],
+)
+def test_historical_run_rejects_invalid_operation_metadata(
+    tmp_path: Path, problem: str
+) -> None:
+    """Keep historical metadata validation at its owning operation's boundary.
+
+    Args:
+        tmp_path: Original sources for a valid historical invocation fixture.
+        problem: Missing, unknown or inconsistent saved metadata to reject.
+    """
+    saved = historical_downstream_run(tmp_path)
+    invocation = saved["invocation"]
+    if problem == "missing":
+        invocation.pop("hydrology")
+    elif problem == "empty":
+        invocation["hydrology"] = {}
+    elif problem == "unknown_extra":
+        invocation["arbitrary"] = {"path": "/private/input.tif"}
+    elif problem == "unknown_report":
+        invocation["hydrology"]["other"] = invocation["hydrology"]["hydrology"]
+    elif problem == "mismatched_reference":
+        invocation["inputs"]["hydrology"]["effectiveSha256"] = "f" * 64
+    else:
+        invocation["hydrology"]["hydrology"]["unknown"] = True
+    with pytest.raises(ValidationError):
+        RunDocument.model_validate(saved)
+
+
+@pytest.mark.parametrize("extra", ["hydrology", "arbitrary"])
+def test_saved_invocation_rejects_extras_without_an_operation_contract(
+    extra: str,
+) -> None:
+    """An operation with no metadata contract cannot accept unknown persisted fields.
+
+    Args:
+        extra: Undeclared metadata field, including another operation's historical field.
+    """
+    _, invocation = build_model_calculation_request(
+        ModelRunRequest.model_validate(summary_request()),
+        ModelRegistry.load_installed(),
+    )
+    saved = invocation.model_dump(mode="json", by_alias=True)
+    saved[extra] = {}
+    with pytest.raises(ValidationError):
+        ModelInvocation.model_validate(saved)

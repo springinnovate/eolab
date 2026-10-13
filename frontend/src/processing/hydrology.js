@@ -1,16 +1,16 @@
-/** Validate the prepared-dataset metadata used by model setup and saved runs. */
+/** Read prepared-dataset metadata retained by historical model runs. */
 
-/** Capture the exact installed hydrology dataset without carrying its source files.
+/** Read the dataset identity captured by a historical model run.
  * @param {Object} snapshot Validated prepared hydrology report.
- * @return {{presetId:string,version:string,effectiveSha256:string}} Submission reference.
+ * @return {{presetId:string,version:string,effectiveSha256:string}} Saved dataset reference.
  */
 export function hydrologyReference(snapshot) {
     return {presetId: snapshot.definition.id, version: snapshot.definition.version, effectiveSha256: snapshot.effectiveSha256};
 }
 
-/** Identify an exact dataset revision in a choice list.
+/** Identify the dataset revision recorded in saved run metadata.
  * @param {Object} reference Prepared hydrology reference.
- * @return {string} Stable selection identity.
+ * @return {string} Stable saved dataset identity.
  */
 export function hydrologyKey(reference) {
     return JSON.stringify([reference.presetId, reference.version, reference.effectiveSha256]);
@@ -29,9 +29,9 @@ export function validateHydrologyReference(reference) {
     return reference;
 }
 
-/** Check the metadata displayed by setup without repeating server topology checks.
+/** Check historical hydrology metadata before displaying a saved run.
  * @param {Object} snapshot Prepared report returned by the server.
- * @return {Object} Report safe to display and select.
+ * @return {Object} Report safe to display.
  * @throws {Error} If required display fields or the dataset identity are malformed.
  */
 export function validatePreparedHydrology(snapshot) {

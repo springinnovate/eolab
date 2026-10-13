@@ -8,7 +8,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializeAsAny,
     ValidationError,
+    ValidationInfo,
     field_serializer,
     field_validator,
     model_validator,
@@ -51,14 +53,7 @@ class ModelInput(ModelSchema):
     the actual catalog dataset, published raster result or area.
     """
 
-    type: Literal[
-        "raster",
-        "catalog_raster",
-        "summary_area",
-        "clip_area",
-        "mask_source",
-        "prepared_hydrology",
-    ]
+    type: Name
     label: Label
 
 
@@ -165,18 +160,69 @@ class ParameterBinding(ModelSchema):
     parameter: Name
 
 
+class FixedInputBinding(ModelSchema):
+    """Supply an operation-owned input value directly from Model YAML.
+
+    The selected operation defines the schema for each argument that accepts a
+    fixed value. The model author supplies it once in the recipe.
+    """
+
+    value: SerializeAsAny[BaseModel]
+
+
 class ModelStep(ModelSchema):
     """A calculation in a model, naming the operation and its arguments.
 
     For example, a summary step runs ``raster.aggregate.v1`` with the model's
     raster and area inputs and its summary-formula parameter. The bindings map
-    those model inputs and parameters to the operation's argument names.
+    those model inputs and parameters to the operation's argument names. Fixed
+    bindings supply values validated by the operation's own input schemas.
     """
+
+    model_config = ConfigDict(revalidate_instances="always")
 
     id: Name
     operation: Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
-    inputs: Mapping[Name, InputBinding] = Field(max_length=16)
+    inputs: Mapping[Name, InputBinding | FixedInputBinding] = Field(max_length=16)
     parameters: Mapping[Name, ParameterBinding] = Field(max_length=32)
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def parse_fixed_inputs(cls, value: Any, info: ValidationInfo) -> Any:
+        """Validate fixed argument values with the selected operation's schemas.
+
+        Args:
+            value: Raw bindings or previously parsed input-binding instances.
+            info: Validated step fields, including its operation identifier.
+
+        Returns:
+            Bindings whose fixed values use the operation's registered models.
+
+        Raises:
+            ValueError: If a fixed argument is unsupported or its binding is malformed.
+            ValidationError: If a fixed value violates its operation-owned schema.
+        """
+        if not isinstance(value, Mapping):
+            return value
+        operation = OPERATIONS.get(info.data.get("operation"))
+        schemas = dict(operation.fixed_input_models) if operation else {}
+        bindings = {}
+        for name, binding in value.items():
+            if isinstance(binding, FixedInputBinding):
+                data = binding.model_dump(mode="json", by_alias=True)
+            else:
+                data = binding
+            if isinstance(data, Mapping) and "value" in data:
+                if set(data) != {"value"} or name not in schemas:
+                    raise ValueError("The operation does not support this fixed input")
+                fixed_value = data["value"]
+                if isinstance(fixed_value, BaseModel):
+                    fixed_value = fixed_value.model_dump(mode="json", by_alias=True)
+                binding = FixedInputBinding(
+                    value=schemas[name].model_validate(fixed_value)
+                )
+            bindings[name] = binding
+        return bindings
 
     @field_validator("inputs", "parameters", mode="after")
     @classmethod
@@ -201,7 +247,10 @@ class ModelStep(ModelSchema):
         Returns:
             A dictionary preserving the argument names and their references.
         """
-        return {key: item.model_dump(mode="json") for key, item in value.items()}
+        return {
+            key: item.model_dump(mode="json", by_alias=True)
+            for key, item in value.items()
+        }
 
 
 class ModelOutput(ModelSchema):
@@ -229,9 +278,9 @@ class ModelOutput(ModelSchema):
 class ModelDefinition(ModelSchema):
     """A reusable analysis recipe with inputs, parameters, a step and outputs.
 
-    The ID and version identify the recipe. Dataset selections and user-supplied
-    parameter values belong to individual runs. EOlab currently executes one
-    calculation step per recipe.
+    The ID and version identify the recipe. Fixed operation inputs belong to
+    its step bindings; user dataset selections and parameter values belong to
+    individual runs. EOlab currently executes one calculation step per recipe.
     """
 
     schema_version: Literal["eolab.model/v1"] = Field(alias="schema")
@@ -285,7 +334,11 @@ class ModelDefinition(ModelSchema):
                 output references an unknown step.
         """
         step = self.steps[0]
-        if any(item.input not in self.inputs for item in step.inputs.values()):
+        if any(
+            item.input not in self.inputs
+            for item in step.inputs.values()
+            if isinstance(item, InputBinding)
+        ):
             raise ValueError("Unknown input reference")
         if any(
             item.parameter not in self.parameters for item in step.parameters.values()
@@ -334,13 +387,23 @@ def validate_operation(definition: ModelDefinition) -> None:
         valid = (
             {
                 name: (
-                    "raster"
-                    if definition.inputs[item.input].type == "catalog_raster"
-                    else definition.inputs[item.input].type
+                    dict(contract.inputs).get(name)
+                    if isinstance(item, FixedInputBinding)
+                    else (
+                        "raster"
+                        if definition.inputs[item.input].type == "catalog_raster"
+                        else definition.inputs[item.input].type
+                    )
                 )
                 for name, item in step.inputs.items()
             }
             == dict(contract.inputs)
+            and all(
+                name in dict(contract.fixed_input_models)
+                for name, item in step.inputs.items()
+                if isinstance(item, FixedInputBinding)
+            )
+            and isinstance(step.inputs.get(contract.primary_input), InputBinding)
             and {
                 name: definition.parameters[item.parameter].type
                 for name, item in step.parameters.items()
@@ -350,7 +413,12 @@ def validate_operation(definition: ModelDefinition) -> None:
             and len(set(requested)) == len(requested)
             and "provenance" not in definition.outputs
             and definition.executionProfile == contract.execution_profile
-            and {item.input for item in step.inputs.values()} == set(definition.inputs)
+            and {
+                item.input
+                for item in step.inputs.values()
+                if isinstance(item, InputBinding)
+            }
+            == set(definition.inputs)
             and {item.parameter for item in step.parameters.values()}
             == set(definition.parameters)
             and all(

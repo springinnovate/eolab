@@ -1,6 +1,6 @@
 # Downstream ecosystem beneficiaries
 
-`downstream-beneficiaries` version **3.0.0** wraps the original
+`downstream-beneficiaries` version **4.0.0** wraps the original
 [WWF workflow at 3f577e27deb347cd4520977eb99474fb81e990fc](https://github.com/springinnovate/wwf_es_beneficiaries/tree/3f577e27deb347cd4520977eb99474fb81e990fc).
 Its source is packaged byte for byte. Processing calls the original partitioning,
 DEM preparation, flow routing, conditional coverage, stitching and population
@@ -16,12 +16,12 @@ The existing queue, progress, explicit cancellation, source authorization, sessi
 ownership, expiry and artifact publication still own the run. There is no new
 renderer, pixel reader or job scheduler.
 
-Open **Tools > Models** to choose the starting mask, prepared hydrology, values
-raster and parameters. See the [setup guide](model-library.md#set-up-downstream-analysis).
+Open **Tools > Models** to choose the starting mask, values raster and parameters.
+The installed Model YAML supplies the DEM and watershed layer. See the [setup guide](model-library.md#set-up-downstream-analysis).
 
 ## Inputs and results
 
-Choose prepared hydrology, one starting mask and a values raster. A raster mask
+Choose one starting mask and a values raster. A raster mask
 passes unchanged to the original conditional calculation with `value > 0`.
 Filtered vector features become one combined AOI and a binary mask on the chosen
 calculation grid. Paths and geometries stay private to the attempt.
@@ -164,11 +164,14 @@ actual native cancellation, worker recovery and large-grid planning coverage.
 
 ## Resilience configuration
 
-[resilience-hydrology.yaml](model-examples/resilience-hydrology.yaml) identifies the
-catalog DEM and watersheds. Configure `HYBAS_ID`, `NEXT_DOWN` and `NEXT_SINK`;
+The bundled [Model YAML](model-examples/downstream-beneficiaries.model.yaml)
+contains the Resilience catalog DEM and level-06 watershed references under
+`steps[0].inputs.hydrology.value`. It maps `HYBAS_ID`, `NEXT_DOWN` and `NEXT_SINK`;
 `ID` and `MAIN_BAS` do not participate in upstream calculations. See
-[prepared-hydrology.md](prepared-hydrology.md) for installation. This wrapper does
-not change that contract. Registration-only and both validation-report versions
-remain supported. Installation checks source metadata; each run checks the
-selected drainage and its DEM coverage, so unrelated basins outside a regional
-DEM do not prevent installation.
+[model hydrology configuration](prepared-hydrology.md) for deployment instructions.
+
+Each run opens the configured DEM and watershed layer and uses them in the
+original model. If a source is missing or unreadable, the run identifies the
+affected input. Processing manages catalog authorization, consistent inputs
+throughout the calculation, cancellation and result expiry. Saved Run YAML keeps
+the model configuration and historical records available for inspection.

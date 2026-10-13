@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AwareDatetime,
     BaseModel,
+    ConfigDict,
     Field,
     JsonValue,
     SerializeAsAny,
@@ -40,11 +41,6 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.downstream_models import StartingMask
-from eolab_app.processing.prepared_hydrology import (
-    HydrologyReference,
-    PreparedHydrologySnapshot,
-)
 from eolab_app.processing.model_result_contracts import ModelResult
 from eolab_app.processing.artifact_manifest import (
     FileId,
@@ -198,67 +194,61 @@ class ModelInvocation(ModelSchema):
     """The model recipe, inputs and effective parameter values saved for a run.
 
     Unlike a submission request, this includes the complete recipe and the
-    default values filled in when the run was accepted. Hydrology inputs also
-    retain the validated configuration and exact catalog source identities.
+    default values filled in when the run was accepted. Registered operations
+    validate their own additional input types and saved metadata fields.
     """
+
+    model_config = ConfigDict(extra="allow")
+    __pydantic_extra__: dict[str, JsonValue] = Field(init=False)
 
     model: CapturedModel
     inputs: dict[Name, JsonValue]
     parameters: dict[Name, JsonValue]
     label: Label
-    hydrology: dict[Name, PreparedHydrologySnapshot] = Field(
-        default_factory=dict, max_length=16, exclude_if=lambda value: not value
-    )
 
     @model_validator(mode="after")
     def check_bindings(self) -> "ModelInvocation":
         """Check the saved inputs and parameters against the saved model definition.
 
         Returns:
-            This invocation after validating its dataset, area and formula values.
+            This invocation after validating its inputs, formulas and operation metadata.
 
         Raises:
-            ValueError: If a saved input or parameter is missing, unknown or invalid.
+            ValueError: If a saved input, parameter or metadata field is missing,
+                unknown or invalid.
+            ProcessingError: If the recorded operation is unavailable.
         """
         definition = self.model.definition
         if set(self.inputs) != set(definition.inputs) or set(self.parameters) != set(
             definition.parameters
         ):
             raise ValueError("Captured bindings do not match the definition")
-        input_types = {
-            "raster": RasterSourceReference,
-            "catalog_raster": CatalogRasterRequest,
-            "clip_area": ClipModelArea,
-            "summary_area": SummaryArea,
-            "prepared_hydrology": HydrologyReference,
-            "mask_source": StartingMask,
+        operation = get_model_operation(definition.steps[0].operation)
+        adapters = {
+            "raster": TypeAdapter(RasterSourceReference),
+            "catalog_raster": TypeAdapter(CatalogRasterRequest),
+            "clip_area": TypeAdapter(ClipModelArea),
+            "summary_area": TypeAdapter(SummaryArea),
+            **dict(operation.input_adapters),
         }
-        hydrology_roles = {
-            name
-            for name, role in definition.inputs.items()
-            if role.type == "prepared_hydrology"
-        }
-        if set(self.hydrology) != hydrology_roles:
-            raise ValueError(
-                "Capture every selected hydrology configuration with its source identities"
-            )
         for name, role in definition.inputs.items():
-            if role.type not in input_types:
+            if role.type not in adapters:
                 raise ValueError("Unsupported captured input type")
-            selected_input = TypeAdapter(input_types[role.type]).validate_python(
-                self.inputs[name]
-            )
-            if (
-                name in hydrology_roles
-                and self.hydrology[name].reference != selected_input
-            ):
-                raise ValueError(
-                    "Captured hydrology does not match the selected configuration"
-                )
+            adapters[role.type].validate_python(self.inputs[name])
         for name, parameter in definition.parameters.items():
             type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
             )
+        extra = self.__pydantic_extra__ or {}
+        if operation.validate_invocation is not None:
+            extra = operation.validate_invocation(
+                {name: role.type for name, role in definition.inputs.items()},
+                self.inputs,
+                extra,
+            )
+        elif extra:
+            raise ValueError("The operation does not support extra invocation fields")
+        object.__setattr__(self, "__pydantic_extra__", extra)
         return self
 
 

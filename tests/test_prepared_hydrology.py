@@ -1,11 +1,12 @@
-"""Prepared hydrology uses real bounded source reads and path-free, versioned reports."""
+"""Current catalog hydrology sources and immutable historical Run YAML records."""
 
 import asyncio
-from dataclasses import replace
-from datetime import timedelta
-from itertools import count
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import fiona
 import numpy as np
@@ -22,28 +23,23 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
-from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.hydrology_validation import (
-    HydrologyValidationLimits,
-    validate_hydrology_sources,
-    validate_hydrology_process,
-    require_network_id,
-)
 from eolab_app.processing.prepared_hydrology import (
-    HydrologyReference,
+    HydrologyGrid,
+    HydrologyRegistration,
     PreparedHydrologyDefinition,
-    PreparedHydrologyRegistry,
     PreparedHydrologySnapshot,
 )
 from eolab_app.processing.model_yaml import (
-    encode_canonical_json,
+    compute_document_checksum,
     export_yaml,
     parse_yaml,
 )
+from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.service import ProcessingService
-from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.errors import RasterNotFoundError
+from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.routes.processing import create_processing_router
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
@@ -145,9 +141,34 @@ def prepare_sources(
             ),
         )
     )
-    document = parse_yaml(
-        Path("docs/model-examples/prepared-hydrology.yaml").read_bytes()
-    )
+    document = {
+        "schema": "eolab.hydrology/v1",
+        "id": "example-network",
+        "version": "1.0.0",
+        "title": "Small eastward drainage",
+        "description": "Three connected watersheds over a sloping DEM.",
+        "dem": {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-111111111111111111111111",
+        },
+        "watersheds": {
+            "collectionId": "eolab-mounted-vectors",
+            "itemId": "watersheds",
+        },
+        "topology": {
+            "idField": "id",
+            "downstreamField": "next",
+            "idType": "integer",
+            "terminal": {"field": "next", "value": 0},
+            "terminalIdField": "sink",
+        },
+        "terrain": {
+            "routing": "mfd",
+            "elevationUnit": "metre",
+            "conditioning": "Synthetic eastward slope without pits",
+            "datasetVersion": "fixture-v1",
+        },
+    }
     definition = PreparedHydrologyDefinition.model_validate(
         {**document, **(definition_changes or {})}
     )
@@ -159,888 +180,196 @@ def prepare_sources(
     )
 
 
-def test_registration_does_not_read_features_or_claim_network_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Register duplicate IDs without opening a feature stream or inventing counts.
+def legacy_snapshot(
+    definition: PreparedHydrologyDefinition,
+    dem: AuthorizedRaster,
+    watersheds: ResolvedCatalogSelection,
+) -> PreparedHydrologySnapshot:
+    """Construct a historical report fixture without production registration code.
 
     Args:
-        tmp_path: Isolated catalog sources and installed report.
-        monkeypatch: Forbid feature iteration through the native driver.
+        definition: Old configuration document retained in a saved run.
+        dem: Fixture elevation source.
+        watersheds: Fixture catalog vector source.
+
+    Returns:
+        Historical report with its original checksum contract.
     """
-    records = [
-        {"id": 1, "next": 0, "sink": 1, "geometry": mapping(box(0, 0, 2, 4))}
-    ] * 2
-    definition, dem, watersheds, _ = prepare_sources(tmp_path, records=records)
-    with pytest.raises(ValueError, match="Duplicate watershed ID"):
-        validate_hydrology_sources(
-            definition, dem, watersheds, HydrologyValidationLimits()
+    with rasterio.open(dem.source_path) as dataset:
+        grid = HydrologyGrid(
+            crs=dataset.crs.to_string(),
+            transform=tuple(dataset.transform)[:6],
+            width=dataset.width,
+            height=dataset.height,
+            dtype=dataset.dtypes[0],
         )
-
-    def reject_feature_read(*args: Any, **kwargs: Any) -> None:
-        """Fail if registration attempts any feature read.
-
-        Args:
-            args: Native driver positional arguments.
-            kwargs: Native driver keyword arguments.
-
-        Raises:
-            AssertionError: On every attempted feature read.
-        """
-        raise AssertionError("Registration must not iterate watershed features")
-
-    monkeypatch.setattr(fiona.Collection, "filter", reject_feature_read)
-    report = validate_hydrology_sources(
-        definition,
-        dem,
-        watersheds,
-        HydrologyValidationLimits(features=1, coordinates=1),
-        register_only=True,
+    report = PreparedHydrologySnapshot.model_construct(
+        definition=definition,
+        demSignature=compute_document_checksum(dem.source_signature.to_catalog()),
+        watershedSelection=watersheds.selection,
+        validation=HydrologyRegistration(
+            validator="eolab.hydrology-registration/v1",
+            validatedAt=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            grid=grid,
+        ),
+        effectiveSha256="0" * 64,
     )
-    document = report.model_dump(mode="json", by_alias=True)
-    assert report.validation.validator == "eolab.hydrology-registration/v1"
-    assert set(document["validation"]) == {
-        "validator",
-        "validatedAt",
-        "grid",
-        "demCellsChecked",
-    }
-    assert str(tmp_path) not in str(document)
-    assert (
-        PreparedHydrologySnapshot.model_validate(
-            parse_yaml(export_yaml(document, run=True), run=True)
-        )
-        == report
-    )
-    (tmp_path / "registered.hydrology.json").write_bytes(
-        encode_canonical_json(document)
-    )
-    assert PreparedHydrologyRegistry.load(tmp_path).get(report.reference) == report
-    document["validation"]["watershedCount"] = 2
-    with pytest.raises(ValidationError):
-        PreparedHydrologySnapshot.model_validate(document)
-    with watersheds.path.open("ab") as source:
-        source.write(b"changed")
-    with pytest.raises(SelectionUnavailableError):
-        validate_hydrology_sources(
-            definition, dem, watersheds, HydrologyValidationLimits(), register_only=True
-        )
-
-
-def test_connected_network_report_round_trips_without_paths_or_geometries(
-    tmp_path: Path,
-) -> None:
-    """Capture network validation and stable effective identity in a compact report.
-
-    Args:
-        tmp_path: Isolated native sources and installed reports.
-    """
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
-    )
-    assert report.validation.watershedCount == 3
-    assert report.validation.terminalCount == 1
-    assert report.validation.demCellsChecked == 0
-    assert report.validation.validator == "eolab.hydrology-validation/v2"
-    assert report.validation.grid.width == 6
-    document = report.model_dump(mode="json", by_alias=True)
-    assert str(tmp_path) not in str(document)
-    assert "coordinates" not in str(document)
-    assert (
-        PreparedHydrologySnapshot.model_validate(
-            parse_yaml(export_yaml(document, run=True), run=True)
-        )
-        == report
-    )
-    later = {
-        **document,
-        "validation": {
-            **document["validation"],
-            "validatedAt": report.validation.validatedAt + timedelta(seconds=1),
-        },
-    }
-    assert (
-        PreparedHydrologySnapshot.model_validate(later).effectiveSha256
-        == report.effectiveSha256
-    )
-    (tmp_path / "example.hydrology.json").write_bytes(encode_canonical_json(document))
-    assert PreparedHydrologyRegistry.load(tmp_path).get(report.reference) == report
-    assert PreparedHydrologyRegistry.load(None).list_configurations() == ()
-    with pytest.raises(ValueError, match="Duplicate"):
-        PreparedHydrologyRegistry((report, report))
-    with pytest.raises(ProcessingError, match="changed"):
-        PreparedHydrologyRegistry((report,)).get(
-            report.reference.model_copy(update={"effectiveSha256": "0" * 64})
-        )
-    changed = {
-        **document,
-        "definition": {**document["definition"], "title": "Edited after validation"},
-    }
-    with pytest.raises(ValidationError, match="checksum"):
-        PreparedHydrologySnapshot.model_validate(changed)
-
-
-@pytest.mark.parametrize(
-    "change,match",
-    [
-        ({"id": 1}, "Duplicate watershed"),
-        ({"next": 99}, "outside the configured network"),
-        ({"next": 1}, "cycle"),
-        ({"sink": 2}, "terminal drainage"),
-        ({"next": None}, "non-null integer"),
-    ],
-)
-def test_bad_networks_fail_before_any_model_runs(
-    tmp_path: Path, change: dict[str, Any], match: str
-) -> None:
-    """Reject malformed links and identifiers independently of terrain coverage.
-
-    Args:
-        tmp_path: Isolated native sources.
-        change: Invalid fields for the second partition.
-        match: Expected actionable failure.
-    """
-    records = [
+    return PreparedHydrologySnapshot.model_validate(
         {
-            "id": i,
-            "next": i + 1 if i < 3 else 0,
-            "sink": 3,
-            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
+            **report.model_dump(mode="json", by_alias=True),
+            "effectiveSha256": report.compute_effective_checksum(),
         }
-        for i in range(1, 4)
-    ]
-    records[1].update(change)
-    definition, dem, watersheds, _ = prepare_sources(tmp_path, records=records)
-    with pytest.raises(ValueError, match=match):
-        validate_hydrology_sources(
-            definition, dem, watersheds, HydrologyValidationLimits()
-        )
-
-
-@pytest.mark.parametrize("value", [-9999, float("nan"), float("inf")])
-def test_installation_defers_elevation_validity_to_runs(
-    tmp_path: Path, value: float
-) -> None:
-    """Allow installation without reading NoData or nonfinite elevation cells.
-
-    Args:
-        tmp_path: Isolated sources.
-        value: Invalid value in the last watershed, beyond the starting partition.
-    """
-    values = np.ones((4, 6))
-    values[2, 5] = value
-    definition, dem, watersheds, _ = prepare_sources(tmp_path, dem_values=values)
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
     )
-    assert report.validation.demCellsChecked == 0
 
 
 @pytest.mark.parametrize(
-    "limits,match",
+    "validator",
     [
-        (HydrologyValidationLimits(features=1), "feature budget"),
-        (HydrologyValidationLimits(coordinates=4), "retained-coordinate budget"),
+        "eolab.hydrology-registration/v1",
+        "eolab.hydrology-validation/v1",
+        "eolab.hydrology-validation/v2",
     ],
 )
-def test_native_validation_obeys_work_budgets(
-    tmp_path: Path, limits: HydrologyValidationLimits, match: str
+def test_historical_reports_keep_their_wire_checksum(
+    tmp_path: Path, validator: str
 ) -> None:
-    """Stop bounded work with an explicit diagnostic rather than partially validating data.
+    """Read saved registration and validation records without migrating their bytes.
 
     Args:
-        tmp_path: Isolated sources.
-        limits: One deliberately exhausted work budget.
-        match: Expected budget diagnostic.
+        tmp_path: Isolated original source fixtures.
+        validator: Historical report schema retained in a saved Run YAML.
     """
     definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    with pytest.raises(ValueError, match=match):
-        validate_hydrology_sources(definition, dem, watersheds, limits)
-
-
-@pytest.mark.parametrize("register_only", [False, True])
-def test_missing_fields_and_changed_sources_are_rejected(
-    tmp_path: Path, register_only: bool
-) -> None:
-    """Catalog signatures and exact field names remain required independently of rendering.
-
-    Args:
-        tmp_path: Isolated native sources.
-        register_only: Whether to omit the full-network scan.
-    """
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    missing = definition.model_copy(
-        update={
-            "topology": definition.topology.model_copy(update={"idField": "absent"})
-        }
-    )
-    with pytest.raises(ValueError, match="attribute field is missing"):
-        validate_hydrology_sources(
-            missing,
-            dem,
-            watersheds,
-            HydrologyValidationLimits(),
-            register_only=register_only,
-        )
-    with dem.source_path.open("ab") as source:
-        source.write(b"changed")
-    with pytest.raises(SelectionUnavailableError, match="DEM changed"):
-        validate_hydrology_sources(
-            definition,
-            dem,
-            watersheds,
-            HydrologyValidationLimits(),
-            register_only=register_only,
-        )
-
-
-@pytest.mark.parametrize("register_only", [False, True])
-def test_metadata_routes_reauthorize_sources_without_viewer_or_geoserver(
-    tmp_path: Path,
-    register_only: bool,
-) -> None:
-    """Discover reports and reject stale selection through real Processing HTTP routes.
-
-    Args:
-        tmp_path: Isolated source datasets.
-        register_only: Whether installation only registered metadata.
-    """
-    definition, dem, watersheds, reader = prepare_sources(tmp_path)
-    report = validate_hydrology_sources(
-        definition,
-        dem,
-        watersheds,
-        HydrologyValidationLimits(),
-        register_only=register_only,
-    )
-
-    class DemAuthority:
-        """Supply the catalog-authorized fixture DEM without a rendering service."""
-
-        available: bool = True
-
-        async def authorize(self, request: Any) -> AuthorizedRaster:
-            """Resolve only the fixture catalog identity.
-
-            Args:
-                request: DEM catalog identity.
-
-            Returns:
-                The originally authorized immutable source.
-
-            Raises:
-                RasterNotFoundError: When the catalog no longer authorizes this source.
-            """
-            assert request == definition.dem
-            if not self.available:
-                raise RasterNotFoundError(
-                    "The prepared DEM is no longer in the catalog."
-                )
-            return dem
-
-    authority = DemAuthority()
-    service = ProcessingService(
-        object(),
-        object(),
-        model_authorizer=authority,
-        hydrology_registry=PreparedHydrologyRegistry((report,)),
-        hydrology_selections=reader,
-    )
-    app = FastAPI()
-    app.include_router(create_processing_router(service))
-    with TestClient(app) as client:
-        response = client.get("/api/processing/prepared-hydrology")
-        assert response.status_code == 200
-        assert (
-            response.json()["configurations"][0]["effectiveSha256"]
-            == report.effectiveSha256
-        )
-        reference = report.reference.model_dump()
-        response = client.post(
-            "/api/processing/prepared-hydrology/resolve", json=reference
-        )
-        assert response.status_code == 403
-        response = client.post(
-            "/api/processing/prepared-hydrology/resolve",
-            json=reference,
-            headers={"X-EOLab-Processing": "1"},
-        )
-        assert response.status_code == 200, response.text
-        assert response.headers["cache-control"] == "private, no-store"
-        assert str(tmp_path) not in response.text
-        authority.available = False
-        response = client.post(
-            "/api/processing/prepared-hydrology/resolve",
-            json=reference,
-            headers={"X-EOLab-Processing": "1"},
-        )
-        assert response.status_code == 404
-        authority.available = True
-        with dem.source_path.open("ab") as source:
-            source.write(b"changed")
-        response = client.post(
-            "/api/processing/prepared-hydrology/resolve",
-            json=reference,
-            headers={"X-EOLab-Processing": "1"},
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"]["code"] == "hydrology_changed"
-
-
-def test_native_process_returns_the_same_report(tmp_path: Path) -> None:
-    """Use the existing native supervisor for successful administrator validation.
-
-    Args:
-        tmp_path: Isolated native sources.
-    """
-    from eolab_app.execution.reusable_process import ReusableProcess
-
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-
-    async def run() -> dict[str, Any]:
-        """Validate and reclaim the native process before returning its report.
-
-        Returns:
-            Successful native validation response.
-        """
-        process = ReusableProcess(
-            (validate_hydrology_process,), address_space_bytes=2 * 1024**3
-        )
-        try:
-            success, result = await process.run(
-                validate_hydrology_process,
-                (definition, dem, watersheds, HydrologyValidationLimits()),
-                30,
-            )
-            assert success, result
-            return result
-        finally:
-            await process.close()
-
-    report = PreparedHydrologySnapshot.model_validate(asyncio.run(run()))
-    assert report.validation.demCellsChecked == 0
-    assert report.validation.validator == "eolab.hydrology-validation/v2"
-
-
-@pytest.mark.parametrize("register_only", [False, True])
-def test_installation_never_reads_dem_pixels(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, register_only: bool
-) -> None:
-    """Inspect real DEM metadata while rejecting any attempt to read pixel data.
-
-    Args:
-        tmp_path: Isolated source datasets.
-        monkeypatch: Replace the Rasterio reader with a metadata-only reader.
-        register_only: Whether installation omits watershed features as well.
-    """
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-
-    class MetadataOnlyReader(rasterio.io.DatasetReader):
-        """Expose the real raster metadata while forbidding elevation and mask reads."""
-
-        def read(self, *args: Any, **kwargs: Any) -> None:
-            """Reject a pixel read during installation.
-
-            Args:
-                args: Rasterio positional read arguments.
-                kwargs: Rasterio keyword read arguments.
-
-            Raises:
-                AssertionError: On every attempted pixel read.
-            """
-            raise AssertionError("Installation must not read DEM pixels")
-
-        def read_masks(self, *args: Any, **kwargs: Any) -> None:
-            """Reject a validity-mask read during installation.
-
-            Args:
-                args: Rasterio positional read arguments.
-                kwargs: Rasterio keyword read arguments.
-
-            Raises:
-                AssertionError: On every attempted mask read.
-            """
-            raise AssertionError("Installation must not read DEM validity masks")
-
-    monkeypatch.setattr(rasterio, "open", MetadataOnlyReader)
-    report = validate_hydrology_sources(
-        definition,
-        dem,
-        watersheds,
-        HydrologyValidationLimits(),
-        register_only=register_only,
-    )
-    assert report.validation.demCellsChecked == 0
-
-
-def test_legacy_coverage_reports_keep_their_checksum(tmp_path: Path) -> None:
-    """Keep installed version 1 reports and saved Run YAML readable without migration.
-
-    Args:
-        tmp_path: Isolated original sources and legacy report file.
-    """
-    from eolab_app.processing.model_yaml import compute_document_checksum
-
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
-    )
+    report = legacy_snapshot(definition, dem, watersheds)
     document = report.model_dump(mode="json", by_alias=True)
-    document["validation"].update(
-        validator="eolab.hydrology-validation/v1", demCellsChecked=24
-    )
-    # Compute the original wire checksum without using the updated model serializer.
+    if "validation" in validator:
+        document["validation"].update(
+            validator=validator,
+            watershedCount=3,
+            terminalCount=1,
+            demCellsChecked=24 if validator.endswith("v1") else 0,
+            bounds={"west": 0.0, "south": 0.0, "east": 6.0, "north": 4.0},
+        )
     payload = {
         key: value for key, value in document.items() if key != "effectiveSha256"
     }
     payload["validation"] = {
         key: value
-        for key, value in document["validation"].items()
+        for key, value in payload["validation"].items()
         if key != "validatedAt"
     }
     document["effectiveSha256"] = compute_document_checksum(payload)
-    (tmp_path / "legacy.hydrology.json").write_bytes(encode_canonical_json(document))
-    restored = PreparedHydrologyRegistry.load(tmp_path).list_configurations()[0]
-    assert restored.model_dump(mode="json", by_alias=True) == document
-    for validator, cells in (("v1", 0), ("v2", 24)):
-        document["validation"].update(
-            validator=f"eolab.hydrology-validation/{validator}", demCellsChecked=cells
-        )
-        with pytest.raises(ValidationError, match="validator scope"):
-            PreparedHydrologySnapshot.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    "value,id_type",
-    [
-        (1.0, "integer"),
-        (True, "integer"),
-        ("1", "integer"),
-        (1, "string"),
-        ("", "string"),
-        (None, "string"),
-    ],
-)
-def test_identifiers_are_not_coerced(value: Any, id_type: str) -> None:
-    """Reject mixed ID types instead of creating ambiguous or rounded graph links.
-
-    Args:
-        value: Source value that violates the declared convention.
-        id_type: Configured ID convention.
-    """
-    with pytest.raises(ValueError, match="watershed IDs"):
-        require_network_id(value, id_type, "watershed_id")
-    assert require_network_id("0001", "string", "watershed_id") == "0001"
-    assert require_network_id(0, "integer", "watershed_id") == 0
-
-
-def test_installation_defers_spatial_gaps_to_selected_runs(tmp_path: Path) -> None:
-    """Validate network links without claiming spatial coverage for any run.
-
-    Args:
-        tmp_path: Isolated source datasets.
-    """
-    records = [
-        {"id": 1, "next": 2, "sink": 2, "geometry": mapping(box(0, 0, 0.6, 4))},
-        {"id": 2, "next": 0, "sink": 2, "geometry": mapping(box(2.4, 0, 4, 4))},
-    ]
-    definition, dem, watersheds, _ = prepare_sources(tmp_path, records=records)
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
+    restored = PreparedHydrologySnapshot.model_validate(
+        parse_yaml(export_yaml(document, run=True), run=True)
     )
-    assert report.validation.watershedCount == 2
+    assert restored.model_dump(mode="json", by_alias=True) == document
+    document["demSignature"] = "f" * 64
+    with pytest.raises(ValidationError, match="checksum"):
+        PreparedHydrologySnapshot.model_validate(document)
 
 
-def test_zero_and_negative_elevations_and_multiple_drainages_are_valid(
+def test_current_watershed_resolution_does_not_use_historical_signature(
     tmp_path: Path,
 ) -> None:
-    """Accept multiple complete drainage graphs regardless of elevation values.
+    """A new run accepts current sources while an active run keeps its own identity.
 
     Args:
-        tmp_path: Isolated sources.
+        tmp_path: Isolated catalog vector and elevation fixtures.
     """
-    records = [
-        {
-            "id": i,
-            "next": 0,
-            "sink": i,
-            "geometry": mapping(box((i - 1) * 2, 0, i * 2, 4)),
-        }
-        for i in range(1, 4)
-    ]
-    definition, dem, watersheds, _ = prepare_sources(
-        tmp_path, records=records, dem_values=np.tile([-3, -2, -1, 0, 1, 2], (4, 1))
-    )
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
-    )
-    assert report.validation.terminalCount == 3
-    assert report.validation.demCellsChecked == 0
-    assert report.validation.validator == "eolab.hydrology-validation/v2"
-
-
-def test_missing_crs_and_wrong_terminal_mapping_fail(tmp_path: Path) -> None:
-    """Explain unsupported source georeferencing and inconsistent stop rules.
-
-    Args:
-        tmp_path: Isolated sources.
-    """
-    definition, dem, watersheds, _ = prepare_sources(tmp_path / "missing-crs", crs=None)
-    with pytest.raises(ValueError, match="valid source CRS"):
-        validate_hydrology_sources(
-            definition, dem, watersheds, HydrologyValidationLimits()
-        )
-    definition, dem, watersheds, _ = prepare_sources(tmp_path / "bad-stop")
-    document = definition.model_dump(mode="json", by_alias=True)
-    document["topology"]["terminal"] = {"field": "sink", "value": 3}
-    with pytest.raises(ValueError, match="still links to another watershed"):
-        validate_hydrology_sources(
-            PreparedHydrologyDefinition.model_validate(document),
-            dem,
-            watersheds,
-            HydrologyValidationLimits(),
-        )
-
-
-@pytest.mark.parametrize("register_only", [False, True])
-def test_captured_model_run_retains_exact_hydrology_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, register_only: bool
-) -> None:
-    """A registered input capability captures reports in the existing Run YAML contract.
-
-    Args:
-        tmp_path: Isolated native sources.
-        monkeypatch: Temporary trusted operation registration to exercise the input contract.
-        register_only: Whether the captured evidence is registration or full validation.
-    """
-    from datetime import datetime, timezone
-    from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
-    from eolab_app.processing.model_run_contracts import (
-        ModelRunRequest,
-        ModelInvocation,
-        RunDocument,
-    )
-    from eolab_app.processing.model_runs import (
-        build_model_calculation_request,
-        build_model_job_submission,
-    )
-    import eolab_app.processing.model_operations as operations
-    import eolab_app.processing.model_definitions as definitions
-    from unittest.mock import AsyncMock, Mock
-    from eolab_app.processing.ports import JobStore, JobArtifactStore
-    from eolab_app.raster.ports import RasterSourceAuthorizer
-
     definition, dem, watersheds, reader = prepare_sources(tmp_path)
-    snapshot = validate_hydrology_sources(
-        definition,
-        dem,
-        watersheds,
-        HydrologyValidationLimits(),
-        register_only=register_only,
-    )
-    operation = operations.get_model_operation("raster.aggregate.v1")
-    recipe = ModelRegistry.load_installed().get("raster-summary", "1.1.0").to_document()
-    registry = {
-        **operations.OPERATIONS,
-        operation.id: replace(
-            operation, inputs=(*operation.inputs, ("hydrology", "prepared_hydrology"))
-        ),
-    }
-    monkeypatch.setattr(operations, "OPERATIONS", registry)
-    monkeypatch.setattr(definitions, "OPERATIONS", registry)
-    recipe["inputs"]["terrain"] = {
-        "type": "prepared_hydrology",
-        "label": "Terrain and watersheds",
-    }
-    recipe["steps"][0]["inputs"]["hydrology"] = {"input": "terrain"}
-    model = ModelDefinition.model_validate(recipe)
-    request = ModelRunRequest(
-        requestId="a" * 32,
-        model={
-            "id": model.id,
-            "version": model.version,
-            "definitionSha256": model.digest,
-        },
-        inputs={
-            "raster": definition.dem.model_dump(by_alias=True),
-            "area": {"kind": "wholeRaster"},
-            "terrain": snapshot.reference.model_dump(),
-        },
-        label="Example hydrology capture",
-    )
-    installed = ModelRegistry((model,))
-    with pytest.raises(ProcessingError, match="invalid"):
-        build_model_calculation_request(request, installed)
-    calculation, invocation = build_model_calculation_request(
-        request, installed, hydrology={"terrain": snapshot}
-    )
-    plan = build_model_job_submission(
-        operation.queue(calculation, None),
-        invocation,
-        tuple(dem.source_signature.to_catalog()),
-    )
-    jobs = Mock(spec=JobStore)
-    jobs.find_request.return_value = None
-    now = datetime.now(timezone.utc)
-    row = {
-        "id": "b" * 32,
-        "operation": "model.run.v1",
-        "status": "queued",
-        "summary": plan.summary,
-        "progress": {},
-        "error": None,
-        "created_at": now,
-        "updated_at": now,
-        "expires_at": now + timedelta(days=1),
-    }
-    jobs.submit.return_value = row
-    authorizer = Mock(spec=RasterSourceAuthorizer)
-    authorizer.authorize = AsyncMock(return_value=dem)
-    service = ProcessingService(
-        jobs,
-        Mock(spec=JobArtifactStore),
-        model_registry=installed,
-        model_authorizer=authorizer,
-        hydrology_registry=PreparedHydrologyRegistry((snapshot,)),
-        hydrology_selections=reader,
-    )
-    submitted = asyncio.run(service.submit_model_run("owner", request))
-    assert submitted["jobId"] == row["id"]
-    _, _, admitted, request_hash = jobs.submit.call_args.args
-    assert admitted.retained_metadata == plan.retained_metadata
-    plan = admitted
-    # An unchanged retry returns the accepted run even after this dataset is removed.
-    row["request_hash"] = request_hash
-    jobs.find_request.return_value = row
-    service.hydrology_registry = PreparedHydrologyRegistry()
-    assert asyncio.run(service.submit_model_run("owner", request)) == submitted
-    jobs.submit.assert_called_once()
-    jobs.find_request.return_value = None
-    with pytest.raises(ProcessingError, match="not installed"):
-        asyncio.run(service.submit_model_run("owner", request))
-    jobs.submit.assert_called_once()
-    document = RunDocument.model_validate(
-        {
-            "schema": "eolab.run/v1",
-            "jobId": "a" * 32,
-            "capturedAt": datetime.now(timezone.utc),
-            **plan.retained_metadata,
+    old_report = legacy_snapshot(definition, dem, watersheds)
+    path = tmp_path / "watersheds.gpkg"
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    current = asyncio.run(reader.resolve_source(definition.watersheds))
+    assert current.selection != old_report.watershedSelection
+    assert not current.selection.filter.active
+    with pytest.raises(SelectionUnavailableError):
+        asyncio.run(reader.resolve_for_sampling(old_report.watershedSelection))
+    assert asyncio.run(reader.resolve_for_sampling(current.selection)) == current
+
+
+def test_model_discovery_needs_no_registration_or_source_access() -> None:
+    """Expose configured model inputs without any dataset eligibility endpoint."""
+    app = FastAPI()
+    app.include_router(create_processing_router(ProcessingService(object(), object())))
+    with TestClient(app) as client:
+        response = client.get("/api/processing/models")
+        assert response.status_code == 200
+        model = next(
+            item
+            for item in response.json()["models"]
+            if item["id"] == "downstream-beneficiaries"
+        )
+        assert set(model["inputs"]) == {"starting_mask", "values"}
+        assert set(model["steps"][0]["inputs"]["hydrology"]["value"]) == {
+            "dem",
+            "watersheds",
+            "topology",
         }
-    )
-    restored = RunDocument.model_validate(
-        parse_yaml(
-            export_yaml(document.model_dump(mode="json", by_alias=True), run=True),
-            run=True,
+        assert client.get("/api/processing/prepared-hydrology").status_code == 404
+        assert not any(
+            "prepared-hydrology" in path
+            for path in client.get("/openapi.json").json()["paths"]
         )
-    )
-    assert restored.invocation.hydrology["terrain"] == snapshot
-    assert str(tmp_path) not in str(restored.model_dump())
-    bad = invocation.model_dump(mode="json", by_alias=True)
-    bad["inputs"]["terrain"]["effectiveSha256"] = "0" * 64
-    with pytest.raises(ValidationError, match="does not match"):
-        ModelInvocation.model_validate(bad)
 
 
-def validate_hydrology_with_slow_reader_clock(
-    writer: ProcessResultWriter,
-    definition: PreparedHydrologyDefinition,
-    dem: AuthorizedRaster,
-    watersheds: ResolvedCatalogSelection,
-    limits: HydrologyValidationLimits,
-    register_only: bool = False,
+def test_missing_configured_dem_names_the_unavailable_model_input(
+    tmp_path: Path,
 ) -> None:
-    """Exercise real native validation with eight simulated seconds per watershed.
+    """Report the missing configured DEM when a user starts the model without a report.
 
     Args:
-        writer: Supervisor result channel from the real CLI process.
-        definition: Administrator configuration resolved by the CLI.
-        dem: Authorized original terrain source.
-        watersheds: Authorized complete watershed network.
-        limits: Administrator budgets passed across the native-process boundary.
-        register_only: Whether to register metadata without advancing the slow reader.
+        tmp_path: Mounted raster fixture used by the allowed user-selected inputs.
     """
-    import eolab_app.bounded_vector as reader
+    _, authorized, _, _ = prepare_sources(tmp_path)
+    registry = ModelRegistry.load_installed()
+    model = registry.get("downstream-beneficiaries", "4.0.0")
+    configured_dem = model.steps[0].inputs["hydrology"].value.dem
+    user_raster = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": "geotiff-" + "2" * 24,
+    }
 
-    original_clock = reader.monotonic
-    ticks = count(step=8.0)
-    reader.monotonic = lambda: next(ticks)
-    try:
-        validate_hydrology_process(
-            writer, definition, dem, watersheds, limits, register_only
-        )
-    finally:
-        reader.monotonic = original_clock
-
-
-def test_administrator_command_uses_catalog_sources_and_atomic_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Pass CLI time budgets into native reads and install only complete reports.
-
-    Args:
-        tmp_path: Isolated original sources, YAML and report.
-        monkeypatch: Replace catalog HTTP and the native reader's elapsed-time clock.
-    """
-    import argparse
-    import httpx2
-    from eolab_app.catalog.geotiff import build_stac_item
-    from eolab_app.catalog.geopackage import build_stac_items
-    from eolab_app.hydrology_cli import validate_configuration
-
-    monkeypatch.setattr(
-        "eolab_app.processing.hydrology_validation.validate_hydrology_process",
-        validate_hydrology_with_slow_reader_clock,
-    )
-
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    raster_item = build_stac_item(tmp_path, dem.source_path)
-    (vector_item,) = build_stac_items(tmp_path, watersheds.path)
-    document = definition.model_dump(mode="json", by_alias=True)
-    document["dem"]["itemId"] = raster_item["id"]
-    document["watersheds"]["itemId"] = vector_item["id"]
-    configuration = tmp_path / "configuration.yaml"
-    configuration.write_bytes(export_yaml(document))
-    items = {raster_item["id"]: raster_item, vector_item["id"]: vector_item}
-    client_type = httpx2.AsyncClient
-
-    def catalog(request: httpx2.Request) -> httpx2.Response:
-        """Return scanner-owned metadata for the exact requested fixture Item.
+    async def authorize(source: CatalogRasterRequest) -> AuthorizedRaster:
+        """Allow the selected raster and report a missing model-configured DEM.
 
         Args:
-            request: STAC lookup from production catalog adapters.
+            source: Catalog identity requested by model submission.
 
         Returns:
-            The real scanned fixture Item or a missing-item response.
+            The readable fixture for the user-selected raster.
+
+        Raises:
+            RasterNotFoundError: If submission opens the configured DEM.
         """
-        item = items.get(request.url.path.rsplit("/", 1)[-1])
-        return httpx2.Response(200, json=item) if item else httpx2.Response(404)
+        if source == configured_dem:
+            raise RasterNotFoundError("The catalog raster could not be found.")
+        return authorized
 
-    monkeypatch.setattr(
-        httpx2,
-        "AsyncClient",
-        lambda **kwargs: client_type(transport=httpx2.MockTransport(catalog), **kwargs),
+    jobs = SimpleNamespace(find_request=Mock(return_value=None), submit=Mock())
+    authorizer = SimpleNamespace(authorize=AsyncMock(side_effect=authorize))
+    service = ProcessingService(
+        jobs, object(), model_registry=registry, model_authorizer=authorizer
     )
-    output = tmp_path / "example.hydrology.json"
-    args = argparse.Namespace(
-        configuration=configuration,
-        output=output,
-        catalog_url="http://catalog",
-        scan_mount=tmp_path,
-        max_features=100,
-        max_coordinates=10000,
-        memory_mib=2048,
-        timeout_seconds=30,
-        register_only=False,
+    request = ModelRunRequest.model_validate(
+        {
+            "requestId": "b" * 32,
+            "model": {
+                "id": model.id,
+                "version": model.version,
+                "definitionSha256": model.digest,
+            },
+            "inputs": {
+                "starting_mask": {"kind": "catalogRaster", "source": user_raster},
+                "values": user_raster,
+            },
+            "parameters": {},
+            "label": "Missing DEM",
+        }
     )
-    asyncio.run(validate_configuration(args))
-    original = output.read_bytes()
-    report = PreparedHydrologyRegistry.load(tmp_path).list_configurations()[0]
-    assert report.validation.watershedCount == 3
-    args.max_features = 1
-    with pytest.raises(ValueError, match="feature budget"):
-        asyncio.run(validate_configuration(args))
-    assert output.read_bytes() == original
-    assert str(tmp_path) not in original.decode()
-    args.max_features = 100
-    args.timeout_seconds = 15
-    with pytest.raises(ValueError, match="15-second time budget"):
-        asyncio.run(validate_configuration(args))
-    assert output.read_bytes() == original
-    args.register_only = True
-    args.max_features = 1
-    asyncio.run(validate_configuration(args))
-    registration = output.read_bytes()
-    report = PreparedHydrologyRegistry.load(tmp_path).list_configurations()[0]
-    assert report.validation.validator == "eolab.hydrology-registration/v1"
-    assert "watershedCount" not in report.validation.model_dump()
-    document["topology"]["idField"] = "missing"
-    configuration.write_bytes(export_yaml(document))
-    with pytest.raises(ValueError, match="attribute field is missing"):
-        asyncio.run(validate_configuration(args))
-    assert output.read_bytes() == registration
-
-
-@pytest.mark.parametrize("register_only", [False, True])
-def test_hydrology_configuration_settings_are_optional_and_reports_fail_closed(
-    configured_environment: None,
-    version_file_path: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    register_only: bool,
-) -> None:
-    """Load reports through real application composition and diagnose bad administrator settings.
-
-    Args:
-        configured_environment: Valid baseline application environment.
-        version_file_path: Isolated build version fixture.
-        tmp_path: Configuration directory and real native source fixtures.
-        monkeypatch: Explicit optional deployment setting.
-        register_only: Exercise metadata registration as well as network validation.
-    """
-    from eolab_app.main import create_app
-    from eolab_app.settings import load_settings
-
-    monkeypatch.delenv("PREPARED_HYDROLOGY_DIRECTORY", raising=False)
-    assert load_settings(version_file_path).prepared_hydrology_directory is None
-    monkeypatch.setenv("PREPARED_HYDROLOGY_DIRECTORY", "relative/directory")
-    with pytest.raises(ValueError, match="absolute path"):
-        load_settings(version_file_path)
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    snapshot = validate_hydrology_sources(
-        definition,
-        dem,
-        watersheds,
-        HydrologyValidationLimits(),
-        register_only=register_only,
-    )
-    report_path = tmp_path / "example.hydrology.json"
-    report_path.write_bytes(
-        encode_canonical_json(snapshot.model_dump(mode="json", by_alias=True))
-    )
-    monkeypatch.setenv("PREPARED_HYDROLOGY_DIRECTORY", str(tmp_path))
-    application = create_app(version_file_path)
-    if register_only:
-        assert snapshot.validation.validator == "eolab.hydrology-registration/v1"
-        assert "watershedCount" not in snapshot.validation.model_dump()
-    # No lifespan or database is required to discover installed metadata.
-    client = TestClient(application)
-    assert (
-        client.get("/api/processing/prepared-hydrology").json()["configurations"][0][
-            "effectiveSha256"
-        ]
-        == snapshot.effectiveSha256
-    )
-    report_path.write_text('{"invalid": true}', encoding="utf-8")
-    with pytest.raises(ValidationError):
-        create_app(version_file_path)
-
-
-def test_installation_accepts_internal_masks_but_rejects_source_replacement(
-    tmp_path: Path,
-) -> None:
-    """Defer embedded elevation validity while preserving original vector identity.
-
-    Args:
-        tmp_path: Isolated native datasets.
-    """
-    definition, dem, watersheds, reader = prepare_sources(tmp_path)
-    snapshot = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
-    )
-    with (
-        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
-        rasterio.open(dem.source_path, "r+") as dataset,
-    ):
-        validity = np.full((4, 6), 255, dtype="uint8")
-        validity[1, 4] = 0
-        dataset.write_mask(validity)
-    dem = replace(dem, source_signature=RasterSourceIdentity.read(dem.source_path))
-    report = validate_hydrology_sources(
-        definition, dem, watersheds, HydrologyValidationLimits()
-    )
-    assert report.validation.demCellsChecked == 0
-    with watersheds.path.open("ab") as dataset:
-        dataset.write(b"changed")
-    with pytest.raises(SelectionUnavailableError, match="identity changed"):
-        asyncio.run(reader.resolve_for_sampling(snapshot.watershedSelection))
+    with pytest.raises(ProcessingError, match="dem input is unavailable") as failure:
+        asyncio.run(service.submit_model_run("owner", request))
+    assert failure.value.code == "source_unavailable"
+    assert "catalog raster could not be found" in failure.value.detail
+    jobs.submit.assert_not_called()

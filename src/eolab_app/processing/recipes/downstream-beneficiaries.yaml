@@ -1,6 +1,6 @@
 schema: eolab.model/v1
 id: downstream-beneficiaries
-version: "3.0.0"
+version: "4.0.0"
 title: Downstream ecosystem beneficiaries
 description: >-
   Run the original WWF downstream model from one combined starting mask.
@@ -11,9 +11,6 @@ inputs:
   starting_mask:
     type: mask_source
     label: Starting mask
-  hydrology:
-    type: prepared_hydrology
-    label: Prepared hydrology
   values:
     type: raster
     label: Values to summarize
@@ -53,7 +50,22 @@ steps:
     operation: hydrology.downstream_beneficiaries.v1
     inputs:
       starting_mask: {input: starting_mask}
-      hydrology: {input: hydrology}
+      hydrology:
+        value:
+          dem:
+            collectionId: eolab-mounted-geotiffs
+            itemId: geotiff-ee81a7caa68b3a9a23c7540a
+          watersheds:
+            collectionId: eolab-mounted-vectors
+            itemId: geopackage-86eb43d6b974d6a05d8cc30d
+          topology:
+            idField: HYBAS_ID
+            downstreamField: NEXT_DOWN
+            idType: integer
+            terminal:
+              field: NEXT_SINK
+              equalsField: HYBAS_ID
+            terminalIdField: NEXT_SINK
       values: {input: values}
     parameters:
       buffer_m: {parameter: buffer_m}

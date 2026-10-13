@@ -423,33 +423,6 @@ export class ProcessingApiClient {
         return response.models.map(validateAvailableModel);
     }
 
-    /** List administrator-prepared terrain and watershed datasets for model setup.
-     * @param {AbortSignal} [signal] Cancel an obsolete setup request.
-     * @return {Promise<Object[]>} Installed reports; source availability is checked on selection.
-     * @throws {ProcessingRequestError|Error} If discovery fails or metadata is malformed.
-     */
-    async discoverPreparedHydrology(signal) {
-        await this.ensureSession();
-        const response = await this.request("/prepared-hydrology", "GET", undefined, signal);
-        if (!Array.isArray(response.configurations)) throw new Error("Invalid prepared hydrology library.");
-        return response.configurations.map(validatePreparedHydrology);
-    }
-
-    /** Recheck access and source revisions for the dataset chosen in setup.
-     * @param {Object} reference Exact dataset ID, version and checksum.
-     * @param {AbortSignal} [signal] Cancel a superseded selection.
-     * @return {Promise<Object>} Checked prepared report.
-     * @throws {ProcessingRequestError|Error} If sources changed, access fails, or the reply differs from the selection.
-     */
-    async resolvePreparedHydrology(reference, signal) {
-        validateHydrologyReference(reference);
-        await this.ensureSession();
-        const snapshot = validatePreparedHydrology(await this.request("/prepared-hydrology/resolve", "POST", reference, signal));
-        if (hydrologyKey(hydrologyReference(snapshot)) !== hydrologyKey(reference))
-            throw new Error("The prepared hydrology dataset changed. Choose it again.");
-        return snapshot;
-    }
-
     /** Read a page of this browser session's model history.
      * @param {string|null} [cursor=null] Continuation returned by the preceding page.
      * @return {Promise<{jobs:Object[],nextCursor:string|null}>} Runs and the next page token.

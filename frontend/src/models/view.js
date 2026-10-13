@@ -3,7 +3,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { renderModelResult, renderModelFiles, updateModelFileActions } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
-import { HydrologyInputView, hydrologyDetails } from "./hydrology-view.js";
+import { hydrologyDetails } from "./hydrology-view.js";
 
 /** Show the creation time in the timezone captured when this run was started.
  * @param {Object} job Model run with its fixed naming timestamp.
@@ -150,9 +150,6 @@ export class ModelsView {
         fields.append(this.field("models-run-label", "Run name", label));
         const nameHelp = this.element("p", "The start date and time are added automatically to this name and its output files.", "models-help");
         nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
-        const hydrologyInput = Object.values(draft.model.inputs).find(input => input.type === "prepared_hydrology");
-        const hydrology = hydrologyInput ? new HydrologyInputView(this, hydrologyInput.label) : null;
-        if (hydrology) fields.append(hydrology.root);
         const source = this.element("select"); source.required = true;
         source.addEventListener("change", () => this.handlers.onEdit({raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
             sourceReason: "Choose a raster from Map layers."}));
@@ -213,7 +210,7 @@ export class ModelsView {
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
             parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus, resultActions, refreshResults, olderResults,
-            hydrology, maskGroup, maskRaster};
+            maskGroup, maskRaster};
     }
 
     /** Provide an inline location for the independently owned vector filter editor.
@@ -244,7 +241,6 @@ export class ModelsView {
         if (this.setup?.id !== draft.id) this.buildSetup(draft);
         const setupControls = this.setup;
         const usesStartingMask = modelHasInput(draft.model, "mask_source");
-        setupControls.hydrology?.render(draft);
         setupControls.fields.disabled = state.submitting;
         if (this.document.activeElement !== setupControls.label) setupControls.label.value = draft.label;
         const acceptsResults = Object.values(draft.model.inputs).some(input => input.type === "raster");
@@ -287,16 +283,15 @@ export class ModelsView {
         setupControls.selectedCount.textContent = draft.selecting ? "Checking selected features…" : draft.vectorInfo ?
             `${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features selected` : draft.area?.kind === "catalogSelection" ? "Features from original run" : "Selection needs checking";
         setupControls.filterDescription.textContent = vectorSource ? describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter) : "";
-        setupControls.vectorStatus.textContent = draft.selecting ? "You can edit the filter while this check runs." : draft.selectionError || draft.maskSuggestion || "";
+        setupControls.vectorStatus.textContent = draft.selecting ? "You can edit the filter while this check runs." : draft.selectionError || "";
         setupControls.mapFilterStatus.textContent = draft.mapFilterMessage ?? "";
         setupControls.areaDescription.hidden = draft.areaMode === "vector" && Boolean(vectorSource) || usesStartingMask && draft.areaMode === "raster";
         setupControls.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
             `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "prepared_hydrology"].includes(input.type));
+        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source"].includes(input.type));
         const areaReady = usesStartingMask && draft.areaMode === "raster" ? Boolean(draft.maskRaster) : Boolean(draft.area);
-        const hydrologyReady = !setupControls.hydrology || Boolean(draft.hydrology) && !draft.hydrologyLoading && !draft.hydrologyChecking;
-        setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !hydrologyReady || !draft.raster || draft.raster.available === false || !supported;
+        setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !draft.raster || draft.raster.available === false || !supported;
         setupControls.run.textContent = state.submitting ? "Submitting…" : "Run model";
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         setupControls.details.run.hidden = true;

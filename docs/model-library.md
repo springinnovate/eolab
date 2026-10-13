@@ -9,14 +9,11 @@ downstream area.
 
 ## Set up downstream analysis
 
-Select the **Downstream ecosystem beneficiaries** card. Select a named,
-versioned **Prepared hydrology** dataset. Setup suggests a dataset when its
-elevation and watershed sources uniquely match Map layers, or only one dataset
-is installed; review that suggestion for your region. Expand **Terrain,
-watersheds & field mappings** to inspect its sources, connection fields, stopping
-rule and terrain preparation. The source check must succeed before Run becomes
-available. If no datasets are installed, an administrator must
-[validate and install a configuration](prepared-hydrology.md).
+Select the **Downstream ecosystem beneficiaries** card. Its elevation raster,
+watershed network and connection fields are configured in the model YAML.
+Choose your starting mask, values and parameters below. The model opens its
+configured sources when it runs; if a source is missing or unreadable, the run
+identifies the affected input.
 
 For **Starting mask**, choose a vector layer and edit its filter in the same
 panel, or choose **Raster cells greater than zero** and a starting raster from
@@ -25,12 +22,9 @@ fixed by this model. All selected features or starting cells form one combined
 mask and one overall result. The watershed network limits the downstream search;
 it does not add starting cells outside that mask.
 
-Choose **Values to summarize** from Map layers or a completed run. Ambiguous
-choices remain blank, and previous results are never selected automatically.
-Hidden map inputs can be chosen explicitly. The model may suggest the only
-visible values raster other than its prepared elevation and chosen starting
-raster, or the only starting vector other than its watershed network; each
-suggestion explains its basis and remains editable.
+Choose **Values to summarize** from Map layers or a completed run. Choose both
+the starting mask and values explicitly; setup leaves these choices blank.
+Hidden map inputs can be chosen too.
 
 Set **Buffer radius (m)**, an optional **Maximum straight-line distance (m)**,
 and **Summary formula**, which defaults to `sum(a)`. Leave the distance cutoff
@@ -42,9 +36,9 @@ visibility changes and filter edits do not change an accepted run.
 The same Runs view shows mask preparation, downstream routing, buffering and
 summary progress, with cancellation and downloads. Coverage and the starting
 mask use the ordinary **Show on map** actions under that run. **Duplicate with
-changes** rechecks the exact original hydrology revision; if it is no longer
-available, choose a replacement explicitly. Refreshing the dataset list never
-silently substitutes a different revision for the copied run.
+changes** copies the starting mask, values and parameters when the same model
+version remains installed. Its configured elevation and watershed sources come
+from that model.
 
 ## Choose inputs
 
