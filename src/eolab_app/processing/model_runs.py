@@ -21,6 +21,7 @@ import shapely
 from pydantic import AwareDatetime, BaseModel, ValidationError
 
 from eolab_app.processing.model_definitions import (
+    FixedHydrologyBinding,
     ModelSchema,
     ModelRegistry,
     validate_operation,
@@ -53,7 +54,6 @@ from eolab_app.processing.artifact_manifest import (
     read_artifact_manifest,
 )
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.prepared_hydrology import PreparedHydrologySnapshot
 
 
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
@@ -200,8 +200,6 @@ def get_application_build_id() -> str:
 def build_model_calculation_request(
     request: ModelRunRequest,
     registry: ModelRegistry,
-    *,
-    hydrology: dict[str, PreparedHydrologySnapshot] | None = None,
 ) -> tuple[BaseModel, ModelInvocation]:
     """Bind a YAML recipe to its registered operation request.
 
@@ -211,7 +209,6 @@ def build_model_calculation_request(
     Args:
         request: The model, datasets, analysis area, parameters and label submitted by a user.
         registry: Installed model definitions available on this deployment.
-        hydrology: Server-authorized snapshots for any prepared-hydrology input roles.
 
     Returns:
         The operation request to execute and the recipe/input record to save with it.
@@ -250,14 +247,13 @@ def build_model_calculation_request(
                 "inputs": request.inputs,
                 "parameters": parameters,
                 "label": request.label,
-                "hydrology": hydrology or {},
             }
         )
         calculation = operation.bind(
             {
                 name: (
-                    invocation.hydrology[binding.input]
-                    if binding.input in invocation.hydrology
+                    binding.value
+                    if isinstance(binding, FixedHydrologyBinding)
                     else invocation.inputs[binding.input]
                 )
                 for name, binding in step.inputs.items()

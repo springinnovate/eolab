@@ -27,12 +27,7 @@ from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.aggregate_models import AggregateArtifact
 from test_downstream_model import downstream_fixture, scaled_downstream_fixture
 from test_prepared_hydrology import prepare_sources
-from eolab_app.processing.hydrology_validation import (
-    validate_hydrology_sources,
-    HydrologyValidationLimits,
-)
-from eolab_app.raster.models import AuthorizedRaster
-from eolab_app.raster.source_identity import RasterSourceIdentity
+from eolab_app.processing.prepared_hydrology import HydrologySources
 
 
 def assert_same_raster(actual: Path, expected: Path) -> None:
@@ -123,16 +118,6 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             else:
                 elevations[1, 2] = -50
             raster.write(elevations, 1)
-        report = validate_hydrology_sources(
-            request.hydrology.definition,
-            AuthorizedRaster(
-                sources.rasters["dem"],
-                RasterSourceIdentity.read(sources.rasters["dem"]),
-            ),
-            sources.network,
-            HydrologyValidationLimits(),
-        )
-        request = request.model_copy(update={"hydrology": report})
     if case == "vector-filter":
         from eolab_app.attribute_filter import VectorFilter
 
@@ -191,7 +176,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             }
             for i in range(1, 4)
         ]
-        topology = request.hydrology.definition.topology.model_dump(
+        topology = request.hydrology_sources.topology.model_dump(
             by_alias=True, exclude_none=True
         )
         topology["terminal"] = {"field": "sink", "equalsField": "id"}
@@ -200,15 +185,17 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             records=records,
             definition_changes={"topology": topology},
         )
-        report = validate_hydrology_sources(
-            definition, dem, network_source, HydrologyValidationLimits()
+        configured = HydrologySources(
+            dem=definition.dem,
+            watersheds=definition.watersheds,
+            topology=definition.topology,
         )
         sources = replace(
             sources,
             rasters={**sources.rasters, "dem": dem.source_path},
             network=network_source,
         )
-        request = request.model_copy(update={"hydrology": report})
+        request = request.model_copy(update={"hydrology": configured})
         if case == "multiple-drains":
             with rasterio.open(reference_mask, "r+") as raster:
                 raster.write(np.ones((4, 6), dtype="int16"), 1)

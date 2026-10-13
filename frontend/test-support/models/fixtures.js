@@ -11,11 +11,15 @@ export const selection = {collectionId: "eolab-mounted-vectors", itemId: "waters
 
 /** A recipe using downstream capabilities with input names chosen by YAML. */
 export const downstreamModel = {...model, id: "downstream-beneficiaries", title: "Downstream ecosystem beneficiaries",
-    inputs: {start: {type: "mask_source", label: "Starting mask"}, terrain: {type: "prepared_hydrology", label: "Prepared hydrology"}, people: {type: "raster", label: "Values to summarize"}},
+    inputs: {start: {type: "mask_source", label: "Starting mask"}, people: {type: "raster", label: "Values to summarize"}},
+    steps: [{id: "analysis", operation: "hydrology.downstream_beneficiaries.v1", inputs: {starting_mask: {input: "start"}, values: {input: "people"},
+        hydrology: {value: {dem: {collectionId: raster.collectionId, itemId: "prepared-dem"},
+            watersheds: {collectionId: selection.collectionId, itemId: "watersheds"},
+            topology: {idField: "HYBAS_ID", downstreamField: "NEXT_DOWN", terminal: {field: "NEXT_SINK", equalsField: "HYBAS_ID"}}}}}}],
     parameters: {summary: model.parameters.summary, buffer: {type: "number", label: "Buffer radius", unit: "m", minimum: 0, default: 5000},
         cutoff: {type: "optional_number", label: "Maximum straight-line distance", unit: "m", exclusiveMinimum: 0, default: null}}};
 
-/** Path-free prepared metadata returned by discovery and captured by accepted runs. */
+/** Path-free report retained by runs created before hydrology was model-configured. */
 export const hydrology = {definition: {id: "prepared-region", version: "1.0.0", title: "Prepared regional terrain", description: "Terrain and connected watersheds for the region.",
     dem: {collectionId: raster.collectionId, itemId: "prepared-dem"}, watersheds: {collectionId: selection.collectionId, itemId: "watersheds"},
     topology: {idField: "HYBAS_ID", downstreamField: "NEXT_DOWN", terminal: {field: "NEXT_SINK", equalsField: "HYBAS_ID"}},

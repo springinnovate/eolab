@@ -50,7 +50,7 @@ into exported older recipes, preserving their checksums.
 | --- | --- | --- | --- | --- |
 | `raster.aggregate.v1` | `raster: raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
 | `raster.clip.v1` | `raster: raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
-| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression`, `wgs84_pixel_size: number`, `travel_time_pixel_size_m: number` | Statistics CSV; masked values, coverage, starting mask and per-drain routing DEM GeoTIFFs | `downstream-small-region` |
+| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: fixed Model YAML value`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression`, `wgs84_pixel_size: number`, `travel_time_pixel_size_m: number` | Statistics CSV; masked values, coverage, starting mask and per-drain routing DEM GeoTIFFs | `downstream-small-region` |
 
 The `raster` input accepts either the existing `{collectionId, itemId}` catalog
 reference or `{kind: runArtifact, jobId, artifactId}` for an owned published
@@ -137,10 +137,13 @@ execution of dependent recipes or permanent storage.
 
 ## Add a new algorithm
 
-Prepared terrain and watershed inputs have a separate administrator configuration
-and validation report. See [Prepared hydrology datasets](prepared-hydrology.md)
-for source identity, topology mappings, installation and the `prepared_hydrology`
-input contract. Existing summary and clip recipes remain unchanged.
+The downstream DEM, watershed source and topology mappings are configured in
+`steps[0].inputs.hydrology.value`, using catalog identities. They are not declared
+in the model's user-facing `inputs`. See [model hydrology configuration](prepared-hydrology.md)
+for the typed fixed binding and deployment instructions. No registration report or
+historical source fingerprint authorizes a new run. The old `prepared_hydrology`
+input/report schemas remain readable in historical Run YAML. Existing summary and
+clip recipes remain unchanged.
 
 YAML selects trusted capabilities; it does not contain Python import paths or
 execute arbitrary code. A genuinely new algorithm needs a registered operation

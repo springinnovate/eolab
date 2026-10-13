@@ -170,6 +170,7 @@ def test_selection_reauthorizes_after_restart_without_storage(
 
     async def scenario() -> None:
         """Reauthorize the descriptor after an injected measurement completes."""
+
         async def measure(selection: CatalogSelection) -> dict[str, Any]:
             """Measure the real fixture source for the requested descriptor.
 
@@ -202,3 +203,63 @@ def test_selection_reauthorizes_after_restart_without_storage(
             await first.select(invalid)
 
     asyncio.run(scenario())
+
+
+def test_configured_source_captures_current_identity_without_scanning(
+    source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """New resolutions follow current source metadata while saved selections stay strict.
+
+    Args:
+        source: Real configured polygon layer.
+        monkeypatch: Reject feature access and simulate a replacement source identity.
+    """
+    from eolab_app.catalog.vector_contract import CatalogVectorRequest
+    from eolab_app.vector import selection_source
+    from unittest.mock import AsyncMock
+
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", source.path, "data", "polygons")
+    )
+    request = CatalogVectorRequest(
+        collectionId=source.selection.collection_id, itemId=source.selection.item_id
+    )
+    metadata = asyncio.run(catalog.get_item(request))
+    with monkeypatch.context() as context:
+        context.setattr(catalog, "get_item", AsyncMock(return_value=metadata))
+        context.setattr(
+            "fiona.open",
+            lambda *args, **kwargs: pytest.fail(
+                "Source resolution must not read features"
+            ),
+        )
+        first = asyncio.run(
+            VectorSamplingService(catalog, catalog).resolve_source(request)
+        )
+    assert not first.selection.filter.active
+    original_signature = selection_source.vector_source_signature
+
+    def changed_signature(value: ResolvedVectorSource) -> tuple[tuple[Any, ...], ...]:
+        """Change only source identity without opening or traversing the native layer.
+
+        Args:
+            value: Configured native source returned by the fixture catalog.
+
+        Returns:
+            Complete component signatures with a changed device number.
+        """
+        return tuple(
+            (name, device + 1, *rest)
+            for name, device, *rest in original_signature(value)
+        )
+
+    monkeypatch.setattr(selection_source, "vector_source_signature", changed_signature)
+    restarted = VectorSamplingService(catalog, catalog)
+    current = asyncio.run(restarted.resolve_source(request))
+    assert current.selection.sourceSignature != first.selection.sourceSignature
+    with pytest.raises(SelectionUnavailableError, match="identity changed"):
+        asyncio.run(restarted.resolve_for_sampling(first.selection))
+    assert (
+        asyncio.run(restarted.resolve_for_sampling(current.selection)).selection
+        == current.selection
+    )

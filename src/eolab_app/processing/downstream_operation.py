@@ -16,7 +16,7 @@ from eolab_app.processing.downstream_calculation import (
     DownstreamSources,
     downstream_process_target,
 )
-from eolab_app.processing.model_yaml import compute_document_checksum
+from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
@@ -29,7 +29,7 @@ def bind_downstream(
     """Bind a recipe's selected inputs and parameters to a downstream request.
 
     Args:
-        inputs: Mask, server-resolved hydrology snapshot and values raster.
+        inputs: Mask, model-configured hydrology sources and values raster.
         parameters: Buffer, optional cutoff and summary formula.
         request_id: Stable model submission identifier.
         label: User's result label.
@@ -85,7 +85,7 @@ def get_additional_sources(
         Additional catalog rasters keyed by stable operation argument names.
     """
     request = downstream_inputs(value)
-    result = {"dem": request.hydrology.definition.dem}
+    result = {"dem": request.hydrology_sources.dem}
     if isinstance(request.starting_mask, RasterStartingMask):
         result["starting_mask"] = request.starting_mask.source
     return result
@@ -113,7 +113,7 @@ def build_downstream_submission(
         polygons: Always absent for the downstream input contract.
 
     Returns:
-        Path-free queued specification awaiting measured worker admission.
+        Path-free queued specification awaiting worker source resolution.
     """
     queued = QueuedDownstream(request=request)
     return PreparedJobPlan(
@@ -125,38 +125,43 @@ def build_downstream_submission(
 
 
 async def resolve_downstream_sources(
-    context: OperationContext, request: DownstreamRequest, values: AuthorizedRaster
+    context: OperationContext,
+    request: DownstreamRequest,
+    values: AuthorizedRaster,
+    watershed_selection: CatalogSelection | None = None,
 ) -> DownstreamSources:
-    """Resolve original vector selections and verify the prepared DEM identity.
+    """Resolve configured source files and preserve identities within one calculation.
 
     Args:
         context: Worker capabilities with captured additional raster identities.
-        request: Captured starting mask and prepared hydrology definition.
+        request: Captured starting mask and model-configured hydrology sources.
         values: Already authorized primary values raster.
+        watershed_selection: Source captured during preparation; None captures the
+            currently configured layer without comparing registration history.
 
     Returns:
         Ephemeral native paths and exact selection readers.
 
     Raises:
-        ProcessingError: If selections are unavailable or prepared terrain changed.
-        SelectionUnavailableError: If a vector source changed or is unavailable.
+        ProcessingError: If the configured watershed is missing, unreadable or changed.
+        SelectionUnavailableError: If the user-selected starting vector changed.
     """
     if context.areas is None:
         raise ProcessingError(
             "selection_unavailable", "Catalog vector reading is unavailable.", 409
         )
-    if (
-        compute_document_checksum(context.rasters["dem"].source_signature.to_catalog())
-        != request.hydrology.demSignature
-    ):
-        raise ProcessingError(
-            "hydrology_changed",
-            "The prepared DEM changed. Validate its hydrology configuration again.",
-            409,
+    try:
+        network = (
+            await context.areas.resolve_source(request.hydrology_sources.watersheds)
+            if watershed_selection is None
+            else await context.areas.resolve_for_sampling(watershed_selection)
         )
-    network = await context.areas.resolve_for_sampling(
-        request.hydrology.watershedSelection
-    )
+    except SelectionUnavailableError as error:
+        raise ProcessingError(
+            "watershed_unavailable",
+            "The model's configured watershed layer is missing, unreadable or changed during this run. Check the configured source and try again.",
+            409,
+        ) from error
     starting = (
         await context.areas.resolve_for_sampling(request.starting_mask.selection)
         if isinstance(request.starting_mask, VectorStartingMask)
@@ -183,7 +188,7 @@ async def prepare_downstream(
         authorized: Primary values raster authorized by the worker.
 
     Returns:
-        Prepared native windows and captured source identities.
+        Values grid metadata and the watershed identity captured for this run.
 
     Raises:
         ProcessingError: If preparation or source verification fails.
@@ -234,22 +239,35 @@ async def resolve_downstream_execution_inputs(
         raise ProcessingError(
             "source_changed", "The values raster changed after preparation.", 409
         )
-    return await resolve_downstream_sources(context, spec.inputs, authorized), spec
+    return (
+        await resolve_downstream_sources(
+            context, spec.inputs, authorized, spec.watershed_selection
+        ),
+        spec,
+    )
 
 
 async def check_downstream_execution(
     context: OperationContext, spec: DownstreamPlan
 ) -> None:
-    """Recheck watershed and starting-vector identities before result publication.
+    """Recheck the run's watershed and starting-vector identities before publication.
 
     Args:
         context: Existing catalog selection reader.
         spec: Executed inputs and their immutable source predicates.
 
     Raises:
-        SelectionUnavailableError: If a vector changed or lost access.
+        ProcessingError: If the configured watershed changed or lost access.
+        SelectionUnavailableError: If the user-selected starting vector changed.
     """
-    await context.areas.resolve_for_sampling(spec.inputs.hydrology.watershedSelection)
+    try:
+        await context.areas.resolve_for_sampling(spec.watershed_selection)
+    except SelectionUnavailableError as error:
+        raise ProcessingError(
+            "watershed_changed",
+            "The model's configured watershed layer changed or became unreadable during this run. Check the source and try again.",
+            409,
+        ) from error
     if isinstance(spec.inputs.starting_mask, VectorStartingMask):
         await context.areas.resolve_for_sampling(spec.inputs.starting_mask.selection)
 

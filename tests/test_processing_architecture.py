@@ -49,11 +49,10 @@ def test_processing_has_no_histogram_renderer_or_aoi_implementation_dependency()
         }, path
 
 
-def test_hydrology_validation_uses_original_sources_without_sibling_services() -> None:
-    """Hydrology contracts and native validation stay independent of renderer and catalog storage."""
+def test_hydrology_sources_use_neutral_readers_without_sibling_services() -> None:
+    """Hydrology source access stays independent of renderer and catalog storage."""
     for name in (
         "prepared_hydrology.py",
-        "hydrology_validation.py",
         "downstream_calculation.py",
         "downstream_operation.py",
     ):

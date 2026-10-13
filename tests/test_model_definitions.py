@@ -560,3 +560,116 @@ def test_saved_policy_must_include_the_registered_numerical_facts(
                 "numericalPolicy": policy,
             }
         )
+
+
+def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() -> None:
+    """Capture configured sources from YAML while users supply only mask and values."""
+    from eolab_app.processing.downstream_models import DownstreamRequest
+    from eolab_app.processing.model_definitions import FixedHydrologyBinding
+    from eolab_app.processing.model_run_contracts import ModelInvocation
+
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("downstream-beneficiaries", "4.0.0")
+    assert set(definition.inputs) == {"starting_mask", "values"}
+    binding = definition.steps[0].inputs["hydrology"]
+    assert isinstance(binding, FixedHydrologyBinding)
+    submitted = ModelRunRequest(
+        requestId="a" * 32,
+        label="Configured source run",
+        model={
+            "id": definition.id,
+            "version": definition.version,
+            "definitionSha256": definition.digest,
+        },
+        inputs={
+            "starting_mask": {
+                "kind": "catalogRaster",
+                "source": {
+                    "collectionId": "eolab-mounted-geotiffs",
+                    "itemId": "geotiff-" + "1" * 24,
+                },
+            },
+            "values": {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": "geotiff-" + "2" * 24,
+            },
+        },
+    )
+    calculation, invocation = build_model_calculation_request(submitted, registry)
+    assert isinstance(calculation, DownstreamRequest)
+    assert calculation.hydrology_sources == binding.value
+    assert invocation.hydrology == {}
+    assert (
+        ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
+        == invocation
+    )
+    configured = definition.to_document()["steps"][0]["inputs"]["hydrology"]["value"]
+    assert set(configured) == {"dem", "watersheds", "topology"}
+    assert set(configured["dem"]) == {"collectionId", "itemId"}
+    for unknown in ("hydrology", "dem", "watersheds"):
+        changed = submitted.model_copy(
+            update={"inputs": {**submitted.inputs, unknown: configured}}
+        )
+        with pytest.raises(ProcessingError, match="exactly the model's inputs"):
+            build_model_calculation_request(changed, registry)
+
+
+@pytest.mark.parametrize(
+    "problem", ["missing_source", "path", "unknown_field", "wrong_argument"]
+)
+def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) -> None:
+    """Fixed source bindings retain typed catalog identities and operation arguments.
+
+    Args:
+        problem: Invalid field, missing identity or mismatched operation argument.
+    """
+    document = (
+        ModelRegistry.load_installed()
+        .get("downstream-beneficiaries", "4.0.0")
+        .to_document()
+    )
+    binding = document["steps"][0]["inputs"]["hydrology"]
+    if problem == "missing_source":
+        del binding["value"]["dem"]
+    elif problem == "path":
+        binding["value"]["dem"] = {"path": "/private/terrain.tif"}
+    elif problem == "unknown_field":
+        binding["value"]["eligibility"] = True
+    else:
+        document["steps"][0]["inputs"]["values"] = binding
+        document["inputs"].pop("values")
+    with pytest.raises((ValidationError, ProcessingError)):
+        ModelRegistry((ModelDefinition.model_validate(document),))
+
+
+def test_legacy_recipe_round_trip_preserves_its_original_checksum() -> None:
+    """Adding fixed bindings does not add fields to historical user-input recipes."""
+    from eolab_app.processing.model_run_contracts import CapturedModel
+    from eolab_app.processing.model_yaml import compute_document_checksum
+
+    document = (
+        ModelRegistry.load_installed()
+        .get("downstream-beneficiaries", "4.0.0")
+        .to_document()
+    )
+    document["version"] = "3.0.0"
+    document["inputs"]["hydrology"] = {
+        "type": "prepared_hydrology",
+        "label": "Prepared hydrology",
+    }
+    document["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
+    original_checksum = compute_document_checksum(document)
+    captured = CapturedModel.model_validate(
+        {
+            "id": document["id"],
+            "version": document["version"],
+            "definitionSha256": original_checksum,
+            "definition": document,
+        }
+    )
+    assert captured.definition.to_document() == document
+    assert captured.definition.digest == original_checksum
+    assert (
+        ModelRegistry((captured.definition,)).get(document["id"], "3.0.0")
+        == captured.definition
+    )

@@ -11,6 +11,7 @@ from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
 from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
+    HydrologySources,
     PreparedHydrologySnapshot,
     NetworkId,
 )
@@ -85,22 +86,38 @@ StartingMask = Annotated[
 
 
 class DownstreamRequest(HydrologySchema):
-    """Capture the starting area, prepared terrain, values and formula for one run.
+    """Capture the starting area, configured sources, values and formula for one run.
 
-    Hydrology is a server-resolved snapshot. The browser supplies only its opaque
-    reference through ModelRunRequest. Geometry and filesystem paths are absent.
+    Model YAML supplies hydrology sources; historical registration snapshots
+    remain readable in saved runs. Geometry and filesystem paths are absent.
     """
 
     requestId: str
     label: Annotated[str, Field(min_length=1, max_length=80)]
     starting_mask: StartingMask
-    hydrology: PreparedHydrologySnapshot
+    hydrology: HydrologySources | PreparedHydrologySnapshot
     values: RasterSourceReference
     buffer_m: Annotated[float, Field(ge=0)]
     cutoff_m: Annotated[float, Field(gt=0)] | None
     wgs84_pixel_size: Annotated[float, Field(gt=0)] = 0.008333333333333
     travel_time_pixel_size_m: Annotated[float, Field(gt=0)] = 900
     summary: Annotated[str, Field(min_length=1, max_length=4096)]
+
+    @property
+    def hydrology_sources(self) -> HydrologySources:
+        """Return the configured catalog sources from a current or historical run.
+
+        Returns:
+            DEM, watershed source and topology without historical eligibility data.
+        """
+        if isinstance(self.hydrology, HydrologySources):
+            return self.hydrology
+        definition = self.hydrology.definition
+        return HydrologySources(
+            dem=definition.dem,
+            watersheds=definition.watersheds,
+            topology=definition.topology,
+        )
 
     @model_validator(mode="after")
     def check_formula(self) -> "DownstreamRequest":
@@ -122,14 +139,14 @@ class DownstreamRequest(HydrologySchema):
 
 
 class QueuedDownstream(HydrologySchema):
-    """Hold accepted downstream inputs until the worker measures their native work."""
+    """Hold accepted downstream inputs until the worker resolves their source files."""
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     request: DownstreamRequest
 
 
 class DownstreamPlan(HydrologySchema):
-    """Record source grids, watershed identities and pit-filling settings for one run.
+    """Record the values grid, current watershed source and pit-filling settings.
 
     Resolved selections are ephemeral worker arguments and never enter storage.
     The original model constructs its own calculation grid using the captured
@@ -141,12 +158,59 @@ class DownstreamPlan(HydrologySchema):
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     inputs: DownstreamRequest
     grid: ClipGrid
-    routingGrid: ClipGrid
-    watersheds: tuple[NetworkId, ...] = Field(min_length=1)
+    watershedSelection: CatalogSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # Historical plans retain their original admission metadata for export.
+    routingGrid: ClipGrid | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    watersheds: tuple[NetworkId, ...] | None = Field(
+        default=None, min_length=1, exclude_if=lambda value: value is None
+    )
     reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
     # Missing fields describe older runs, not the current deployment default.
     pit_fill_search_limit: PitFillSearchLimit = 100
+
+    @model_validator(mode="after")
+    def check_watershed_selection(self) -> "DownstreamPlan":
+        """Require a plan's saved watershed identity to match its configured source.
+
+        Returns:
+            This plan with a complete, unfiltered source identity for execution.
+
+        Raises:
+            ValueError: If the source identity is missing, filtered or belongs to
+                a different configured layer.
+        """
+        selection = self.watershed_selection
+        configured = self.inputs.hydrology_sources.watersheds
+        if (
+            selection.collection_id != configured.collection_id
+            or selection.item_id != configured.item_id
+            or selection.filter.active
+        ):
+            raise ValueError(
+                "The plan requires the complete configured watershed layer"
+            )
+        return self
+
+    @property
+    def watershed_selection(self) -> CatalogSelection:
+        """Read the source identity captured for this run's watershed reads.
+
+        Returns:
+            Preparation-time selection, or a historical run's saved selection.
+
+        Raises:
+            ValueError: If a persisted plan omitted its watershed source identity.
+        """
+        if self.watershedSelection is not None:
+            return self.watershedSelection
+        if isinstance(self.inputs.hydrology, PreparedHydrologySnapshot):
+            return self.inputs.hydrology.watershedSelection
+        raise ValueError("The downstream plan has no captured watershed source")
 
 
 class DownstreamNumericalPolicy(HydrologySchema):

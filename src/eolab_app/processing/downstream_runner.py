@@ -74,7 +74,7 @@ def write_watershed_view(
 
     Args:
         sources: Resolved original files with source identity checks.
-        spec: Captured administrator field mappings.
+        spec: Field mappings captured from Model YAML.
         directory: Private directory owned by this calculation attempt.
 
     Returns:
@@ -86,7 +86,7 @@ def write_watershed_view(
         OSError: If the private view cannot be written.
     """
     sources.network.require_current()
-    topology = spec.inputs.hydrology.definition.topology
+    topology = spec.inputs.hydrology_sources.topology
     if topology.idType != "integer" or topology.terminalIdField is None:
         raise ProcessingError(
             "unsupported_hydrology",
@@ -312,14 +312,23 @@ def run_original_downstream(
         sources, spec, starting, model_working_directory, limits
     )
     watershed_view_path = write_watershed_view(sources, spec, model_working_directory)
-    watershed_partitions_by_sink = (
-        beneficiaries_model.partition_subwatersheds_by_terminal_drain(
-            starting_area_path,
-            watershed_view_path,
-            beneficiaries_model.choose_equidistant_crs_from_bbox(starting_area_path),
-            model_working_directory / "partitions",
+    try:
+        watershed_partitions_by_sink = (
+            beneficiaries_model.partition_subwatersheds_by_terminal_drain(
+                starting_area_path,
+                watershed_view_path,
+                beneficiaries_model.choose_equidistant_crs_from_bbox(
+                    starting_area_path
+                ),
+                model_working_directory / "partitions",
+            )
         )
-    )
+    except Exception as error:
+        raise ProcessingError(
+            "watershed_read_failed",
+            "The model could not read or process its configured watershed layer. Check the source and field mappings in Model YAML.",
+            422,
+        ) from error
     partition_coverage_paths = []
     partition_starting_mask_paths = []
     routing_dem_outputs: list[ProducedFile] = []
@@ -333,13 +342,20 @@ def run_original_downstream(
         write_progress(
             directory, "routing_downstream", index, len(watershed_partitions_by_sink)
         )
-        beneficiaries_model.align_and_resize_raster_on_vector(
-            str(sources.rasters["dem"]),
-            partition_dem_path,
-            "near",
-            [model_inputs.wgs84_pixel_size, -model_inputs.wgs84_pixel_size],
-            partition_vector_path,
-        )
+        try:
+            beneficiaries_model.align_and_resize_raster_on_vector(
+                str(sources.rasters["dem"]),
+                partition_dem_path,
+                "near",
+                [model_inputs.wgs84_pixel_size, -model_inputs.wgs84_pixel_size],
+                partition_vector_path,
+            )
+        except Exception as error:
+            raise ProcessingError(
+                "dem_read_failed",
+                "The model could not read or process its configured DEM. Check the source in Model YAML.",
+                422,
+            ) from error
         beneficiaries_model.calc_flow_dir(
             partition_dem_path,
             partition_directory,
@@ -438,6 +454,9 @@ def run_original_downstream(
                 "beneficiariesRevision": BENEFICIARIES_REVISION,
                 "ecoshardRevision": ECOSHARD_REVISION,
                 "inputs": model_inputs.model_dump(mode="json", by_alias=True),
+                "watershedSelection": spec.watershed_selection.model_dump(
+                    mode="json", by_alias=True
+                ),
                 "numericalPolicy": {
                     "pitFillSearchLimit": spec.pit_fill_search_limit,
                     "pitFillTreatNodataAsClosed": PIT_FILL_TREAT_NODATA_AS_CLOSED,

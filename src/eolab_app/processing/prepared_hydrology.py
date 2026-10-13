@@ -1,15 +1,12 @@
-"""Describe prepared hydrology datasets and retain their validated source identities."""
+"""Configure hydrology sources and read registration records saved by earlier runs."""
 
-from pathlib import Path
-from types import MappingProxyType
 from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.catalog_selection import CatalogSelection
-from eolab_app.processing.model_yaml import compute_document_checksum, parse_yaml
-from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.model_yaml import compute_document_checksum
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 
 Identifier = Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
@@ -78,26 +75,6 @@ class NetworkTermination(HydrologySchema):
             raise ValueError("Terminal comparison requires two different fields")
         return self
 
-    def matches(self, properties: dict[str, object]) -> bool:
-        """Test a watershed's fields against the configured stopping rule.
-
-        Args:
-            properties: Original source properties containing the required fields.
-
-        Returns:
-            True when both values have the same type and value.
-
-        Raises:
-            ValueError: If comparison values are missing or have different types.
-        """
-        actual = properties[self.field]
-        expected = properties[self.equalsField] if self.equalsField else self.value
-        if actual is None or type(actual) is not type(expected):
-            raise ValueError(
-                "Terminal comparison values must have the same non-null type"
-            )
-        return actual == expected
-
 
 class WatershedTopology(HydrologySchema):
     """Map watershed IDs, downstream links and optional terminal drainage IDs.
@@ -152,6 +129,19 @@ class PreparedHydrologyDefinition(HydrologySchema):
     watersheds: HydrologyWatersheds
     topology: WatershedTopology
     terrain: TerrainPreparation
+
+
+class HydrologySources(HydrologySchema):
+    """Configure the DEM, watershed layer and field mappings used by a model.
+
+    These catalog identities belong to Model YAML. They do not certify source
+    suitability or pin files to a historical registration. Each run resolves
+    the current catalog sources and keeps them unchanged while calculating.
+    """
+
+    dem: HydrologyRaster
+    watersheds: HydrologyWatersheds
+    topology: WatershedTopology
 
 
 class HydrologyGrid(HydrologySchema):
@@ -298,91 +288,3 @@ class PreparedHydrologySnapshot(HydrologySchema):
             version=self.definition.version,
             effectiveSha256=self.effectiveSha256,
         )
-
-
-class PreparedHydrologyLibrary(HydrologySchema):
-    """Installed hydrology reports available for selection, subject to fresh source checks."""
-
-    configurations: list[PreparedHydrologySnapshot]
-
-
-class PreparedHydrologyRegistry:
-    """Find installed hydrology registrations and validation reports for model runs."""
-
-    def __init__(self, snapshots: tuple[PreparedHydrologySnapshot, ...] = ()) -> None:
-        """Index installed snapshots without limiting the number of configurations.
-
-        Args:
-            snapshots: Schema-checked registration or full-network validation reports.
-
-        Raises:
-            ValueError: If two reports use the same configuration ID and version.
-        """
-        entries = {}
-        for snapshot in snapshots:
-            key = (snapshot.definition.id, snapshot.definition.version)
-            if key in entries:
-                raise ValueError("Duplicate prepared hydrology ID and version")
-            entries[key] = snapshot
-        self._entries = MappingProxyType(entries)
-
-    @classmethod
-    def load(cls, directory: Path | None) -> "PreparedHydrologyRegistry":
-        """Load hydrology registration or validation reports from an administrator directory.
-
-        Args:
-            directory: Read-only server configuration directory; None installs no datasets.
-
-        Returns:
-            Schema-checked installed configurations, without reading their source data.
-
-        Raises:
-            ValueError: If the configured directory or a report is invalid.
-            OSError: If administrator files cannot be read.
-            ProcessingError: If a report violates the existing YAML/JSON document limits.
-        """
-        if directory is None:
-            return cls()
-        if not directory.is_dir():
-            raise ValueError("Prepared hydrology directory must exist")
-        snapshots = []
-        for path in sorted(directory.glob("*.hydrology.json")):
-            with path.open("rb") as source:
-                document = parse_yaml(source.read(256 * 1024 + 1), run=True)
-            snapshots.append(PreparedHydrologySnapshot.model_validate(document))
-        return cls(tuple(snapshots))
-
-    def list_configurations(self) -> tuple[PreparedHydrologySnapshot, ...]:
-        """Return installed snapshots; their source availability is checked on selection.
-
-        Returns:
-            Complete path-free reports in configuration ID/version order.
-        """
-        return tuple(self._entries[key] for key in sorted(self._entries))
-
-    def get(self, reference: HydrologyReference) -> PreparedHydrologySnapshot:
-        """Find exactly the configuration and source revision selected in model setup.
-
-        Args:
-            reference: Expected configuration ID, version and effective checksum.
-
-        Returns:
-            The immutable installed snapshot to reauthorize and capture for a run.
-
-        Raises:
-            ProcessingError: If the dataset is missing or its effective version changed.
-        """
-        snapshot = self._entries.get((reference.presetId, reference.version))
-        if snapshot is None:
-            raise ProcessingError(
-                "hydrology_unavailable",
-                "This hydrology configuration is not installed.",
-                404,
-            )
-        if snapshot.effectiveSha256 != reference.effectiveSha256:
-            raise ProcessingError(
-                "hydrology_changed",
-                "The hydrology configuration changed. Choose it again.",
-                409,
-            )
-        return snapshot

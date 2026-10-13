@@ -91,6 +91,22 @@ class ResolvedCatalogSelection:
 class CatalogSelectionReader(Protocol):
     """Authorize immutable Catalog selections without rendering dependencies."""
 
+    async def resolve_source(
+        self, source: CatalogVectorRequest
+    ) -> ResolvedCatalogSelection:
+        """Authorize the current complete catalog layer without reading its features.
+
+        Args:
+            source: Catalog collection and item identifying the configured layer.
+
+        Returns:
+            Current full-layer descriptor, authorized path and file-change checks.
+
+        Raises:
+            SelectionUnavailableError: If the source cannot be resolved or inspected.
+        """
+        ...
+
     async def resolve_for_sampling(
         self, selection: CatalogSelection
     ) -> ResolvedCatalogSelection:

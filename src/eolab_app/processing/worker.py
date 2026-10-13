@@ -178,20 +178,26 @@ class ProcessingWorker:
             Authorized native sources for this preparation or execution phase.
 
         Raises:
-            ProcessingError: If a source changed since admission.
-            RasterFeatureError: If catalog authorization fails.
+            ProcessingError: If a named source is unavailable or changed since admission.
         """
         result = {}
         for name, reference in (
             operation.extra_sources(spec) if operation.extra_sources else {}
         ).items():
-            source = await self.authorizer.authorize(reference)
+            try:
+                source = await self.authorizer.authorize(reference)
+            except RasterFeatureError as error:
+                raise ProcessingError(
+                    "source_unavailable",
+                    f"The model's {name} input is unavailable. {error.detail}",
+                    422,
+                ) from error
             if model is None or tuple(
                 source.source_signature.to_catalog()
             ) != model.additionalSourceSignatures.get(name):
                 raise ProcessingError(
                     "source_changed",
-                    "A model input changed after this run was accepted.",
+                    f"The model's {name} input changed after this run was accepted.",
                     409,
                 )
             result[name] = source

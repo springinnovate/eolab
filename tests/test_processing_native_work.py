@@ -8,10 +8,8 @@ import numpy as np
 import pytest
 from rasterio.crs import CRS
 from rasterio.windows import Window
-from shapely.geometry import box
 
-from eolab_app.processing.downstream_calculation import plan_native_grid
-from eolab_app.processing.downstream_models import DownstreamLimits
+from eolab_app.processing.downstream_calculation import describe_values_grid
 from eolab_app.processing.raster_input import count_native_raster_blocks
 from eolab_app.processing.clip_models import ClipArea
 from eolab_app.processing.aggregate_models import AggregateArea
@@ -66,7 +64,7 @@ def test_billion_cell_downstream_grid_needs_only_metadata() -> None:
         window_transform=lambda window: transform
         * Affine.translation(window.col_off, window.row_off),
     )
-    grid = plan_native_grid(dataset, box(-80, 0, -40, 30), DownstreamLimits())
+    grid = describe_values_grid(dataset)
     assert grid.width * grid.height == 1_200_000_000
     assert grid.reservedBytes == 0
     assert grid.decodedBytes == 0
@@ -78,7 +76,12 @@ def test_summary_plan_has_no_total_read_window_ceiling() -> None:
     from eolab_app.processing.aggregate_windows import plan_raster_read_windows
 
     plan = plan_raster_read_windows(
-        Window(0, 0, 40_000, 30_000), (16, 16), 40_000, 30_000, None, 512,
+        Window(0, 0, 40_000, 30_000),
+        (16, 16),
+        40_000,
+        30_000,
+        None,
+        512,
     )
     assert plan.readWindows == 2_500 * 1_875
     assert plan.readWidth == plan.readHeight == 16

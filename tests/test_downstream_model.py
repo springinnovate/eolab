@@ -20,12 +20,8 @@ from eolab_app.processing.downstream_calculation import (
     plan_downstream,
 )
 from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamLimits
-from eolab_app.processing.hydrology_validation import (
-    validate_hydrology_sources,
-    HydrologyValidationLimits,
-)
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.prepared_hydrology import NetworkTermination
+from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_prepared_hydrology import prepare_sources
@@ -42,7 +38,7 @@ def scaled_downstream_fixture(
         height: Bounded native row count.
 
     Returns:
-        Revalidated prepared terrain, captured inputs and deployment limits.
+        Configured terrain, captured inputs and deployment limits.
     """
     sources, request, limits = downstream_fixture(directory)
     for name in ("dem", "starting_mask", "values"):
@@ -67,15 +63,9 @@ def scaled_downstream_fixture(
             blockysize=256,
         ) as target:
             target.write(data, 1)
-    dem = AuthorizedRaster(
-        sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
-    )
-    report = validate_hydrology_sources(
-        request.hydrology.definition, dem, sources.network, HydrologyValidationLimits()
-    )
     return (
         sources,
-        request.model_copy(update={"hydrology": report, "wgs84_pixel_size": 6 / width}),
+        request.model_copy(update={"wgs84_pixel_size": 6 / width}),
         limits,
     )
 
@@ -86,7 +76,6 @@ def downstream_fixture(
     values: np.ndarray | None = None,
     formula: str = "sum(a)",
     records: list[dict[str, Any]] | None = None,
-    register_only: bool = False,
 ) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
     """Create a prepared three-basin eastward slope and a first-column raster mask.
 
@@ -95,18 +84,15 @@ def downstream_fixture(
         values: Optional native 4-by-6 values raster.
         formula: Scalar result formula.
         records: Optional complete network with different coverage or connections.
-        register_only: Install source metadata without validating the full network.
 
     Returns:
         Native sources, captured request and test deployment limits.
     """
     definition, dem, network, _ = prepare_sources(directory, records=records)
-    hydrology = validate_hydrology_sources(
-        definition,
-        dem,
-        network,
-        HydrologyValidationLimits(),
-        register_only=register_only,
+    hydrology = HydrologySources(
+        dem=definition.dem,
+        watersheds=definition.watersheds,
+        topology=definition.topology,
     )
     for name, data in (
         ("mask", np.tile([1, 0, 0, 0, 0, 0], (4, 1)).astype("int16")),
@@ -159,29 +145,20 @@ def downstream_fixture(
 
 
 @pytest.mark.parametrize(
-    "problem,match",
-    [
-        ("cycle", "cycle"),
-        ("missing", "did not return all requested records"),
-        ("sink", "terminal drainage"),
-        ("null_id", "non-null integer"),
-        ("terminal", "still links"),
-        ("duplicate_start", "Duplicate watershed ID 1"),
-        ("duplicate_downstream", "Duplicate watershed ID 2"),
-        ("duplicate_outside_start", "Duplicate watershed ID 1"),
-    ],
+    "problem", ["cycle", "missing", "sink", "null_id", "duplicate"]
 )
-def test_registered_network_checks_only_selected_drainage_before_routing(
-    tmp_path: Path, problem: str, match: str
+def test_configured_network_is_delegated_without_a_suitability_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
 ) -> None:
-    """Reject ambiguous or cyclic selected drainage before routing or sink traversal.
+    """Let the original model read configured hydrology without a separate network gate.
 
     Args:
-        tmp_path: Native fixture sources.
-        problem: Invalid selected connection or ID that registration does not scan.
-        match: Expected local diagnostic.
+        tmp_path: Native fixture sources and calculation directory.
+        monkeypatch: Observe the model boundary without executing invalid routing.
+        problem: Network data that the application previously rejected in preflight.
     """
     from shapely.geometry import box, mapping
+    from eolab_app.processing.aggregate_models import AggregateArtifact
 
     records = [
         {
@@ -200,40 +177,30 @@ def test_registered_network_checks_only_selected_drainage_before_routing(
         records[1]["sink"] = 2
     elif problem == "null_id":
         records[0]["id"] = None
-    elif problem == "terminal":
-        records[2]["next"] = 2
     else:
-        duplicate = dict(records[1 if problem == "duplicate_downstream" else 0])
-        if problem == "duplicate_outside_start":
-            duplicate["geometry"] = mapping(box(20, 0, 22, 4))
-        records.append(duplicate)
-    sources, request, limits = downstream_fixture(
-        tmp_path, records=records, register_only=True
+        records.append(dict(records[0]))
+    sources, request, limits = downstream_fixture(tmp_path, records=records)
+    reader = Mock(side_effect=AssertionError("Unexpected watershed preflight"))
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_calculation.polygon_records", reader
     )
-    if problem == "terminal":
-        # A constant sink flag contradicts the source's remaining downstream link.
-        topology = request.hydrology.definition.topology.model_copy(
-            update={"terminal": NetworkTermination(field="id", value=3)}
-        )
-        definition = request.hydrology.definition.model_copy(
-            update={"topology": topology}
-        )
-        dem = AuthorizedRaster(
-            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
-        )
-        report = validate_hydrology_sources(
-            definition,
-            dem,
-            sources.network,
-            HydrologyValidationLimits(),
-            register_only=True,
-        )
-        request = request.model_copy(update={"hydrology": report})
-    with pytest.raises(ProcessingError, match=match):
-        plan_downstream(sources, request, limits)
+    expected = AggregateArtifact(
+        filename="result.csv", size=1, sha256="a" * 64, rows=[]
+    )
+    original_model = Mock(return_value=expected)
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.run_original_downstream", original_model
+    )
+    plan = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    assert calculate_downstream(sources, plan, directory, limits) is expected
+    original_model.assert_called_once()
+    assert original_model.call_args.args[0] is sources
+    reader.assert_not_called()
 
 
-def test_registered_network_runs_despite_unrelated_duplicate_ids(
+def test_configured_network_runs_despite_unrelated_duplicate_ids(
     tmp_path: Path,
 ) -> None:
     """Route a valid selected drainage without scanning unrelated duplicate basin records.
@@ -256,24 +223,13 @@ def test_registered_network_runs_despite_unrelated_duplicate_ids(
         [{"id": 10, "next": 999, "sink": 10, "geometry": mapping(box(20, 0, 22, 4))}]
         * 2
     )
-    sources, request, limits = downstream_fixture(
-        tmp_path, records=records, register_only=True
-    )
+    sources, request, limits = downstream_fixture(tmp_path, records=records)
     plan = plan_downstream(sources, request, limits)
-    assert plan.watersheds == (1, 2, 3)
+    assert plan.watershedSelection == sources.network.selection
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, plan, directory, limits)
     assert float(artifact.rows[0]["value"]) == 24
-
-
-def test_field_comparison_stops_virtual_downstream_links() -> None:
-    """NEXT_SINK equals HYBAS_ID identifies a real sink even with NEXT_DOWN present."""
-    rule = NetworkTermination(field="NEXT_SINK", equalsField="HYBAS_ID")
-    assert rule.matches({"NEXT_SINK": 12, "HYBAS_ID": 12, "NEXT_DOWN": 99})
-    assert not rule.matches({"NEXT_SINK": 12, "HYBAS_ID": 11, "NEXT_DOWN": 12})
-    with pytest.raises(ValueError):
-        rule.matches({"NEXT_SINK": "12", "HYBAS_ID": 12})
 
 
 @pytest.mark.parametrize("pit_fill_search_limit", [100, 1000])
@@ -298,7 +254,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
         sources, spec, directory, replace(limits, pit_fill_search_limit=1)
     )
     assert float(artifact.rows[0]["value"]) == float(data[data > 0].sum())
-    assert spec.watersheds == (1, 2, 3)
+    assert spec.watershedSelection == sources.network.selection
     provenance = json.loads((directory / "provenance.json").read_text())
     assert provenance["numericalPolicy"]["pitFillSearchLimit"] == pit_fill_search_limit
     assert provenance["numericalPolicy"]["pitFillTreatNodataAsClosed"] is True
@@ -340,7 +296,7 @@ def test_nodata_values_preserve_original_zero_total(tmp_path: Path) -> None:
 
 
 def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> None:
-    """A raster with no positive valid seed cells fails with a useful admission error.
+    """A raster with no positive seed cells fails when constructing the model's AOI.
 
     Args:
         tmp_path: Isolated native sources.
@@ -348,8 +304,11 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
     sources, request, limits = downstream_fixture(tmp_path)
     with rasterio.open(sources.rasters["starting_mask"], "r+") as dataset:
         dataset.write(np.zeros((4, 6), dtype="int16"), 1)
+    plan = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
     with pytest.raises(ProcessingError, match="no positive valid cells"):
-        plan_downstream(sources, request, limits)
+        calculate_downstream(sources, plan, directory, limits)
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -679,7 +638,14 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     registry = ModelRegistry.load_installed()
-    definition = registry.get("downstream-beneficiaries", "3.0.0")
+    from eolab_app.processing.model_definitions import ModelDefinition
+
+    document = registry.get("downstream-beneficiaries", "4.0.0").to_document()
+    document["steps"][0]["inputs"]["hydrology"]["value"] = (
+        request.hydrology_sources.model_dump(mode="json", by_alias=True)
+    )
+    definition = ModelDefinition.model_validate(document)
+    registry = ModelRegistry((definition,))
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
@@ -692,7 +658,6 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
             "starting_mask": request.starting_mask.model_dump(
                 mode="json", by_alias=True
             ),
-            "hydrology": request.hydrology.reference.model_dump(),
             "values": request.values.model_dump(by_alias=True),
         },
         parameters={
@@ -703,9 +668,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
             "travel_time_pixel_size_m": 100000,
         },
     )
-    calculation, invocation = build_model_calculation_request(
-        submitted, registry, hydrology={"hydrology": request.hydrology}
-    )
+    calculation, invocation = build_model_calculation_request(submitted, registry)
     operation = get_model_operation(definition.steps[0].operation)
     identities = {
         name: tuple(RasterSourceIdentity.read(path).to_catalog())
@@ -719,7 +682,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     )
     references = {
         request.values.item_id: sources.rasters["values"],
-        request.hydrology.definition.dem.item_id: sources.rasters["dem"],
+        request.hydrology_sources.dem.item_id: sources.rasters["dem"],
         request.starting_mask.source.item_id: sources.rasters["starting_mask"],
     }
 
@@ -767,7 +730,8 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         native=native,
         downstream_limits=replace(limits, pit_fill_search_limit=1000),
         areas=SimpleNamespace(
-            resolve_for_sampling=AsyncMock(return_value=sources.network)
+            resolve_for_sampling=AsyncMock(return_value=sources.network),
+            resolve_source=AsyncMock(return_value=sources.network),
         ),
     )
 
@@ -960,9 +924,8 @@ def test_regional_dem_runs_with_network_extending_beyond_it(
         }
     )
     sources, request, limits = downstream_fixture(tmp_path, records=records)
-    assert request.hydrology.validation.watershedCount == 4
     spec = plan_downstream(sources, request, limits)
-    assert spec.watersheds == (1, 2, 3)
+    assert spec.watershedSelection == sources.network.selection
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -972,18 +935,26 @@ def test_regional_dem_runs_with_network_extending_beyond_it(
 @pytest.mark.parametrize(
     "width,height,west,north", [(5, 4, 0, 4), (6, 3, 0, 3), (6, 4, 10, 4)]
 )
-def test_run_rejects_missing_downstream_dem_extent(
-    tmp_path: Path, width: int, height: int, west: float, north: float
+def test_configured_dem_extent_is_left_to_the_original_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+    height: int,
+    west: float,
+    north: float,
 ) -> None:
-    """Reject partial and absent terrain before clipped windows can truncate a run.
+    """Pass a configured regional DEM unchanged without a separate coverage scan.
 
     Args:
         tmp_path: Isolated sources and private attempt directory.
+        monkeypatch: Observe the original-model call without routing missing terrain.
         width: Restricted DEM column count.
         height: Restricted DEM row count.
         west: DEM western edge.
         north: DEM northern edge.
     """
+    from eolab_app.processing.aggregate_models import AggregateArtifact
+
     sources, request, limits = downstream_fixture(tmp_path)
     with rasterio.open(
         sources.rasters["dem"],
@@ -998,20 +969,18 @@ def test_run_rejects_missing_downstream_dem_extent(
         transform=from_origin(west, north, 1, 1),
     ) as dataset:
         dataset.write(np.ones((height, width), dtype="float32"), 1)
-    report = validate_hydrology_sources(
-        request.hydrology.definition,
-        AuthorizedRaster(
-            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
-        ),
-        sources.network,
-        HydrologyValidationLimits(),
+    expected = AggregateArtifact(
+        filename="result.csv", size=1, sha256="a" * 64, rows=[]
     )
-    request = request.model_copy(update={"hydrology": report})
-    with pytest.raises(
-        ProcessingError, match="does not cover the full downstream drainage"
-    ) as error:
-        plan_downstream(sources, request, limits)
-    assert error.value.code == "incomplete_dem"
+    original_model = Mock(return_value=expected)
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.run_original_downstream", original_model
+    )
+    plan = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    assert calculate_downstream(sources, plan, directory, limits) is expected
+    assert original_model.call_args.args[0].rasters["dem"] == sources.rasters["dem"]
 
 
 @pytest.mark.parametrize("invalid", [-9999, float("nan"), float("inf"), "mask"])
@@ -1056,15 +1025,6 @@ def test_run_delegates_terrain_values_without_reading_dem_pixels(
             elevations = dataset.read(1)
             elevations[1, 4] = invalid
             dataset.write(elevations, 1)
-    report = validate_hydrology_sources(
-        request.hydrology.definition,
-        AuthorizedRaster(
-            sources.rasters["dem"], RasterSourceIdentity.read(sources.rasters["dem"])
-        ),
-        sources.network,
-        HydrologyValidationLimits(),
-    )
-    request = request.model_copy(update={"hydrology": report})
     pixel_reader = Mock(wraps=downstream_calculation.read_native_raster_window)
     monkeypatch.setattr(
         downstream_calculation, "read_native_raster_window", pixel_reader
@@ -1088,10 +1048,10 @@ def test_run_delegates_terrain_values_without_reading_dem_pixels(
 
 
 @pytest.mark.parametrize("tiny", [False, True])
-def test_run_keeps_boundary_checks_without_requiring_native_pixel_centers(
+def test_configured_watershed_boundaries_are_left_to_the_original_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiny: bool
 ) -> None:
-    """Keep polygon-boundary checks while leaving subpixel terrain to the model.
+    """Pass configured polygon boundaries to the model without a separate gap check.
 
     Args:
         tmp_path: Native sources and private result directory.
@@ -1114,22 +1074,211 @@ def test_run_keeps_boundary_checks_without_requiring_native_pixel_centers(
         box(2.9, 1, 3.1, 1.2) if tiny else box(2, 0, 2.4, 4)
     )
     sources, request, limits = downstream_fixture(tmp_path, records=records)
-    if tiny:
-        expected = AggregateArtifact(
-            filename="result.csv", size=1, sha256="a" * 64, rows=[]
+    expected = AggregateArtifact(
+        filename="result.csv", size=1, sha256="a" * 64, rows=[]
+    )
+    original_model = Mock(return_value=expected)
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.run_original_downstream",
+        original_model,
+    )
+    spec = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    assert calculate_downstream(sources, spec, directory, limits) is expected
+    original_model.assert_called_once()
+
+
+@pytest.mark.parametrize("missing", ["dem", "values"])
+def test_missing_configured_raster_names_the_runtime_input(
+    tmp_path: Path, missing: str
+) -> None:
+    """Source failures identify the absent input without requesting registration.
+
+    Args:
+        tmp_path: Native sources for the calculation.
+        missing: Raster input removed before native preparation.
+    """
+    sources, request, limits = downstream_fixture(tmp_path)
+    absent = tmp_path / "absent.tif"
+    sources = replace(sources, rasters={**sources.rasters, missing: absent})
+    label = "configured DEM" if missing == "dem" else "values raster"
+    with pytest.raises(ProcessingError, match=label) as failure:
+        plan_downstream(sources, request, limits)
+    assert failure.value.code == "source_unavailable"
+    assert str(absent) not in failure.value.detail
+    assert "validat" not in failure.value.detail
+
+
+def test_worker_captures_configured_watershed_then_keeps_that_identity(
+    tmp_path: Path,
+) -> None:
+    """Fresh runs resolve current sources and execution rechecks only that run's identity.
+
+    Args:
+        tmp_path: Real source files and current catalog descriptors.
+    """
+    from eolab_app.catalog_selection import SelectionUnavailableError
+    from eolab_app.processing.downstream_operation import (
+        resolve_downstream_sources,
+        resolve_downstream_execution_inputs,
+        check_downstream_execution,
+    )
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    reader = SimpleNamespace(
+        resolve_source=AsyncMock(return_value=sources.network),
+        resolve_for_sampling=AsyncMock(return_value=sources.network),
+    )
+    context = SimpleNamespace(
+        areas=reader,
+        source_checksum=None,
+        rasters={
+            name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
+            for name, path in sources.rasters.items()
+            if name != "values"
+        },
+    )
+    values = AuthorizedRaster(
+        sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
+    )
+    resolved = asyncio.run(resolve_downstream_sources(context, request, values))
+    reader.resolve_source.assert_awaited_once_with(request.hydrology_sources.watersheds)
+    reader.resolve_for_sampling.assert_not_awaited()
+    plan = plan_downstream(resolved, request, limits)
+    assert plan.watershedSelection == sources.network.selection
+    restored = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
+    assert restored.watershed_selection == sources.network.selection
+    execution_sources, _ = asyncio.run(
+        resolve_downstream_execution_inputs(context, restored, values)
+    )
+    assert execution_sources.network == sources.network
+    reader.resolve_for_sampling.assert_awaited_once_with(sources.network.selection)
+    reader.resolve_for_sampling.side_effect = SelectionUnavailableError("changed")
+    with pytest.raises(ProcessingError, match="watershed layer"):
+        asyncio.run(resolve_downstream_execution_inputs(context, restored, values))
+    with pytest.raises(ProcessingError, match="watershed layer"):
+        asyncio.run(check_downstream_execution(context, restored))
+    assert reader.resolve_source.await_count == 1
+
+
+def test_worker_does_not_compare_legacy_registration_fingerprints(
+    tmp_path: Path,
+) -> None:
+    """Retained registration metadata does not become a new-run eligibility gate.
+
+    Args:
+        tmp_path: Configured source files and legacy registration metadata.
+    """
+    from eolab_app.processing.downstream_operation import resolve_downstream_sources
+    from test_prepared_hydrology import legacy_snapshot
+
+    sources, request, limits = downstream_fixture(tmp_path / "current")
+    definition, dem, network, _ = prepare_sources(tmp_path / "historical")
+    historical = legacy_snapshot(definition, dem, network)
+    request = request.model_copy(update={"hydrology": historical})
+    reader = SimpleNamespace(
+        resolve_source=AsyncMock(return_value=sources.network),
+        resolve_for_sampling=AsyncMock(
+            side_effect=AssertionError("Historical signature used")
+        ),
+    )
+    context = SimpleNamespace(
+        areas=reader,
+        rasters={
+            name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
+            for name, path in sources.rasters.items()
+            if name != "values"
+        },
+    )
+    values = AuthorizedRaster(
+        sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
+    )
+    resolved = asyncio.run(resolve_downstream_sources(context, request, values))
+    assert resolved.network == sources.network
+    reader.resolve_source.assert_awaited_once_with(historical.definition.watersheds)
+    reader.resolve_for_sampling.assert_not_awaited()
+    plan = plan_downstream(resolved, request, limits)
+    assert plan.watershed_selection == sources.network.selection
+
+
+def test_missing_configured_watershed_names_the_runtime_input(tmp_path: Path) -> None:
+    """A missing watershed reports the model's configured input without private paths.
+
+    Args:
+        tmp_path: Source fixtures for a failed current-layer resolution.
+    """
+    from eolab_app.catalog_selection import SelectionUnavailableError
+    from eolab_app.processing.downstream_operation import resolve_downstream_sources
+
+    sources, request, _ = downstream_fixture(tmp_path)
+    context = SimpleNamespace(
+        areas=SimpleNamespace(
+            resolve_source=AsyncMock(
+                side_effect=SelectionUnavailableError("private path")
+            )
+        ),
+        rasters={},
+    )
+    values = AuthorizedRaster(
+        sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
+    )
+    with pytest.raises(ProcessingError, match="configured watershed layer") as failure:
+        asyncio.run(resolve_downstream_sources(context, request, values))
+    assert failure.value.code == "watershed_unavailable"
+    assert "private path" not in failure.value.detail
+
+
+@pytest.mark.parametrize("input_name", ["watersheds", "dem"])
+def test_native_source_failure_identifies_configured_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, input_name: str
+) -> None:
+    """Translate actual native reads into useful errors without a suitability preflight.
+
+    Args:
+        tmp_path: Source and run directories.
+        monkeypatch: Fail the original model at its source-reading boundary.
+        input_name: Native source-reading operation that fails.
+    """
+    from shapely.geometry import box
+    from eolab_app.processing import downstream_runner
+
+    sources, request, limits = downstream_fixture(tmp_path / "sources")
+    spec = plan_downstream(sources, request, limits)
+    directory = tmp_path / "run"
+    directory.mkdir()
+    upstream = Mock()
+    if input_name == "watersheds":
+        upstream.partition_subwatersheds_by_terminal_drain.side_effect = RuntimeError(
+            "private path"
         )
-        original_model = Mock(return_value=expected)
-        monkeypatch.setattr(
-            "eolab_app.processing.downstream_runner.run_original_downstream",
-            original_model,
-        )
-        spec = plan_downstream(sources, request, limits)
-        directory = tmp_path / "run"
-        directory.mkdir()
-        assert calculate_downstream(sources, spec, directory, limits) is expected
-        original_model.assert_called_once()
     else:
-        with pytest.raises(
-            ProcessingError, match="gap before its downstream partition"
-        ):
-            plan_downstream(sources, request, limits)
+        upstream.partition_subwatersheds_by_terminal_drain.return_value = {
+            "drain_3": "partition.gpkg"
+        }
+        upstream.align_and_resize_raster_on_vector.side_effect = RuntimeError(
+            "private path"
+        )
+    monkeypatch.setattr(
+        downstream_runner, "load_beneficiaries", Mock(return_value=upstream)
+    )
+    monkeypatch.setattr(
+        downstream_runner,
+        "prepare_starting_inputs",
+        Mock(
+            return_value=(
+                directory / "starting.geojson",
+                sources.rasters["starting_mask"],
+            )
+        ),
+    )
+    expected_code = (
+        "watershed_read_failed" if input_name == "watersheds" else "dem_read_failed"
+    )
+    with pytest.raises(ProcessingError) as failure:
+        downstream_runner.run_original_downstream(
+            sources, spec, directory, limits, box(0, 0, 1, 4)
+        )
+    assert failure.value.code == expected_code
+    assert "configured" in failure.value.detail
+    assert "private path" not in failure.value.detail

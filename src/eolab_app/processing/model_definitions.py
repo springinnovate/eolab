@@ -22,6 +22,7 @@ from eolab_app.processing.model_yaml import (
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.model_operations import OPERATIONS
 from eolab_app.processing.raster_expression import compile_expression, walk
+from eolab_app.processing.prepared_hydrology import HydrologySources
 
 Name = Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
 Version = Annotated[
@@ -165,17 +166,28 @@ class ParameterBinding(ModelSchema):
     parameter: Name
 
 
+class FixedHydrologyBinding(ModelSchema):
+    """Supply a calculation's DEM and watershed configuration directly from Model YAML.
+
+    The model author chooses catalog sources and their field mappings. This
+    binding creates no user-selectable input and requires no registration report.
+    """
+
+    value: HydrologySources
+
+
 class ModelStep(ModelSchema):
     """A calculation in a model, naming the operation and its arguments.
 
     For example, a summary step runs ``raster.aggregate.v1`` with the model's
     raster and area inputs and its summary-formula parameter. The bindings map
-    those model inputs and parameters to the operation's argument names.
+    those model inputs and parameters to the operation's argument names. A fixed
+    hydrology value supplies catalog sources and field mappings from the recipe.
     """
 
     id: Name
     operation: Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
-    inputs: Mapping[Name, InputBinding] = Field(max_length=16)
+    inputs: Mapping[Name, InputBinding | FixedHydrologyBinding] = Field(max_length=16)
     parameters: Mapping[Name, ParameterBinding] = Field(max_length=32)
 
     @field_validator("inputs", "parameters", mode="after")
@@ -201,7 +213,10 @@ class ModelStep(ModelSchema):
         Returns:
             A dictionary preserving the argument names and their references.
         """
-        return {key: item.model_dump(mode="json") for key, item in value.items()}
+        return {
+            key: item.model_dump(mode="json", by_alias=True)
+            for key, item in value.items()
+        }
 
 
 class ModelOutput(ModelSchema):
@@ -229,9 +244,9 @@ class ModelOutput(ModelSchema):
 class ModelDefinition(ModelSchema):
     """A reusable analysis recipe with inputs, parameters, a step and outputs.
 
-    The ID and version identify the recipe. Dataset selections and user-supplied
-    parameter values belong to individual runs. EOlab currently executes one
-    calculation step per recipe.
+    The ID and version identify the recipe. Fixed hydrology sources belong to
+    its step bindings; user dataset selections and parameter values belong to
+    individual runs. EOlab currently executes one calculation step per recipe.
     """
 
     schema_version: Literal["eolab.model/v1"] = Field(alias="schema")
@@ -285,7 +300,11 @@ class ModelDefinition(ModelSchema):
                 output references an unknown step.
         """
         step = self.steps[0]
-        if any(item.input not in self.inputs for item in step.inputs.values()):
+        if any(
+            item.input not in self.inputs
+            for item in step.inputs.values()
+            if isinstance(item, InputBinding)
+        ):
             raise ValueError("Unknown input reference")
         if any(
             item.parameter not in self.parameters for item in step.parameters.values()
@@ -334,9 +353,13 @@ def validate_operation(definition: ModelDefinition) -> None:
         valid = (
             {
                 name: (
-                    "raster"
-                    if definition.inputs[item.input].type == "catalog_raster"
-                    else definition.inputs[item.input].type
+                    "prepared_hydrology"
+                    if isinstance(item, FixedHydrologyBinding)
+                    else (
+                        "raster"
+                        if definition.inputs[item.input].type == "catalog_raster"
+                        else definition.inputs[item.input].type
+                    )
                 )
                 for name, item in step.inputs.items()
             }
@@ -350,7 +373,12 @@ def validate_operation(definition: ModelDefinition) -> None:
             and len(set(requested)) == len(requested)
             and "provenance" not in definition.outputs
             and definition.executionProfile == contract.execution_profile
-            and {item.input for item in step.inputs.values()} == set(definition.inputs)
+            and {
+                item.input
+                for item in step.inputs.values()
+                if isinstance(item, InputBinding)
+            }
+            == set(definition.inputs)
             and {item.parameter for item in step.parameters.values()}
             == set(definition.parameters)
             and all(
