@@ -47,6 +47,13 @@ semantic version; its definition checksum captures the configuration in saved
 runs. Version 4.0.0 supplies the bundled model's hydrology through this
 configuration.
 
+The `definitionSha256` in the [example run request](model-examples/downstream-beneficiaries.request.json)
+identifies the canonical model recipe: its input declarations, fixed configuration,
+parameters and outputs. API clients copy it from model discovery so submission
+uses the recipe shown during setup. Reboots and remounts leave this checksum
+unchanged when the installed recipe stays the same; each run resolves its
+configured catalog sources afresh.
+
 The watershed source is the complete configured layer. The original WWF model
 uses integer IDs and the configured downstream and terminal fields. The model
 operator chooses suitable data for the intended analysis, including terrain
