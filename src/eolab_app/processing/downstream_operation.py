@@ -2,9 +2,12 @@
 
 from typing import Any, Callable
 
+from pydantic import JsonValue
+
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.downstream_models import (
     DownstreamLimits,
+    DownstreamInvocationMetadata,
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
@@ -21,6 +24,44 @@ from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
+
+
+def validate_downstream_invocation(
+    input_types: dict[str, str],
+    inputs: dict[str, JsonValue],
+    extra: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    """Check saved downstream registration snapshots against their selected references.
+
+    Args:
+        input_types: Model input names and their validated declared types.
+        inputs: Captured input values already checked by their registered adapters.
+        extra: Additional fields saved alongside the generic model invocation.
+
+    Returns:
+        Validated metadata in its historical JSON form, omitting an empty snapshot map.
+
+    Raises:
+        ValueError: If snapshots are missing, extra or different from selected references.
+        ValidationError: If saved metadata contains unknown fields or invalid snapshots.
+    """
+    metadata = DownstreamInvocationMetadata.model_validate(extra)
+    roles = {
+        name
+        for name, input_type in input_types.items()
+        if input_type == "prepared_hydrology"
+    }
+    if set(metadata.hydrology) != roles:
+        raise ValueError(
+            "Capture every selected hydrology configuration with its source identities"
+        )
+    for name in roles:
+        reference = metadata.hydrology[name].reference.model_dump(mode="json")
+        if reference != inputs[name]:
+            raise ValueError(
+                "Captured hydrology does not match the selected configuration"
+            )
+    return metadata.model_dump(mode="json", by_alias=True)
 
 
 def bind_downstream(

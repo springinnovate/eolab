@@ -21,7 +21,7 @@ import shapely
 from pydantic import AwareDatetime, BaseModel, ValidationError
 
 from eolab_app.processing.model_definitions import (
-    FixedHydrologyBinding,
+    FixedInputBinding,
     ModelSchema,
     ModelRegistry,
     validate_operation,
@@ -253,7 +253,7 @@ def build_model_calculation_request(
             {
                 name: (
                     binding.value
-                    if isinstance(binding, FixedHydrologyBinding)
+                    if isinstance(binding, FixedInputBinding)
                     else invocation.inputs[binding.input]
                 )
                 for name, binding in step.inputs.items()

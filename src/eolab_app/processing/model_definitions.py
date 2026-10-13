@@ -8,7 +8,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializeAsAny,
     ValidationError,
+    ValidationInfo,
     field_serializer,
     field_validator,
     model_validator,
@@ -22,7 +24,6 @@ from eolab_app.processing.model_yaml import (
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.model_operations import OPERATIONS
 from eolab_app.processing.raster_expression import compile_expression, walk
-from eolab_app.processing.prepared_hydrology import HydrologySources
 
 Name = Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
 Version = Annotated[
@@ -52,14 +53,7 @@ class ModelInput(ModelSchema):
     the actual catalog dataset, published raster result or area.
     """
 
-    type: Literal[
-        "raster",
-        "catalog_raster",
-        "summary_area",
-        "clip_area",
-        "mask_source",
-        "prepared_hydrology",
-    ]
+    type: Name
     label: Label
 
 
@@ -166,14 +160,14 @@ class ParameterBinding(ModelSchema):
     parameter: Name
 
 
-class FixedHydrologyBinding(ModelSchema):
-    """Supply a calculation's DEM and watershed configuration directly from Model YAML.
+class FixedInputBinding(ModelSchema):
+    """Supply an operation-owned input value directly from Model YAML.
 
-    The model author chooses catalog sources and their field mappings. This
-    binding creates no user-selectable input and requires no registration report.
+    The selected operation defines the schema for each argument that accepts a
+    fixed value. The model author supplies it once in the recipe.
     """
 
-    value: HydrologySources
+    value: SerializeAsAny[BaseModel]
 
 
 class ModelStep(ModelSchema):
@@ -181,14 +175,54 @@ class ModelStep(ModelSchema):
 
     For example, a summary step runs ``raster.aggregate.v1`` with the model's
     raster and area inputs and its summary-formula parameter. The bindings map
-    those model inputs and parameters to the operation's argument names. A fixed
-    hydrology value supplies catalog sources and field mappings from the recipe.
+    those model inputs and parameters to the operation's argument names. Fixed
+    bindings supply values validated by the operation's own input schemas.
     """
+
+    model_config = ConfigDict(revalidate_instances="always")
 
     id: Name
     operation: Annotated[str, Field(strict=True, pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
-    inputs: Mapping[Name, InputBinding | FixedHydrologyBinding] = Field(max_length=16)
+    inputs: Mapping[Name, InputBinding | FixedInputBinding] = Field(max_length=16)
     parameters: Mapping[Name, ParameterBinding] = Field(max_length=32)
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def parse_fixed_inputs(cls, value: Any, info: ValidationInfo) -> Any:
+        """Validate fixed argument values with the selected operation's schemas.
+
+        Args:
+            value: Raw bindings or previously parsed input-binding instances.
+            info: Validated step fields, including its operation identifier.
+
+        Returns:
+            Bindings whose fixed values use the operation's registered models.
+
+        Raises:
+            ValueError: If a fixed argument is unsupported or its binding is malformed.
+            ValidationError: If a fixed value violates its operation-owned schema.
+        """
+        if not isinstance(value, Mapping):
+            return value
+        operation = OPERATIONS.get(info.data.get("operation"))
+        schemas = dict(operation.fixed_input_models) if operation else {}
+        bindings = {}
+        for name, binding in value.items():
+            if isinstance(binding, FixedInputBinding):
+                data = binding.model_dump(mode="json", by_alias=True)
+            else:
+                data = binding
+            if isinstance(data, Mapping) and "value" in data:
+                if set(data) != {"value"} or name not in schemas:
+                    raise ValueError("The operation does not support this fixed input")
+                fixed_value = data["value"]
+                if isinstance(fixed_value, BaseModel):
+                    fixed_value = fixed_value.model_dump(mode="json", by_alias=True)
+                binding = FixedInputBinding(
+                    value=schemas[name].model_validate(fixed_value)
+                )
+            bindings[name] = binding
+        return bindings
 
     @field_validator("inputs", "parameters", mode="after")
     @classmethod
@@ -244,7 +278,7 @@ class ModelOutput(ModelSchema):
 class ModelDefinition(ModelSchema):
     """A reusable analysis recipe with inputs, parameters, a step and outputs.
 
-    The ID and version identify the recipe. Fixed hydrology sources belong to
+    The ID and version identify the recipe. Fixed operation inputs belong to
     its step bindings; user dataset selections and parameter values belong to
     individual runs. EOlab currently executes one calculation step per recipe.
     """
@@ -353,8 +387,8 @@ def validate_operation(definition: ModelDefinition) -> None:
         valid = (
             {
                 name: (
-                    "prepared_hydrology"
-                    if isinstance(item, FixedHydrologyBinding)
+                    dict(contract.inputs).get(name)
+                    if isinstance(item, FixedInputBinding)
                     else (
                         "raster"
                         if definition.inputs[item.input].type == "catalog_raster"
@@ -364,6 +398,12 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.inputs.items()
             }
             == dict(contract.inputs)
+            and all(
+                name in dict(contract.fixed_input_models)
+                for name, item in step.inputs.items()
+                if isinstance(item, FixedInputBinding)
+            )
+            and isinstance(step.inputs.get(contract.primary_input), InputBinding)
             and {
                 name: definition.parameters[item.parameter].type
                 for name, item in step.parameters.items()

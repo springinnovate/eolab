@@ -8,7 +8,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
 from eolab_app.processing.polygon_areas import PolygonAreaReference
@@ -29,7 +29,9 @@ from eolab_app.processing.downstream_models import (
     QueuedDownstream,
     DownstreamPlan,
     DownstreamPolicy,
+    StartingMask,
 )
+from eolab_app.processing.prepared_hydrology import HydrologyReference, HydrologySources
 
 Request = TypeVar("Request", bound=BaseModel)
 Queued = TypeVar("Queued", bound=BaseModel)
@@ -91,6 +93,11 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         extra_sources: Additional catalog rasters to capture and check with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
         check_execution: Recheck vector access and identity before result publication.
+        fixed_input_models: Argument names and schemas for values fixed in Model YAML.
+        input_adapters: Additional operation-owned types accepted by selected inputs.
+        validate_invocation: Validate captured operation metadata using input role
+            types, selected values and extra fields; return canonical JSON fields.
+            Operations without this callback accept no extra invocation fields.
     """
 
     id: str
@@ -134,6 +141,15 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     check_execution: Callable[[OperationContext, Prepared], Awaitable[None]] = (
         raster.check_raster_execution
     )
+    fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
+    input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
+    validate_invocation: (
+        Callable[
+            [dict[str, str], dict[str, JsonValue], dict[str, JsonValue]],
+            dict[str, JsonValue],
+        ]
+        | None
+    ) = None
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
@@ -231,6 +247,12 @@ OPERATIONS = MappingProxyType(
                 extra_sources=downstream.get_additional_sources,
                 execution_inputs=downstream.resolve_downstream_execution_inputs,
                 check_execution=downstream.check_downstream_execution,
+                fixed_input_models=(("hydrology", HydrologySources),),
+                input_adapters=(
+                    ("mask_source", TypeAdapter(StartingMask)),
+                    ("prepared_hydrology", TypeAdapter(HydrologyReference)),
+                ),
+                validate_invocation=downstream.validate_downstream_invocation,
             ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",

@@ -138,12 +138,13 @@ execution of dependent recipes or permanent storage.
 ## Add a new algorithm
 
 The downstream DEM, watershed source and topology mappings are configured in
-`steps[0].inputs.hydrology.value`, using catalog identities. They are not declared
-in the model's user-facing `inputs`. See [model hydrology configuration](prepared-hydrology.md)
-for the typed fixed binding and deployment instructions. No registration report or
-historical source fingerprint authorizes a new run. The old `prepared_hydrology`
-input/report schemas remain readable in historical Run YAML. Existing summary and
-clip recipes remain unchanged.
+`steps[0].inputs.hydrology.value`, using catalog identities. The downstream
+operation owns this configuration schema, its starting-mask input schema and
+historical report parsing. Generic model binding uses the schemas and validation
+callbacks declared by the operation registration. See
+[model hydrology configuration](prepared-hydrology.md) for deployment instructions.
+Model setup presents the starting mask, values and calculation parameters to the
+user. Saved Run YAML captures the configuration and preserves historical reports.
 
 YAML selects trusted capabilities; it does not contain Python import paths or
 execute arbitrary code. A genuinely new algorithm needs a registered operation
@@ -153,6 +154,9 @@ module. `processing/raster_operations.py` contains the existing adapters.
 The registration declares input/parameter types, queued and prepared schemas,
 request binding, source identity, owned polygon capture, preparation, native
 execution, numerical policy, result metadata and retained Run YAML outcome.
+Operations can declare fixed-input schemas for recipe values, adapters for their
+input types and validation for their saved metadata. The owning operation checks
+those values; the generic runner binds and stores the validated result.
 Ordinary summary cache behavior is also registered. Model runs execute afresh
 and do not join ordinary shared calculations or reuse their scalar cache.
 

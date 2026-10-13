@@ -12,6 +12,7 @@ from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
     HydrologySources,
+    Identifier,
     PreparedHydrologySnapshot,
     NetworkId,
 )
@@ -83,6 +84,18 @@ class VectorStartingMask(HydrologySchema):
 StartingMask = Annotated[
     RasterStartingMask | VectorStartingMask, Field(discriminator="kind")
 ]
+
+
+class DownstreamInvocationMetadata(HydrologySchema):
+    """Retain source registration snapshots captured by historical downstream runs.
+
+    Current recipes contain fixed source configuration in their step bindings.
+    Earlier runs preserve this metadata in their original Run YAML format.
+    """
+
+    hydrology: dict[Identifier, PreparedHydrologySnapshot] = Field(
+        default_factory=dict, max_length=16, exclude_if=lambda value: not value
+    )
 
 
 class DownstreamRequest(HydrologySchema):
