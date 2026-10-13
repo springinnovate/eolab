@@ -26,13 +26,7 @@
 .models-run-heading { display: flex; align-items: start; gap: 8px; min-width: 0; }
 .models-run-heading h3 { flex: 1; }
 .models-run-heading > button { flex: none; padding: 3px 6px; }
-#models-panel .models-compact-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#models-panel .models-compact-name:focus { white-space: normal; overflow-wrap: anywhere; }
-#models-panel .models-compact-name:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.models-name-details { min-width: 0; }
-.models-name-details p { margin: 6px 0; overflow-wrap: anywhere; }
-.models-name-details > button { padding: 3px 6px; }
-.models-name-details > [role="status"] { display: block; }
+#models-panel .models-name { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .models-run-name-editor { margin: 8px 0; }
 .models-details { margin: 12px 0; font-size: 0.8rem; }
 .models-details summary { cursor: pointer; color: var(--brand); }

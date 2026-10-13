@@ -182,9 +182,8 @@ Output names include their run name and creation time, with no hash. For example
 download filename. Saved Run and Model YAML downloads also carry that run context.
 The installed library's reusable Model YAML keeps its recipe name.
 
-Long names are shortened in lists. Hover or focus the name to inspect it, or
-open the run details for the full text and **Copy name**. The Runs list shows
-the creation time separately so it remains visible even when a name is long.
+The Runs list, run heading and output downloads show complete names, including
+the timestamp. Long names and filenames wrap onto additional lines.
 
 Choose **Show on map** beside a GeoTIFF or supported GeoJSON output to inspect it.
 Nothing is added automatically. Its button changes to **On map**, and Map layers
