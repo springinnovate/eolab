@@ -73,10 +73,11 @@ def assert_same_raster(actual: Path, expected: Path) -> None:
         "virtual-link",
         "resampled-dem",
         "dem-nodata",
+        "dem-pit",
     ],
 )
 def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> None:
-    """The unchanged CLI and EOlab return exactly the same rasters and sum.
+    """The unchanged CLI and EOlab return identical results and routing terrain.
 
     The reference prepares canonical HydroBASINS fields and a known AOI itself;
     it does not use EOlab's input conversion or calculation helpers. The original
@@ -109,10 +110,13 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             raster.write(values, 1)
         area = box(0, 0, 0.02, 4)
     reference_mask = sources.rasters["starting_mask"]
-    if case == "dem-nodata":
+    if case in {"dem-nodata", "dem-pit"}:
         with rasterio.open(sources.rasters["dem"], "r+") as raster:
             elevations = raster.read(1)
-            elevations[1, 4] = raster.nodata
+            if case == "dem-nodata":
+                elevations[1, 4] = raster.nodata
+            else:
+                elevations[1, 2] = -50
             raster.write(elevations, 1)
         report = validate_hydrology_sources(
             request.hydrology.definition,
@@ -358,6 +362,32 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
     assert_same_raster(
         wrapped / "masked_values.tif", output / "reference-area_union_population.tif"
     )
+    reference_routing_dems = {
+        path.parent.name: path
+        for path in (reference / "work").rglob("pit_filled_*_clipped.tif")
+    }
+    assert reference_routing_dems
+    retained_routing_dems = {
+        item.name.removeprefix("routing_dem_"): item
+        for item in artifact.additional_outputs
+        if item.output_name == "routing_dem"
+    }
+    assert set(retained_routing_dems) == set(reference_routing_dems)
+    if case == "multiple-drains":
+        assert len(retained_routing_dems) == 3
+    for drain, file in retained_routing_dems.items():
+        assert_same_raster(wrapped / file.storage_name, reference_routing_dems[drain])
+        assert file.member_label == f"Drain {drain.removeprefix('drain_')}"
+    if case == "dem-pit":
+        filled_path = next(iter(reference_routing_dems.values()))
+        clipped_path = filled_path.with_name(
+            filled_path.name.removeprefix("pit_filled_")
+        )
+        with (
+            rasterio.open(filled_path) as filled,
+            rasterio.open(clipped_path) as clipped,
+        ):
+            assert np.any(filled.read(1) != clipped.read(1))
     with next(output.glob("comparison_*.csv")).open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 1

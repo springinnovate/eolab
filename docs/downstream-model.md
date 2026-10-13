@@ -1,6 +1,6 @@
 # Downstream ecosystem beneficiaries
 
-`downstream-beneficiaries` version **2.0.0** wraps the original
+`downstream-beneficiaries` version **2.1.0** wraps the original
 [WWF workflow at 7e32ae28540ab53178248758a6f40affea8d6ff6](https://github.com/springinnovate/wwf_es_beneficiaries/tree/7e32ae28540ab53178248758a6f40affea8d6ff6).
 Its source is packaged byte for byte. Processing calls the original partitioning,
 DEM preparation, flow routing, conditional coverage, stitching and population
@@ -42,9 +42,23 @@ not inferred from the DEM. Compare standalone runs using identical settings,
 inputs and AOIs.
 
 Retained outputs are original coverage and masked-values GeoTIFFs, a starting-mask
-diagnostic, statistics CSV, provenance and Run YAML. Rasters use ordinary EOlab
+diagnostic, routing DEMs, statistics CSV, provenance and Run YAML. Rasters use ordinary EOlab
 rendering, styling, sampling and model-input pipelines. Scratch remains run-owned
 and is removed after calculation or by failed/cancelled-attempt cleanup.
+
+In a completed run, find **Routing DEM (pit-filled) · Drain …** under **Files from
+this run** and choose **Show on map** or **Download**. This is the exact elevation
+file passed to the original model's MFD routing, after clipping to the drainage
+polygons, resampling to the calculation pixel size and filling pits. Its NoData
+edge is preserved, so it can help explain where a downstream trace stops.
+
+Separate drainage groups keep separate DEM files, identified by terminal drain ID;
+EOlab does not mosaic or resample them again. These intermediate rasters use the
+same styling, pixel picking, model-input access, seven-day expiry, renewal and
+deletion controls as other run rasters. They are retained by the recipe's
+`analysis.routing_dem` output. Older completed runs have already discarded their
+DEM scratch files and must be rerun to inspect them. Version 2.1.0 adds these files
+without changing the original calculations.
 
 ## Numerical behavior
 
@@ -105,7 +119,8 @@ deployment/beneficiaries-source.json --output /tmp/beneficiaries-wheels`, instal
 the generated wheels, then install EOlab.
 
 `tests/test_downstream_upstream.py` invokes the unchanged CLI separately with
-independently prepared inputs. It requires exact coverage and masked pixels,
+independently prepared inputs. It requires exact coverage, masked values and each
+drainage group's pit-filled routing DEM pixels,
 validity masks, CRS, transforms, dimensions, types, NoData and total equality.
 Cases cover buffer/cutoff, resampled signed/NoData values, filtered vector starts,
 multiple drainages and virtual links. Worker tests retain publication, Run YAML,

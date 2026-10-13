@@ -142,6 +142,8 @@ function validateJob(job) {
 }
 
 /** Check a run's output-file list, sizes and download URLs against its current status.
+ * One declared output can produce many files, so the list has no fixed count limit.
+ * Every file still requires valid metadata, a unique identity and a run-scoped URL.
  * @param {Object} manifest Complete file metadata from the server.
  * @param {Object} job Owning model job and its lifecycle snapshot.
  * @return {void}
@@ -150,7 +152,7 @@ function validateJob(job) {
 function validateModelArtifacts(manifest, job) {
     if (manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
         !["pending", "available", "unavailable"].includes(manifest.availability) ||
-        !Array.isArray(manifest.files) || manifest.files.length > 64 ||
+        !Array.isArray(manifest.files) ||
         !Number.isSafeInteger(manifest.totalBytes) || manifest.totalBytes < 0 ||
         (manifest.availability === "available" ? job.status !== "ready" || !manifest.files.length : manifest.files.length || manifest.totalBytes))
         throw new Error("Processing returned invalid result file availability.");

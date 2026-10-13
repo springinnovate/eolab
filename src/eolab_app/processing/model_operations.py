@@ -47,6 +47,9 @@ class OperationOutput:
         media_type: Format written by the operation.
         label: Default display label, overridable by the recipe.
         role: Whether this is a final result or a retained scientific intermediate.
+        multiple_files: Whether the output contains individually named files.
+            Each member keeps its operation-supplied name and appends its member
+            label to the recipe's display label.
     """
 
     name: str
@@ -55,6 +58,7 @@ class OperationOutput:
     media_type: str
     label: str
     role: Literal["result", "intermediate"] = "result"
+    multiple_files: bool = False
 
 
 @dataclass(frozen=True)
@@ -198,6 +202,15 @@ OPERATIONS = MappingProxyType(
                         "image/tiff",
                         "Starting mask",
                         "intermediate",
+                    ),
+                    OperationOutput(
+                        "routing_dem",
+                        "raster",
+                        "map",
+                        "image/tiff",
+                        "Routing DEM (pit-filled)",
+                        "intermediate",
+                        multiple_files=True,
                     ),
                 ),
                 execution_profile="downstream-small-region",

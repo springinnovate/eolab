@@ -112,9 +112,26 @@ test("multiple run files require scoped URLs, unique IDs and valid availability"
         value => { value.files[0].filename = "../other"; },
         value => { value.availability = "pending"; },
         value => { value.totalBytes = 1; },
-        value => { value.files = Array(65).fill(value.files[0]); },
     ]) {
         artifacts = fileManifest(); damage(artifacts);
         await assert.rejects(h.api.getJob(job().jobId));
+    }
+});
+
+test("more than 64 distinct run files are accepted and the last file is still validated", async () => {
+    const artifacts = fileManifest(), source = artifacts.files[0];
+    artifacts.files = Array.from({length: 65}, (_, index) => {
+        const artifactId = index.toString(16).padStart(32, "0"), name = `intermediate_${index}`;
+        return {...source, artifactId, name, filename: `${name}.tif`, role: "intermediate",
+            label: `Intermediate ${index + 1}`,
+            url: `/api/processing/jobs/${artifacts.jobId}/artifacts/${artifactId}`};
+    });
+    artifacts.totalBytes = artifacts.files.reduce((total, file) => total + file.bytes, artifacts.totalBytes);
+    const h = fixture(() => job({status: "ready", expiresAt: artifacts.expiresAt, result: statisticsResult, artifacts}));
+    assert.deepEqual((await h.api.getJob(job().jobId)).artifacts, artifacts);
+    const lastFile = artifacts.files.at(-1);
+    for (const change of [{url: lastFile.url.replace(artifacts.jobId, "f".repeat(32))}, {sha256: "bad"}]) {
+        artifacts.files[artifacts.files.length - 1] = {...lastFile, ...change};
+        await assert.rejects(h.api.getJob(job().jobId), /result file details|result file download address/);
     }
 });

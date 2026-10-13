@@ -329,7 +329,9 @@ def declare_model_files(
 
     Returns:
         Only the scientific files explicitly requested by this recipe. The worker
-        separately includes the operation's provenance record.
+        separately includes the operation's provenance record. Collection outputs
+        retain each member's operation-supplied name and combine the recipe label
+        with the member label; single-file outputs use the recipe alias.
 
     Raises:
         ProcessingError: If files are missing, duplicated, unknown, or have a format
@@ -349,27 +351,34 @@ def declare_model_files(
         sha256=artifact.sha256,
     )
     produced = (primary, *artifact.additional_outputs)
-    if (
-        len(produced) > 32
-        or len({item.name for item in produced}) != len(produced)
-        or any(
-            item.name not in contracts
-            or item.media_type != contracts[item.name].media_type
-            for item in produced
-        )
-    ):
+    if len({item.name for item in produced}) != len(produced):
         raise ProcessingError(
             "invalid_model_result",
             "The operation returned unexpected result files.",
             500,
         )
-    by_name = {item.name: item for item in produced}
+    by_output: dict[str, list[ProducedFile]] = {}
+    for item in produced:
+        output_name = item.output_name or item.name
+        contract = contracts.get(output_name)
+        if (
+            contract is None
+            or item.media_type != contract.media_type
+            or contract.multiple_files != (item.output_name is not None)
+            or contract.multiple_files != (item.member_label is not None)
+        ):
+            raise ProcessingError(
+                "invalid_model_result",
+                "The operation returned unexpected result files.",
+                500,
+            )
+        by_output.setdefault(output_name, []).append(item)
     summary = row.get("summary") or row["spec"]
     outputs = summary.get("outputs") or {operation.output.name: summary["output"]}
     declarations = []
     for name, output in outputs.items():
         if (
-            name not in by_name
+            name not in by_output
             or name not in contracts
             or output["mediaType"] != contracts[name].media_type
             or output["role"] != contracts[name].role
@@ -379,19 +388,25 @@ def declare_model_files(
                 "A declared model output is missing or invalid.",
                 500,
             )
-        item = by_name[name]
-        declarations.append(
-            FileDeclaration(
-                name=output["name"],
-                label=output["label"],
-                role=output["role"],
-                storage_name=item.storage_name,
-                filename=item.filename,
-                media_type=item.media_type,
-                size=item.size,
-                sha256=item.sha256,
+        for item in by_output[name]:
+            declarations.append(
+                FileDeclaration(
+                    name=(
+                        item.name if contracts[name].multiple_files else output["name"]
+                    ),
+                    label=(
+                        f"{output['label']} · {item.member_label}"
+                        if contracts[name].multiple_files
+                        else output["label"]
+                    ),
+                    role=output["role"],
+                    storage_name=item.storage_name,
+                    filename=item.filename,
+                    media_type=item.media_type,
+                    size=item.size,
+                    sha256=item.sha256,
+                )
             )
-        )
     return tuple(declarations)
 
 

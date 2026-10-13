@@ -584,6 +584,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         "starting_mask",
         "provenance",
         "masked_values",
+        "routing_dem_drain_3",
     }
     exported = client.get(f"/api/processing/jobs/{identifier}/run-yaml")
     RunDocument.model_validate(parse_yaml(exported.content, run=True))

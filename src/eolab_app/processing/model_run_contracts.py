@@ -52,7 +52,6 @@ from eolab_app.processing.artifact_manifest import (
     FileRole,
     FileName,
     MediaType,
-    MAX_ARTIFACT_FILES,
 )
 
 MODEL_OPERATION = "model.run.v1"
@@ -386,12 +385,13 @@ class ModelArtifactManifest(ModelSchema):
 
     Pending and unavailable runs contain no file links. totalBytes includes the
     private inventory file in addition to every result and retained intermediate.
+    A collection can retain any number of individually validated files.
     """
 
     jobId: OpaqueId
     availability: Literal["pending", "available", "unavailable"]
     expiresAt: datetime
-    files: list[ModelArtifactDownload] = Field(max_length=MAX_ARTIFACT_FILES)
+    files: list[ModelArtifactDownload]
     totalBytes: Annotated[int, Field(ge=0)]
 
 
@@ -531,16 +531,15 @@ class ModelOutcome(ModelSchema):
     """A finished run's final status, error, summary values or raster file metadata.
 
     This record remains available after result files expire, until the run's
-    metadata expires or the user deletes the run.
+    metadata expires or the user deletes the run. The artifact list includes
+    every retained collection member without a fixed file-count ceiling.
     """
 
     status: Literal["ready", "failed", "cancelled", "interrupted"]
     error: JobFailureResponse | None
     statistics: list[AggregateValue] | None
     raster: ModelRasterOutcome | None = None
-    artifacts: list[ModelArtifactRecord] | None = Field(
-        default=None, max_length=MAX_ARTIFACT_FILES
-    )
+    artifacts: list[ModelArtifactRecord] | None = None
 
 
 class ModelExecution(ModelSchema):

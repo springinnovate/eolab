@@ -300,6 +300,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
         "coverage",
         "starting_mask",
         "masked_values",
+        "routing_dem_drain_3",
     }
 
 
@@ -508,7 +509,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     registry = ModelRegistry.load_installed()
-    definition = registry.get("downstream-beneficiaries", "2.0.0")
+    definition = registry.get("downstream-beneficiaries", "2.1.0")
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
@@ -627,7 +628,14 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         "starting_mask",
         "provenance",
         "masked_values",
+        "routing_dem_drain_3",
     }
+    routing_dem = next(
+        file for file in response.artifacts.files if file.name == "routing_dem_drain_3"
+    )
+    assert routing_dem.role == "intermediate"
+    assert routing_dem.mediaType == "image/tiff"
+    assert routing_dem.label == "Routing DEM (pit-filled) · Drain 3"
     document = RunDocument.model_validate(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )

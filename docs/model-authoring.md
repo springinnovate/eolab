@@ -50,7 +50,7 @@ into exported older recipes, preserving their checksums.
 | --- | --- | --- | --- | --- |
 | `raster.aggregate.v1` | `raster: raster`, `area: summary_area` | `expression: summary_expression` | `statistics`, type `statistics`, presentation `table`, CSV | `raster-summary` |
 | `raster.clip.v1` | `raster: raster`, `area: clip_area` | None | `raster`, type `raster`, presentation `map`, GeoTIFF | `raster-clip` |
-| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression` | Statistics CSV, coverage GeoTIFF and optional starting-mask GeoTIFF | `downstream-small-region` |
+| `hydrology.downstream_beneficiaries.v1` | `starting_mask: mask_source`, `hydrology: prepared_hydrology`, `values: raster` | `buffer_m: number`, `cutoff_m: optional_number`, `summary: summary_expression`, `wgs84_pixel_size: number`, `travel_time_pixel_size_m: number` | Statistics CSV; masked values, coverage, starting mask and per-drain routing DEM GeoTIFFs | `downstream-small-region` |
 
 The `raster` input accepts either the existing `{collectionId, itemId}` catalog
 reference or `{kind: runArtifact, jobId, artifactId}` for an owned published
@@ -68,6 +68,32 @@ currently each produce one scientific result. `map` and
 `saveEligible` describe output capabilities; map previews and permanent saving
 are separate capabilities. Temporary map previews are available; permanent saving
 and YAML import from the browser are not yet available.
+
+The downstream model prepares a separate DEM for each terminal drainage group
+(watersheds grouped by their final drain). A starting area can reach several
+groups, so the number of DEMs is known only when the model runs. Each file is kept
+separately to preserve the exact grid and NoData edges used for routing.
+
+A recipe selects all those DEMs with one output declaration:
+
+```yaml
+outputs:
+  routing_dem:
+    source: analysis.routing_dem
+    type: raster
+    label: Routing DEM (pit-filled)
+    role: intermediate
+    presentation: map
+    saveEligible: true
+```
+
+The registered operation declares `multiple_files=True` for this output so the
+recipe can retain every DEM without listing drain IDs in advance. Each file
+keeps its unique operation-supplied name and adds its drain label to the recipe
+label, such as `Routing DEM (pit-filled) · Drain 6060506430`. The existing run-file
+view supplies download and Show on map controls for each file; it does not need
+to interpret drainage groups. Single-file outputs still use their recipe aliases,
+and files not belonging to a declared operation output are rejected.
 
 ## Reuse a published raster
 
@@ -147,8 +173,8 @@ The recipe's role, type and presentation must match the registered contract.
 The native operation returns its usual primary `Artifact`, with completed
 `ProducedFile` entries in `additional_outputs`. Each entry identifies a flat
 workspace basename and supplies its exact size, checksum, download name and
-media type. The operation's preparation must reserve disk for all files it can
-produce, including scratch and provenance. YAML cannot increase that reservation.
+media type. Processing writes the requested files without estimating or reserving
+a maximum disk footprint; actual filesystem failures are reported by the worker.
 Adding another recipe that selects these outputs needs no API or UI dispatch.
 
 After native execution exits, the worker binds completed files to the captured
@@ -159,12 +185,16 @@ receive download links. File hashing cooperates with cancellation and the worker
 waits for publication to stop before cleanup. The final database transition still
 checks the attempt, lease and deadline after the directory rename.
 
-Storage permits up to 64 retained files and a 64 KiB inventory. Model YAML
-permits up to 32 scientific outputs. A closed workspace may contain up to 128
+Retained file inventories have no fixed file-count or byte ceiling, so an output
+collection can grow with the calculation's drainage groups. For example, 64
+drainage groups produce 64 DEMs plus the run's other outputs. The browser accepts
+the full inventory and validates each file rather than rejecting the completed
+run at a fixed file count. Model YAML still
+permits up to 32 logical scientific outputs. A closed workspace contains only
 flat regular files; nested directories, symbolic links, junctions and hard links
 are rejected. Basenames must be portable and cannot be filesystem paths or
 Windows device names. The exact disk charge includes every retained file and
-the inventory itself. Failed attempts retain their reservation until cleanup.
+the inventory itself. Failed attempts remain owned by Processing until cleanup.
 
 Model status includes an `artifacts` manifest; it is also available from
 `GET /api/processing/jobs/{jobId}/artifacts`. Each file has an opaque `artifactId`,
