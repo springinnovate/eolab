@@ -1,7 +1,7 @@
 # Run a model
 
 Open **Tools → Models** in the map's right-hand Analysis area. Search the
-library by name or purpose, then choose **Set up model**. **Raster summary**
+library by name or purpose, then select a model's card to open setup. **Raster summary**
 calculates one summary formula for a raster and area. **Raster clip** produces
 a downloadable GeoTIFF of a raster within the chosen area. **Downstream ecosystem
 beneficiaries** traces flow from a starting mask and summarizes values in the
@@ -9,7 +9,7 @@ downstream area.
 
 ## Set up downstream analysis
 
-Choose **Downstream ecosystem beneficiaries → Set up model**. Select a named,
+Select the **Downstream ecosystem beneficiaries** card. Select a named,
 versioned **Prepared hydrology** dataset. Setup suggests a dataset when its
 elevation and watershed sources uniquely match Map layers, or only one dataset
 is installed; review that suggestion for your region. Expand **Terrain,
@@ -117,13 +117,13 @@ in `YYYY_MM_DD_HH_MM_SS` format, for example
 using the browser's UTC offset then. Older runs and API submissions without an
 offset use UTC.
 
-Choose **Rename run** in its details to change the name, including while the
+Choose the **Rename run** pencil beside its name to change it, including while the
 model is running. This updates its generated output names and future download
 filenames. It does not change the creation time, calculation or files. Duplicating
 a run creates a new timestamp when the new run is accepted.
 
 Open **Runs** or **Tools → Model runs** to see this browser session's history.
-Use **Load older runs** for earlier pages. Select a run to see its stage,
+Use **Load older runs** for earlier pages. Select a run's card to see its stage,
 measured progress, saved inputs, results and downloads. Progress counts
 apply to the current stage; they are not an estimated percentage for the entire
 model.
@@ -182,8 +182,9 @@ Output names include their run name and creation time, with no hash. For example
 download filename. Saved Run and Model YAML downloads also carry that run context.
 The installed library's reusable Model YAML keeps its recipe name.
 
-The Runs list, run heading and output downloads show complete names, including
-the timestamp. Long names and filenames wrap onto additional lines.
+The Runs list, run heading and output cards show complete names, including
+the timestamp. Long names and filenames wrap onto additional lines. Each output
+has a separate **Download** action beneath its name and file details.
 
 Choose **Show on map** beside a GeoTIFF or supported GeoJSON output to inspect it.
 Nothing is added automatically. Its button changes to **On map**, and Map layers

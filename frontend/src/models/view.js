@@ -1,7 +1,7 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { renderModelResult, renderModelFiles } from "./result-view.js";
+import { renderModelResult, renderModelFiles, updateModelFileActions } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { HydrologyInputView, hydrologyDetails } from "./hydrology-view.js";
 
@@ -73,9 +73,10 @@ export class ModelsView {
     /** Create a native button for a semantic action.
      * @param {string} label Visible and accessible action name.
      * @param {()=>void} action Click callback.
+     * @param {string} [className="secondary-button"] Appearance of this action.
      * @return {HTMLButtonElement} Button.
      */
-    button(label, action) { const button = this.element("button", label, "secondary-button"); button.type = "button"; button.addEventListener("click", action); return button; }
+    button(label, action, className = "secondary-button") { const button = this.element("button", label, className); button.type = "button"; button.addEventListener("click", action); return button; }
 
     /** Connect navigation and persistent controls to controller actions.
      * @param {Object<string,Function>} handlers Semantic user actions.
@@ -159,8 +160,8 @@ export class ModelsView {
         const sourceField = this.field("models-raster", Object.values(draft.model.inputs).find(input => ["raster", "catalog_raster"].includes(input.type))?.label ?? "Raster", source);
         if (!usesStartingMask) fields.append(sourceField, reason);
         const resultActions = this.element("div", "", "models-actions");
-        const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns);
-        const olderResults = this.button("Load older results", this.handlers.onMore);
+        const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns, "models-action");
+        const olderResults = this.button("Load older results", this.handlers.onMore, "models-action");
         resultActions.append(refreshResults, olderResults); if (!usesStartingMask) fields.append(resultActions);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
@@ -204,7 +205,7 @@ export class ModelsView {
             if (usesStartingMask && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
             if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
         }
-        const run = this.button("Run model", () => {}); run.type = "submit";
+        const run = this.button("Run model", () => {}, "models-primary"); run.type = "submit";
         const hint = this.element("p", "Run model uses the choices shown here. You can keep using the map while it runs. To stop it, choose Cancel run.", "models-help");
         fields.append(hint, run); form.append(fields);
         form.addEventListener("submit", event => { event.preventDefault(); this.handlers.onSubmit(); });
@@ -226,7 +227,7 @@ export class ModelsView {
     recipeDetails() {
         const root = this.element("details", "", "models-details"); root.append(this.element("summary", "Recipe & downloads"));
         const actions = this.element("div", "", "models-actions");
-        const preview = this.button("View Model YAML", this.handlers.onYaml);
+        const preview = this.button("View Model YAML", this.handlers.onYaml, "models-action");
         const model = this.element("a", "Download Model YAML"); model.download = "";
         const run = this.element("a", "Download Run YAML"); run.download = "";
         const message = this.element("p", "", "models-help");
@@ -309,12 +310,20 @@ export class ModelsView {
     buildRun(id) {
         const heading = this.element("div", "", "models-run-heading");
         const title = this.element("h3", "", "models-name");
-        const rename = this.button("Rename run", () => this.openRunNameEditor()); heading.append(title, rename);
+        const rename = this.button("", () => this.openRunNameEditor(), "models-action models-rename");
+        rename.title = "Rename run"; rename.setAttribute("aria-label", "Rename run");
+        const pencil = this.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        pencil.setAttribute("viewBox", "0 0 24 24"); pencil.setAttribute("aria-hidden", "true"); pencil.setAttribute("focusable", "false");
+        const pencilPath = this.document.createElementNS("http://www.w3.org/2000/svg", "path");
+        pencilPath.setAttribute("d", "m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z");
+        pencilPath.setAttribute("fill", "none"); pencilPath.setAttribute("stroke", "currentColor");
+        pencilPath.setAttribute("stroke-width", "1.7"); pencilPath.setAttribute("stroke-linecap", "round"); pencilPath.setAttribute("stroke-linejoin", "round");
+        pencil.append(pencilPath); rename.append(pencil); heading.append(title, rename);
         const created = this.element("p", "", "models-help");
         const nameEditor = this.element("form", "", "models-run-name-editor"); nameEditor.hidden = true;
         const nameInput = this.element("input"); nameInput.type = "text"; nameInput.required = true;
         const saveName = this.element("button", "Save name", "secondary-button"); saveName.type = "submit";
-        const cancelName = this.button("Cancel", () => this.closeRunNameEditor());
+        const cancelName = this.button("Cancel", () => this.closeRunNameEditor(), "models-action");
         const nameActions = this.element("div", "", "models-actions"); nameActions.append(saveName, cancelName);
         nameEditor.append(this.field("models-edit-run-name", "Run name", nameInput), nameActions);
         nameEditor.addEventListener("submit", event => { event.preventDefault(); void this.saveRunName(); });
@@ -325,8 +334,8 @@ export class ModelsView {
         const progress = this.element("progress"); progress.setAttribute("aria-label", "Current model stage progress");
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
         const actions = this.element("div", "", "models-actions");
-        const cancel = this.button("Cancel run", this.handlers.onCancel); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate);
-        const renew = this.button("Keep for another 7 days", this.handlers.onRenew);
+        const cancel = this.button("Cancel run", this.handlers.onCancel, "models-action"); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate, "models-action");
+        const renew = this.button("Keep for another 7 days", this.handlers.onRenew, "models-action");
         const remove = this.button("Delete run and results", this.handlers.onDelete);
         actions.append(cancel, duplicate, renew, remove);
         const confirmation = this.element("div", "", "models-result"); confirmation.setAttribute("role", "group");
@@ -405,15 +414,17 @@ export class ModelsView {
         r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. You can undo this for 30 seconds.`;
         r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
         r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
-        const signature = JSON.stringify([available, job?.result, job?.artifacts, state.outputPreviews]);
+        const signature = JSON.stringify([available, job?.result, job?.artifacts]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
+            r.fileActions = [];
             if (available && job.result) {
                 const filesAvailable = job.artifacts?.availability === "available";
                 renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
-                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
+                if (filesAvailable) r.fileActions = renderModelFiles(r.result, job.artifacts, this.element.bind(this), this.handlers.onShowOutput);
             }
         }
+        updateModelFileActions(r.fileActions, state.outputPreviews);
         r.expiry.hidden = job?.status === "deleted";
         r.inputs.hidden = job?.status === "deleted";
         r.expiry.textContent = job ? `Temporary run in this browser. Clearing cookies or losing this browser session loses access.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
@@ -498,11 +509,14 @@ export class ModelsView {
         if (signature !== this.librarySignature) {
             this.librarySignature = signature;
             this.elements["library-items"].replaceChildren(...filtered.map(model => {
-                const card = this.element("article", "", "models-library-card");
-                card.append(this.element("h3", model.title), this.element("p", model.description),
+                const card = this.element("article", "", "models-card");
+                const heading = this.element("h3");
+                const open = this.button(model.title, () => this.handlers.onChoose(model), "models-card-open models-name");
+                open.setAttribute("aria-label", `Set up ${model.title}`); heading.append(open);
+                card.append(heading, this.element("p", model.description),
                     this.element("p", `Inputs: ${Object.values(model.inputs).map(input => input.label).join(", ")}`, "models-help"),
                     this.element("p", `Outputs: ${Object.entries(model.outputs).map(([name, output]) => `${name} (${output.presentation})`).join(", ")}`, "models-help"),
-                    this.button("Set up model", () => this.handlers.onChoose(model))); return card;
+                    this.element("span", "Set up model →", "models-card-hint")); return card;
             }));
         }
         this.elements["library-status"].textContent = state.loading ? "Loading model library…" : filtered.length ? "" : "No matching models.";
@@ -516,9 +530,10 @@ export class ModelsView {
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
-                const root = this.element("article", "", "models-history-row"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId));
-                button.classList.add("models-name");
-                const status = this.element("small"); root.append(button, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
+                const root = this.element("article", "", "models-card");
+                const heading = this.element("h3"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId), "models-card-open models-name");
+                heading.append(button);
+                const status = this.element("small", "", "models-help"); root.append(heading, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
                 this.elements["runs-list"].append(root);
             }
             card.button.textContent = job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
