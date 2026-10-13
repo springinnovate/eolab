@@ -136,6 +136,49 @@ test("deletion needs confirmation and removes captured inputs and choices after 
     assert.equal(h.controller.state.page, "runs");
 });
 
+test("inline deletion returns focus on Keep or Escape and keeps a failed confirmation available", async () => {
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+    const ready = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z"});
+    let rejectDeletion, calls = 0;
+    const h = fixture({getJob: async () => ready, deleteModelRun: () => {
+        calls++; return new Promise((_resolve, reject) => { rejectDeletion = reject; });
+    }}, view);
+    await h.controller.showRun(ready.jobId);
+    const remove = view.run.remove;
+    remove.focus(); remove.dispatchEvent(new Event("click"));
+    assert.equal(doc.activeElement, view.run.keep); assert.equal(calls, 0);
+    view.run.keep.dispatchEvent(new Event("click"));
+    assert.equal(h.controller.state.deleteConfirmation, null); assert.equal(doc.activeElement, remove);
+    assert.equal(view.run.confirmation.hidden, true); assert.equal(calls, 0);
+
+    remove.dispatchEvent(new Event("click"));
+    const escape = new Event("keydown", {cancelable: true});
+    Object.defineProperty(escape, "key", {value: "Escape"});
+    view.run.confirmation.dispatchEvent(escape);
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(h.controller.state.deleteConfirmation, null); assert.equal(doc.activeElement, remove);
+    assert.equal(calls, 0);
+
+    remove.dispatchEvent(new Event("click")); view.run.confirm.focus();
+    const confirmation = view.run.confirmation, confirm = view.run.confirm;
+    const pending = h.controller.deleteRun();
+    const busyEscape = new Event("keydown", {cancelable: true});
+    Object.defineProperty(busyEscape, "key", {value: "Escape"});
+    confirmation.dispatchEvent(busyEscape);
+    assert.equal(h.controller.state.deleteConfirmation, ready.jobId);
+    assert.equal(h.controller.state.runs[0].jobId, ready.jobId);
+    rejectDeletion(new Error("Offline")); await pending;
+    assert.equal(calls, 1); assert.equal(view.run.confirmation, confirmation);
+    assert.equal(view.run.confirm, confirm); assert.equal(confirm.disabled, false);
+    assert.equal(doc.activeElement, confirm); assert.match(view.elements.error.textContent, /Offline/);
+    assert.equal(confirmation.hidden, false);
+
+    h.api.deleteModelRun = async () => ({...ready, status: "deleted", updatedAt: "2026-10-10T00:00:00Z"});
+    await h.controller.deleteRun();
+    assert.equal(h.controller.state.page, "runs"); assert.deepEqual(h.controller.state.runs, []);
+    assert.equal(doc.activeElement, view.elements.heading);
+});
+
 test("Undo restores its run and captured displays without extending expiry or changing the user's setup", async () => {
     const ready = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z"});
     const deletionUndo = {deletionId: "d".repeat(32), expiresAt: new Date(Date.now() + 30000).toISOString()};
