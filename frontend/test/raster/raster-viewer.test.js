@@ -4728,21 +4728,20 @@ test("an obsolete output publication never attaches a WMS layer", async () => {
     assert.equal(await pending,null); assert.equal(h.mapLayers.snapshots().length,0); h.destroy();
 });
 
-test("output names refresh after publication and later renames preserve raster rendering", async () => {
+test("updating output names preserves raster rendering and custom labels", async () => {
     let finish;
     const reads = [];
     const h = visibleLayerFixture(async source => { reads.push(source); return RASTER_STATISTICS; }, {
         publishRaster: () => new Promise(resolve => { finish = resolve; })});
     const raster = {source: {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32)},
         label: "Original output", bbox: [77,20,79,24], group: {id: "run", label: "Original run"}};
-    let presentation = {label: "Output · First run", sourceName: "Output · First run", group: {id: "run", label: "First run"}};
-    const pending = h.viewer.showSource(raster, {removed() {}, copy() {}, info() {}}, {getPresentation: () => presentation});
-    presentation = {label: "Output · New run", sourceName: "Output · New run", group: {id: "run", label: "New run"}};
+    const presentation = {label: "Output · First run", sourceName: "Output · First run", group: {id: "run", label: "First run"}};
+    const pending = h.viewer.showSource(raster, {removed() {}, copy() {}, info() {}}, presentation);
     finish({layerName: "eolab:output", bbox: raster.bbox});
     const record = await pending;
     await flushPromises();
     assert.equal(record.entry.label, presentation.label);
-    assert.equal(h.mapLayers.snapshots()[0].group.label, "New run");
+    assert.equal(h.mapLayers.snapshots()[0].group.label, "First run");
     const layer = record.state.layer;
     const readCount = reads.length;
     h.mapLayers.updateLocalPresentation(record.entry.key, {sourceName: "Output · Latest run", group: {id: "run", label: "Latest run"}});

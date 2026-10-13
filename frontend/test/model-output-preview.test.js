@@ -88,12 +88,18 @@ test("an output attaches with the current run name when it changes during a prev
     assert.equal(record.adapter.snapshot().group.label, renamed.label);
 });
 
-test("raster publication resolves current names after metadata and publication finish", async () => {
+test("a rename during raster publication updates the attached name once", async () => {
     let finishMetadata, finishPublication, attached;
+    const changes = [];
     const h = fixture({describe: () => new Promise(resolve => { finishMetadata = resolve; }),
+        updateLayer: (key, presentation) => {
+            assert.ok(attached);
+            changes.push({key, presentation});
+            Object.assign(attached, presentation);
+        },
         addRaster: async (_raster, _lifecycle, presentation) => {
             await new Promise(resolve => { finishPublication = resolve; });
-            attached = presentation.getPresentation();
+            attached = {...presentation};
             return {};
         }});
     h.file.mediaType = "image/tiff";
@@ -104,11 +110,15 @@ test("raster publication resolves current names after metadata and publication f
     const latest = {...renamedRun(h.run, "Name during publication"), updatedAt: "2026-10-11T00:00:00Z"};
     h.owner.updateRun(latest);
     finishPublication(); await pending;
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].key, artifactLayerKey(h.run.jobId, h.file.artifactId));
     assert.equal(attached.label, latest.artifacts.files[0].displayName);
+    assert.equal(attached.sourceName, latest.artifacts.files[0].displayName);
     assert.equal(attached.group.label, latest.label);
     assert.equal([...h.owner.layers.values()][0].runName, latest.label);
     h.owner.updateRun(h.run);
     assert.equal([...h.owner.layers.values()][0].runName, latest.label);
+    assert.equal(changes.length, 1);
 });
 
 test("a rename observed as raster attachment completes updates the retained presentation", async () => {
@@ -117,8 +127,7 @@ test("a rename observed as raster attachment completes updates the retained pres
     const h = fixture({describe: async () => ({version: "a".repeat(64), bounds: [0,0,1,1],
         capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
         updateLayer: (key, presentation) => changes.push({key, presentation}),
-        addRaster: async (_raster, _lifecycle, options) => {
-            options.getPresentation();
+        addRaster: async () => {
             h.owner.updateRun(latest);
             return {};
         }});
@@ -276,12 +285,15 @@ test("preview transport uses same-origin no-store requests and cancels oversized
 test("raster display delegates to the common raster owner using original identity and metadata", async () => {
     let attachment, copy;
     const h = fixture({read: () => { throw new Error("Raster previews must not be loaded"); },
+        updateLayer: () => assert.fail("Unchanged names do not need a presentation update"),
         describe: async source => ({source, version: "a".repeat(64), bounds: [0,0,1,1], capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
         addRaster: (raster, lifecycle, presentation) => { attachment = {raster, lifecycle, presentation}; copy = lifecycle.copy({kind: "raster"}); }});
     h.file.mediaType = "image/tiff"; h.file.sha256 = "a".repeat(64);
     await h.owner.show(h.run, h.file);
     assert.deepEqual(attachment.raster.source, {kind: "runArtifact", jobId: h.run.jobId, artifactId: h.file.artifactId});
     assert.deepEqual(attachment.raster.group, {id: h.run.jobId, label: h.run.label, actionLabel: "Delete run and results"});
+    assert.equal(attachment.presentation.sourceName, attachment.raster.label);
+    assert.deepEqual(attachment.presentation.group, attachment.raster.group);
     assert.equal(attachment.raster.capabilities.calculations, true);
     assert.equal(attachment.raster.item, undefined);
     assert.equal(copy.artifactId, h.file.artifactId); assert.equal(copy.appearance.kind, "raster");

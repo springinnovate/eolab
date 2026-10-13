@@ -67,6 +67,8 @@ export class ModelOutputLayers {
     }
 
     /** Explicitly load a file, then attach it only if its run is still available.
+     * Run-name changes during raster publication are applied through the map owner
+     * after attachment completes.
      * @param {Object} job Validated owning run snapshot.
      * @param {Object} file Validated manifest file.
      * @param {Object} [restore] Optional Undo style and map presentation.
@@ -95,7 +97,7 @@ export class ModelOutputLayers {
                 const bbox = metadata.bounds;
                 if (!bbox) throw new Error("This raster cannot be placed on the map. Download it or choose it directly as a model input.");
                 if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This raster crosses unsupported map bounds.");
-                let presentation = this.outputPresentation(job.jobId, file);
+                const presentation = this.outputPresentation(job.jobId, file);
                 const retained = await this.addRaster({source, version: metadata.version, bbox, ...presentation,
                     capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
                         calculations: true, modelInput: true}}, {
@@ -107,9 +109,8 @@ export class ModelOutputLayers {
                     copy: appearance => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance}),
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
-                }, {visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                }, {...presentation, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
                     customName: restore?.customName ?? null,
-                    getPresentation: () => (presentation = this.outputPresentation(job.jobId, file)),
                     isCurrent: () => !this.destroyed && !abort.signal.aborted && isCurrent() &&
                         this.runStates.get(job.jobId)?.status === "ready" && Date.parse(this.runStates.get(job.jobId).expiresAt) > Date.now()});
                 if (retained !== null && !abort.signal.aborted) {
