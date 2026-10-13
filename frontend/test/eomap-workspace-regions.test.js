@@ -618,6 +618,46 @@ test("workspace overflow shares one native action list and keeps statistics sett
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
+test("supporting analysis controls preserve native buttons, clear names and disclosure targets", () => {
+    for (const id of ["map-tools-more-summary", "map-inspection-more-summary"]) {
+        const {source} = requireElementRange(id);
+        assert.match(source, /^<button\b[^>]*\btype="button"/);
+        assert.match(source, /aria-label="Map and analysis tools"/);
+        assert.match(source, /aria-controls="workspace-tool-actions"/);
+        assert.match(source, /popovertarget="workspace-tool-actions"/);
+        assert.match(source, />Tools<\/button>$/);
+    }
+    const minimize = requireElementRange("toggle-map-inspection-dock").source;
+    assert.match(minimize, /^<button\b[^>]*\btype="button"/);
+    assert.match(minimize, /aria-expanded="true"/);
+    assert.match(minimize, /aria-controls="map-click-navigation map-inspection-tabs map-inspection-panels"/);
+    assert.match(minimize, />Minimize<\/button>$/);
+    for (const id of ["workspace-tool-actions", "map-click-navigation", "map-inspection-tabs", "map-inspection-panels"]) {
+        assert.equal(countMarkupId(id), 1, `supporting control target ${id} exists once`);
+    }
+    for (const [id, accessibleName] of [
+        ["models-close", "Close Models"],
+        ["close-raster-series", "Close raster series"],
+        ["close-annotations", "Close shared layer"],
+        ["calculations-close", "Close raster statistics"],
+        ["raster-clips-close", "Close raster download"],
+        ["close-vector-inspector", "Close feature inspector"],
+        ["close-vector-time-series", "Close vector series"],
+        ["close-vector-feature-profile", "Close feature-field plot"],
+        ["close-map-histogram", "Close raster histogram"],
+        ["close-vector-filter", null],
+        ["close-layer-style", "Close style editor"],
+    ]) {
+        const {source} = requireElementRange(id);
+        assert.match(source, /^<button\b[^>]*\btype="button"/, `${id} remains keyboard-operable`);
+        assert.equal(countMarkupId(id), 1);
+        if (accessibleName) assert.ok(source.includes(`aria-label="${accessibleName}"`), `${id} names its panel`);
+        if (id === "close-vector-filter" || id === "close-layer-style") assert.match(source, />Close<\/button>$/);
+        else assert.match(source, />(?:×|&times;)<\/button>$/);
+        assert.doesNotMatch(source, /\btabindex="-1"|\sdisabled(?:\s|>)/, `${id} remains reachable`);
+    }
+});
+
 test("semantic regions preserve one DOM instance of every owned control", () => {
     const uniqueIdentifiers = [
         "control-panel",

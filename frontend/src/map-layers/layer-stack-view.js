@@ -111,6 +111,8 @@ export class MapLayerStackView {
         this.filterIndicators = [
             "#map-filter-indicators", "#map-inspection-filter-indicators",
         ].map((selector) => documentContext.querySelector(selector)).filter(Boolean);
+        /** @type {Map<Element,Map<string,{root:HTMLDivElement,label:HTMLElement,summary:HTMLSpanElement,edit:HTMLButtonElement}>>} Stable filter controls for each presentation slot. */
+        this.filterStrips = new Map();
         this.root = requireLayerStackElement(
             documentContext,
             "#raster-layer-stack"
@@ -365,24 +367,52 @@ export class MapLayerStackView {
     }
 
     /**
-     * Show active-filter summaries in the map and dock presentation slots.
-     * @param {Object[]} layers Neutral retained-layer presentation snapshots.
+     * Show layer names and filter status beside an explicit editing action.
+     * Retain each action while counts change so keyboard focus stays in place.
+     * @param {MapLayerStackSnapshot[]} layers Neutral retained-layer presentation snapshots.
      * @return {void}
      */
     #renderFilters(layers) {
         const active = layers.filter((layer) => layer.visible && layer.filterActive);
         for (const container of this.filterIndicators) {
-            const buttons = active.map((layer) => {
-                const button = this.documentContext.createElement("button");
-                button.type = "button";
-                button.className = "secondary-button map-filter-indicator";
-                button.textContent = `${layer.label} · ${layer.filterStatus} · Filter`;
-                button.title = `Edit filter for ${layer.label}. Counts cover the whole layer.`;
-                button.addEventListener("click", () => this.handlers?.onFilter?.(layer.key));
-                return button;
+            let strips = this.filterStrips.get(container);
+            if (!strips) { strips = new Map(); this.filterStrips.set(container, strips); }
+            const activeKeys = new Set(active.map(layer => layer.key));
+            for (const [key, strip] of strips) {
+                if (!activeKeys.has(key)) { strip.root.remove(); strips.delete(key); }
+            }
+            active.forEach((layer, index) => {
+                let strip = strips.get(layer.key);
+                if (!strip) {
+                    const root = this.documentContext.createElement("div");
+                    root.className = "map-filter-indicator";
+                    const information = this.documentContext.createElement("div");
+                    information.className = "map-filter-information";
+                    const label = this.documentContext.createElement("strong");
+                    label.className = "map-filter-layer";
+                    const summary = this.documentContext.createElement("span");
+                    summary.className = "map-filter-summary";
+                    information.append(label, summary);
+                    const edit = this.documentContext.createElement("button");
+                    edit.type = "button";
+                    edit.className = "analysis-panel-action map-filter-edit";
+                    edit.textContent = "Edit filter";
+                    edit.addEventListener("click", () => this.handlers?.onFilter?.(layer.key));
+                    root.append(information, edit);
+                    strip = {root, label, summary, edit};
+                    strips.set(layer.key, strip);
+                }
+                strip.label.textContent = layer.label;
+                strip.summary.textContent = layer.filterStatus ?? "";
+                strip.edit.setAttribute("aria-label", `Edit filter for ${layer.label}`);
+                strip.edit.title = `Edit filter for ${layer.label}. Counts cover the whole layer.`;
+                if (container.children[index] !== strip.root) {
+                    const focused = strip.root.contains(this.documentContext.activeElement);
+                    container.insertBefore(strip.root, container.children[index] ?? null);
+                    if (focused) strip.edit.focus({preventScroll: true});
+                }
             });
-            container.replaceChildren(...buttons);
-            container.hidden = buttons.length === 0;
+            container.hidden = active.length === 0;
         }
     }
 

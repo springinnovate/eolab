@@ -1,5 +1,12 @@
 /* Models uses the existing Analysis panel's typography, colors and controls. */
 #models-panel { min-width: 0; }
+/* Cover the panel's 14px scroll padding so output cannot peek above the header. */
+#models-panel > .map-histogram-toolbar {
+  top: -14px;
+  margin: -14px -14px 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-1);
+}
 #models-panel h2 { font-size: 1rem; margin: 0; }
 #models-panel h3 { font-size: 0.95rem; margin: 0 0 6px; }
 .models-navigation, .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
