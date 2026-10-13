@@ -567,7 +567,7 @@ The downstream model also builds the hash-pinned EcoShard archive in
 NumPy headers and tested Cython 3.0.12 compiler. Its legacy setup needs these build
 dependencies installed before wheel generation; both the application and disposable
 PostgreSQL test images build it without an isolated backend. The distribution
-version is fixed by `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g8d6b778edbaa`.
+version is fixed by `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g6bd106862a2c`.
 
 For local development, install GDAL 3.10.x with NumPy support using your native
 package manager (for example, conda-forge). Install NumPy, Cython 3.0.12,

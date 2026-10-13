@@ -296,7 +296,7 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     provenance = json.loads((directory / "provenance.json").read_text())
     assert provenance["numericalPolicy"]["pitFillSearchLimit"] == 100
     assert provenance["numericalPolicy"]["pitFillTreatNodataAsClosed"] is True
-    assert provenance["ecoshardRevision"] == "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+    assert provenance["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert (
         provenance["beneficiariesRevision"]
         == "3f577e27deb347cd4520977eb99474fb81e990fc"
@@ -395,7 +395,7 @@ def test_closed_edge_policy_records_current_filling_settings(tmp_path: Path) -> 
     assert saved["version"] == "hydrology.downstream_beneficiaries.v3"
     assert saved["pitFillSearchLimit"] == 100
     assert saved["pitFillTreatNodataAsClosed"] is True
-    assert saved["ecoshardRevision"] == "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+    assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
     assert DownstreamPolicy.model_validate(saved).model_dump(mode="json") == saved
 

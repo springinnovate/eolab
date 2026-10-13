@@ -19,7 +19,7 @@ from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
-ECOSHARD_REVISION = "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
 BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
 PIT_FILL_SEARCH_LIMIT = 100
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
@@ -206,7 +206,7 @@ class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
     beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
         BENEFICIARIES_REVISION
     )
-    ecoshardRevision: Literal["8d6b778edbaaff6e5dc3cc04d9da7f9416522054"] = (
+    ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
         ECOSHARD_REVISION
     )
     pitFillSearchLimit: Literal[100] = PIT_FILL_SEARCH_LIMIT

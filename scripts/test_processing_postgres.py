@@ -73,7 +73,7 @@ def build_image(application_image: str | None) -> str:
             "-r /build-inputs/application-runtime-requirements.txt "
             "&& python -m pip install --no-cache-dir --no-deps --no-build-isolation "
             "--require-hashes -r /build-inputs/application-gdal-requirements.txt "
-            "&& SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g8d6b778edbaa "
+            "&& SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g6bd106862a2c "
             "python -m pip install --no-cache-dir --no-deps --no-build-isolation "
             "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt\n"
             "COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json /build-inputs/\n"

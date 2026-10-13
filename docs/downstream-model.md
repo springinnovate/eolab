@@ -132,8 +132,9 @@ metadata around unchanged `workflow_runner.py` and the original
 Application and disposable PostgreSQL images use this same builder.
 
 The calculation uses EcoShard revision
-`8d6b778edbaaff6e5dc3cc04d9da7f9416522054`, which adds the optional closed-edge
-flag. Its declared `filelock` dependency is included in the runtime wheel lock.
+`6bd106862a2cb2517f91f9bd7ca8bb071ccb6013`, which includes the optional closed-edge
+flag and keeps optional Float16 types compatible with the application's GDAL 3.10.
+Its declared `filelock` dependency is included in the runtime wheel lock.
 Runtime wheels have reviewed hashes.
 The application build verifies imports; model checksums and build inventory record
 numerical package versions. Revision changes require a reviewed build change.

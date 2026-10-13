@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
     "wwf-es-beneficiaries==0.0.0+g3f577e27deb3",
-    "ecoshard @ https://github.com/springinnovate/ecoshard/archive/8d6b778edbaaff6e5dc3cc04d9da7f9416522054.tar.gz#sha256=5e54a215cef518eae1cf1ba2a5a457cf44a84abfe6591753e8002cedb132fc59",
+    "ecoshard @ https://github.com/springinnovate/ecoshard/archive/6bd106862a2cb2517f91f9bd7ca8bb071ccb6013.tar.gz#sha256=e751808a1dc57dfc2236e96f41209ed82dfa85ee492d146da339a8249a001f3b",
     "scipy>=1.14,<2",
     "numexpr>=2.10,<3",
     "psutil>=7,<8",
