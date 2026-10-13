@@ -19,16 +19,49 @@ function fixture() {
     view.render(state); return {doc, view, state, actions};
 }
 
-test("Undo and Dismiss remain stable through rendering and move focus when the notice disappears", () => {
-    const h = fixture(), deletion = {jobId: "1".repeat(32), deletionId: "d".repeat(32), label: "Cuba"};
-    h.state.deletions = [deletion]; h.view.render(h.state);
-    const notice = h.view.deletionNotices.get(deletion.deletionId);
-    notice.undo.focus(); h.view.render(h.state); assert.equal(h.doc.activeElement, notice.undo);
-    notice.undo.dispatchEvent(new Event("click")); notice.dismiss.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.actions.slice(-2), [["UndoDelete", deletion.jobId], ["DismissDelete", deletion.jobId]]);
-    deletion.busy = true; h.view.render(h.state); assert.equal(notice.undo.disabled, true); assert.equal(notice.dismiss.disabled, true);
+test("separate Undo offers retain full names, action identity and the other notice's focus", () => {
+    const h = fixture(), first = {jobId: "1".repeat(32), deletionId: "d".repeat(32),
+        label: "Downstream beneficiaries for the full watershed and coastal communities · 2026_10_08_00_00_00"};
+    const second = {jobId: "2".repeat(32), deletionId: "e".repeat(32), label: "Cuba population · 2026_10_08_00_00_01"};
+    h.state.deletions = [first, second]; h.view.render(h.state);
+    const firstNotice = h.view.deletionNotices.get(first.deletionId), secondNotice = h.view.deletionNotices.get(second.deletionId);
+    assert.equal(h.view.elements.deletions.children.length, 2);
+    for (const [deletion, notice] of [[first, firstNotice], [second, secondNotice]]) {
+        assert.ok(notice.root.children[0].textContent.includes(deletion.label));
+        assert.equal(notice.root.children[0].getAttribute("role"), "status");
+        assert.equal(notice.undo.getAttribute("aria-label"), `Undo deletion of ${deletion.label}`);
+        assert.equal(notice.dismiss.getAttribute("aria-label"), `Dismiss Undo for ${deletion.label}`);
+    }
+    secondNotice.undo.focus(); h.view.render(h.state);
+    assert.equal(h.view.deletionNotices.get(second.deletionId).undo, secondNotice.undo);
+    assert.equal(h.doc.activeElement, secondNotice.undo);
+    firstNotice.dismiss.dispatchEvent(new Event("click")); secondNotice.undo.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.slice(-2), [["DismissDelete", first.jobId], ["UndoDelete", second.jobId]]);
+    h.state.deletions = [second]; h.view.render(h.state);
+    assert.equal(h.view.deletionNotices.has(first.deletionId), false);
+    assert.equal(h.doc.activeElement, secondNotice.undo);
     h.state.deletions = []; h.view.render(h.state);
     assert.equal(h.view.elements.deletions.children.length, 0); assert.equal(h.doc.activeElement, h.view.elements.heading);
+});
+
+test("Undo busy and failed-retry states preserve the named notice and its controls", () => {
+    const h = fixture(), deletion = {jobId: "1".repeat(32), deletionId: "d".repeat(32), label: "Cuba population"};
+    h.state.deletions = [deletion]; h.view.render(h.state);
+    const notice = h.view.deletionNotices.get(deletion.deletionId);
+    notice.undo.focus(); deletion.busy = true; h.view.render(h.state);
+    assert.equal(notice.undo.disabled, true); assert.equal(notice.dismiss.disabled, true);
+    assert.equal(notice.root.getAttribute("aria-busy"), "true");
+    assert.ok(notice.root.children[0].textContent.includes(deletion.label));
+    assert.match(notice.root.children[0].textContent, /Updating…/);
+    deletion.busy = false; h.state.error = "Could not undo deletion: Offline"; h.view.render(h.state);
+    assert.equal(h.view.deletionNotices.get(deletion.deletionId), notice);
+    assert.equal(notice.undo.disabled, false); assert.equal(notice.dismiss.disabled, false);
+    assert.notEqual(notice.root.getAttribute("aria-busy"), "true");
+    assert.equal(h.doc.activeElement, notice.undo);
+    assert.equal(h.view.elements.error.hidden, false);
+    assert.equal(h.view.elements.error.textContent, h.state.error);
+    notice.undo.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["UndoDelete", deletion.jobId]);
 });
 
 test("raster choices separate map layers from completed runs and explain unavailable results", () => {
@@ -79,19 +112,45 @@ test("library and run cards use the same presentation and invoke their existing 
 
 test("run renewal and deletion have explicit scope, confirmation and busy feedback", () => {
     const h = fixture(), artifacts = fileManifest();
-    const ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const ready = job({name: "Downstream beneficiaries for the full watershed and coastal communities",
+        status: "ready", expiresAt: artifacts.expiresAt, artifacts});
     Object.assign(h.state, {page: "run", runs: [ready], selectedRun: ready.jobId});
     h.view.render(h.state);
     assert.equal(h.view.run.renew.hidden, false);
     assert.equal(h.view.run.remove.hidden, false);
     assert.equal(h.view.run.confirmation.hidden, true);
+    assert.equal(h.view.run.remove.parentNode, h.view.run.confirmation.parentNode);
+    assert.ok(h.view.run.remove.className.split(" ").includes("models-action-danger"));
+    assert.ok(h.view.run.confirm.className.split(" ").includes("models-action-danger"));
+    assert.equal(h.view.run.keep.className.split(" ").includes("models-action-danger"), false);
+    assert.equal(h.view.run.confirmation.getAttribute("role"), "group");
+    assert.equal(h.view.run.confirmation.getAttribute("aria-describedby"), h.view.run.warning.id);
+    assert.ok(h.view.run.warning.id);
+    assert.equal(h.view.run.keep.textContent, "Keep run");
+    assert.equal(h.view.run.confirm.textContent, "Delete run and results");
     h.view.run.remove.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "Delete");
     h.state.deleteConfirmation = ready.jobId; h.view.render(h.state);
-    assert.match(h.view.run.warning.textContent, /Population total.*all its result files/);
+    assert.ok(h.view.run.warning.textContent.includes(ready.label));
+    assert.match(h.view.run.warning.textContent, /all its result files/);
     assert.match(h.view.run.warning.textContent, /removed from the map/);
+    assert.equal(h.view.run.remove.hidden, true); assert.equal(h.view.run.confirmation.hidden, false);
+    assert.equal(h.state.runs[0], ready);
     h.view.focusDeleteConfirmation(); assert.equal(h.doc.activeElement, h.view.run.keep);
+    const keep = h.view.run.keep, confirm = h.view.run.confirm;
+    h.view.render(h.state); assert.equal(h.doc.activeElement, keep);
+    keep.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "KeepRun");
+    confirm.focus(); confirm.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "ConfirmDelete");
     h.state.actionBusy = true; h.view.render(h.state);
     assert.equal(h.view.run.confirm.disabled, true); assert.equal(h.view.run.renew.disabled, true);
+    assert.equal(h.view.run.keep.disabled, true); assert.equal(h.view.run.confirm.textContent, "Please wait…");
+    assert.equal(h.view.run.confirmation.getAttribute("aria-busy"), "true");
+    assert.equal(h.view.run.confirm, confirm); assert.equal(h.view.run.keep, keep);
+    Object.assign(h.state, {actionBusy: false, error: "Deletion could not be confirmed: Offline"}); h.view.render(h.state);
+    assert.equal(h.view.run.confirm.disabled, false); assert.equal(h.view.run.keep.disabled, false);
+    assert.equal(h.view.run.confirm.textContent, "Delete run and results");
+    assert.notEqual(h.view.run.confirmation.getAttribute("aria-busy"), "true");
+    assert.equal(h.view.run.confirmation.hidden, false); assert.equal(h.doc.activeElement, confirm);
+    assert.equal(h.view.elements.error.textContent, h.state.error);
     Object.assign(h.state, {actionBusy: false, actionMessage: "Results kept until tomorrow."}); h.view.render(h.state);
     assert.equal(h.view.run.feedback.textContent, h.state.actionMessage);
     ready.status = "deleted"; h.view.render(h.state);

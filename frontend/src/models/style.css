@@ -43,8 +43,15 @@ article.models-result > .models-actions { margin: 0; }
 .models-details dd { margin: 3px 0 10px; overflow-wrap: anywhere; }
 .models-details dt { font-weight: 600; }
 .models-error { color: var(--status-danger); overflow-wrap: anywhere; }
-.models-deletion-notice { padding: 10px; border: 1px solid var(--border-1); border-radius: var(--radius); margin: 10px 0; overflow-wrap: anywhere; }
-.models-deletion-notice p { margin: 0; }
+.models-delete { margin: 4px 0 10px; min-width: 0; }
+.models-action-danger { color: var(--status-danger); }
+.models-delete-confirmation { border-inline-start: 2px solid var(--status-danger); padding-inline-start: 10px; font-size: 0.8rem; overflow-wrap: anywhere; }
+.models-delete-confirmation p { margin: 0 0 4px; }
+.models-delete-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.models-delete-confirm { padding-inline: 10px; border-color: var(--status-danger); background: var(--status-danger); color: var(--surface-2); font-weight: 600; }
+.models-delete-confirm:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--status-danger); text-decoration: underline; }
+.models-deletion-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 0; margin: 4px 0; border-bottom: 1px solid var(--border-1); font-size: 0.8rem; overflow-wrap: anywhere; }
+.models-deletion-notice p { flex: 1 1 180px; min-width: 0; margin: 0; }
 #models-recovery { padding: 10px; border: 1px solid var(--status-warning); }
 #models-yaml { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; border: 1px solid var(--border-1); padding: 10px; max-height: 24rem; overflow: auto; }
 #models-panel [hidden] { display: none; }

@@ -298,7 +298,7 @@ export class ModelsView {
         setupControls.details.message.textContent = supported ? `Model version ${draft.model.version}. Results are temporary.` : "This model requires input controls not yet available in this interface.";
     }
 
-    /** Build stable controls for a selected run.
+    /** Build stable run controls with deletion confirmation at its action's location.
      * @param {string} id Run identity.
      * @return {void}
      */
@@ -331,23 +331,31 @@ export class ModelsView {
         const actions = this.element("div", "", "models-actions");
         const cancel = this.button("Cancel run", this.handlers.onCancel, "models-action"); const duplicate = this.button("Duplicate with changes", this.handlers.onDuplicate, "models-action");
         const renew = this.button("Keep for another 7 days", this.handlers.onRenew, "models-action");
-        const remove = this.button("Delete run and results", this.handlers.onDelete);
-        actions.append(cancel, duplicate, renew, remove);
-        const confirmation = this.element("div", "", "models-result"); confirmation.setAttribute("role", "group");
+        actions.append(cancel, duplicate, renew);
+        const deletion = this.element("div", "", "models-delete");
+        const remove = this.button("Delete run and results", this.handlers.onDelete, "models-action models-action-danger");
+        const confirmation = this.element("div", "", "models-delete-confirmation"); confirmation.setAttribute("role", "group");
         confirmation.setAttribute("aria-label", "Confirm run deletion");
         const warning = this.element("p");
-        const confirmActions = this.element("div", "", "models-actions");
-        const confirm = this.button("Delete run and results", this.handlers.onConfirmDelete);
-        const keep = this.button("Keep run", this.handlers.onKeepRun);
+        warning.id = "models-delete-warning"; confirmation.setAttribute("aria-describedby", warning.id);
+        const confirmActions = this.element("div", "", "models-delete-actions");
+        const confirm = this.button("Delete run and results", this.handlers.onConfirmDelete, "models-action models-action-danger models-delete-confirm");
+        const keep = this.button("Keep run", this.handlers.onKeepRun, "models-action");
         confirmActions.append(keep, confirm); confirmation.append(warning, confirmActions);
+        confirmation.addEventListener("keydown", event => {
+            if (event.key === "Escape" && !this.state.actionBusy) {
+                event.preventDefault(); event.stopPropagation(); this.handlers.onKeepRun();
+            }
+        });
+        deletion.append(remove, confirmation);
         const feedback = this.element("p", "", "models-help"); feedback.setAttribute("role", "status");
         const expiry = this.element("p", "", "models-help");
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
+        this.elements.run.replaceChildren(heading, created, nameEditor, status, progress, error, result, actions, deletion, feedback, expiry, inputs, details.root);
         this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, editingName: false,
-            status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
+            status, progress, error, result, cancel, duplicate, renew, deletion, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
     }
 
     /** Open the selected run's name while keeping its creation timestamp fixed.
@@ -378,7 +386,7 @@ export class ModelsView {
         if (saved && this.run === run) this.closeRunNameEditor();
     }
 
-    /** Render current run progress, immutable setup and available result downloads.
+    /** Render run progress, results and inline deletion confirmation without replacing controls.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -406,7 +414,10 @@ export class ModelsView {
         r.remove.hidden = !job || ACTIVE_JOB_STATES.has(job.status) || job.status === "deleted" || state.deleteConfirmation === job.jobId;
         r.remove.disabled = Boolean(state.actionBusy);
         r.confirmation.hidden = !job || job.status === "deleted" || state.deleteConfirmation !== job.jobId;
-        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? All outputs from this run will also be removed from the map. You can undo this for 30 seconds.`;
+        r.deletion.hidden = r.remove.hidden && r.confirmation.hidden;
+        r.warning.textContent = `Delete “${job?.label ?? "this run"}” and all its result files? Its outputs will be removed from the map. Undo is available for 30 seconds.`;
+        r.confirmation.setAttribute("aria-busy", String(Boolean(state.actionBusy)));
+        r.confirm.textContent = state.actionBusy ? "Please wait…" : "Delete run and results";
         r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
         r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
         const signature = JSON.stringify([available, job?.result, job?.artifacts]);
@@ -455,7 +466,7 @@ export class ModelsView {
         r.details.message.textContent = metadataAvailable ? `Recipe ${job.model.title} · ${job.model.version}` : "Saved recipe and inputs are no longer available.";
     }
 
-    /** Present separate Undo offers while keeping their focused buttons stable.
+    /** Present compact, separate Undo status rows while keeping focused buttons stable.
      * @param {Object[]} notices Unexpired server-backed deletion offers.
      * @return {void}
      */
@@ -470,17 +481,20 @@ export class ModelsView {
             let notice = this.deletionNotices.get(deletion.deletionId);
             if (!notice) {
                 const root = this.element("div", "", "models-deletion-notice");
-                const message = this.element("p", `“${deletion.label}” deleted. Undo is available for 30 seconds.`);
+                const message = this.element("p");
                 message.setAttribute("role", "status");
-                const actions = this.element("div", "", "models-actions");
-                const undo = this.button("Undo", () => this.handlers.onUndoDelete(deletion.jobId));
-                const dismiss = this.button("Dismiss", () => this.handlers.onDismissDelete(deletion.jobId));
+                const actions = this.element("div", "", "models-delete-actions");
+                const undo = this.button("Undo", () => this.handlers.onUndoDelete(deletion.jobId), "models-action");
+                const dismiss = this.button("Dismiss", () => this.handlers.onDismissDelete(deletion.jobId), "models-action");
                 undo.setAttribute("aria-label", `Undo deletion of ${deletion.label}`);
                 dismiss.setAttribute("aria-label", `Dismiss Undo for ${deletion.label}`);
                 actions.append(undo, dismiss); root.append(message, actions);
-                notice = {root, undo, dismiss}; this.deletionNotices.set(deletion.deletionId, notice);
+                notice = {root, message, undo, dismiss}; this.deletionNotices.set(deletion.deletionId, notice);
                 this.elements.deletions.append(root);
             }
+            const message = `“${deletion.label}” deleted. Undo available for 30 seconds.${deletion.busy ? " Updating…" : ""}`;
+            if (notice.message.textContent !== message) notice.message.textContent = message;
+            notice.root.setAttribute("aria-busy", String(Boolean(deletion.busy)));
             notice.undo.disabled = deletion.busy; notice.dismiss.disabled = deletion.busy;
         }
     }
