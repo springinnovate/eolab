@@ -2,12 +2,57 @@
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from eolab_app.processing.models import ArtifactDownload
 from eolab_app.routes.processing import create_processing_router
+
+
+@pytest.mark.parametrize(
+    "rejection", ["missing-header", "foreign-origin", "cross-site", "oversized"]
+)
+def test_model_name_patch_enforces_mutation_boundaries(rejection: str) -> None:
+    """Reject unsafe or oversized rename requests before they reach the job service.
+
+    Args:
+        rejection: Same-origin, required-header or body-size rule to exercise.
+    """
+
+    class UncalledRenameService:
+        """Fail if an invalid HTTP mutation reaches application state."""
+
+        async def rename_model_run(self, *args: Any) -> dict[str, Any]:
+            """Reject an unexpected call from the route.
+
+            Args:
+                args: Arguments that must not cross this invalid request boundary.
+
+            Raises:
+                AssertionError: Always, because HTTP must reject this request first.
+            """
+            raise AssertionError("Invalid rename reached the service")
+
+    app = FastAPI()
+    app.include_router(create_processing_router(UncalledRenameService()))
+    headers = {"X-EOLab-Processing": "1"}
+    body = {"label": "Edited name"}
+    if rejection == "missing-header":
+        headers.clear()
+    elif rejection == "foreign-origin":
+        headers["Origin"] = "https://another.example"
+    elif rejection == "cross-site":
+        headers["Sec-Fetch-Site"] = "cross-site"
+    else:
+        body["label"] = "x" * (16 * 1024)
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.patch(
+            f"/api/processing/jobs/{'a' * 32}/name", json=body, headers=headers
+        )
+    assert response.status_code == (413 if rejection == "oversized" else 403)
 
 
 def test_job_result_delivery_uses_declared_file_type_and_releases_leases(

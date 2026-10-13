@@ -664,6 +664,274 @@ def submit(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     return job
 
 
+@pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
+def test_model_renaming_preserves_execution_and_changes_only_display_names(
+    model_boundary: Any,
+    store: PostgresJobStore,
+    monkeypatch: pytest.MonkeyPatch,
+    model_id: str,
+) -> None:
+    """Names survive preparation and update every download without changing result bytes.
+
+    Args:
+        model_boundary: Real model HTTP, native worker and artifact storage.
+        store: Disposable PostgreSQL lifecycle owner.
+        monkeypatch: Rename after worker preparation but before its stale snapshot is saved.
+        model_id: Table or raster model using the common naming contract.
+    """
+    client, worker, _ = model_boundary
+    body = model_request(client, model_id, utcOffsetMinutes=-420)
+    submitted = submit(client, body)
+    base = f"/api/processing/jobs/{submitted['jobId']}"
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    timestamp = (
+        datetime.fromisoformat(submitted["createdAt"])
+        .astimezone(timezone(timedelta(minutes=-420)))
+        .strftime("%Y_%m_%d_%H_%M_%S")
+    )
+    assert submitted["name"] == body["label"]
+    assert submitted["nameTimestamp"] == timestamp
+    assert submitted["label"] == f"{body['label']} · {timestamp}"
+    queued = client.patch(
+        base + "/name", json={"label": "Queued name"}, headers=HEADERS
+    )
+    assert queued.status_code == 200, queued.text
+    save_prepared = store.save_prepared_job
+
+    def rename_before_saving(
+        identifier: str, attempt: str, prepared: PreparedJobPlan
+    ) -> dict[str, Any]:
+        """Edit a name after its original preparation snapshot has already been captured.
+
+        Args:
+            identifier: Claimed calculation identity.
+            attempt: Current worker token.
+            prepared: Existing calculation plan containing the worker's earlier summary.
+
+        Returns:
+            Saved calculation plan with subscriber display settings kept independently.
+        """
+        renamed = client.patch(
+            base + "/name", json={"label": "During preparation"}, headers=HEADERS
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["status"] == "running"
+        return save_prepared(identifier, attempt, prepared)
+
+    monkeypatch.setattr(store, "save_prepared_job", rename_before_saving)
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    assert ready["name"] == "During preparation"
+    before = store.get(submitted["jobId"], owner)
+    original_files = {
+        file["artifactId"]: client.get(file["url"]).content
+        for file in ready["artifacts"]["files"]
+    }
+    original_result = client.get(base + "/result").content
+    original_provenance = client.get(base + "/provenance").content
+    renamed_response = client.patch(
+        base + "/name", json={"label": "Café biomass / 2021"}, headers=HEADERS
+    )
+    assert renamed_response.status_code == 200, renamed_response.text
+    renamed = renamed_response.json()
+    assert renamed["name"] == "Café biomass / 2021"
+    assert renamed["createdAt"] == submitted["createdAt"]
+    assert renamed["nameTimestamp"] == timestamp
+    assert renamed["updatedAt"] > ready["updatedAt"]
+    assert submit(client, body)["name"] == renamed["name"]
+    assert (
+        client.get("/api/processing/model-runs").json()["jobs"][0]["name"]
+        == renamed["name"]
+    )
+    for file in renamed["artifacts"]["files"]:
+        assert file["displayName"] == f"{file['label']} · {renamed['label']}"
+        assert f"_cafe-biomass-2021_{timestamp}." in file["filename"]
+        download = client.get(file["url"])
+        assert download.content == original_files[file["artifactId"]]
+        assert (
+            f'filename="{file["filename"]}"' in download.headers["content-disposition"]
+        )
+        assert (
+            client.head(file["url"]).headers["content-disposition"]
+            == download.headers["content-disposition"]
+        )
+        assert (
+            client.get(file["url"], headers={"Range": "bytes=0-3"}).content
+            == download.content[:4]
+        )
+    for suffix, original in (
+        ("/result", original_result),
+        ("/provenance", original_provenance),
+    ):
+        download = client.get(base + suffix)
+        assert download.content == original
+        assert (
+            f"_cafe-biomass-2021_{timestamp}."
+            in download.headers["content-disposition"]
+        )
+    for suffix in ("model-yaml", "run-yaml"):
+        download = client.get(f"{base}/{suffix}")
+        assert (
+            f'filename="{suffix}_cafe-biomass-2021_{timestamp}.yaml"'
+            in download.headers["content-disposition"]
+        )
+    assert client.get(base + "/invocation").json()["label"] == renamed["name"]
+    assert (
+        parse_yaml(client.get(base + "/run-yaml").content, run=True)["invocation"][
+            "label"
+        ]
+        == renamed["name"]
+    )
+    after = store.get(submitted["jobId"], owner)
+    for field in (
+        "request_hash",
+        "summary",
+        "artifact",
+        "retained_metadata",
+        "retained_outcome",
+        "created_at",
+        "expires_at",
+    ):
+        assert after[field] == before[field]
+    assert after["retained_metadata"]["invocation"]["label"] == body["label"]
+
+
+def test_download_lease_keeps_readable_filename_after_result_expiry(
+    model_boundary: Any, store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An acquired transfer can finish naming and reading its file after the run expires.
+
+    Args:
+        model_boundary: Real model API, worker and result storage.
+        store: Disposable lifecycle store that grants the original download lease.
+        monkeypatch: Pause the service's acquire boundary at an already granted lease.
+    """
+    client, worker, service = model_boundary
+    job = submit(client, model_request(client))
+    assert client.portal.call(worker.run_once)
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    row, lease = store.acquire_transfer(job["jobId"], owner)
+    with psycopg.connect(store.conninfo) as connection:
+        row["expires_at"] = connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s RETURNING expires_at",
+            (row["job_id"],),
+        ).fetchone()[0]
+
+    def acquired_before_expiry(
+        identifier: str, requesting_owner: str
+    ) -> tuple[dict[str, Any], str]:
+        """Return the lease already granted before result expiry.
+
+        Args:
+            identifier: Expected public model-run identity.
+            requesting_owner: Original session hash.
+
+        Returns:
+            The owned result snapshot and active transfer lease.
+        """
+        assert identifier == job["jobId"] and requesting_owner == owner
+        return row, lease
+
+    monkeypatch.setattr(store, "acquire_transfer", acquired_before_expiry)
+    try:
+        download = client.portal.call(service.download, owner, job["jobId"])
+        assert (
+            download.filename == f"statistics_my-model-run_{job['nameTimestamp']}.csv"
+        )
+        assert download.path.is_file()
+        assert download.lease_id == lease
+    finally:
+        store.transfer_heartbeat(lease, True)
+
+
+@pytest.mark.parametrize(
+    "rejection", ["owner", "origin", "deleted", "operation", "blank", "long", "extra"]
+)
+def test_model_rename_rejects_unowned_or_invalid_edits(
+    model_boundary: Any, store: PostgresJobStore, rejection: str
+) -> None:
+    """Renaming uses the existing same-origin session and model-run ownership boundary.
+
+    Args:
+        model_boundary: Real model HTTP and worker composition.
+        store: Disposable store for an unrelated operation fixture.
+        rejection: Unauthorized, deleted or invalid rename request.
+    """
+    client, _, _ = model_boundary
+    job = submit(client, model_request(client))
+    owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+    identifier = job["jobId"]
+    body = {"label": "Renamed"}
+    headers = HEADERS
+    expected = 422
+    if rejection == "owner":
+        client.cookies.clear()
+        expected = 404
+    elif rejection == "origin":
+        headers = {**HEADERS, "Origin": "https://another.example"}
+        expected = 403
+    elif rejection == "deleted":
+        store.cancel(identifier, owner)
+        store.cancel(identifier, owner, delete=True)
+        expected = 409
+    elif rejection == "operation":
+        other = store.submit(
+            owner,
+            uuid4().hex,
+            PreparedJobPlan({}, {}, 0, operation="test.unrelated.v1"),
+            "unrelated",
+        )
+        identifier = other["id"]
+        expected = 409
+    elif rejection == "blank":
+        body["label"] = " "
+    elif rejection == "long":
+        body["label"] = "x" * 81
+    else:
+        body["utcOffsetMinutes"] = 60
+    response = client.patch(
+        f"/api/processing/jobs/{identifier}/name", json=body, headers=headers
+    )
+    assert response.status_code == expected, response.text
+    assert store.get(job["jobId"], owner)["presentation"] == {"utcOffsetMinutes": 0}
+
+
+@pytest.mark.parametrize("state", ["cancelled", "failed", "interrupted"])
+def test_terminal_model_runs_can_be_renamed(
+    model_boundary: Any, store: PostgresJobStore, state: str
+) -> None:
+    """Editing a stopped run names its history without resuming the calculation.
+
+    Args:
+        model_boundary: Real model HTTP and worker composition.
+        store: Disposable lifecycle store.
+        state: Unsuccessful terminal state to preserve through renaming.
+    """
+    client, worker, _ = model_boundary
+    job = submit(client, model_request(client))
+    base = f"/api/processing/jobs/{job['jobId']}"
+    if state == "cancelled":
+        client.post(base + "/cancel", headers=HEADERS)
+    elif state == "interrupted":
+        store.interrupt_unfinished_jobs_on_restart()
+    else:
+        claimed = store.claim_next_job()
+        assert store.finish(
+            claimed["id"],
+            claimed["attempt_id"],
+            None,
+            {"code": "test", "detail": "Test failure"},
+        )
+    response = client.patch(
+        base + "/name", json={"label": "Stopped test"}, headers=HEADERS
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == state
+    assert response.json()["name"] == "Stopped test"
+    assert not client.portal.call(worker.run_once)
+
+
 def test_model_executes_real_summary_and_exports_without_installed_definition(
     model_boundary: Any, store: Any
 ) -> None:

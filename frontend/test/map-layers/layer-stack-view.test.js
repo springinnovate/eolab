@@ -76,6 +76,15 @@ class FakeLayerStackElement extends EventTarget {
     this.children.push(...children);
   }
 
+  /** Insert child nodes before existing children.
+   * @param {...FakeLayerStackElement} children Child nodes.
+   * @return {void}
+   */
+  prepend(...children) {
+    this.children.unshift(...children);
+    for (const child of children) child.parentElement = this;
+  }
+
   /**
    * Replace all child nodes.
    *
@@ -463,9 +472,32 @@ test("inline Rename preserves draft text across refreshes, validates, saves and 
   form.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
   assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
   assert.equal(renamed.length, 2);
-  view.render([{ ...layer, item: null, datasetKind: "annotation" }], layer.key);
+  view.render([{ ...layer, item: null, sourceName: null, datasetKind: "annotation" }], layer.key);
   assert.equal(elementsByClass(list, "map-layer-name-editor").length, 0);
   assert.equal(elementsByClass(list, "secondary-button").some(button => button.dataset.layerAction === "rename"), false);
+});
+
+test("named local outputs expose Rename and full keyboard-inspectable names", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc);
+  const label = "Coverage · A long named model run · 2026_10_12_14_35_22";
+  const layer = {...LAYERS[0], item: null, label, sourceName: label,
+    group: {id: "run", label: "A long named model run · 2026_10_12_14_35_22"}};
+  view.bind({onRename() {}});
+  view.render([layer], layer.key);
+  const list = doc.querySelector("#raster-layer-list");
+  assert.ok(actionControl(list.children[0], "rename"));
+  const name = elementsByClass(list, "raster-layer-name")[0];
+  assert.equal(name.textContent, label);
+  assert.equal(name.tabIndex, 0);
+  assert.match(name.title, /2026_10_12_14_35_22/);
+  const group = elementsByClass(list, "map-layer-group-name")[0];
+  assert.equal(group.textContent, layer.group.label);
+  assert.equal(group.tabIndex, 0);
+  assert.equal(group.title, layer.group.label);
+  assert.match(list.children[0].getAttribute("aria-label"), /A long named model run/);
+  name.focus();
+  view.render([layer], layer.key);
+  assert.equal(doc.activeElement, elementsByClass(list, "raster-layer-name")[0]);
 });
 
 test("heading counts retained types through mixed, hidden, single-type, and empty maps", () => {

@@ -43,6 +43,23 @@ test("renewal uses the owned run endpoint and validates the returned job", async
     await assert.rejects(broken.api.renewModelRun(job().jobId), /invalid/);
 });
 
+test("renaming changes only the name through the owned mutation endpoint", async () => {
+    const renamed = job({name: "Cuba biomass", updatedAt: "2026-10-09T00:00:00Z"});
+    const h = fixture(() => renamed);
+    assert.deepEqual(await h.api.renameModelRun(renamed.jobId, renamed.name), renamed);
+    assert.equal(h.calls[1].url, `/api/processing/jobs/${renamed.jobId}/name`);
+    assert.equal(h.calls[1].options.method, "PATCH");
+    assert.equal(h.calls[1].options.headers["X-EOLab-Processing"], "1");
+    assert.deepEqual(JSON.parse(h.calls[1].options.body), {label: "Cuba biomass"});
+    const unicode = job({name: "🌳".repeat(80)}), unicodeApi = fixture(() => unicode);
+    assert.deepEqual(await unicodeApi.api.renameModelRun(unicode.jobId, unicode.name), unicode);
+    for (const change of [{name: ""}, {name: "x".repeat(81)}, {nameTimestamp: "2026-10-08"}, {label: "Missing creation time"},
+        {jobId: "2".repeat(32)}]) {
+        const broken = fixture(() => ({...renamed, ...change}));
+        await assert.rejects(broken.api.renameModelRun(renamed.jobId, "Cuba biomass"));
+    }
+});
+
 test("model deletion requests Undo and scopes restoration and dismissal to that exact deletion", async () => {
     const deletionUndo = {deletionId: "d".repeat(32), expiresAt: "2099-01-01T00:00:00Z"};
     const deleted = job({status: "deleted", deletionUndo}), h = fixture(() => deleted);
@@ -110,6 +127,8 @@ test("multiple run files require scoped URLs, unique IDs and valid availability"
         value => { value.files[0].bytes = -1; },
         value => { value.files[0].sha256 = "bad"; },
         value => { value.files[0].filename = "../other"; },
+        value => { value.files[0].displayName = ""; },
+        value => { value.files[0].displayName = "x".repeat(306); },
         value => { value.availability = "pending"; },
         value => { value.totalBytes = 1; },
     ]) {

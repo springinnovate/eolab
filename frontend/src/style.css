@@ -746,7 +746,10 @@ h5 {
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
 .map-layer-attribution { grid-column: 2; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-3); overflow-wrap: anywhere; }
-.map-layer-group-heading { grid-column: 1 / -1; grid-row: 1; padding-top: 4px; font-size: 0.85rem; overflow-wrap: anywhere; }
+.map-layer-group-heading { grid-column: 1 / -1; grid-row: 1; min-width: 0; padding-top: 4px; font-size: 0.85rem; overflow-wrap: anywhere; }
+.map-layer-group-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raster-layer-row.has-layer-group .raster-layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-layer-group-name:focus, .raster-layer-row.has-layer-group .raster-layer-name:focus { white-space: normal; overflow-wrap: anywhere; }
 .map-layer-group-heading button { display: block; margin-top: 4px; padding: 2px 0; border: 0; background: transparent; font: inherit; font-weight: 400; text-align: left; }
 .raster-layer-row.has-group-heading .map-layer-drag-handle { grid-row: 2; }
 

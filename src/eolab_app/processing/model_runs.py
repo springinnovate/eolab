@@ -2,14 +2,17 @@
 
 import base64
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import hashlib
 from importlib.metadata import version, PackageNotFoundError
 from importlib.resources import files
 import json
-from pathlib import Path
+import mimetypes
+from pathlib import Path, PurePath
+import re
 from typing import Any
+import unicodedata
 
 import fiona
 import pyproj
@@ -26,6 +29,7 @@ from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
     MODEL_RUN_RETENTION_SECONDS,
     ModelInvocation,
+    ModelRunPresentation,
     ModelRunRequest,
     ModelRunSpec,
     RunDocument,
@@ -50,6 +54,68 @@ from eolab_app.processing.artifact_manifest import (
 )
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.prepared_hydrology import PreparedHydrologySnapshot
+
+
+def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
+    """Describe a run with its editable name and fixed local creation timestamp.
+
+    Args:
+        row: Owned job record, including its original summary and subscriber presentation.
+
+    Returns:
+        The editable name, a YYYY_MM_DD_HH_MM_SS timestamp, and their combined label.
+        Historical runs use their original label and a UTC creation timestamp.
+
+    Raises:
+        ValidationError: If persisted presentation settings are invalid.
+    """
+    presentation = ModelRunPresentation.model_validate(row.get("presentation") or {})
+    summary = row.get("summary") or row["spec"]
+    name = presentation.label or summary["label"]
+    created = row["created_at"].astimezone(
+        timezone(timedelta(minutes=presentation.utcOffsetMinutes))
+    )
+    timestamp = created.strftime("%Y_%m_%d_%H_%M_%S")
+    return {"name": name, "nameTimestamp": timestamp, "label": f"{name} · {timestamp}"}
+
+
+def build_model_download_filename(
+    row: dict[str, Any], output_name: str, original_filename: str, media_type: str
+) -> str:
+    """Name a downloaded output using its run name and fixed creation timestamp.
+
+    Args:
+        row: Owned model run with its creation time and current display settings.
+        output_name: Unique recipe output or collection member name; YAML exports
+            use their document kind instead.
+        original_filename: Safe stored filename supplying the file extension.
+        media_type: Declared format, used to choose a standard extension only when
+            the stored extension leaves no room for a run name.
+
+    Returns:
+        A portable ASCII basename of at most 160 characters, with no public ID.
+        Only the run-name portion is shortened, keeping collection members distinct.
+        An exceptionally long stored extension uses its MIME type's usual extension,
+        or .bin when none is known.
+
+    Raises:
+        ValidationError: If persisted presentation settings are invalid.
+    """
+    run = describe_model_run_name(row)
+    ascii_name = (
+        unicodedata.normalize("NFKD", run["name"]).encode("ascii", "ignore").decode()
+    )
+    name = re.sub(r"[^A-Za-z0-9]+", "-", ascii_name).strip("-").lower() or "model-run"
+    suffix = PurePath(original_filename).suffix
+    available = 160 - len(output_name) - len(run["nameTimestamp"]) - len(suffix) - 2
+    if available < 1:
+        suffix = mimetypes.guess_extension(media_type, strict=False) or ".bin"
+        if len(suffix) > 16:
+            suffix = ".bin"
+        available = 160 - len(output_name) - len(run["nameTimestamp"]) - len(suffix) - 2
+    return (
+        f"{output_name}_{name[:available].rstrip('-')}_{run['nameTimestamp']}{suffix}"
+    )
 
 
 @lru_cache(maxsize=1)
@@ -523,7 +589,10 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             **output,
             "url": f"/api/processing/jobs/{row['id']}/result",
             "provenanceUrl": f"/api/processing/jobs/{row['id']}/provenance",
-            "filename": artifact["filename"],
+            "displayName": f"{output['label']} · {describe_model_run_name(row)['label']}",
+            "filename": build_model_download_filename(
+                row, output["name"], artifact["filename"], artifact["media_type"]
+            ),
             "bytes": artifact["size"],
             "sha256": artifact["sha256"],
             **operation.result(summary, artifact),
@@ -536,7 +605,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": row["updated_at"],
         "expiresAt": row["expires_at"],
         "model": summary["model"],
-        "label": summary["label"],
+        **describe_model_run_name(row),
         "metadataExpiresAt": row.get("metadata_expires_at"),
         "deletionUndo": (
             {"deletionId": row["deletion_id"], "expiresAt": row["deletion_undo_until"]}
@@ -552,21 +621,28 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def describe_artifact_file(file: PublishedFile) -> dict[str, Any]:
+def describe_artifact_file(file: PublishedFile, row: dict[str, Any]) -> dict[str, Any]:
     """Describe a completed file without publishing its private storage basename.
 
     Args:
         file: Validated immutable inventory entry.
+        row: Owned model run supplying its current name and fixed creation time.
 
     Returns:
         Public scientific metadata, independent of download availability.
+
+    Raises:
+        ValidationError: If the run's persisted display settings are invalid.
     """
     return {
         "artifactId": file.id,
         "name": file.name,
         "label": file.label,
+        "displayName": f"{file.label} · {describe_model_run_name(row)['label']}",
         "role": file.role,
-        "filename": file.filename,
+        "filename": build_model_download_filename(
+            row, file.name, file.filename, file.media_type
+        ),
         "mediaType": file.media_type,
         "bytes": file.size,
         "sha256": file.sha256,
@@ -604,7 +680,7 @@ def serialize_model_artifacts(row: dict[str, Any]) -> dict[str, Any]:
         availability, total = "available", manifest.total_bytes
         files = [
             {
-                **describe_artifact_file(file),
+                **describe_artifact_file(file, row),
                 "url": f"/api/processing/jobs/{row['id']}/artifacts/{file.id}",
             }
             for file in manifest.files
@@ -640,6 +716,9 @@ def read_model_job_operation_id(row: dict[str, Any]) -> str:
 def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
     """Read the recipe and input values saved for a model run.
 
+    The returned name reflects the owner's latest edit; the stored invocation
+    and its calculation inputs remain unchanged.
+
     Args:
         row: A job record already authorized for the requesting session.
 
@@ -665,6 +744,9 @@ def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
             410,
         )
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
+    presentation = ModelRunPresentation.model_validate(row.get("presentation") or {})
+    if presentation.label is not None:
+        metadata["invocation"]["label"] = presentation.label
     return ModelInvocation.model_validate(metadata["invocation"])
 
 
@@ -709,7 +791,7 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
         }
         if artifact and artifact.get("manifest"):
             execution["outcome"]["artifacts"] = [
-                describe_artifact_file(file)
+                describe_artifact_file(file, row)
                 for file in read_artifact_manifest(artifact["manifest"]).files
             ]
     document = RunDocument.model_validate(

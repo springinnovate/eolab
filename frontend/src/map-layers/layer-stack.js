@@ -13,7 +13,9 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
  * @property {string} key Stable Catalog Item key or local layer identifier.
  * @property {Object|null} item Catalog STAC Item; null for browser-owned layers.
  * @property {string} label Readable layer label.
- * @property {string|null} [customName] Optional map-specific catalog name; source metadata is unchanged.
+ * @property {string|null} [customName] Optional map-specific name; source metadata is unchanged.
+ * @property {string} [sourceName] Owner-supplied local name that enables the standard name editor.
+ * @property {{id:string,label:string,actionLabel?:string}} [group] Current owner-supplied local layer group.
  * @property {number} retentionOrder Monotonic add-intent order.
  * @property {boolean} visible Whether the layer is attached to the map.
  * @property {boolean} legendIncluded Whether this layer appears in the on-map legend.

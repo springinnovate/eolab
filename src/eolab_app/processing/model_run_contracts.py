@@ -58,6 +58,25 @@ MODEL_OPERATION = "model.run.v1"
 MODEL_RUN_RETENTION_SECONDS = 7 * 86_400
 MODEL_DELETION_UNDO_SECONDS = 30
 Digest = Annotated[str, Field(strict=True, pattern=r"^[a-f0-9]{64}$")]
+RunName = Annotated[str, Field(strict=True, min_length=1, max_length=80, pattern=r"\S")]
+UtcOffsetMinutes = Annotated[int, Field(strict=True, ge=-840, le=840)]
+
+
+class ModelRunNameRequest(ModelSchema):
+    """Replace a run's editable name without changing its inputs or creation time."""
+
+    label: RunName
+
+
+class ModelRunPresentation(ModelSchema):
+    """Keep an owner's edited run name and the timezone offset chosen at submission.
+
+    The offset is minutes east of UTC and remains fixed when the run is renamed.
+    Older runs have no presentation and use their original name and UTC.
+    """
+
+    label: RunName | None = None
+    utcOffsetMinutes: UtcOffsetMinutes = 0
 
 
 class ModelReference(ModelSchema):
@@ -78,6 +97,8 @@ class ModelRunRequest(ModelSchema):
     ``requestId`` identifies retries of the same submission. ``model`` selects
     the recipe version; ``inputs`` supplies datasets and an area. Omitted
     parameters use the recipe's defaults, and ``label`` names the run for the user.
+    ``utcOffsetMinutes`` fixes its timestamp to the submitting browser's local
+    time, expressed as minutes east of UTC; older clients default to UTC.
     """
 
     requestId: Annotated[
@@ -87,7 +108,8 @@ class ModelRunRequest(ModelSchema):
     model: ModelReference
     inputs: dict[Name, JsonValue] = Field(min_length=1, max_length=16)
     parameters: dict[Name, JsonValue] = Field(default_factory=dict, max_length=32)
-    label: Label
+    label: RunName
+    utcOffsetMinutes: UtcOffsetMinutes = 0
 
     @model_validator(mode="after")
     def check_json_values(self) -> "ModelRunRequest":
@@ -367,6 +389,7 @@ class ModelArtifactRecord(ModelSchema):
     artifactId: FileId
     name: OutputName
     label: str
+    displayName: str | None = None
     role: FileRole
     filename: FileName
     mediaType: MediaType
@@ -377,6 +400,7 @@ class ModelArtifactRecord(ModelSchema):
 class ModelArtifactDownload(ModelArtifactRecord):
     """One complete file currently downloadable by the run's owner."""
 
+    displayName: str
     url: str
 
 
@@ -401,11 +425,15 @@ class ModelJobResponse(JobResponse):
     ``metadataExpiresAt`` is the deadline for reading the saved Model/Run YAML.
     Result files have their own expiry in the inherited ``expiresAt`` field.
     ``deletionUndo`` identifies a deletion that this owner can still undo.
+    ``name`` is editable; ``nameTimestamp`` is the fixed creation timestamp.
+    ``label`` combines both for use outside this run's details.
     """
 
     operation: Literal["model.run.v1"]
     model: ModelIdentity
-    label: Label
+    name: Label
+    nameTimestamp: Annotated[str, Field(pattern=r"^\d{4}(?:_\d{2}){5}$")]
+    label: Annotated[str, Field(min_length=1, max_length=102)]
     metadataExpiresAt: datetime | None
     progress: ModelProgress
     result: ModelResult | None

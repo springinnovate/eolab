@@ -78,6 +78,42 @@ test("renewal updates the shared observer and all run consumers without resubmit
     assert.equal(h.submitted.length, 0);
 });
 
+test("renaming an active run refreshes its consumers and duplicates the name without the old timestamp", async () => {
+    const original = job({status: "running"}), renamed = job({status: "running", name: "Cuba biomass", updatedAt: "2026-10-09T00:00:00Z"});
+    const requests = [], changes = [];
+    const h = fixture({getJob: async () => original, renameModelRun: async (...args) => { requests.push(args); return renamed; }});
+    h.controller.onRunChange = value => changes.push(value);
+    await h.controller.loadLibrary(); await h.controller.showRun(original.jobId);
+    assert.equal(await h.controller.renameRun(" Cuba biomass "), true);
+    assert.deepEqual(requests, [[original.jobId, "Cuba biomass"]]);
+    assert.equal(h.jobs.jobs[0], renamed); assert.equal(changes.at(-1), renamed);
+    assert.equal(h.controller.state.invocation.label, renamed.name);
+    assert.equal(h.controller.state.runs[0].nameTimestamp, original.nameTimestamp);
+    h.controller.rememberRun(original); assert.equal(h.controller.state.runs[0], renamed);
+    h.controller.state.invocation = {...h.controller.state.invocation, label: original.name};
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.draft.label, "Cuba biomass");
+    assert.deepEqual(h.submitted, []); assert.deepEqual(h.cancelled, []);
+});
+
+test("a rename failure preserves the run and a late rename does not edit a different run's inputs", async () => {
+    const original = job(), h = fixture({getJob: async () => original,
+        renameModelRun: async () => { throw new Error("Connection lost"); }});
+    await h.controller.showRun(original.jobId);
+    assert.equal(await h.controller.renameRun("New name"), false);
+    assert.equal(h.controller.state.runs[0], original); assert.match(h.controller.state.error, /Could not rename.*Connection lost/);
+    assert.equal(h.controller.state.actionBusy, false);
+    let finish;
+    h.api.renameModelRun = () => new Promise(resolve => { finish = resolve; });
+    const pending = h.controller.renameRun("New name");
+    const second = job({jobId: "2".repeat(32), name: "Other run"});
+    h.api.getJob = async () => second; h.api.readModelInvocation = async () => ({...invocation, label: second.name});
+    await h.controller.showRun(second.jobId);
+    finish(job({name: "New name", updatedAt: "2026-10-09T00:00:00Z"})); await pending;
+    assert.equal(h.controller.state.selectedRun, second.jobId);
+    assert.equal(h.controller.state.invocation.label, second.name);
+});
+
 test("deletion needs confirmation and removes captured inputs and choices after success", async () => {
     const artifacts = fileManifest(), ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
     const deleted = {...ready, status: "deleted", artifacts: {files: []}, updatedAt: "2026-10-10T00:00:00Z"};
@@ -201,11 +237,29 @@ test("a lost submission response survives reload and retries the exact captured 
     const h = fixture({submitModelRun: async () => { throw new TypeError("Connection lost"); }});
     h.controller.chooseModel(model); await h.controller.submit();
     const captured = structuredClone(h.controller.state.pending); assert.ok(captured);
+    assert.equal(captured.utcOffsetMinutes, 0 - new Date().getTimezoneOffset());
+    assert.equal(captured.label, model.title);
     h.controller.chooseModel(model); h.controller.editDraft({label: "Different draft"});
     const next = fixture(); next.controller.storage = h.storage; next.controller.start();
     await next.controller.submit(true);
     assert.deepEqual(next.submitted[0], captured); assert.equal(next.controller.state.pending, null);
     assert.equal(next.controller.state.page, "run");
+});
+
+test("captured timezone offsets survive the recovery storage JSON round trip", () => {
+    const draft = createModelDraft(model, {rasters: [raster], area}, "timezone-recovery");
+    for (const offset of [-420, 0, -0, 330]) {
+        const captured = captureModelSubmission(draft, "timezone-request", offset);
+        assert.deepEqual(JSON.parse(JSON.stringify(captured)), captured);
+    }
+});
+
+test("run names count Unicode characters consistently when capturing a submission", () => {
+    const draft = createModelDraft(model, {rasters: [raster], area}, "unicode-name");
+    draft.label = "🌳".repeat(80);
+    assert.equal(captureModelSubmission(draft, "unicode-request", -420).label, draft.label);
+    draft.label += "🌳";
+    assert.throws(() => captureModelSubmission(draft, "unicode-request", -420), /1–80 characters/);
 });
 
 test("definite rejection leaves the draft editable and does not silently retry", async () => {

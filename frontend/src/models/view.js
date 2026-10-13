@@ -1,9 +1,17 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { renderModelResult, renderModelFiles } from "./result-view.js";
+import { renderModelResult, renderModelFiles, createModelNameDetails } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { HydrologyInputView, hydrologyDetails } from "./hydrology-view.js";
+
+/** Show the creation time in the timezone captured when this run was started.
+ * @param {Object} job Model run with its fixed naming timestamp.
+ * @return {string} Readable date and time, without changing the stored suffix.
+ */
+function formatModelRunCreatedTime(job) {
+    return job.nameTimestamp?.replace(/^(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})$/, "$1-$2-$3 $4:$5:$6") ?? new Date(job.createdAt).toLocaleString();
+}
 
 /** Describe the explicit area shown in setup and saved run details.
  * @param {Object|null} area Model area descriptor.
@@ -41,9 +49,10 @@ export function describeModelProgress(job) {
 export class ModelsView {
     /** Bind the existing Models panel markup.
      * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {Clipboard|undefined} [clipboard=globalThis.navigator?.clipboard] Browser clipboard for full names.
      */
-    constructor(documentContext = globalThis.document) {
-        this.document = documentContext; this.listeners = []; this.runCards = new Map();
+    constructor(documentContext = globalThis.document, clipboard = globalThis.navigator?.clipboard) {
+        this.document = documentContext; this.clipboard = clipboard; this.listeners = []; this.runCards = new Map();
         this.deletionNotices = new Map();
         this.elements = Object.fromEntries(["heading", "close", "library", "setup", "run", "runs", "error", "recovery", "recover", "query",
             "library-items", "library-status", "refresh", "runs-list", "runs-status", "more", "refresh-runs", "yaml", "deletions"]
@@ -136,9 +145,11 @@ export class ModelsView {
         const form = this.element("form", "", "models-form");
         const fields = this.element("fieldset"); const legend = this.element("legend", draft.model.title); fields.append(legend);
         const description = this.element("p", draft.model.description, "models-help"); fields.append(description);
-        const label = this.element("input"); label.type = "text"; label.maxLength = 80; label.required = true;
+        const label = this.element("input"); label.type = "text"; label.required = true;
         label.addEventListener("input", () => this.handlers.onEdit({label: label.value}));
         fields.append(this.field("models-run-label", "Run name", label));
+        const nameHelp = this.element("p", "The start date and time are added automatically to this name and its output files.", "models-help");
+        nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
         const hydrologyInput = Object.values(draft.model.inputs).find(input => input.type === "prepared_hydrology");
         const hydrology = hydrologyInput ? new HydrologyInputView(this, hydrologyInput.label) : null;
         if (hydrology) fields.append(hydrology.root);
@@ -297,7 +308,22 @@ export class ModelsView {
      * @return {void}
      */
     buildRun(id) {
-        const title = this.element("h3"); const status = this.element("p"); status.setAttribute("role", "status");
+        const heading = this.element("div", "", "models-run-heading");
+        const title = this.element("h3", "", "models-compact-name"); title.tabIndex = 0;
+        const rename = this.button("Rename run", () => this.openRunNameEditor()); heading.append(title, rename);
+        const created = this.element("p", "", "models-help");
+        const nameEditor = this.element("form", "", "models-run-name-editor"); nameEditor.hidden = true;
+        const nameInput = this.element("input"); nameInput.type = "text"; nameInput.required = true;
+        const saveName = this.element("button", "Save name", "secondary-button"); saveName.type = "submit";
+        const cancelName = this.button("Cancel", () => this.closeRunNameEditor());
+        const nameActions = this.element("div", "", "models-actions"); nameActions.append(saveName, cancelName);
+        nameEditor.append(this.field("models-edit-run-name", "Run name", nameInput), nameActions);
+        nameEditor.addEventListener("submit", event => { event.preventDefault(); void this.saveRunName(); });
+        nameEditor.addEventListener("keydown", event => {
+            if (event.key === "Escape" && !this.state.actionBusy) { event.preventDefault(); event.stopPropagation(); this.closeRunNameEditor(); }
+        });
+        const nameDetails = createModelNameDetails(this.element.bind(this), this.clipboard);
+        const status = this.element("p"); status.setAttribute("role", "status");
         const progress = this.element("progress"); progress.setAttribute("aria-label", "Current model stage progress");
         const error = this.element("p", "", "models-error"); const result = this.element("div", "", "models-results");
         const actions = this.element("div", "", "models-actions");
@@ -317,8 +343,37 @@ export class ModelsView {
         const inputs = this.element("details", "", "models-details"); inputs.append(this.element("summary", "Inputs used for this run"));
         const inputsBody = this.element("div"); inputs.append(inputsBody);
         const details = this.recipeDetails();
-        this.elements.run.replaceChildren(title, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
-        this.run = {id, title, status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
+        this.elements.run.replaceChildren(heading, created, nameEditor, nameDetails.root, status, progress, error, result, actions, confirmation, feedback, expiry, inputs, details.root);
+        this.run = {id, title, created, rename, nameEditor, nameInput, saveName, cancelName, nameDetails, editingName: false,
+            status, progress, error, result, cancel, duplicate, renew, remove, confirmation, warning, confirm, keep, feedback, expiry, inputs, inputsBody, details};
+    }
+
+    /** Open the selected run's name while keeping its creation timestamp fixed.
+     * @return {void}
+     */
+    openRunNameEditor() {
+        const job = this.state.runs.find(run => run.jobId === this.run?.id);
+        if (!job || this.state.actionBusy) return;
+        this.run.editingName = true; this.run.nameInput.value = job.name ?? job.label;
+        this.renderRun(this.state); this.run.nameInput.focus(); this.run.nameInput.select?.();
+    }
+
+    /** Discard an unsaved name and return focus to its Rename action.
+     * @return {void}
+     */
+    closeRunNameEditor() {
+        if (!this.run) return;
+        this.run.editingName = false; this.renderRun(this.state); this.run.rename.focus();
+    }
+
+    /** Save the entered name and keep the editor open if the server rejects it.
+     * @return {Promise<void>} Completion after saving and restoring focus when still on this run.
+     */
+    async saveRunName() {
+        const run = this.run;
+        if (!run?.editingName || this.state.actionBusy) return;
+        const saved = await this.handlers.onRename(run.nameInput.value);
+        if (saved && this.run === run) this.closeRunNameEditor();
     }
 
     /** Render current run progress, immutable setup and available result downloads.
@@ -329,7 +384,16 @@ export class ModelsView {
         const id = state.selectedRun; if (!id) return;
         if (this.run?.id !== id) this.buildRun(id);
         const r = this.run; const job = state.runs.find(run => run.jobId === id);
-        r.title.textContent = job?.label ?? "Model run";
+        r.title.textContent = job?.name ?? job?.label ?? "Model run"; r.title.title = job?.label ?? "Model run";
+        r.title.setAttribute("aria-label", job?.label ?? "Model run");
+        r.created.textContent = job ? `Created ${formatModelRunCreatedTime(job)}` : "";
+        if (r.nameDetails.name.textContent !== job?.label) r.nameDetails.status.textContent = "";
+        r.nameDetails.name.textContent = job?.label ?? ""; r.nameDetails.root.hidden = !job;
+        r.rename.hidden = !job || job.status === "deleted" || r.editingName;
+        r.rename.disabled = Boolean(state.actionBusy);
+        r.nameEditor.hidden = !r.editingName || !job || job.status === "deleted";
+        r.nameInput.disabled = r.saveName.disabled = r.cancelName.disabled = Boolean(state.actionBusy);
+        r.saveName.textContent = state.renamingRun === id ? "Saving…" : "Save name";
         r.status.textContent = job ? describeModelProgress(job) : "Reading run…";
         r.error.textContent = state.invocationError || job?.error?.message || job?.error?.detail || ""; r.error.hidden = !r.error.textContent;
         r.cancel.hidden = !job || !ACTIVE_JOB_STATES.has(job.status); r.cancel.disabled = state.actionBusy || job?.status === "cancelling";
@@ -351,7 +415,7 @@ export class ModelsView {
             if (available && job.result) {
                 const filesAvailable = job.artifacts?.availability === "available";
                 renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
-                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput);
+                if (filesAvailable) renderModelFiles(r.result, job.artifacts, this.element.bind(this), state.outputPreviews, this.handlers.onShowOutput, this.clipboard);
             }
         }
         r.expiry.hidden = job?.status === "deleted";
@@ -456,11 +520,13 @@ export class ModelsView {
         for (const job of state.runs) {
             let card = this.runCards.get(job.jobId);
             if (!card) {
-                const root = this.element("article", "", "models-history-row"); const button = this.button(job.label, () => this.handlers.onRun(job.jobId));
+                const root = this.element("article", "", "models-history-row"); const button = this.button(job.name ?? job.label, () => this.handlers.onRun(job.jobId));
+                button.classList.add("models-compact-name");
                 const status = this.element("small"); root.append(button, status); card = {root, button, status}; this.runCards.set(job.jobId, card);
                 this.elements["runs-list"].append(root);
             }
-            card.button.textContent = job.label; card.status.textContent = `${describeModelProgress(job)} · ${new Date(job.createdAt).toLocaleString()}`;
+            card.button.textContent = job.name ?? job.label; card.button.title = job.label; card.button.setAttribute("aria-label", job.label);
+            card.status.textContent = `${describeModelProgress(job)} · ${formatModelRunCreatedTime(job)}`;
         }
         // Move retained nodes only when ordering changes, keeping focus during status reads.
         const order = state.runs.map(job => job.jobId).join();

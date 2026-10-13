@@ -715,6 +715,46 @@ class PostgresJobStore:
             )
         return row
 
+    def update_presentation(
+        self, identifier: str, owner: str, changes: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an owner's display settings without changing the shared calculation.
+
+        Args:
+            identifier: Public job handle belonging to this owner.
+            owner: Current browser-session hash.
+            changes: Display fields validated by their owning application service.
+
+        Returns:
+            The updated owned job, with its execution, files and creation time unchanged.
+
+        Raises:
+            ProcessingError: If the job is unowned, deleted or storage is unavailable.
+        """
+        with self._transaction(acquire_lock=True) as cursor:
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ProcessingError(
+                    "job_not_found", "This processing job is unavailable.", 404
+                )
+            if row["status"] == "deleted":
+                raise ProcessingError("job_deleted", "This run has been deleted.", 409)
+            cursor.execute(
+                "UPDATE processing.job_subscribers SET "
+                "presentation=COALESCE(presentation,'{}'::jsonb)||%s,"
+                "updated_at=clock_timestamp() WHERE id=%s AND owner=%s",
+                (Jsonb(changes), identifier, owner),
+            )
+            cursor.execute(
+                "SELECT * FROM processing.subscribed_jobs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+            return cursor.fetchone()
+
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:

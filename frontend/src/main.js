@@ -859,6 +859,7 @@ async function initializeCatalog(
         onRunObserved: job => processingJobs.accept(job),
         addRaster: (source, lifecycle, presentation) => rasterVisualization.showSource(source, lifecycle, presentation),
         addLayer: (source, adapter) => mapLayerController.addLocal(source, adapter),
+        updateLayer: (key, presentation) => mapLayerController.updateLocalPresentation(key, presentation),
         removeLayer: key => mapLayerController.removeKey(key),
         refreshLayers: () => mapLayerController.render(),
         createLayer: (key, data, appearance) => createArtifactPreviewLayer(L, leafletMap, key, data, appearance, document),

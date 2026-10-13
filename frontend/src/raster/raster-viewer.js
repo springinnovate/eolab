@@ -1011,7 +1011,7 @@ export function initializeRasterViewer(
         return allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.pixels !== false)
             .map(({ entry, state }) => ({
                 key: entry.key,
-                label: entry.customName ?? getRasterDisplayStem(state.item),
+                label: entry.item === null ? entry.label : entry.customName ?? getRasterDisplayStem(state.item),
                 item: state.item,
             }));
     }
@@ -4364,7 +4364,7 @@ export function initializeRasterViewer(
     /** Publish and attach a source through ordinary raster tiles, style and analysis.
      * @param {Object} raster Original source, metadata, label, group and capabilities.
      * @param {Object} lifecycle Composition-supplied info, Undo and removal callbacks.
-     * @param {Object} [presentation={}] Visibility, opacity, restored appearance, signal and isCurrent callback.
+     * @param {Object} [presentation={}] Initial names and group, visibility, opacity, restored appearance, signal and isCurrent callback.
      * @return {Promise<Object|null>} Retained raster record, or null after cancellation.
      * @throws {Error} If identity, appearance or layer construction fails.
      */

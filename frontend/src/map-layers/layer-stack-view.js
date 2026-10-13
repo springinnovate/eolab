@@ -39,7 +39,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {boolean} [legendIncluded] Include in the map legend unless false.
  * @property {{canCopy:boolean,canPaste:boolean,sourceLabel:string|null,pasteReason:string|null}} [styleClipboard] Owner-reported style compatibility.
  * @property {string|null} error Visible layer failure, when present.
- * @property {string} [sourceName] Original catalog name for resetting custom names.
+ * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
  * @property {boolean} [filterActive] A filter is currently applied.
  * @property {string} [filterStatus] Actionable filter result summary.
@@ -271,7 +271,14 @@ export class MapLayerStackView {
         layers.forEach((layer, index) => {
             if (!layer.group || layers[index - 1]?.group?.id === layer.group.id) return;
             const heading = this.documentContext.createElement("strong");
-            heading.className = "map-layer-group-heading"; heading.textContent = layer.group.label;
+            heading.className = "map-layer-group-heading";
+            const name = this.documentContext.createElement("span");
+            name.className = "map-layer-group-name";
+            name.textContent = layer.group.label; name.title = layer.group.label;
+            name.tabIndex = 0;
+            name.dataset.layerKey = layer.key; name.dataset.layerAction = "group-name";
+            this.#rememberFocusTarget(focusTargets, name);
+            heading.append(name);
             if (layer.group.actionLabel && this.allowRemoval) {
                 const action = this.#button(layer.group.actionLabel, `${layer.group.actionLabel}: ${layer.group.label}`,
                     layer.key, "group-action", () => this.handlers?.onGroupAction(layer.group.id), focusTargets);
@@ -414,6 +421,7 @@ export class MapLayerStackView {
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
+        row.classList.toggle("has-layer-group", Boolean(layer.group));
         row.dataset.layerKey = layer.key;
         row.dataset.layerIndex = String(index);
         row.classList.toggle("is-hidden", !layer.visible);
@@ -446,6 +454,11 @@ export class MapLayerStackView {
         name.className = "raster-layer-name";
         name.textContent = layer.label;
         name.title = accessibleName;
+        if (layer.group) {
+            name.tabIndex = 0;
+            name.dataset.layerKey = layer.key; name.dataset.layerAction = "name";
+            this.#rememberFocusTarget(focusTargets, name);
+        }
         label.append(visibility);
         const title = this.documentContext.createElement("span");
         title.className = "map-layer-title";
@@ -549,7 +562,7 @@ export class MapLayerStackView {
         utilities.append(
             ...(filter ? [filter] : []),
             zoom,
-            ...(layer.item !== null ? [this.#iconButton(
+            ...(layer.item !== null || layer.sourceName ? [this.#iconButton(
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
             )] : []),

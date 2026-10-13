@@ -258,6 +258,24 @@ class JobStore(Protocol):
         """
         ...
 
+    def update_presentation(
+        self, identifier: str, owner: str, changes: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an owner's display settings independently of calculation state.
+
+        Args:
+            identifier: Owned public job handle.
+            owner: Browser-session hash.
+            changes: Display fields validated by the application service.
+
+        Returns:
+            Updated owned job with its creation time, inputs and files unchanged.
+
+        Raises:
+            ProcessingError: If ownership, deletion or storage prevents the update.
+        """
+        ...
+
     def list_owned(
         self, owner: str, operations: tuple[str, ...] | None = None
     ) -> list[dict[str, Any]]:

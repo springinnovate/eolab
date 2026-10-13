@@ -41,7 +41,7 @@ export class ModelsController {
         this.deletions = new Map();
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
-            pending: null, submitting: false, actionBusy: false, deleteConfirmation: null, actionMessage: ""};
+            pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
         this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0;
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
@@ -53,6 +53,7 @@ export class ModelsController {
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
+            onRename: label => this.renameRun(label),
             onRenew: () => void this.renewRun(), onDelete: () => this.requestRunDeletion(), onConfirmDelete: () => void this.deleteRun(),
             onUndoDelete: id => void this.resolveDeletion(id, true), onDismissDelete: id => void this.resolveDeletion(id, false),
             onKeepRun: () => { this.state.deleteConfirmation = null; this.render(); this.view.focusRunDelete?.(); },
@@ -566,6 +567,30 @@ export class ModelsController {
         finally { this.state.actionBusy = false; this.render(); }
     }
 
+    /** Rename the selected run and refresh its existing output labels through composition.
+     * @param {string} label New user-entered name without the creation timestamp.
+     * @return {Promise<boolean>} Whether renaming succeeded, allowing the view to close its editor.
+     */
+    async renameRun(label) {
+        const id = this.state.selectedRun;
+        if (!id || this.state.actionBusy) return false;
+        this.state.actionBusy = true; this.state.renamingRun = id; this.state.actionMessage = ""; this.state.error = ""; this.render();
+        try {
+            if (!label.trim() || [...label.trim()].length > 80) throw new Error("Name this run using 1–80 characters.");
+            const job = await this.api.renameModelRun(id, label.trim());
+            this.jobs.accept(job); this.rememberRun(job); this.refreshMapLayers();
+            if (this.state.selectedRun === id) {
+                const current = this.runSnapshots.get(id);
+                if (this.state.invocation) this.state.invocation = {...this.state.invocation, label: current.name};
+                this.state.actionMessage = "Run renamed.";
+            }
+            return true;
+        } catch (error) {
+            if (this.state.selectedRun === id) this.state.error = `Could not rename this run: ${error.message}`;
+            return false;
+        } finally { this.state.actionBusy = false; this.state.renamingRun = null; this.render(); }
+    }
+
     /** Delete the confirmed run and offer server-backed Undo for thirty seconds.
      * @return {Promise<void>} Completion after deletion or visible failure.
      */
@@ -673,7 +698,7 @@ export class ModelsController {
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
         const draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
-        draft.label = saved.label; draft.parameters = structuredClone(saved.parameters);
+        draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
         draft.rasterChosen = true; draft.maskChosen = true;
         let savedHydrology = null;
         for (const [name, input] of Object.entries(model.inputs)) {

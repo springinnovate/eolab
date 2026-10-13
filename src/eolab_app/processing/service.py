@@ -51,6 +51,7 @@ from eolab_app.processing.model_run_contracts import (
     MODEL_OPERATION,
     MODEL_DELETION_UNDO_SECONDS,
     MODEL_RUN_RETENTION_SECONDS,
+    ModelRunNameRequest,
     ModelRunRequest,
 )
 from eolab_app.processing.model_runs import (
@@ -59,8 +60,10 @@ from eolab_app.processing.model_runs import (
     encode_model_run_cursor,
     export_model_job_yaml,
     read_model_invocation,
+    read_model_job_operation_id,
     serialize_model_job,
     serialize_model_artifacts,
+    build_model_download_filename,
     build_model_calculation_request,
 )
 from eolab_app.processing.model_yaml import (
@@ -295,11 +298,11 @@ class ProcessingService:
                 the configured queue or storage limits prevent submission.
             RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
-        request_hash = hashlib.sha256(
-            encode_canonical_json(
-                request.model_dump(mode="json", exclude={"requestId"})
-            )
-        ).hexdigest()
+        request_data = request.model_dump(mode="json", exclude={"requestId"})
+        if request.utcOffsetMinutes == 0:
+            # Preserve retry identity for submissions accepted before local timestamps.
+            request_data.pop("utcOffsetMinutes")
+        request_hash = hashlib.sha256(encode_canonical_json(request_data)).hexdigest()
         existing = await asyncio.to_thread(
             self.jobs.find_request, owner, request.requestId
         )
@@ -365,6 +368,9 @@ class ProcessingService:
             signature,
             additional_signatures,
         )
+        prepared = replace(
+            prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
+        )
         row = await asyncio.to_thread(
             self.jobs.submit, owner, request.requestId, prepared, request_hash
         )
@@ -427,7 +433,9 @@ class ProcessingService:
         """
         return export_yaml(self.model_registry.get(identifier, version).to_document())
 
-    async def export_job_yaml(self, owner: str, identifier: str, *, run: bool) -> bytes:
+    async def export_job_yaml(
+        self, owner: str, identifier: str, *, run: bool
+    ) -> tuple[bytes, str]:
         """Export the recipe or run details saved with this browser session's job.
 
         Args:
@@ -437,13 +445,43 @@ class ProcessingService:
                 only the reusable Model YAML recipe.
 
         Returns:
-            UTF-8 YAML bytes using the saved recipe, independent of the current library.
+            UTF-8 YAML bytes and a filename using the run's current name and creation
+            timestamp. The saved recipe is independent of the current library.
 
         Raises:
             ProcessingError: If the job is unavailable to this session or its metadata expired.
         """
         row = await asyncio.to_thread(self.jobs.get, identifier, owner)
-        return export_model_job_yaml(row, run=run)
+        document_kind = "run-yaml" if run else "model-yaml"
+        return export_model_job_yaml(row, run=run), build_model_download_filename(
+            row, document_kind, "document.yaml", "application/yaml"
+        )
+
+    async def rename_model_run(
+        self, owner: str, identifier: str, request: ModelRunNameRequest
+    ) -> dict[str, Any]:
+        """Rename an owned model run without changing its calculation or retained files.
+
+        Args:
+            owner: Hash of the requesting browser's Processing session cookie.
+            identifier: The model run's public job ID.
+            request: Validated replacement name, without a creation timestamp.
+
+        Returns:
+            Updated run status and download names using its original creation time.
+
+        Raises:
+            ProcessingError: If the run is unowned, deleted or not a model run.
+        """
+        row = await asyncio.to_thread(self.jobs.get, identifier, owner)
+        require_operation(row, MODEL_OPERATION)
+        updated = await asyncio.to_thread(
+            self.jobs.update_presentation,
+            identifier,
+            owner,
+            {"label": request.label},
+        )
+        return serialize_processing_job(updated)
 
     async def get_model_invocation(self, owner: str, identifier: str) -> dict[str, Any]:
         """Read a run's original setup for inspection or duplication.
@@ -1031,7 +1069,7 @@ class ProcessingService:
                         410,
                     )
             content = None
-            if row.get("presentation"):
+            if row.get("presentation") and row["operation"] != MODEL_OPERATION:
                 rows = present_calculation_rows(artifact["rows"], row["presentation"])
                 content = statistics_csv(rows)
                 if provenance:
@@ -1049,6 +1087,22 @@ class ProcessingService:
                     content = json.dumps(document, allow_nan=False).encode("utf-8")
                 size = len(content)
                 sha256 = hashlib.sha256(content).hexdigest()
+            if row["operation"] == MODEL_OPERATION:
+                output = (row.get("summary") or row["spec"]).get("output")
+                output_name = (
+                    "provenance"
+                    if provenance
+                    else (
+                        output["name"]
+                        if output
+                        else get_model_operation(
+                            read_model_job_operation_id(row)
+                        ).output.name
+                    )
+                )
+                filename = build_model_download_filename(
+                    row, output_name, filename, media_type
+                )
             return ArtifactDownload(
                 path, filename, size, sha256, lease, media_type, content
             )
@@ -1117,7 +1171,14 @@ class ProcessingService:
                     410,
                 )
             return ArtifactDownload(
-                path, file.filename, file.size, file.sha256, lease, file.media_type
+                path,
+                build_model_download_filename(
+                    row, file.name, file.filename, file.media_type
+                ),
+                file.size,
+                file.sha256,
+                lease,
+                file.media_type,
             )
         except BaseException:
             await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)
