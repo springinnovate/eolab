@@ -56,7 +56,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
     && test "$(gdal-config --version)" = "3.10.3" \
     && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --require-hashes --wheel-dir /wheels -r application-gdal-requirements.txt \
-    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+gf7e2adba2a4d \
+    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g8d6b778edbaa \
         python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --require-hashes --wheel-dir /wheels -r application-ecoshard-requirements.txt \
     && python build-beneficiaries.py --manifest beneficiaries-source.json --output /wheels \

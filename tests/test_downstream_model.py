@@ -1,6 +1,7 @@
 """Reference grids and real Processing boundaries for downstream model execution."""
 
 import asyncio
+import json
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -292,6 +293,14 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     artifact = calculate_downstream(sources, spec, directory, limits)
     assert float(artifact.rows[0]["value"]) == float(data[data > 0].sum())
     assert spec.watersheds == (1, 2, 3)
+    provenance = json.loads((directory / "provenance.json").read_text())
+    assert provenance["numericalPolicy"]["pitFillSearchLimit"] == 100
+    assert provenance["numericalPolicy"]["pitFillTreatNodataAsClosed"] is True
+    assert provenance["ecoshardRevision"] == "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+    assert (
+        provenance["beneficiariesRevision"]
+        == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    )
     with rasterio.open(directory / "starting_mask.tif") as mask:
         assert np.count_nonzero(mask.read(1) == 1) == 4
     with rasterio.open(directory / "coverage.tif") as coverage:
@@ -337,17 +346,58 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         plan_downstream(sources, request, limits)
 
 
-def test_historical_numerical_policy_remains_readable() -> None:
-    """Saved version-one runs retain their numerical description after replacement."""
-    from eolab_app.processing.downstream_models import DownstreamNumericalPolicy
+@pytest.mark.parametrize("version", [1, 2])
+def test_historical_numerical_policy_remains_readable(version: int) -> None:
+    """Saved runs keep their original revisions and numerical descriptions.
+
+    Args:
+        version: Historical reimplementation or original open-edge WWF policy.
+    """
+    from eolab_app.processing.downstream_models import (
+        DownstreamNumericalPolicy,
+        WrappedDownstreamNumericalPolicy,
+    )
     from eolab_app.processing.model_operations import get_model_operation
 
-    historical = DownstreamNumericalPolicy(bufferMetres=5000).model_dump(mode="json")
+    historical = (
+        DownstreamNumericalPolicy(bufferMetres=5000)
+        if version == 1
+        else WrappedDownstreamNumericalPolicy(
+            bufferMetres=5000, wgs84PixelSize=1, distancePixelSizeMetres=100000
+        )
+    ).model_dump(mode="json")
+    assert historical["ecoshardRevision"] == "f7e2adba2a4d41128aea941bb747470418d2dce9"
+    if version == 2:
+        assert (
+            historical["beneficiariesRevision"]
+            == "7e32ae28540ab53178248758a6f40affea8d6ff6"
+        )
+    assert "pitFillSearchLimit" not in historical
     operation = get_model_operation("hydrology.downstream_beneficiaries.v1")
     assert (
         operation.policy_type.model_validate(historical).model_dump(mode="json")
         == historical
     )
+
+
+def test_closed_edge_policy_records_current_filling_settings(tmp_path: Path) -> None:
+    """New runs record the requested filling behavior without changing old policies.
+
+    Args:
+        tmp_path: Isolated native source metadata for a prepared plan.
+    """
+    from eolab_app.processing.downstream_operation import describe_downstream_policy
+    from eolab_app.processing.downstream_models import DownstreamPolicy
+
+    sources, request, limits = downstream_fixture(tmp_path)
+    policy = describe_downstream_policy(plan_downstream(sources, request, limits))
+    saved = policy.model_dump(mode="json")
+    assert saved["version"] == "hydrology.downstream_beneficiaries.v3"
+    assert saved["pitFillSearchLimit"] == 100
+    assert saved["pitFillTreatNodataAsClosed"] is True
+    assert saved["ecoshardRevision"] == "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+    assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
+    assert DownstreamPolicy.model_validate(saved).model_dump(mode="json") == saved
 
 
 def test_upstream_relative_scratch_stays_in_run_after_failure(
@@ -378,6 +428,8 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
             OSError: Always, after creating a run-local scratch marker.
         """
         assert Path.cwd() == workspace.resolve()
+        assert kwargs["max_pixel_fill_count"] == 100
+        assert kwargs["treat_nodata_as_closed"] is True
         Path("upstream-relative-scratch").write_text("private")
         raise OSError("upstream fixture failure")
 
@@ -509,7 +561,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     registry = ModelRegistry.load_installed()
-    definition = registry.get("downstream-beneficiaries", "2.1.0")
+    definition = registry.get("downstream-beneficiaries", "3.0.0")
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
@@ -640,6 +692,10 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
     assert set(document.execution.additionalSources) == {"dem", "starting_mask"}
+    policy = document.execution.numericalPolicy.model_dump(mode="json")
+    assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
+    assert policy["pitFillSearchLimit"] == 100
+    assert policy["pitFillTreatNodataAsClosed"] is True
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
 
 

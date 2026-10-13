@@ -19,8 +19,10 @@ from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 
 OPERATION = "hydrology.downstream_beneficiaries.v1"
-ECOSHARD_REVISION = "f7e2adba2a4d41128aea941bb747470418d2dce9"
-BENEFICIARIES_REVISION = "7e32ae28540ab53178248758a6f40affea8d6ff6"
+ECOSHARD_REVISION = "8d6b778edbaaff6e5dc3cc04d9da7f9416522054"
+BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
+PIT_FILL_SEARCH_LIMIT = 100
+PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 FLOW_THRESHOLD = 100 * float_info.epsilon
 
 
@@ -139,7 +141,7 @@ class DownstreamNumericalPolicy(HydrologySchema):
 
     version: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        ECOSHARD_REVISION
+        "f7e2adba2a4d41128aea941bb747470418d2dce9"
     )
     routing: Literal["mfd_prepared_dem_native_grid"] = "mfd_prepared_dem_native_grid"
     seeds: Literal["cell_center_positive_valid_raster_or_filtered_vector"] = (
@@ -165,16 +167,16 @@ class DownstreamNumericalPolicy(HydrologySchema):
 
 
 class WrappedDownstreamNumericalPolicy(HydrologySchema):
-    """Record the original model version and the numerical settings passed to it."""
+    """Read historical WWF runs that allowed drainage to NoData during filling."""
 
     version: Literal["hydrology.downstream_beneficiaries.v2"] = (
         "hydrology.downstream_beneficiaries.v2"
     )
     beneficiariesRevision: Literal["7e32ae28540ab53178248758a6f40affea8d6ff6"] = (
-        BENEFICIARIES_REVISION
+        "7e32ae28540ab53178248758a6f40affea8d6ff6"
     )
     ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        ECOSHARD_REVISION
+        "f7e2adba2a4d41128aea941bb747470418d2dce9"
     )
     calculation: Literal["unchanged_upstream_functions"] = (
         "unchanged_upstream_functions"
@@ -191,10 +193,32 @@ class WrappedDownstreamNumericalPolicy(HydrologySchema):
     cutoffMetres: float | None = None
 
 
+class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
+    """Record closed-edge pit filling before the original WWF MFD calculation.
+
+    The search limit uses EcoShard's exploration cutoff, not an exact count of
+    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    """
+
+    version: Literal["hydrology.downstream_beneficiaries.v3"] = (
+        "hydrology.downstream_beneficiaries.v3"
+    )
+    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
+        BENEFICIARIES_REVISION
+    )
+    ecoshardRevision: Literal["8d6b778edbaaff6e5dc3cc04d9da7f9416522054"] = (
+        ECOSHARD_REVISION
+    )
+    pitFillSearchLimit: Literal[100] = PIT_FILL_SEARCH_LIMIT
+    pitFillTreatNodataAsClosed: Literal[True] = PIT_FILL_TREAT_NODATA_AS_CLOSED
+
+
 class DownstreamPolicy(
     RootModel[
         Annotated[
-            DownstreamNumericalPolicy | WrappedDownstreamNumericalPolicy,
+            DownstreamNumericalPolicy
+            | WrappedDownstreamNumericalPolicy
+            | ClosedEdgeDownstreamNumericalPolicy,
             Field(discriminator="version"),
         ]
     ]
