@@ -22,7 +22,7 @@ export function modelSourceKey(source) { return JSON.stringify(source.kind === "
 export function modelResultSources(runs) {
     return runs.filter(run => run.status === "ready" && Date.parse(run.expiresAt) > Date.now() && run.artifacts?.availability === "available")
         .flatMap(run => run.artifacts.files.filter(file => file.mediaType === "image/tiff" && ["result", "intermediate"].includes(file.role))
-            .map(file => ({kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, label: `${run.label} · ${file.label}`, available: true, expiresAt: run.expiresAt})));
+            .map(file => ({kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, label: file.displayName ?? `${file.label} · ${run.label}`, available: true, expiresAt: run.expiresAt})));
 }
 
 /** Explain the saved polygon selection without exposing server paths.
@@ -120,11 +120,12 @@ export function createModelDraft(model, context, id) {
 /** Capture one draft as a model request, validating area and source choices.
  * @param {Object} draft Editable model setup.
  * @param {string} requestId Stable retry identity generated before dispatch.
+ * @param {number} [utcOffsetMinutes=-new Date().getTimezoneOffset()] Local minutes east of UTC, captured once for this submission and its retries.
  * @return {Object} Independent submission, unaffected by later map or draft edits.
  * @throws {Error} If a required input, label, area or parameter is missing.
  */
-export function captureModelSubmission(draft, requestId) {
-    if (!draft.label.trim() || draft.label.length > 80) throw new Error("Name this run using 1–80 characters.");
+export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new Date().getTimezoneOffset()) {
+    if (!draft.label.trim() || [...draft.label.trim()].length > 80) throw new Error("Name this run using 1–80 characters.");
     if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
         throw new Error("Choose a raster from Map layers or a completed run.");
     if (draft.raster.available === false || draft.raster.kind === "runArtifact" && Date.parse(draft.raster.expiresAt) <= Date.now())
@@ -170,5 +171,6 @@ export function captureModelSubmission(draft, requestId) {
         }
     }
     const {id, version, definitionSha256} = draft.model;
-    return structuredClone({requestId, model: {id, version, definitionSha256}, inputs, parameters: draft.parameters, label: draft.label.trim()});
+    return structuredClone({requestId, model: {id, version, definitionSha256}, inputs, parameters: draft.parameters,
+        label: draft.label.trim(), utcOffsetMinutes});
 }

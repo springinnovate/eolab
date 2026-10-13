@@ -47,6 +47,7 @@ from eolab_app.processing.model_run_contracts import (
     ModelInvocation,
     ModelLibrary,
     ModelRunList,
+    ModelRunNameRequest,
     ModelRunRequest,
     ModelArtifactManifest,
     ModelDeletionAction,
@@ -93,12 +94,12 @@ class RequestSizeLimitedRoute(APIRoute):
         """Wrap the endpoint with its request-body size check.
 
         Returns:
-            A request handler enforcing the upload, batch or ordinary POST size limit.
+            A request handler enforcing upload, batch and ordinary mutation size limits.
         """
         handler = super().get_route_handler()
 
         async def check_request_size(request: Request) -> Response:
-            """Read a POST body and reject it if it exceeds this endpoint's byte limit.
+            """Read a POST or PATCH body and enforce this endpoint's byte limit.
 
             Args:
                 request: The incoming HTTP request before JSON parsing.
@@ -109,7 +110,7 @@ class RequestSizeLimitedRoute(APIRoute):
             Raises:
                 HTTPException: If the body exceeds this endpoint's byte limit.
             """
-            if request.method != "POST":
+            if request.method not in {"POST", "PATCH"}:
                 return await handler(request)
             limit = (
                 MAX_POLYGON_AREA_BYTES
@@ -171,7 +172,7 @@ def get_processing_session_owner_hash(
     Raises:
         HTTPException: If a mutation fails the origin or Processing-header check.
     """
-    if request.method in {"POST", "DELETE"}:
+    if request.method in {"POST", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
         if (
             request.headers.get("sec-fetch-site") == "cross-site"
@@ -549,7 +550,7 @@ def create_processing_router(
         Raises:
             HTTPException: If the run belongs to another session, was deleted, or its metadata expired.
         """
-        data = await _await_service_result(
+        data, filename = await _await_service_result(
             service.export_job_yaml(
                 get_processing_session_owner_hash(
                     request, response, session_ttl_seconds
@@ -563,7 +564,7 @@ def create_processing_router(
             media_type="application/yaml",
             headers={
                 **dict(response.headers),
-                "Content-Disposition": f'attachment; filename="{job_id}-{document_kind}.yaml"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
                 "X-Content-Type-Options": "nosniff",
             },
         )
@@ -572,7 +573,7 @@ def create_processing_router(
     async def read_saved_model_inputs(
         job_id: JobId, request: Request, response: Response
     ) -> dict[str, Any]:
-        """Return the recipe and input values originally submitted for a run.
+        """Return a run's original recipe and inputs with its current editable name.
 
         Args:
             job_id: The accepted model run's job ID.
@@ -960,6 +961,41 @@ def create_processing_router(
                     request, response, session_ttl_seconds
                 ),
                 job_id,
+            )
+        )
+
+    @router.patch(
+        "/jobs/{job_id}/name",
+        response_model=ModelJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def rename_model_run(
+        job_id: JobId,
+        body: ModelRunNameRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        """Rename a model run and its downloads without changing its calculation.
+
+        Args:
+            job_id: Owned model-run identity.
+            body: Replacement name, without the run's fixed creation timestamp.
+            request: Same-origin request carrying the browser session cookie.
+            response: Response receiving the renewed session cookie.
+
+        Returns:
+            Updated run status and readable output names.
+
+        Raises:
+            HTTPException: If ownership, origin or run availability rejects the edit.
+        """
+        return await _await_service_result(
+            service.rename_model_run(
+                get_processing_session_owner_hash(
+                    request, response, session_ttl_seconds
+                ),
+                job_id,
+                body,
             )
         )
 

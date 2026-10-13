@@ -605,6 +605,37 @@ test("local layers keep their identity and survive Catalog clearing and restorat
     assert.throws(() => controller.addLocal({key: record.entry.key, label: "duplicate"}, local));
 });
 
+test("local source names update generated labels and groups while preserving custom names and Undo", () => {
+    const controller = new MapLayerController({leafletMap: createMap(), view: createView()});
+    const adapter = createAdapter("output");
+    adapter.copyLayerForUndo = () => ({kind: "output"});
+    const originalGroup = {id: "run", label: "Original run"};
+    adapter.snapshot = () => ({datasetKind: "raster", group: originalGroup});
+    const record = controller.addLocal({key: "local:output", label: "Coverage · Original run",
+        sourceName: "Coverage · Original run", group: originalGroup}, adapter);
+    const renderer = controller.getLeafletLayer(record.entry.key), state = record.state;
+    const presentation = {sourceName: "Coverage · Renamed run", group: {id: "run", label: "Renamed run"}};
+    controller.updateLocalPresentation(record.entry.key, presentation);
+    assert.equal(record.entry.label, presentation.sourceName);
+    assert.equal(controller.snapshots()[0].group.label, "Renamed run");
+    controller.renameLayer(record.entry.key, "My coverage");
+    controller.updateLocalPresentation(record.entry.key, {...presentation, sourceName: "Coverage · Latest run"});
+    assert.equal(record.entry.label, "My coverage");
+    assert.equal(controller.copyLayerForUndo(record.entry.key).customName, "My coverage");
+    assert.equal(controller.getLeafletLayer(record.entry.key), renderer);
+    assert.equal(record.state, state);
+    controller.renameLayer(record.entry.key, null);
+    assert.equal(record.entry.label, "Coverage · Latest run");
+    const annotation = controller.addLocal({key: "local:annotation", label: "Workshop"}, adapter);
+    assert.throws(() => controller.renameLayer(annotation.entry.key, "Wrong editor"), /layer editor/);
+    controller.updateLocalPresentation(annotation.entry.key, presentation);
+    assert.equal(annotation.entry.label, "Workshop");
+    controller.removeKey(record.entry.key);
+    controller.updateLocalPresentation(record.entry.key, presentation);
+    assert.equal(controller.snapshots().length, 1);
+    controller.destroy();
+});
+
 
 test("name sorts use displayed numeric names, retain ties and preserve layer state", async () => {
     const map = createMap(), view = createView(), changes = [];

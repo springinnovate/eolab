@@ -25,6 +25,7 @@ export class ModelOutputLayers {
      * @param {Object} dependencies Composition-supplied interfaces.
      * @param {Object} dependencies.api Processing status API.
      * @param {(source:Object,adapter:Object)=>void} dependencies.addLayer Attach a local display through the map owner.
+     * @param {(key:string,presentation:Object)=>void} dependencies.updateLayer Update generated names through the map owner, preserving custom names.
      * @param {(key:string)=>void} dependencies.removeLayer Remove a displayed layer only.
      * @param {()=>void} dependencies.refreshLayers Refresh neutral layer presentations.
      * @param {(key:string,data:Object,appearance:Object)=>Object} dependencies.createLayer Create a Leaflet-compatible display.
@@ -36,8 +37,8 @@ export class ModelOutputLayers {
      * @param {Function} [dependencies.read=readArtifactPreview] Bounded preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
      */
-    constructor({api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved = () => {}, describe = describeRasterSource, read = readArtifactPreview, clock = globalThis}) {
-        Object.assign(this, {api, addLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved, describe, read, clock});
+    constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved = () => {}, describe = describeRasterSource, read = readArtifactPreview, clock = globalThis}) {
+        Object.assign(this, {api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved, describe, read, clock});
         this.layers = new Map(); this.pending = new Map(); this.messages = new Map(); this.timer = null; this.expiryTimer = null; this.destroyed = false;
         this.runStates = new Map();
     }
@@ -51,6 +52,18 @@ export class ModelOutputLayers {
         const key = artifactLayerKey(jobId, artifactId);
         return {canShow: PREVIEW_MEDIA_TYPES.has(file.mediaType) && file.role !== "provenance",
             onMap: this.layers.has(key), busy: this.pending.has(key), error: this.messages.get(key) ?? ""};
+    }
+
+    /** Read an output's latest generated name and run group for map presentation.
+     * @param {string} jobId Known owning run identity.
+     * @param {Object} file Original artifact identity and scientific label.
+     * @return {{label:string,sourceName:string,group:Object}} Names from the latest accepted run snapshot.
+     */
+    outputPresentation(jobId, file) {
+        const job = this.runStates.get(jobId);
+        const latestFile = job.artifacts?.files.find(value => value.artifactId === file.artifactId) ?? file;
+        const label = latestFile.displayName ?? `${latestFile.label} · ${job.label}`;
+        return {label, sourceName: label, group: {id: jobId, label: job.label, actionLabel: "Delete run and results"}};
     }
 
     /** Explicitly load a file, then attach it only if its run is still available.
@@ -82,9 +95,8 @@ export class ModelOutputLayers {
                 const bbox = metadata.bounds;
                 if (!bbox) throw new Error("This raster cannot be placed on the map. Download it or choose it directly as a model input.");
                 if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This raster crosses unsupported map bounds.");
-                const state = {key, jobId: job.jobId, runName: job.label, file, expiresAt: job.expiresAt, kind: "raster"};
-                const retained = await this.addRaster({source, version: metadata.version, bbox, label: file.label,
-                    group: {id: job.jobId, label: job.label, actionLabel: "Delete run and results"},
+                let presentation = this.outputPresentation(job.jobId, file);
+                const retained = await this.addRaster({source, version: metadata.version, bbox, ...presentation,
                     capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
                         calculations: true, modelInput: true}}, {
                     /** Reopen the source run without putting private identity into a catalog item. @return {void} */
@@ -96,24 +108,32 @@ export class ModelOutputLayers {
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
                 }, {visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                    customName: restore?.customName ?? null,
+                    getPresentation: () => (presentation = this.outputPresentation(job.jobId, file)),
                     isCurrent: () => !this.destroyed && !abort.signal.aborted && isCurrent() &&
                         this.runStates.get(job.jobId)?.status === "ready" && Date.parse(this.runStates.get(job.jobId).expiresAt) > Date.now()});
                 if (retained !== null && !abort.signal.aborted) {
-                    state.expiresAt = this.runStates.get(job.jobId).expiresAt;
-                    this.layers.set(key, state);
+                    const latest = this.runStates.get(job.jobId);
+                    this.layers.set(key, {key, jobId: job.jobId, runName: latest.label,
+                        file: latest.artifacts.files.find(value => value.artifactId === file.artifactId) ?? file, expiresAt: latest.expiresAt, kind: "raster"});
+                    const current = this.outputPresentation(job.jobId, file);
+                    if (current.label !== presentation.label || current.group.label !== presentation.group.label) this.updateLayer(key, current);
                 }
                 this.schedule(); return;
             }
             const data = await this.read(job.jobId, file, abort.signal);
             if (this.destroyed || abort.signal.aborted || !isCurrent()) return;
             if (Date.parse(this.runStates.get(job.jobId).expiresAt) <= Date.now()) throw new Error("This result expired while its preview was loading.");
-            const state = {key, jobId: job.jobId, runName: job.label, file, expiresAt: this.runStates.get(job.jobId).expiresAt, kind: data.kind,
+            const latest = this.runStates.get(job.jobId);
+            const state = {key, jobId: job.jobId, runName: latest.label,
+                file: latest.artifacts.files.find(value => value.artifactId === file.artifactId) ?? file, expiresAt: latest.expiresAt, kind: data.kind,
                 appearance: restore?.local.appearance ?? initialAppearance(data)};
             state.initial = initialAppearance(data);
             state.appearance = this.normalizeAppearance(state, state.appearance);
             layer = this.createLayer(key, data, state.appearance); state.layer = layer;
             this.layers.set(key, state);
-            this.addLayer({key, label: file.label, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1}, this.adapter(state));
+            this.addLayer({key, ...this.outputPresentation(job.jobId, file), customName: restore?.customName ?? null,
+                visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1}, this.adapter(state));
             this.schedule();
         } catch (error) {
             this.layers.delete(key); layer?.release();
@@ -205,7 +225,7 @@ export class ModelOutputLayers {
         if (isCurrent()) await this.show(job, file, snapshot, isCurrent);
     }
 
-    /** Apply authoritative run expiry or deletion through composition or status reads.
+    /** Apply authoritative run names, expiry or deletion through composition or status reads.
      * Only a newer authoritative response can restore a deleted run after Undo.
      * @param {Object} job Owned run snapshot from the Processing API.
      * @return {void}
@@ -224,6 +244,11 @@ export class ModelOutputLayers {
             const file = job.artifacts?.files.find(value => value.artifactId === state.file.artifactId);
             if (available && file?.sha256 === state.file.sha256) {
                 if (state.expiresAt !== job.expiresAt) { state.expiresAt = job.expiresAt; changed = true; }
+                if (state.runName !== job.label || state.file.displayName !== file.displayName) {
+                    state.runName = job.label; state.file = file;
+                    this.updateLayer(state.key, this.outputPresentation(job.jobId, file));
+                    changed = true;
+                }
             }
             else {
                 this.messages.set(state.key, "Map layer removed because the result is no longer available. Reopen the run to check it.");

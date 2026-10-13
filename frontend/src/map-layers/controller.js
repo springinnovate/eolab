@@ -6,7 +6,7 @@ import { MapLayerStack } from "./layer-stack.js";
 import { MapLayerStackView } from "./layer-stack-view.js";
 
 /**
- * Trim a map-specific name, using null to restore the original catalog name.
+ * Trim a map-specific name, using null to restore its source name.
  * @param {unknown} value User-entered or saved display name; null resets it.
  * @return {string|null} Trimmed name, or null for the source name.
  * @throws {TypeError} If the name is blank, not text, or longer than 160 characters.
@@ -72,7 +72,7 @@ function normalizeCustomLayerName(value) {
  * @typedef {Object} RemovedMapLayer
  * @property {string} key Stable layer identity.
  * @property {string} label Display name before removal.
- * @property {string|null} [customName] Map-specific catalog layer name, or null for its source name.
+ * @property {string|null} [customName] Map-specific layer name, or null for its source name.
  * @property {number} index Previous top-first drawing position.
  * @property {boolean} visible Previous visibility.
  * @property {number} opacity Previous overlay opacity.
@@ -177,7 +177,9 @@ export class MapLayerController {
      * Attach a local layer using its owner's synchronous rendering adapter.
      * An existing publication may be supplied without a Catalog Item. Layers supply
      * createState, createLayer and snapshot, plus optional lifecycle callbacks.
-     * @param {{key:string,label:string,visible?:boolean,opacity?:number,publication?:Object}} source Local presentation and optional completed publication.
+     * Providing sourceName enables the standard name editor, preserving custom names
+     * when the owner later updates its source name.
+     * @param {{key:string,label:string,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object}} source Local presentation and optional completed publication.
      * @param {Object} adapter Owner's rendering and presentation methods.
      * @return {Object} Retained record.
      * @throws {Error} If the identity is duplicated or construction fails.
@@ -189,6 +191,12 @@ export class MapLayerController {
         const { entry } = this.stack.addLocal(source.key, source.label, this.recordIntent());
         const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null };
         try {
+            if (source.sourceName !== undefined) {
+                entry.sourceName = source.sourceName;
+                entry.customName = normalizeCustomLayerName(source.customName ?? null);
+                entry.label = entry.customName ?? entry.sourceName;
+            }
+            if (source.group) entry.group = source.group;
             this.stack.setVisible(entry.key, source.visible ?? true);
             this.stack.setOpacity(entry.key, source.opacity ?? 1);
             record.state = adapter.createState({ entry, source, publication: record.publication });
@@ -994,21 +1002,36 @@ export class MapLayerController {
     }
 
     /**
-     * Rename a catalog layer in this map without changing its source or requesting new data.
+     * Rename a map layer without changing its source or requesting new data.
      * Annotation names continue to belong to their existing annotation editor.
-     * @param {string} key Retained catalog layer identity.
+     * @param {string} key Retained layer identity.
      * @param {string|null} name Custom display name, or null to use the source name.
      * @return {void}
-     * @throws {TypeError|RangeError} If the name is invalid or the layer is not a retained catalog layer.
+     * @throws {TypeError|RangeError} If the name is invalid or the layer does not support this editor.
      */
     renameLayer(key, name) {
         const record = this.#requireRecord(key);
-        if (record.entry.item === null) throw new TypeError("Use the layer editor to rename this layer.");
+        if (record.entry.item === null && record.entry.sourceName === undefined) throw new TypeError("Use the layer editor to rename this layer.");
         const customName = normalizeCustomLayerName(name);
         record.entry.customName = customName;
-        record.entry.label = customName ?? record.adapter.label(record.entry.item);
+        record.entry.label = customName ?? record.entry.sourceName ?? record.adapter.label(record.entry.item);
         this.render({ key, action: "rename" });
         this.view.announceStatus?.(`Layer renamed to ${record.entry.label}.`);
+    }
+
+    /** Update a local layer's source name and group without replacing a user's custom name.
+     * Missing or removed layers are ignored so late owner updates cannot restore them.
+     * @param {string} key Retained local layer identity.
+     * @param {{sourceName:string,group:Object}} presentation Current source name and grouping.
+     * @return {void}
+     */
+    updateLocalPresentation(key, {sourceName, group}) {
+        const record = this.records.get(key);
+        if (!record || record.entry.item !== null || record.entry.sourceName === undefined) return;
+        record.entry.sourceName = sourceName;
+        record.entry.label = record.entry.customName ?? sourceName;
+        record.entry.group = group;
+        this.render();
     }
 
     /**
@@ -1022,7 +1045,8 @@ export class MapLayerController {
             return {
                 ...entry,
                 ...record.adapter.snapshot(record),
-                sourceName: entry.item === null ? null : record.adapter.label(entry.item),
+                ...(entry.group ? {group: entry.group} : {}),
+                sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
                 styleClipboard: this.#styleClipboardSnapshot(record),
                 error: record.error,
             };

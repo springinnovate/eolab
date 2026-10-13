@@ -191,6 +191,8 @@ def test_many_drainage_files_publish_without_an_inventory_ceiling(
         serialize_model_artifacts(
             {
                 "id": "b" * 32,
+                "created_at": datetime.now(timezone.utc),
+                "summary": {"label": "Many drainage groups"},
                 "status": "ready",
                 "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
                 "artifact": {"manifest": asdict(manifest)},

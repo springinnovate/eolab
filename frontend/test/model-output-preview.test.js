@@ -16,7 +16,11 @@ function fixture(overrides = {}) {
     const records = new Map(); const calls = {reads: 0, releases: 0, changes: 0};
     const api = {getJob: async () => run, readJobStatuses: async () => ({jobs: [run], unavailableJobIds: []})};
     const owner = new ModelOutputLayers({api, clock: {setTimeout() {}, clearTimeout() {}},
-        addLayer: (source, adapter) => records.set(source.key, {entry: source, adapter, state: adapter.createState()}),
+        addLayer: (source, adapter) => records.set(source.key, {entry: {...source, label: source.customName ?? source.label}, adapter, state: adapter.createState()}),
+        updateLayer: (key, presentation) => {
+            const record = records.get(key);
+            Object.assign(record.entry, presentation, {label: record.entry.customName ?? presentation.sourceName});
+        },
         removeLayer: key => { const record = records.get(key); records.delete(key); record.adapter.removed(); },
         refreshLayers: () => {}, createLayer: () => ({setAppearance() {}, zoom() {}, release() { calls.releases++; }}),
         openRun: () => {}, onChange: () => { calls.changes++; },
@@ -31,11 +35,99 @@ test("outputs are opt-in, keep run identities, and remove without deleting any r
     assert.equal(h.calls.reads, 1); assert.equal(h.records.size, 1);
     assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).onMap, true);
     const record = h.records.get(key);
+    assert.equal(record.entry.label, h.file.displayName ?? `${h.file.label} · ${h.run.label}`);
     assert.deepEqual(record.adapter.snapshot().group, {id: h.run.jobId, label: h.run.label, actionLabel: "Delete run and results"});
     h.owner.removeLayer(key);
     assert.equal(h.owner.layers.size, 0); assert.equal(h.calls.releases, 1);
     assert.equal(h.run.artifacts.files.length, 3);
     await h.owner.show(h.run, h.file); assert.equal(h.calls.reads, 2);
+});
+
+/** Rename a run fixture and its output labels as returned by the API.
+ * @param {Object} run Previous run response.
+ * @param {string} name New readable run name.
+ * @return {Object} Newer response with matching output display names.
+ */
+function renamedRun(run, name) {
+    const label = `${name} · ${run.nameTimestamp ?? "2026_10_08_00_00_00"}`;
+    return {...run, name, label, updatedAt: "2026-10-10T00:00:00Z",
+        artifacts: {...run.artifacts, files: run.artifacts.files.map(file => ({...file, displayName: `${file.label} · ${label}`}))}};
+}
+
+test("run renaming refreshes output names and groups without rereading files, including Undo", async () => {
+    const h = fixture(); await h.owner.show(h.run, h.file);
+    const key = artifactLayerKey(h.run.jobId, h.file.artifactId), record = h.records.get(key);
+    const renamed = renamedRun(h.run, "Cuba biomass");
+    h.owner.updateRun(renamed);
+    assert.equal(record.entry.label, renamed.artifacts.files[0].displayName);
+    assert.equal(record.adapter.snapshot().group.label, renamed.label);
+    assert.equal(h.calls.reads, 1);
+    record.entry.customName = "My comparison"; record.entry.label = record.entry.customName;
+    const latest = {...renamedRun(renamed, "Updated biomass"), updatedAt: "2026-10-11T00:00:00Z"};
+    h.owner.updateRun(latest);
+    assert.equal(record.entry.label, "My comparison");
+    assert.equal(record.entry.sourceName, latest.artifacts.files[0].displayName);
+    assert.equal(record.adapter.snapshot().group.label, latest.label);
+    const snapshot = {key, customName: record.entry.customName, local: record.adapter.copyLayerForUndo()};
+    h.owner.removeLayer(key); h.api.getJob = async () => latest;
+    await h.owner.restore(snapshot, () => true);
+    assert.equal(h.records.get(key).entry.label, "My comparison");
+    assert.equal(h.records.get(key).entry.sourceName, latest.artifacts.files[0].displayName);
+    assert.equal(h.calls.reads, 2);
+});
+
+test("an output attaches with the current run name when it changes during a preview read", async () => {
+    let finish;
+    const h = fixture({read: () => new Promise(resolve => { finish = resolve; })});
+    const pending = h.owner.show(h.run, h.file);
+    const renamed = renamedRun(h.run, "New name while reading");
+    h.owner.updateRun(renamed);
+    finish(h.data); await pending;
+    const record = [...h.records.values()][0];
+    assert.equal(record.entry.label, renamed.artifacts.files[0].displayName);
+    assert.equal(record.adapter.snapshot().group.label, renamed.label);
+});
+
+test("raster publication resolves current names after metadata and publication finish", async () => {
+    let finishMetadata, finishPublication, attached;
+    const h = fixture({describe: () => new Promise(resolve => { finishMetadata = resolve; }),
+        addRaster: async (_raster, _lifecycle, presentation) => {
+            await new Promise(resolve => { finishPublication = resolve; });
+            attached = presentation.getPresentation();
+            return {};
+        }});
+    h.file.mediaType = "image/tiff";
+    const pending = h.owner.show(h.run, h.file);
+    h.owner.updateRun(renamedRun(h.run, "Name during metadata read"));
+    finishMetadata({version: h.file.sha256, bounds: [0,0,1,1], capabilities: {pixels: {supported: true}, statistics: {supported: true}}});
+    await Promise.resolve();
+    const latest = {...renamedRun(h.run, "Name during publication"), updatedAt: "2026-10-11T00:00:00Z"};
+    h.owner.updateRun(latest);
+    finishPublication(); await pending;
+    assert.equal(attached.label, latest.artifacts.files[0].displayName);
+    assert.equal(attached.group.label, latest.label);
+    assert.equal([...h.owner.layers.values()][0].runName, latest.label);
+    h.owner.updateRun(h.run);
+    assert.equal([...h.owner.layers.values()][0].runName, latest.label);
+});
+
+test("a rename observed as raster attachment completes updates the retained presentation", async () => {
+    const changes = [];
+    let latest;
+    const h = fixture({describe: async () => ({version: "a".repeat(64), bounds: [0,0,1,1],
+        capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+        updateLayer: (key, presentation) => changes.push({key, presentation}),
+        addRaster: async (_raster, _lifecycle, options) => {
+            options.getPresentation();
+            h.owner.updateRun(latest);
+            return {};
+        }});
+    h.file.mediaType = "image/tiff";
+    latest = renamedRun(h.run, "Rename during attachment");
+    await h.owner.show(h.run, h.file);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].presentation.label, latest.artifacts.files[0].displayName);
+    assert.equal(changes[0].presentation.group.label, latest.label);
 });
 
 test("renewal updates the map deadline and late reads cannot shorten it", async () => {

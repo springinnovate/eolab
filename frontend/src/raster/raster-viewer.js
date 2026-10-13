@@ -1011,7 +1011,7 @@ export function initializeRasterViewer(
         return allVisibleRasterRecords().filter(({state}) => state.item.capabilities?.pixels !== false)
             .map(({ entry, state }) => ({
                 key: entry.key,
-                label: entry.customName ?? getRasterDisplayStem(state.item),
+                label: entry.item === null ? entry.label : entry.customName ?? getRasterDisplayStem(state.item),
                 item: state.item,
             }));
     }
@@ -4365,6 +4365,8 @@ export function initializeRasterViewer(
      * @param {Object} raster Original source, metadata, label, group and capabilities.
      * @param {Object} lifecycle Composition-supplied info, Undo and removal callbacks.
      * @param {Object} [presentation={}] Visibility, opacity, restored appearance, signal and isCurrent callback.
+     * An optional getPresentation callback supplies current sourceName, label and group
+     * after publication, so a pending layer uses any intervening name changes.
      * @return {Promise<Object|null>} Retained raster record, or null after cancellation.
      * @throws {Error} If identity, appearance or layer construction fails.
      */
@@ -4372,7 +4374,8 @@ export function initializeRasterViewer(
         const publication = await publishRaster(raster, undefined, presentation.signal);
         if (presentation.signal?.aborted || presentation.isCurrent?.() === false) return null;
         const key = rasterSourceKey(raster);
-        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation, publication}, rasterMapLayerAdapter);
+        const record = mapLayers.addLocal({key, label: raster.label, raster, lifecycle, ...presentation,
+            ...presentation.getPresentation?.(), publication}, rasterMapLayerAdapter);
         renderLayerHistogramSummaries();
         return record;
     }

@@ -25,9 +25,12 @@ export const hydrology = {definition: {id: "prepared-region", version: "1.0.0", 
  * @return {Object} Model run response.
  */
 export function job(changes = {}) {
+    const name = changes.name ?? changes.label ?? "Population total";
+    const nameTimestamp = changes.nameTimestamp ?? "2026_10_08_00_00_00";
     return {jobId: "1".repeat(32), operation: "model.run.v1", model: {id: model.id, version: model.version, definitionSha256: model.definitionSha256, title: model.title},
-        label: "Population total", status: "queued", createdAt: "2026-10-08T00:00:00Z", updatedAt: "2026-10-08T00:00:00Z",
-        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null, ...changes};
+        status: "queued", createdAt: "2026-10-08T00:00:00Z", updatedAt: "2026-10-08T00:00:00Z",
+        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null, ...changes,
+        name, nameTimestamp, label: `${name} · ${nameTimestamp}`};
 }
 
 /** Installed clip recipe shape, using the same raster input and a restricted area. */
@@ -58,5 +61,6 @@ export function fileManifest() {
             {artifactId: "a".repeat(32), name: "raster", label: "Clipped raster", role: "result", filename: "result.tif", mediaType: "image/tiff", bytes: 4096},
             {artifactId: "b".repeat(32), name: "coverage", label: "Coverage", role: "intermediate", filename: "coverage.tif", mediaType: "image/tiff", bytes: 2048},
             {artifactId: "c".repeat(32), name: "provenance", label: "Provenance", role: "provenance", filename: "provenance.json", mediaType: "application/json", bytes: 128},
-        ].map(file => ({...file, sha256: "a".repeat(64), url: `/api/processing/jobs/${jobId}/artifacts/${file.artifactId}`}))};
+        ].map(file => ({...file, displayName: `${file.label} · ${job().label}`,
+            sha256: "a".repeat(64), url: `/api/processing/jobs/${jobId}/artifacts/${file.artifactId}`}))};
 }

@@ -113,7 +113,9 @@ function validateJob(job) {
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.operation === "model.run.v1") {
         validateModelIdentity(job.model);
-        if (typeof job.label !== "string" || !["createdAt", "updatedAt"].every(key => Number.isFinite(Date.parse(job[key]))) ||
+        if (typeof job.name !== "string" || !job.name.trim() || [...job.name].length > 80 ||
+            typeof job.nameTimestamp !== "string" || !/^\d{4}(?:_\d{2}){5}$/.test(job.nameTimestamp) ||
+            job.label !== `${job.name} · ${job.nameTimestamp}` || !["createdAt", "updatedAt"].every(key => Number.isFinite(Date.parse(job[key]))) ||
             !["expiresAt", "metadataExpiresAt"].every(key => job[key] === null || Number.isFinite(Date.parse(job[key]))) ||
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
@@ -162,6 +164,7 @@ function validateModelArtifacts(manifest, job) {
         if (!file || !/^[a-f0-9]{32}$/.test(file.artifactId) || ids.has(file.artifactId) ||
             typeof file.name !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(file.name) || names.has(file.name) ||
             typeof file.label !== "string" || !file.label || file.label.length > 200 ||
+            typeof file.displayName !== "string" || !file.displayName.trim() || [...file.displayName].length > 305 ||
             !["result", "intermediate", "provenance"].includes(file.role) ||
             typeof file.filename !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(file.filename) ||
             typeof file.mediaType !== "string" || file.mediaType.length > 100 || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(file.mediaType) ||
@@ -535,6 +538,19 @@ export class ProcessingApiClient {
     async renewModelRun(id) {
         await this.ensureSession();
         return validateJob(await this.request(`/jobs/${validateProcessingId(id)}/renew`, "POST"));
+    }
+
+    /** Rename a model run without changing its creation time, inputs or outputs.
+     * @param {string} id Owned model run ID.
+     * @param {string} label User's new name, excluding the automatic creation timestamp.
+     * @return {Promise<Object>} Validated run with its updated display names.
+     * @throws {ProcessingRequestError|Error} If the run is unavailable, renaming fails or the reply is invalid.
+     */
+    async renameModelRun(id, label) {
+        await this.ensureSession();
+        const job = validateJob(await this.request(`/jobs/${validateProcessingId(id)}/name`, "PATCH", {label}));
+        if (job.operation !== "model.run.v1" || job.jobId !== id) throw new Error("Unexpected model rename response.");
+        return job;
     }
 
     /** Delete a model run while keeping a thirty-second Undo opportunity.

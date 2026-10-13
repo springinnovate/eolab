@@ -6,12 +6,13 @@ import { SummaryControlDocument } from "../../test-support/processing/summary-do
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
+ * @param {Clipboard|undefined} [clipboard] Optional clipboard for copying complete names.
  * @return {Object} View, document, mutable state and action log.
  */
-function fixture() {
+function fixture(clipboard) {
     const doc = new SummaryControlDocument(); const actions = [];
-    const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
+    const view = new ModelsView(doc, clipboard);
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -128,6 +129,41 @@ test("run controls and open details remain stable through progress updates", () 
     assert.equal(h.view.run.cancel, cancel); assert.equal(h.doc.activeElement, cancel); assert.equal(h.view.run.details.root.open, true);
     assert.equal(h.view.run.progress.value, 3); assert.match(h.view.run.status.textContent, /3 of 8 blocks/);
     h.state.runs[0].status = "cancelling"; h.view.render(h.state); assert.equal(cancel.disabled, true);
+});
+
+test("the inline run name survives progress updates and closes only after a successful save", async () => {
+    const h = fixture(), running = job({status: "running"});
+    Object.assign(h.state, {page: "run", selectedRun: running.jobId, runs: [running]}); h.view.render(h.state);
+    h.view.run.rename.dispatchEvent(new Event("click"));
+    const input = h.view.run.nameInput;
+    assert.equal(input.value, running.name); assert.equal(h.doc.activeElement, input);
+    input.value = "Cuba biomass";
+    running.progress = {phase: "calculating", completed: 3, total: 8}; h.view.render(h.state);
+    assert.equal(h.view.run.nameInput, input); assert.equal(input.value, "Cuba biomass"); assert.equal(h.doc.activeElement, input);
+    h.view.handlers.onRename = async label => { assert.equal(label, "Cuba biomass"); return false; };
+    await h.view.saveRunName(); assert.equal(h.view.run.nameEditor.hidden, false);
+    h.state.actionBusy = true; h.state.renamingRun = running.jobId; h.view.render(h.state);
+    assert.equal(input.disabled, true); assert.equal(h.view.run.saveName.textContent, "Saving…");
+    h.state.actionBusy = false; h.view.handlers.onRename = async () => true;
+    await h.view.saveRunName(); assert.equal(h.view.run.nameEditor.hidden, true); assert.equal(h.doc.activeElement, h.view.run.rename);
+});
+
+test("compact run names keep the timestamp visible and full run and artifact names can be copied", async () => {
+    const copied = [], h = fixture({writeText: async value => { copied.push(value); }}), artifacts = fileManifest();
+    const ready = job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts});
+    Object.assign(h.state, {page: "run", selectedRun: ready.jobId, runs: [ready]}); h.view.render(h.state);
+    const card = h.view.runCards.get(ready.jobId);
+    assert.equal(card.button.textContent, ready.name); assert.equal(card.button.title, ready.label);
+    assert.equal(card.button.getAttribute("aria-label"), ready.label); assert.match(card.status.textContent, /2026-10-08 00:00:00/);
+    assert.equal(h.view.run.nameDetails.name.textContent, ready.label);
+    h.view.run.nameDetails.copy.dispatchEvent(new Event("click")); await Promise.resolve();
+    assert.deepEqual(copied, [ready.label]); assert.equal(h.view.run.nameDetails.status.textContent, "Name copied.");
+    const fileCard = h.view.run.result.children[2], details = fileCard.children.at(-1);
+    assert.equal(fileCard.children[2].title, artifacts.files[0].filename);
+    assert.equal(details.children[1].textContent, artifacts.files[0].displayName);
+    assert.equal(details.children[2].textContent, artifacts.files[0].filename);
+    details.children[3].dispatchEvent(new Event("click")); await Promise.resolve();
+    assert.equal(copied.at(-1), artifacts.files[0].displayName);
 });
 
 test("file cards show independent opt-in map actions and display loading and map inclusion", () => {
@@ -258,6 +294,8 @@ test("clip results offer a GeoTIFF with dimensions, expire correctly and retain 
     h.state.runs = [job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: clipResult})];
     h.view.render(h.state);
     assert.equal(h.view.run.result.children[0].children[0].textContent, "Clipped raster");
+    assert.equal(h.view.run.result.children[0].children[1].title, clipResult.filename);
+    assert.equal(h.view.run.result.children[0].children[1].tabIndex, 0);
     assert.equal(h.view.run.result.children[0].children[2].textContent, "10 × 10 pixels · 90 valid pixels");
     const links = h.view.run.result.children[1].children;
     assert.equal(links[0].textContent, "Download GeoTIFF"); assert.equal(links[0].href, clipResult.url);

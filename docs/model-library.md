@@ -110,6 +110,18 @@ enabled so this retry is also available after reloading the tab.
 
 ## Follow a run
 
+Every model uses the same naming convention. **Run name** starts with the model's
+name and can be edited before running. The accepted run adds its creation time
+in `YYYY_MM_DD_HH_MM_SS` format, for example
+`Cuba biomass · 2026_10_12_14_35_22`. The time is fixed when the run is accepted,
+using the browser's UTC offset then. Older runs and API submissions without an
+offset use UTC.
+
+Choose **Rename run** in its details to change the name, including while the
+model is running. This updates its generated output names and future download
+filenames. It does not change the creation time, calculation or files. Duplicating
+a run creates a new timestamp when the new run is accepted.
+
 Open **Runs** or **Tools → Model runs** to see this browser session's history.
 Use **Load older runs** for earlier pages. Select a run to see its stage,
 measured progress, saved inputs, results and downloads. Progress counts
@@ -165,12 +177,26 @@ valid-pixel count and file size. **Files from this run** lists individual downlo
 for results, retained intermediates and **Calculation details**. Downloads require
 the browser session that owns the run.
 
+Output names include their run name and creation time, with no hash. For example,
+`Downstream coverage · Cuba biomass · 2026_10_12_14_35_22` has a matching readable
+download filename. Saved Run and Model YAML downloads also carry that run context.
+The installed library's reusable Model YAML keeps its recipe name.
+
+Long names are shortened in lists. Hover or focus the name to inspect it, or
+open the run details for the full text and **Copy name**. The Runs list shows
+the creation time separately so it remains visible even when a name is long.
+
 Choose **Show on map** beside a GeoTIFF or supported GeoJSON output to inspect it.
 Nothing is added automatically. Its button changes to **On map**, and Map layers
 groups the chosen outputs under their run names. Use the usual visibility,
 opacity, Style, legend, zoom and remove controls. The layer's information action
 reopens its run. Removing a layer leaves its file available to download or show
 again; Undo checks the original file again before restoring its style and display.
+
+The normal map-layer **Rename** action can give an output its own map label.
+Renaming its run then preserves that custom label. **Use source name** restores
+the generated output name. Removing a layer and undoing that removal also keeps
+its custom label.
 
 Raster outputs use the same **Style** controls as catalog rasters, including
 continuous palettes, percentile ranges, manual categories, uploaded CSV tables

@@ -28,6 +28,7 @@ class ModelResultFile(JobResultResponse):
 
     name: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
     label: Annotated[str, Field(min_length=1, max_length=80)]
+    displayName: str
     role: Literal["result"]
 
 
