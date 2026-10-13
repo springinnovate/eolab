@@ -566,7 +566,7 @@
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
-        <button id="map-tools-more-summary" class="secondary-button" type="button"
+        <button id="map-tools-more-summary" class="analysis-panel-action" type="button"
           popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
           aria-label="Map and analysis tools">Tools</button>
       </div>
@@ -592,10 +592,10 @@
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
           <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
-          <button id="toggle-map-inspection-dock" class="secondary-button"
+          <button id="toggle-map-inspection-dock" class="analysis-panel-action"
             type="button" aria-controls="map-click-navigation map-inspection-tabs map-inspection-panels"
             aria-expanded="true">Minimize</button>
-          <button id="map-inspection-more-summary" class="secondary-button" type="button"
+          <button id="map-inspection-more-summary" class="analysis-panel-action" type="button"
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             aria-label="Map and analysis tools">Tools</button>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
@@ -652,7 +652,7 @@
           <section id="models-panel" role="tabpanel" aria-labelledby="map-inspection-tab-models" hidden>
             <header class="map-histogram-toolbar">
               <h2 id="models-heading" tabindex="-1">Model library</h2>
-              <button id="models-close" class="secondary-button" type="button" aria-label="Close Models">×</button>
+              <button id="models-close" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close Models">×</button>
             </header>
             <nav class="models-navigation" aria-label="Models">
               <button id="models-nav-library" type="button" aria-pressed="true">Library</button>
@@ -684,7 +684,7 @@
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
               <h2>Raster stack</h2>
-              <button id="close-raster-series" class="secondary-button" type="button" aria-label="Close raster series">&times;</button>
+              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster series">&times;</button>
             </header>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sampling area selected</p>
@@ -749,7 +749,7 @@
             </details>
           </section>
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
-            <header class="map-histogram-toolbar"><h2>Shared layer</h2><button id="close-annotations" class="secondary-button" type="button" aria-label="Close shared layer">&times;</button></header>
+            <header class="map-histogram-toolbar"><h2>Shared layer</h2><button id="close-annotations" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close shared layer">&times;</button></header>
             <div class="annotation-layer-actions">
               <button class="secondary-button" id="undo-annotation-delete" type="button" hidden>Undo deletion</button>
               <button class="secondary-button" id="retry-annotation-save" type="button" hidden>Retry saving</button>
@@ -765,7 +765,7 @@
             </details>
           </section>
           <section id="calculations-panel" role="region" aria-labelledby="open-calculations-dock" hidden>
-            <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster statistics">&times;</button></div>
+            <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster statistics">&times;</button></div>
             <p class="map-analysis-purpose">Calculate values such as mean, totals and area across rasters. Each formula uses <code>a</code> for the raster in that result.</p>
             <section class="summary-scope" aria-label="Sampling area">
               <div class="summary-area-row"><label for="summary-source-mode">Rasters</label><select id="summary-source-mode"><option value="query">Enabled rasters in this area</option><option value="single">Choose raster for each statistic</option></select></div>
@@ -828,7 +828,7 @@
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
             <header class="map-histogram-toolbar">
               <h2>Download raster clip</h2>
-              <button id="raster-clips-close" class="secondary-button" type="button" aria-label="Close raster download">&times;</button>
+              <button id="raster-clips-close" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster download">&times;</button>
             </header>
             <form id="raster-clips-form">
               <h3 id="raster-clips-source-name"></h3>
@@ -876,7 +876,7 @@
                   <span id="vector-time-series-action-help" class="immediate-action-tooltip"
                     role="tooltip">Select at least two features at this location to plot one field across them.</span>
                 </span>
-                <button id="close-vector-inspector" class="secondary-button"
+                <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close"
                   type="button" aria-label="Close feature inspector">×</button>
               </div>
             </header>
@@ -914,7 +914,7 @@
                 <p id="vector-time-series-context" class="vector-series-context"
                   hidden></p>
               </div>
-              <button id="close-vector-time-series" class="secondary-button"
+              <button id="close-vector-time-series" class="analysis-panel-action analysis-panel-close"
                 type="button" aria-label="Close vector series">×</button>
             </header>
             <div class="vector-time-series-controls">
@@ -980,7 +980,7 @@
                 <p id="vector-feature-profile-context" class="vector-series-context"
                   hidden></p>
               </div>
-              <button id="close-vector-feature-profile" class="secondary-button"
+              <button id="close-vector-feature-profile" class="analysis-panel-action analysis-panel-close"
                 type="button" aria-label="Close feature-field plot">×</button>
             </header>
             <nav class="vector-feature-navigation vector-feature-profile-navigation"
@@ -1057,7 +1057,7 @@
             aria-labelledby="map-click-histogram" hidden>
             <header class="map-histogram-toolbar">
               <h2 id="map-histogram-heading">Raster distributions</h2>
-              <button id="close-map-histogram" class="secondary-button" type="button"
+              <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close" type="button"
                 aria-label="Close raster histogram">×</button>
             </header>
             <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
@@ -1310,7 +1310,7 @@
   aria-labelledby="map-inspection-tab-filter vector-filter-title">
   <header class="layer-style-header">
     <h2>Filter features</h2>
-    <button id="close-vector-filter" class="secondary-button" type="button">Close</button>
+    <button id="close-vector-filter" class="analysis-panel-action" type="button">Close</button>
   </header>
   <p id="vector-filter-title"></p>
   <div class="vector-filter-options">
@@ -1337,7 +1337,7 @@
       aria-labelledby="map-inspection-tab-style layer-style-title">
       <header class="layer-style-header">
         <h2 id="layer-style-heading">Style layer</h2>
-        <button id="close-layer-style" class="secondary-button" type="button" aria-label="Close style editor">Close</button>
+        <button id="close-layer-style" class="analysis-panel-action" type="button" aria-label="Close style editor">Close</button>
       </header>
       <p id="layer-style-title"></p>
       <button id="filter-styled-vector-layer" class="secondary-button" type="button" hidden>Filter features…</button>
