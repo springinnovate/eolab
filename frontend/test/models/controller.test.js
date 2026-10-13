@@ -237,13 +237,21 @@ test("a lost submission response survives reload and retries the exact captured 
     const h = fixture({submitModelRun: async () => { throw new TypeError("Connection lost"); }});
     h.controller.chooseModel(model); await h.controller.submit();
     const captured = structuredClone(h.controller.state.pending); assert.ok(captured);
-    assert.equal(captured.utcOffsetMinutes, -new Date().getTimezoneOffset());
+    assert.equal(captured.utcOffsetMinutes, 0 - new Date().getTimezoneOffset());
     assert.equal(captured.label, model.title);
     h.controller.chooseModel(model); h.controller.editDraft({label: "Different draft"});
     const next = fixture(); next.controller.storage = h.storage; next.controller.start();
     await next.controller.submit(true);
     assert.deepEqual(next.submitted[0], captured); assert.equal(next.controller.state.pending, null);
     assert.equal(next.controller.state.page, "run");
+});
+
+test("captured timezone offsets survive the recovery storage JSON round trip", () => {
+    const draft = createModelDraft(model, {rasters: [raster], area}, "timezone-recovery");
+    for (const offset of [-420, 0, -0, 330]) {
+        const captured = captureModelSubmission(draft, "timezone-request", offset);
+        assert.deepEqual(JSON.parse(JSON.stringify(captured)), captured);
+    }
 });
 
 test("run names count Unicode characters consistently when capturing a submission", () => {

@@ -172,5 +172,5 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     }
     const {id, version, definitionSha256} = draft.model;
     return structuredClone({requestId, model: {id, version, definitionSha256}, inputs, parameters: draft.parameters,
-        label: draft.label.trim(), utcOffsetMinutes});
+        label: draft.label.trim(), utcOffsetMinutes: utcOffsetMinutes === 0 ? 0 : utcOffsetMinutes});
 }
