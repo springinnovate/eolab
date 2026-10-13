@@ -69,14 +69,31 @@ currently each produce one scientific result. `map` and
 are separate capabilities. Temporary map previews are available; permanent saving
 and YAML import from the browser are not yet available.
 
-An operation may declare a collection of files for one output. For example,
-`analysis.routing_dem` in the downstream model retains one pit-filled GeoTIFF per
-terminal drainage group. YAML selects the whole collection using the ordinary
-output declaration (`role: intermediate`, `presentation: map`). Each member gets
-its own download and Show on map action, keeps its unique operation-supplied file
-name, and appends its member label to the recipe's label. The operation must
-explicitly declare `multiple_files=True`; arbitrary extra files are rejected.
-Single-file output aliases and existing recipes keep their current behavior.
+The downstream model prepares a separate DEM for each terminal drainage group
+(watersheds grouped by their final drain). A starting area can reach several
+groups, so the number of DEMs is known only when the model runs. Each file is kept
+separately to preserve the exact grid and NoData edges used for routing.
+
+A recipe selects all those DEMs with one output declaration:
+
+```yaml
+outputs:
+  routing_dem:
+    source: analysis.routing_dem
+    type: raster
+    label: Routing DEM (pit-filled)
+    role: intermediate
+    presentation: map
+    saveEligible: true
+```
+
+The registered operation declares `multiple_files=True` for this output so the
+recipe can retain every DEM without listing drain IDs in advance. Each file
+keeps its unique operation-supplied name and adds its drain label to the recipe
+label, such as `Routing DEM (pit-filled) · Drain 6060506430`. The existing run-file
+view supplies download and Show on map controls for each file; it does not need
+to interpret drainage groups. Single-file outputs still use their recipe aliases,
+and files not belonging to a declared operation output are rejected.
 
 ## Reuse a published raster
 
