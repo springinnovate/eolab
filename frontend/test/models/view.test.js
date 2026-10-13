@@ -60,6 +60,23 @@ test("removed history entries leave the DOM while unrelated run cards retain the
     assert.match(h.view.elements["runs-status"].textContent, /No model runs/);
 });
 
+test("library and run cards use the same presentation and invoke their existing navigation", () => {
+    const h = fixture(), run = job();
+    Object.assign(h.state, {page: "library", runs: [run]}); h.view.render(h.state);
+    const libraryCard = h.view.elements["library-items"].children[0];
+    const libraryButton = libraryCard.children[0].children[0];
+    const runCard = h.view.runCards.get(run.jobId);
+    assert.equal(libraryCard.className, runCard.root.className);
+    assert.equal(libraryButton.className, runCard.button.className);
+    assert.equal(libraryButton.type, "button"); assert.equal(runCard.button.type, "button");
+    assert.equal(libraryButton.getAttribute("aria-label"), `Set up ${model.title}`);
+    libraryButton.dispatchEvent(new Event("click")); runCard.button.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.slice(-2), [["Choose", model], ["Run", run.jobId]]);
+    libraryButton.focus(); h.view.render(h.state);
+    assert.equal(h.view.elements["library-items"].children[0], libraryCard);
+    assert.equal(libraryCard.contains(h.doc.activeElement), true);
+});
+
 test("run renewal and deletion have explicit scope, confirmation and busy feedback", () => {
     const h = fixture(), artifacts = fileManifest();
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
@@ -114,8 +131,8 @@ test("run files distinguish coverage from results and replace legacy duplicate l
     assert.equal(children.length, 5); // Primary scientific card, heading, three file cards.
     assert.equal(children[1].textContent, "Files from this run");
     assert.match(children[3].children[1].textContent, /Intermediate result/);
-    assert.equal(children[4].children[0].textContent, `Download ${artifacts.files[2].displayName}`);
-    for (let index = 0; index < 3; index++) assert.equal(children[index + 2].children[0].href, artifacts.files[index].url);
+    assert.equal(children[4].children[0].textContent, artifacts.files[2].displayName);
+    for (let index = 0; index < 3; index++) assert.equal(children[index + 2].children[3].children[1].href, artifacts.files[index].url);
     h.state.runs[0].expiresAt = "2000-01-01T00:00:00Z";
     h.view.render(h.state);
     assert.equal(h.view.run.result.children.length, 0);
@@ -133,6 +150,8 @@ test("run controls and open details remain stable through progress updates", () 
 test("the inline run name survives progress updates and closes only after a successful save", async () => {
     const h = fixture(), running = job({status: "running"});
     Object.assign(h.state, {page: "run", selectedRun: running.jobId, runs: [running]}); h.view.render(h.state);
+    assert.equal(h.view.run.rename.getAttribute("aria-label"), "Rename run");
+    assert.equal(h.view.run.rename.children[0].getAttribute("aria-hidden"), "true");
     h.view.run.rename.dispatchEvent(new Event("click"));
     const input = h.view.run.nameInput;
     assert.equal(input.value, running.name); assert.equal(h.doc.activeElement, input);
@@ -147,7 +166,7 @@ test("the inline run name survives progress updates and closes only after a succ
     await h.view.saveRunName(); assert.equal(h.view.run.nameEditor.hidden, true); assert.equal(h.doc.activeElement, h.view.run.rename);
 });
 
-test("run headings and output links show complete names without a disclosure", () => {
+test("run and output headings show complete names with separate download actions", () => {
     const h = fixture(), artifacts = fileManifest();
     const ready = job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts});
     Object.assign(h.state, {page: "run", selectedRun: ready.jobId, runs: [ready]}); h.view.render(h.state);
@@ -158,9 +177,12 @@ test("run headings and output links show complete names without a disclosure", (
     assert.equal(h.view.elements.run.querySelectorAll("summary").some(summary => summary.textContent === "Full name"), false);
     for (const [index, file] of artifacts.files.entries()) {
         const fileCard = h.view.run.result.children[index + 2];
-        assert.equal(fileCard.children[0].textContent, `Download ${file.displayName}`);
+        assert.equal(fileCard.children[0].textContent, file.displayName);
         assert.equal(fileCard.children[2].textContent, file.filename);
-        assert.equal(fileCard.children.length, 3);
+        const download = fileCard.children[3].children[1];
+        assert.equal(download.textContent, "Download");
+        assert.equal(download.getAttribute("aria-label"), `Download ${file.displayName}`);
+        assert.equal(download.href, file.url); assert.equal(download.download, "");
     }
     h.state.runs = [job({...ready, name: "Cuba biomass"})]; h.view.render(h.state);
     assert.equal(h.view.run.title.textContent, `Cuba biomass · ${ready.nameTimestamp}`);
@@ -196,24 +218,39 @@ test("file cards show independent opt-in map actions and display loading and map
     h.state.outputPreviews = Object.fromEntries(rasterFiles.map(file => [file.artifactId, {canShow: true}]));
     h.view.render(h.state);
     for (const [index, file] of rasterFiles.entries()) {
-        const card = h.view.run.result.children[index + 2], button = card.children[3];
-        assert.equal(card.children[0].textContent, `Download ${file.displayName}`);
-        assert.equal(card.children[0].href, file.url);
+        const card = h.view.run.result.children[index + 2], button = card.children[3].children[0];
+        assert.equal(card.children[0].textContent, file.displayName);
+        assert.equal(card.children[3].children[1].href, file.url);
         assert.equal(button.textContent, "Show on map");
         assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.displayName}`);
         button.dispatchEvent(new Event("click"));
         assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
     }
+    const card = h.view.run.result.children[2], button = card.children[3].children[0];
+    const otherButton = h.view.run.result.children[3].children[3].children[0];
+    button.focus();
+    const actionCount = h.actions.length;
     h.state.outputPreviews[firstFile.artifactId].busy = true; h.view.render(h.state);
-    const button = h.view.run.result.children[2].children[3];
-    assert.equal(button.textContent, "Adding to map…"); assert.equal(button.disabled, true);
-    assert.equal(h.view.run.result.children[3].children[3].textContent, "Show on map");
-    assert.equal(h.view.run.result.children[3].children[3].disabled, false);
+    assert.equal(h.view.run.result.children[2], card);
+    assert.equal(h.view.run.result.contains(button), true);
+    assert.equal(h.doc.activeElement, button);
+    assert.equal(button.textContent, "Adding to map…"); assert.equal(button.getAttribute("aria-disabled"), "true");
+    button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount);
+    assert.equal(otherButton.textContent, "Show on map"); assert.equal(otherButton.getAttribute("aria-disabled"), "false");
     h.state.outputPreviews[firstFile.artifactId] = {canShow: true, onMap: true}; h.view.render(h.state);
-    assert.equal(h.view.run.result.children[2].children[3].textContent, "On map");
-    assert.equal(h.view.run.result.children[2].children[3].disabled, true);
-    assert.equal(h.view.run.result.children[3].children[3].textContent, "Show on map");
-    assert.equal(h.view.run.result.children[3].children[3].disabled, false);
+    assert.equal(button.textContent, "On map"); assert.equal(button.getAttribute("aria-disabled"), "true");
+    assert.equal(h.doc.activeElement, button); assert.equal(h.view.run.result.contains(button), true);
+    button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount);
+    assert.equal(otherButton.textContent, "Show on map"); assert.equal(otherButton.getAttribute("aria-disabled"), "false");
+    const download = card.children[3].children[1]; download.focus();
+    h.state.outputPreviews[firstFile.artifactId] = {canShow: true, error: "Could not add this output. Try again."}; h.view.render(h.state);
+    assert.equal(h.doc.activeElement, download); assert.equal(h.view.run.result.contains(download), true);
+    assert.equal(card.children[4].hidden, false); assert.match(card.children[4].textContent, /Try again/);
+    assert.equal(button.getAttribute("aria-disabled"), "false");
+    button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount + 1);
+    h.state.outputPreviews[firstFile.artifactId] = {canShow: false}; h.view.render(h.state);
+    assert.equal(button.hidden, true); assert.equal(card.children[4].hidden, true);
+    button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount + 1);
 });
 
 test("stage feedback covers terminal states and an unknown total stays indeterminate", () => {

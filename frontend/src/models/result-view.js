@@ -66,31 +66,53 @@ export function renderModelResult(root, result, jobId, element, showDownloads = 
  * @param {HTMLElement} root Container owned by the run view.
  * @param {Object} manifest Validated available file inventory.
  * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
- * @param {Object} [previews={}] Composition-supplied inclusion and loading states keyed by file ID.
  * @param {(artifactId:string)=>void} [showOutput] Request display of one file.
- * @return {void}
+ * @return {Array<{artifactId:string,label:string,button:HTMLButtonElement,error:HTMLElement}>} Stable file controls for updating map actions without replacing focused elements.
  */
-export function renderModelFiles(root, manifest, element, previews = {}, showOutput = () => {}) {
+export function renderModelFiles(root, manifest, element, showOutput = () => {}) {
     root.append(element("h4", "Files from this run"));
+    const controls = [];
     for (const file of manifest.files) {
         const card = element("article", "", "models-result");
         const label = file.displayName ?? (file.role === "provenance" ? "Calculation details" : file.label);
-        const link = element("a", `Download ${label}`);
+        const link = element("a", "Download", "models-action");
         link.href = processingArtifactDownloadUrl(file.url, manifest.jobId, file.artifactId);
         link.download = ""; link.title = file.displayName ?? file.label;
+        link.setAttribute("aria-label", `Download ${label}`);
         const role = {result: "Result", intermediate: "Intermediate result", provenance: "Inputs and calculation settings"}[file.role];
-        const filename = element("span", file.filename, "models-name");
-        card.append(link, element("span", `${role} · ${formatDownloadBytes(file.bytes)}`), filename);
-        const state = previews[file.artifactId] ?? {};
-        if (state.canShow) {
-            const button = element("button", state.onMap ? "On map" : state.busy ? "Adding to map…" : "Show on map", "secondary-button");
-            button.type = "button"; button.disabled = Boolean(state.onMap || state.busy);
-            button.setAttribute("aria-label", `${button.textContent}: ${label}`);
-            button.addEventListener("click", () => showOutput(file.artifactId)); card.append(button);
-            if (state.error) {
-                const error = element("p", state.error, "models-error"); error.setAttribute("role", "alert"); card.append(error);
-            }
-        }
+        const filename = element("span", file.filename, "models-help models-name");
+        const actions = element("div", "", "models-actions");
+        const button = element("button", "Show on map", "models-action");
+        button.type = "button"; button.hidden = true;
+        button.setAttribute("aria-live", "polite"); button.setAttribute("aria-atomic", "true");
+        button.addEventListener("click", () => {
+            if (!button.hidden && button.getAttribute("aria-disabled") !== "true") showOutput(file.artifactId);
+        });
+        const error = element("p", "", "models-error"); error.setAttribute("role", "alert"); error.hidden = true;
+        actions.append(button, link);
+        card.append(element("h5", label, "models-name"), element("span", `${role} · ${formatDownloadBytes(file.bytes)}`, "models-help"), filename, actions, error);
+        controls.push({artifactId: file.artifactId, label, button, error});
         root.append(card);
+    }
+    return controls;
+}
+
+/** Update each file's map action while preserving its button and download link.
+ * @param {Array<{artifactId:string,label:string,button:HTMLButtonElement,error:HTMLElement}>} controls File controls returned by renderModelFiles.
+ * @param {Object<string,{canShow?:boolean,onMap?:boolean,busy?:boolean,error?:string}>} [previews={}] Map availability, inclusion and loading states keyed by file ID.
+ * @return {void}
+ */
+export function updateModelFileActions(controls, previews = {}) {
+    for (const {artifactId, label, button, error} of controls) {
+        const state = previews[artifactId] ?? {};
+        const caption = state.onMap ? "On map" : state.busy ? "Adding to map…" : "Show on map";
+        button.hidden = !state.canShow;
+        if (button.textContent !== caption) button.textContent = caption;
+        button.setAttribute("aria-label", `${caption}: ${label}`);
+        button.setAttribute("aria-disabled", String(Boolean(state.onMap || state.busy)));
+        button.setAttribute("aria-busy", String(Boolean(state.busy)));
+        const message = state.error ?? "";
+        if (error.textContent !== message) error.textContent = message;
+        error.hidden = !state.canShow || !message;
     }
 }
