@@ -186,7 +186,10 @@ waits for publication to stop before cleanup. The final database transition stil
 checks the attempt, lease and deadline after the directory rename.
 
 Retained file inventories have no fixed file-count or byte ceiling, so an output
-collection can grow with the calculation's drainage groups. Model YAML still
+collection can grow with the calculation's drainage groups. For example, 64
+drainage groups produce 64 DEMs plus the run's other outputs. The browser accepts
+the full inventory and validates each file rather than rejecting the completed
+run at a fixed file count. Model YAML still
 permits up to 32 logical scientific outputs. A closed workspace contains only
 flat regular files; nested directories, symbolic links, junctions and hard links
 are rejected. Basenames must be portable and cannot be filesystem paths or
