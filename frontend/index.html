@@ -570,7 +570,10 @@
             popovertarget="workspace-tool-actions" aria-controls="workspace-tool-actions"
             aria-label="Map and analysis tools">Tools <span aria-hidden="true">▾</span></button>
         </div>
-        <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
+        <div class="map-filter-summary-group" role="group" aria-labelledby="map-filter-summary-heading">
+          <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
+          <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
+        </div>
       </div>
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">

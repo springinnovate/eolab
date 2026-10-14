@@ -4968,7 +4968,7 @@ summary:hover > .raster-disclosure-chevron {
     max-height: calc((45dvh - 80px) / 3);
     overflow-y: auto;
   }
-  #app[data-inspection-open="true"] .panel-opener {
+  #app .panel-opener {
     inset: 16px auto auto 16px;
   }
 }
@@ -4995,6 +4995,8 @@ summary:hover > .raster-disclosure-chevron {
 .vector-filter-help { color: var(--text-2); font-size: 0.8rem; }
 #vector-filter-status.is-error { color: #b42318; }
 .map-layer-filter-status { grid-column: 2 / -1; justify-self: start; font-size: 0.75rem; }
+.map-filter-summary-group:has(> .map-filter-indicators[hidden]) { display: none; }
+.map-filter-summary-heading { display: block; padding: 4px; font-size: 0.74rem; }
 .map-filter-indicators { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; max-height: min(120px, 20dvh); overflow-y: auto; pointer-events: auto; }
 .map-filter-indicators[hidden] { display: none; }
 .map-filter-indicator {
