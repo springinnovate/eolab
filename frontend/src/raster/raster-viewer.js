@@ -3505,7 +3505,7 @@ export function initializeRasterViewer(
                 "Click the map to use one shared WGS 84 window.";
         } else {
             nextStatus = "Whole-raster histogram selected. Click the map or " +
-                "use Analysis tools to analyze the map center.";
+                "choose Tools → Inspect map center to analyze the map center.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }

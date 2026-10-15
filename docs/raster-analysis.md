@@ -80,7 +80,7 @@ across selected rasters. Switching views retains their independent source and
 area context; opening a destination alone does not calculate statistics.
 
 One map click can return both vector features and raster information.
-**Features at clicked point** is a separate navigation group, visible alongside
+**Features at inspected point** is a separate navigation group, visible alongside
 raster analysis when point inspection participates. Switching tools or receiving
 new results keeps both groups visible; **Minimize** collapses the whole dock.
 Its updating, unavailable, and new-result feedback refers only to point features.
@@ -140,7 +140,7 @@ its ordinary numeric presentation.
 ## Plot values across raster layers
 
 Choose **Raster analysis → Raster stack**, **Plot raster stack** beneath a histogram,
-or the stack action in **Tools** on the map or dock.
+or **Tools → Plot raster stack** in the persistent map toolbar.
 **Raster stack** runs the same formulas across your selected rasters using
 [raster calculations](raster-calculations.md#plotting-statistics-across-rasters).
 Visible raster layers start selected; expand **Rasters** to choose a different
