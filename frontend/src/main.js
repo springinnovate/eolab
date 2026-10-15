@@ -22,7 +22,6 @@ import {
     CatalogSurpriseClient,
     createDebouncedAction,
     formatCatalogItemCount,
-    formatCatalogVisualizationReason,
     formatScanReconciliation,
     formatScanProgressCounts,
     formatScanTiming,
@@ -71,9 +70,9 @@ import {
 import { addMapRenderStatus } from "./map-layers/map-render-status.js";
 import {
     catalogItemsMatch,
-    CatalogMapActionRegistry,
-    CatalogVectorAssessmentCache,
+    CatalogMapActions,
 } from "./catalog-map-actions.js";
+import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
@@ -643,16 +642,51 @@ async function initializeCatalog(
     const catalogState = {
         collectionsDocument: null,
         resultViews: new Map(),
-        mapActionFeedback: new Map(),
         searchSequence: 0,
         searchText: "",
         selectedButton: null,
         selectedItem: null,
-        pendingMapActions: new CatalogMapActionRegistry(),
-        vectorAssessments: new CatalogVectorAssessmentCache(),
         // Generation token: filter/search changes invalidate older async
         // Surprise responses so they cannot select an Item from stale criteria.
         surpriseRequestGeneration: 0,
+    };
+
+    const catalogMapActions = new CatalogMapActions({
+        contains: item => catalogVisualization.contains(item),
+        prepare: item => catalogVisualization.prepare(item),
+        show: item => catalogVisualization.show(item),
+        remove: item => catalogVisualization.remove(item, true),
+        getBounds: getCatalogItemMapBounds,
+        openStyle: key => layerStyleEditor.open(key),
+        zoomToBounds: bounds => leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 }),
+        onPrepared: (item, visualization) => {
+            if (!catalogItemsMatch(catalogState.selectedItem, item)) return;
+            catalogMapActions.applyAssessment(catalogState.selectedItem);
+            if (visualization?.kind === "raster") {
+                rasterVisualization.activateAnalysis(catalogState.selectedItem);
+            }
+            renderCatalogItemInspector(
+                catalogState.selectedItem,
+                catalogState.collectionsDocument.collections,
+                appGlobalConfiguration.scanDisplayPathPrefix
+            );
+        },
+        onRemoved: (item, kind) => {
+            if (kind === "raster" && catalogItemsMatch(catalogState.selectedItem, item)) {
+                rasterVisualization.activateAnalysis(item);
+            }
+        },
+        onAdded: onRenderingWorkspaceRequested,
+        onChange: refreshCatalogMapAction,
+    });
+    const catalogMapActionElements = {
+        container: catalogMapActionsElement,
+        toggle: catalogLayerToggle,
+        style: catalogLayerStyle,
+        zoom: catalogLayerZoom,
+        onMap: catalogOnMap,
+        actionStatus: catalogMapActionStatus,
+        layerStatus: catalogLayerStatus,
     };
 
     /**
@@ -676,82 +710,9 @@ async function initializeCatalog(
      */
     function refreshCatalogMapAction() {
         for (const view of catalogState.resultViews.values()) {
-            view.update({
-                supported: getCatalogVisualization(view.item) !== null,
-                retained: catalogVisualization.contains(view.item),
-                canZoom: getCatalogItemMapBounds(view.item) !== null,
-                pendingAction: catalogState.pendingMapActions.get(view.item),
-                feedback: getCatalogMapActionFeedback(view.item),
-            });
+            view.update(catalogMapActions.state(view.item));
         }
         updateCatalogMapAction(catalogState.selectedItem);
-    }
-
-    /**
-     * Read feedback only while it describes the Item's current membership.
-     *
-     * @param {Object|null} item Catalog Item or no current selection.
-     * @return {{message:string,isError:boolean}|null} Relevant action feedback.
-     */
-    function getCatalogMapActionFeedback(item) {
-        if (item === null) return null;
-        const key = getCatalogItemKey(item);
-        const feedback = catalogState.mapActionFeedback.get(key);
-        if (feedback && feedback.retained !== catalogVisualization.contains(item)) {
-            catalogState.mapActionFeedback.delete(key);
-            return null;
-        }
-        return feedback ?? null;
-    }
-
-    /**
-     * Publish outcome feedback to this Item's row and matching inspector.
-     *
-     * @param {Object} item Item whose action completed.
-     * @param {string} message Accessible outcome or error text.
-     * @param {boolean} [isError=false] Show failures beside the row action.
-     * @return {void}
-     */
-    function setCatalogMapActionFeedback(item, message, isError = false) {
-        catalogState.mapActionFeedback.set(getCatalogItemKey(item), {
-            message, isError, retained: catalogVisualization.contains(item),
-        });
-        refreshCatalogMapAction();
-    }
-
-    /**
-     * Begin one assessment or publication action for an Item.
-     *
-     * @param {Object} item Catalog Item owning the action.
-     * @param {string} buttonText In-progress action label.
-     * @param {string} statusText In-progress status explanation.
-     * @return {{item:Object,key:string,buttonText:string,statusText:string}}
-     * Identity token for matching completion.
-     * @throws {Error} If the Item already owns an in-flight action.
-     */
-    function beginCatalogMapAction(item, buttonText, statusText) {
-        catalogState.mapActionFeedback.delete(getCatalogItemKey(item));
-        const pendingAction = catalogState.pendingMapActions.begin(
-            item,
-            buttonText,
-            statusText
-        );
-        refreshCatalogMapAction();
-        return pendingAction;
-    }
-
-    /**
-     * Finish only the action that still owns this Item's controls.
-     *
-     * @param {{item:Object,key:string}} pendingAction Action identity returned
-     * at start.
-     * @return {void}
-     */
-    function finishCatalogMapAction(pendingAction) {
-        if (!catalogState.pendingMapActions.finish(pendingAction)) {
-            return;
-        }
-        refreshCatalogMapAction();
     }
 
     let annotations = null;
@@ -1495,55 +1456,13 @@ async function initializeCatalog(
     );
     onRasterViewerReady(rasterVisualization, rasterClips, calculations);
     /**
-     * Apply the scanner-owned visualization decision to the map action.
+     * Render the selected Item's current map-action state in the inspector.
      *
      * @param {Object|null} item Selected Catalog Item.
      * @return {void}
      */
     function updateCatalogMapAction(item) {
-        const visualization = getCatalogVisualization(item);
-        const isRetained = item !== null && catalogVisualization.contains(item);
-        const pendingAction = item === null
-            ? null
-            : catalogState.pendingMapActions.get(item);
-        catalogMapActionsElement.hidden = visualization === null;
-        catalogMapActionsElement.setAttribute(
-            "aria-busy",
-            String(pendingAction !== null)
-        );
-        catalogLayerToggle.disabled = pendingAction !== null;
-        catalogLayerToggle.hidden = false;
-        catalogLayerStyle.hidden = !isRetained;
-        catalogLayerStyle.disabled = pendingAction !== null;
-        const canZoom = getCatalogItemMapBounds(item) !== null;
-        catalogLayerZoom.hidden = !isRetained;
-        catalogLayerZoom.disabled = pendingAction !== null || !canZoom;
-        catalogLayerZoom.title = canZoom ? "Zoom to this item's bounding box."
-            : "Zoom unavailable: this item has no usable bounding box.";
-        const actionStatus = pendingAction?.statusText ??
-            getCatalogMapActionFeedback(item)?.message ?? "";
-        if (catalogMapActionStatus.textContent !== actionStatus) {
-            catalogMapActionStatus.textContent = actionStatus;
-        }
-        catalogOnMap.hidden = !isRetained;
-        catalogLayerToggle.classList.toggle("catalog-add-action", !isRetained);
-        catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
-            isRetained
-                ? "Remove from map"
-                : "Add to map"
-        );
-        const fullVisualizationReason = formatCatalogVisualizationReason(
-            item,
-            visualization?.metadata?.reason
-        );
-        catalogLayerStatus.textContent = [
-            fullVisualizationReason,
-            isRetained
-                ? visualization?.kind === "vector"
-                    ? "This vector is on the map."
-                    : "This raster is on the map."
-                : "",
-        ].filter((message) => message !== "").join(" ");
+        renderCatalogMapAction(catalogMapActionElements, item, catalogMapActions.state(item));
     }
 
     /**
@@ -1581,7 +1500,7 @@ async function initializeCatalog(
      * @return {void}
      */
     function selectCatalogItem(item, requestedButton = null) {
-        catalogState.vectorAssessments.apply(item);
+        catalogMapActions.applyAssessment(item);
         const itemButton = requestedButton ??
             catalogState.resultViews.get(getCatalogItemKey(item))?.detailsButton ?? null;
         if (catalogState.selectedButton !== null) {
@@ -1641,7 +1560,7 @@ async function initializeCatalog(
         }
 
         for (const item of itemCollection.features) {
-            catalogState.vectorAssessments.apply(item);
+            catalogMapActions.applyAssessment(item);
             const presentation = buildCatalogResultPresentation(
                 item,
                 MOUNTED_DATASET_TYPES.get(item.collection)
@@ -1650,9 +1569,9 @@ async function initializeCatalog(
                 item, presentation,
                 id: `catalog-result-${catalogState.searchSequence}-${catalogState.resultViews.size}`,
                 onDetails: selectCatalogItem,
-                onMapAction: (requestedItem) => toggleCatalogLayer(requestedItem),
-                onStyle: styleCatalogLayer,
-                onZoom: zoomCatalogLayer,
+                onMapAction: item => catalogMapActions.toggle(item),
+                onStyle: item => catalogMapActions.style(item),
+                onZoom: item => catalogMapActions.zoom(item),
                 onPreview: (previewItem) => footprintController.preview(previewItem),
                 onClearPreview: () => footprintController.clearPreview(),
             });
@@ -1729,7 +1648,7 @@ async function initializeCatalog(
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
-        catalogState.vectorAssessments.clear();
+        catalogMapActions.clearTransientState();
         catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
@@ -1738,7 +1657,6 @@ async function initializeCatalog(
         retryPageButton.hidden = true;
         clearCatalogSelection();
         catalogState.resultViews.clear();
-        catalogState.mapActionFeedback.clear();
         catalogResultsElement.replaceChildren();
         catalogResultsElement.setAttribute("aria-busy", "true");
         applyCatalogSystemState(
@@ -1912,119 +1830,13 @@ async function initializeCatalog(
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Add or remove one explicitly requested Catalog Item independently of selection.
-     *
-     * Prepared rasters publish directly. Vector add attempts retain their
-     * authoritative capability assessment before publication. Successful adds
-     * open Map layers so the user can find the added layer's controls.
-     *
-     * @param {Object|null} item Item requested by a row or inspector action.
-     * @return {Promise<void>} Completion after this Item's action settles.
-     */
-    async function toggleCatalogLayer(item) {
-        const visualization = catalogVisualization.describe(item);
-        if (visualization === null || catalogState.pendingMapActions.get(item) !== null) {
-            return;
-        }
-        const datasetNoun = catalogVisualization.noun(item);
-        if (catalogVisualization.contains(item)) {
-            catalogVisualization.remove(item, true);
-            if (visualization.kind === "raster" && catalogItemsMatch(catalogState.selectedItem, item)) {
-                rasterVisualization.activateAnalysis(item);
-            }
-            const removalStatus =
-                `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "removed from the map.";
-            setCatalogMapActionFeedback(item, removalStatus);
-            return;
-        }
-
-        const pendingAction = beginCatalogMapAction(
-            item,
-            "Adding to map...",
-            visualization.kind === "vector"
-                ? "Checking whether this vector layer can be rendered."
-                : "Publishing this prepared raster."
-        );
-        try {
-            const preparedItem = await catalogVisualization.prepare(item);
-            if (visualization.kind === "vector") {
-                catalogState.vectorAssessments.record(item, preparedItem);
-            }
-            const currentVisualization = catalogVisualization.describe(preparedItem);
-            if (catalogItemsMatch(catalogState.selectedItem, item)) {
-                catalogState.vectorAssessments.apply(catalogState.selectedItem);
-                if (currentVisualization?.kind === "raster") {
-                    rasterVisualization.activateAnalysis(catalogState.selectedItem);
-                }
-                renderCatalogItemInspector(
-                    catalogState.selectedItem,
-                    catalogState.collectionsDocument.collections,
-                    appGlobalConfiguration.scanDisplayPathPrefix
-                );
-            }
-            if (
-                currentVisualization?.kind === "vector" &&
-                currentVisualization.metadata?.eligible !== true
-            ) {
-                setCatalogMapActionFeedback(item,
-                    formatCatalogVisualizationReason(
-                        item,
-                        currentVisualization?.metadata?.reason
-                    ) ||
-                    "Visualization is unavailable for this item.", true);
-                return;
-            }
-
-            const publication = await catalogVisualization.show(preparedItem);
-            if (publication === null) return;
-            const successStatus =
-                `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "added to the map.";
-            setCatalogMapActionFeedback(item, successStatus);
-            onRenderingWorkspaceRequested();
-        } catch (visualizationError) {
-            setCatalogMapActionFeedback(item, formatCatalogVisualizationReason(
-                item, visualizationError.message
-            ), true);
-        } finally {
-            finishCatalogMapAction(pendingAction);
-        }
-    }
-    /**
-     * Open the shared editor for a retained Item without selecting or showing it.
-     *
-     * @param {Object|null} item Item requested by a result or details shortcut.
-     * @return {void}
-     */
-    function styleCatalogLayer(item) {
-        if (item === null || !catalogVisualization.contains(item) ||
-            catalogState.pendingMapActions.get(item) !== null) return;
-        layerStyleEditor.open(getCatalogItemKey(item));
-    }
-
-    /**
-     * Fit a retained Item's bounds without changing selection or layer state.
-     *
-     * @param {Object|null} item Item requested by a result or details shortcut.
-     * @return {boolean} Whether the retained Item could be fitted.
-     */
-    function zoomCatalogLayer(item) {
-        const bounds = getCatalogItemMapBounds(item);
-        if (bounds === null || !catalogVisualization.contains(item) ||
-            catalogState.pendingMapActions.get(item) !== null) return false;
-        leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 });
-        return true;
-    }
-
-    /**
      * Fit the map to one retained layer through its authoritative Catalog Item.
      *
      * @param {Object|null} item Authoritative retained Catalog Item.
      * @return {boolean} Whether the retained Item could be fitted.
      */
     function zoomRetainedMapLayer(item) {
-        return zoomCatalogLayer(item);
+        return catalogMapActions.zoom(item);
     }
 
     /**
@@ -2079,13 +1891,13 @@ async function initializeCatalog(
     }
 
     catalogLayerZoom.addEventListener("click", () => {
-        zoomCatalogLayer(catalogState.selectedItem);
+        catalogMapActions.zoom(catalogState.selectedItem);
     });
     catalogLayerStyle.addEventListener("click", () => {
-        styleCatalogLayer(catalogState.selectedItem);
+        catalogMapActions.style(catalogState.selectedItem);
     });
     catalogLayerToggle.addEventListener("click", () => {
-        void toggleCatalogLayer(catalogState.selectedItem);
+        void catalogMapActions.toggle(catalogState.selectedItem);
     });
     if (!isSharedViewer) await loadCatalog(true);
     return loadCatalog.bind(null, true);
