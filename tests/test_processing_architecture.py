@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import yaml
+
 
 def imports(path: Path) -> set[str]:
     """Read actual static imports for an architectural boundary assertion.
@@ -157,20 +159,65 @@ def test_shared_raster_access_has_no_private_storage_or_renderer_dependency() ->
     }
 
 
-def test_processing_deployment_is_separate_bounded_and_source_read_only() -> None:
-    """Protect worker isolation and private artifact-volume ownership."""
-    compose = Path("docker-compose.yml").read_text()
-    worker = compose.split("  processing-worker:\n", 1)[1].split("\n  app:\n", 1)[0]
-    app = compose.split("\n  app:\n", 1)[1].split("\nvolumes:\n", 1)[0]
-    assert 'command: ["python", "-m", "eolab_app.worker_cli"]' in worker
-    assert "mem_limit: 2g" in worker
-    assert "cpus: 2" in worker
-    assert "read_only: true" in worker
-    assert "processing-data:/processing-data" in worker
-    assert "processing-data:/processing-data:ro" in app
-    geoserver = compose.split("  geoserver:\n", 1)[1].split("\n  geoserver-init:", 1)[0]
-    assert "processing-data:/processing-data:ro" in geoserver
-    assert "GEOSERVER" not in worker
+def test_processing_deployment_preserves_concurrency_without_work_ceilings() -> None:
+    """Check Processing's own execution policy without reading Jobs settings."""
+    services = yaml.safe_load(Path("docker-compose.yml").read_text())["services"]
+    worker = services["processing-worker"]
+    assert worker["command"] == ["python", "-m", "eolab_app.worker_cli"]
+    assert worker["cpus"] == 2
+    assert not {"mem_limit", "memswap_limit", "pids_limit"}.intersection(worker)
+    limits = worker.get("deploy", {}).get("resources", {}).get("limits", {})
+    assert not {"memory", "pids"}.intersection(limits)
+    environment = dict(entry.split("=", 1) for entry in worker["environment"])
+    # Processing exposes storage, concurrency, numerical policy and retention,
+    # not total calculation budgets. New settings must preserve that policy.
+    assert {name for name in environment if name.startswith("PROCESSING_")} == {
+        "PROCESSING_DATA_PATH",
+        "PROCESSING_WORKER_COUNT",
+        "PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT",
+        "PROCESSING_RESULT_TTL_SECONDS",
+        "PROCESSING_METADATA_TTL_SECONDS",
+    }
+    assert (
+        environment["PROCESSING_WORKER_COUNT"] == "${EOLAB_PROCESSING_WORKER_COUNT-1}"
+    )
+    assert not any(name.startswith("GEOSERVER") for name in environment)
+
+
+def test_processing_deployment_preserves_source_and_artifact_mount_ownership() -> None:
+    """Require read-only source access and writable artifacts only for the worker."""
+    services = yaml.safe_load(Path("docker-compose.yml").read_text())["services"]
+    worker_mounts = services["processing-worker"]["volumes"]
+    source_mounts = [
+        mount
+        for mount in worker_mounts
+        if isinstance(mount, dict) and mount.get("target") == "/scan-source"
+    ]
+    assert source_mounts == [
+        {
+            "type": "bind",
+            "source": "${EOLAB_SCAN_MOUNT_PATH}",
+            "target": "/scan-source",
+            "read_only": True,
+        }
+    ]
+    assert "processing-data:/processing-data" in worker_mounts
+    for name in ("app", "geoserver"):
+        assert "processing-data:/processing-data:ro" in services[name]["volumes"], name
+
+
+def test_jobs_deployment_keeps_its_own_resource_and_filesystem_limits() -> None:
+    """Protect the bounded Jobs service independently of Processing calculations."""
+    jobs = yaml.safe_load(Path("docker-compose.yml").read_text())["services"]["jobs"]
+    assert jobs["mem_limit"] == "2g"
+    assert jobs["memswap_limit"] == "2g"
+    assert jobs["cpus"] == 1
+    assert jobs["pids_limit"] == 32
+    assert jobs["read_only"] is True
+
+
+def test_processing_schema_is_independent_of_catalog_storage() -> None:
+    """Keep Processing tables in their own schema without pgSTAC dependencies."""
     sql = Path("src/eolab_app/processing/schema.sql").read_text()
     assert "pgstac." not in sql.lower()
     assert "CREATE SCHEMA IF NOT EXISTS processing" in sql

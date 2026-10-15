@@ -3,6 +3,7 @@
 from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
+import yaml
 
 from eolab_app.main import create_app
 from eolab_app.processing.clip_models import RasterClipLimits
@@ -110,17 +111,19 @@ def test_processing_cookie_covers_configured_metadata_retention(
 
 
 def test_compose_shares_each_budget_with_app_and_worker() -> None:
-    """Keep both processes on the same deployment policy, with strict blank handling."""
+    """Share concurrency and retention defaults between app and worker services."""
     root = Path(__file__).parents[1]
-    compose = (root / "docker-compose.yml").read_text()
+    services = yaml.safe_load((root / "docker-compose.yml").read_text())["services"]
     example = (root / ".env.example").read_text()
-    worker = compose.split("  processing-worker:\n", 1)[1].split("  jobs:\n", 1)[0]
-    app = compose.split("  app:\n", 1)[1].split("\nvolumes:", 1)[0]
+    worker = dict(
+        entry.split("=", 1) for entry in services["processing-worker"]["environment"]
+    )
+    app = dict(entry.split("=", 1) for entry in services["app"]["environment"])
     defaults = RasterClipLimits()
     for name, (attribute, _) in OVERRIDES.items():
         value = getattr(defaults, attribute)
-        entry = f'"{name}=${{EOLAB_{name}-{value}}}"'
-        assert entry in worker and entry in app
+        entry = f"${{EOLAB_{name}-{value}}}"
+        assert worker[name] == app[name] == entry
         assert f"EOLAB_{name}={value}" in example
 
 
