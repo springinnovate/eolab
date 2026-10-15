@@ -1001,7 +1001,7 @@ async function initializeCatalog(
      * Visibility and WMS publication do not determine numerical selection.
      * @return {Array<{key:string,label:string,item:Object,
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
-     * filter:ReturnType<import("./vector/filter.js").normalizeVectorFilter>}>}
+     * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
      * Retained catalog identities, immutable fields and applied filter snapshots.
      */
     const catalogPolygonTargets = () => mapLayerController.retainedRecords
