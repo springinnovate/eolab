@@ -14,6 +14,10 @@ const COMPOSITION_SOURCE = readFileSync(
     new URL("../src/main.js", import.meta.url),
     "utf8"
 );
+const CATALOG_ACTION_SOURCE = readFileSync(
+    new URL("../src/catalog-map-actions.js", import.meta.url),
+    "utf8"
+);
 
 /**
  * Find one stable ID's byte position in the application markup.
@@ -294,7 +298,7 @@ test("Map layers has one heading and collapse control with no nested list widget
 test("successful catalog additions reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /setCatalogMapActionFeedback\(item, successStatus\);\s*onRenderingWorkspaceRequested\(\);/
+        /onAdded:\s*onRenderingWorkspaceRequested/
     );
     assert.match(
         COMPOSITION_SOURCE,
@@ -311,6 +315,24 @@ test("successful catalog additions reveal Map layers through composition", () =>
     assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
     assert.match(COMPOSITION_SOURCE, /new MapInspectionController\(/);
     assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);
+});
+
+test("Catalog action state exists before the layer controller's synchronous initial render", () => {
+    const actionOwner = COMPOSITION_SOURCE.indexOf("new CatalogMapActions(");
+    const actionElements = COMPOSITION_SOURCE.indexOf("const catalogMapActionElements =");
+    const layerController = COMPOSITION_SOURCE.indexOf("new MapLayerController(");
+    assert.ok(actionOwner >= 0 && actionElements >= 0 && layerController >= 0);
+    assert.ok(actionOwner < layerController);
+    assert.ok(actionElements < layerController);
+});
+
+test("Catalog action lifecycle does not import or inspect map, analysis, style or DOM implementations", () => {
+    assert.doesNotMatch(CATALOG_ACTION_SOURCE,
+        /from\s+["'][^"']*(?:\/(?:map|layer-style-editor|catalog-map-action-view)\.js|\/(?:map-layers|raster|vector|processing)\/[^"']*)["']/);
+    assert.doesNotMatch(CATALOG_ACTION_SOURCE,
+        /\b(?:document|window|leafletMap|catalogState|mapLayerController|rasterVisualization|layerStyleEditor)\b/);
+    assert.doesNotMatch(CATALOG_ACTION_SOURCE,
+        /\b(?:querySelector|addEventListener|createElement|textContent|classList)\b/);
 });
 
 test("composition forwards inspection layout and CSS does not infer it from changing tool contents", () => {
