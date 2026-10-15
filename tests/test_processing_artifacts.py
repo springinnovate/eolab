@@ -1,13 +1,11 @@
-"""Physical storage headroom at the worker artifact boundary."""
+"""Private attempt creation without storage scans or free-space admission."""
 
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.models import ProcessingError, ProcessingLimits
 
 
 def test_prepare_does_not_scan_retained_outputs(
@@ -42,8 +40,7 @@ def test_prepare_does_not_scan_retained_outputs(
         "eolab_app.processing.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=100),
     )
-    limits = ProcessingLimits()
-    assert artifacts.prepare("b" * 32, 5, limits).is_dir()
+    assert artifacts.prepare("b" * 32).is_dir()
 
 
 def test_prepare_does_not_reserve_physical_free_space(
@@ -61,8 +58,7 @@ def test_prepare_does_not_reserve_physical_free_space(
         "eolab_app.processing.artifacts.shutil.disk_usage",
         lambda path: SimpleNamespace(free=20),
     )
-    limits = ProcessingLimits()
-    assert artifacts.prepare("a" * 32, 6, limits).is_dir()
+    assert artifacts.prepare("a" * 32).is_dir()
 
 
 def test_prepare_does_not_query_free_space(
@@ -89,4 +85,4 @@ def test_prepare_does_not_query_free_space(
         raise OSError("free space unavailable")
 
     monkeypatch.setattr("eolab_app.processing.artifacts.shutil.disk_usage", unavailable)
-    assert artifacts.prepare("a" * 32, 1, ProcessingLimits()).is_dir()
+    assert artifacts.prepare("a" * 32).is_dir()

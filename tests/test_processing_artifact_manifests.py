@@ -18,7 +18,7 @@ from eolab_app.processing.artifact_manifest import (
     read_artifact_manifest,
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.models import Artifact, ProcessingError, ProcessingLimits
+from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.worker import ProcessingWorker
 
 ATTEMPT = "a" * 32
@@ -37,7 +37,7 @@ def workspace(
     """
     storage = LocalJobArtifacts(tmp_path)
     storage.initialize()
-    path = storage.prepare(ATTEMPT, 100_000, ProcessingLimits())
+    path = storage.prepare(ATTEMPT)
     declarations = []
     for name, role, data in (
         ("result", "result", b"a,b\n1,2\n"),
@@ -72,7 +72,7 @@ def test_publish_only_declared_files_and_account_inventory(tmp_path: Path) -> No
     storage, path, declarations = workspace(tmp_path)
     for index in range(130):
         (path / f"scratch{index}").touch()
-    manifest = storage.publish(ATTEMPT, 0, declarations, Event())
+    manifest = storage.publish(ATTEMPT, declarations, Event())
     published = tmp_path / "results" / ATTEMPT
     assert not path.exists()
     assert {file.name for file in published.iterdir()} == {
@@ -116,7 +116,6 @@ def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -
     """
     storage, path, declarations = workspace(tmp_path)
     cancelled = Event()
-    reservation = 100_000
     if invalid == "missing":
         (path / "coverage.csv").unlink()
     elif invalid in {"checksum", "size"}:
@@ -149,7 +148,7 @@ def test_invalid_publication_exposes_no_manifest(tmp_path: Path, invalid: str) -
     elif invalid == "cancelled":
         cancelled.set()
     with pytest.raises((ProcessingError, ValidationError)):
-        storage.publish(ATTEMPT, reservation, declarations, cancelled)
+        storage.publish(ATTEMPT, declarations, cancelled)
     assert not (tmp_path / "results" / ATTEMPT).exists()
     if invalid in {"hardlink", "symlink"}:
         assert (tmp_path / "outside.csv").read_bytes() == b"outside"
@@ -191,7 +190,7 @@ def test_persisted_manifest_cannot_understate_bytes(tmp_path: Path) -> None:
         tmp_path: Real artifact fixture root.
     """
     storage, _, declarations = workspace(tmp_path)
-    manifest = asdict(storage.publish(ATTEMPT, 100_000, declarations, Event()))
+    manifest = asdict(storage.publish(ATTEMPT, declarations, Event()))
     manifest["total_bytes"] -= 1
     with pytest.raises(ValidationError):
         read_artifact_manifest(manifest)
@@ -203,7 +202,6 @@ def test_worker_waits_for_publication_after_repeated_cancellation() -> None:
 
     def publish(
         attempt: str,
-        reservation: int,
         declarations: tuple[FileDeclaration, ...],
         cancelled: Event,
     ) -> Any:
@@ -211,7 +209,6 @@ def test_worker_waits_for_publication_after_repeated_cancellation() -> None:
 
         Args:
             attempt: Fenced fixture ID.
-            reservation: Admitted bytes.
             declarations: Worker-approved files.
             cancelled: Signal proving the worker requests cooperative stop.
 

@@ -306,7 +306,7 @@ class ProcessingWorker:
         spec = handler.prepared_type.model_validate(calculation_spec)
         source = handler.source(spec)
         target, action, limits = handler.execution(
-            spec, self._operation_context(model is None), row["reserved_bytes"]
+            spec, self._operation_context(model is None)
         )
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
@@ -328,8 +328,6 @@ class ProcessingWorker:
         directory = await asyncio.to_thread(
             self.artifacts.prepare,
             row["attempt_id"],
-            row["reserved_bytes"],
-            self.limits,
         )
         if model is None and handler.cached is not None:
             value = await handler.cached(context, spec, directory)
@@ -418,7 +416,6 @@ class ProcessingWorker:
             asyncio.to_thread(
                 self.artifacts.publish,
                 row["attempt_id"],
-                row["reserved_bytes"],
                 declarations,
                 cancelled,
             )

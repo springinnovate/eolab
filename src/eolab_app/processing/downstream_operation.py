@@ -314,20 +314,16 @@ async def check_downstream_execution(
 
 
 def select_downstream_execution(
-    spec: DownstreamPlan, context: OperationContext, reserved_bytes: int
+    spec: DownstreamPlan, context: OperationContext
 ) -> tuple[Callable[..., None], str, DownstreamLimits]:
     """Select the original downstream model target for supervised execution.
 
     Args:
         spec: Prepared operation plan.
         context: Worker deployment limits.
-        reserved_bytes: Historical storage estimate; no byte ceiling is applied.
 
     Returns:
         The supervised native target, action and worker limits.
-
-    Raises:
-        ProcessingError: If the reservation is insufficient.
     """
     return downstream_process_target, "calculate", context.downstream_limits
 

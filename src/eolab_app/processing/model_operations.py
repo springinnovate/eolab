@@ -82,8 +82,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         source: Extract the operation's catalog or owned run-file reference.
         polygon: Identify an owned polygon upload that admission must copy.
         queue: Capture inputs and ordinary sharing identity; model admission removes it.
-        prepare: Measure native work and return the required disk reservation.
-        execution: Check execution-specific limits and select the native target.
+        prepare: Resolve captured inputs into a native calculation plan.
+        execution: Select the native target, action and execution settings.
         policy: Report effective numerical settings from a prepared plan.
         result: Describe completed result values and grid metadata.
         outcome: Describe retained scientific metadata in Run YAML.
@@ -118,7 +118,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         Awaitable[PreparedJobPlan],
     ]
     execution: Callable[
-        [Prepared, OperationContext, int],
+        [Prepared, OperationContext],
         tuple[Callable[..., None], str, Any],
     ]
     policy: Callable[[Prepared], BaseModel]
