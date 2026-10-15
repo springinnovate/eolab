@@ -34,6 +34,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {(key: string) => void} onStyleHistogram Opens Style for one
  * retained raster represented by a histogram summary.
  * @property {(key:string)=>void} [onDownloadHistogram] Review a clip of this source and selection.
+ * @property {(key:string)=>void} [onCalculateHistogram] Open statistics for this raster and area.
+ * @property {(key:string)=>void} [onRetryHistogram] Retry this raster's histogram.
  */
 
 /**
@@ -48,6 +50,21 @@ import { formatRasterPixelValue } from "./value-format.js";
  * the continuous chart, axes, and bin preview without changing statistics state.
  * @property {string} [valueLabel] X-axis name with explicit source units.
  * @property {import("./categorical-presentation.js").CategoricalAreaPresentation|null} [categorical] Prepared category rows.
+ * @property {boolean} [automatic] Show the full chart within this card.
+ * @property {Object|null} [statistics] Validated statistics for the full chart.
+ * @property {Object} [style] Committed continuous raster style.
+ * @property {boolean} [canRetry] Offer retry after a recoverable failure.
+ */
+
+/**
+ * @typedef {Object} HistogramSummaryCard
+ * @property {string} key Raster identity.
+ * @property {string} signature Serialized presentation last rendered in the card.
+ * @property {HTMLElement} root Article owning the chart and actions.
+ * @property {HTMLButtonElement|null} button Optional legacy detail-selection button.
+ * @property {SVGSVGElement|null} chart Continuous chart with a resize observer.
+ * @property {HistogramAxisControls|null} axisControls Continuous chart's axis editor.
+ * @property {Array<{button:HTMLButtonElement,handleClick:()=>void}>} listeners Owned action listeners.
  */
 
 /** Own direct DOM interaction and presentation for raster histograms. */
@@ -102,11 +119,10 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-point-sample-list"
         );
-        this.summaryButtons = [];
-        this.summaryCharts = [];
+        /** @type {Map<string, HistogramSummaryCard>} */
+        this.summaryCards = new Map();
         this.axisStates = new Map();
         this.categoryExpansions = new Map();
-        this.summaryAxisControls = [];
         this.detailAxisControls = null;
         this.detailAxesHost = documentContext.createElement("div");
         this.histogram.append(this.detailAxesHost);
@@ -139,8 +155,8 @@ export class RasterHistogramControlsView {
             "click",
             this.boundRetryStatistics
         );
-        this.#clearSummaryButtonListeners();
-        this.#clearSummaryCharts();
+        for (const card of this.summaryCards.values()) this.#disposeSummaryCard(card);
+        this.summaryCards.clear();
         this.clearHistogram();
         this.axisStates.clear();
         this.categoryExpansions.clear();
@@ -148,9 +164,9 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Render one clearly labeled histogram summary for every retained raster.
-     * Dynamic buttons own their direct listeners and are replaced atomically,
-     * so repeated lifecycle renders cannot double-bind an action.
+     * Update changed raster cards while preserving other cards and pending edits.
+     * Compare presentation values because callers recreate summary objects. Move
+     * only out-of-order cards; detaching unchanged inputs would lose browser focus.
      *
      * @param {RasterHistogramSummary[]} summaries Presentation-ready summaries.
      * @param {string|null} activeKey Active retained raster key, or null when
@@ -162,23 +178,46 @@ export class RasterHistogramControlsView {
         if (!Array.isArray(summaries)) {
             throw new TypeError("Raster histogram summaries must be an array");
         }
-        const focusedKey = this.summaryButtons.find(
-            ({ button }) => button === this.documentContext.activeElement
-        )?.key ?? null;
-        this.#clearSummaryButtonListeners();
-        this.#clearSummaryCharts();
+        const signatures = new Map();
+        for (const summary of summaries) {
+            const signature = this.#serializeSummaryPresentation(summary);
+            if (signatures.has(summary.key)) {
+                throw new TypeError("Raster histogram summary keys must be unique");
+            }
+            signatures.set(summary.key, signature);
+        }
+        const focusedElement = this.documentContext.activeElement;
+        const focusedCard = [...this.summaryCards.values()].find(card => card.root.contains(focusedElement));
+        const focusedIndex = focusedCard ? Array.from(this.histogramList.children).indexOf(focusedCard.root) : -1;
+        for (const [key, card] of this.summaryCards) {
+            if (!signatures.has(key) || signatures.get(key) !== card.signature) {
+                this.#disposeSummaryCard(card);
+                this.summaryCards.delete(key);
+            }
+        }
         this.activeHistogramKey = activeKey;
         this.automatic = summaries.some((summary) => summary.automatic);
         this.histogram.hidden = !this.isAvailable || !this.modeIsCompatible || this.automatic;
-        const buttons = summaries.map((summary) =>
-            this.#createSummaryButton(summary)
-        );
-        this.histogramList.replaceChildren(...buttons);
+        for (const [index, summary] of summaries.entries()) {
+            let card = this.summaryCards.get(summary.key);
+            if (!card) {
+                card = this.#createSummaryCard(summary, signatures.get(summary.key));
+                this.summaryCards.set(summary.key, card);
+            }
+            const current = this.histogramList.children[index] ?? null;
+            if (current !== card.root) this.histogramList.insertBefore(card.root, current);
+        }
         this.histogramEmpty.hidden = summaries.length > 0;
         this.#synchronizeSummaryExpansion();
-        if (focusedKey !== null) {
-            this.summaryButtons.find(({ key }) => key === focusedKey)
-                ?.button.focus();
+        if (focusedCard) {
+            // Reordering can blur a retained input. Removal instead needs a
+            // surviving card (or the empty message) as a keyboard destination.
+            const target = this.histogramList.contains(focusedElement) ? focusedElement
+                : this.summaryCards.get(focusedCard.key)?.root
+                    ?? this.histogramList.children[Math.min(focusedIndex, summaries.length - 1)]
+                    ?? this.histogramEmpty;
+            if (target === this.histogramEmpty) target.setAttribute("tabindex", "-1");
+            if (this.documentContext.activeElement !== target) target.focus({ preventScroll: true });
         }
     }
 
@@ -453,13 +492,15 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Construct a chart-first raster summary with sampling context underneath.
+     * Validate a summary and identify changes in its displayed data and actions.
+     * Axis drafts and category expansion are local interaction state, deliberately
+     * excluded from the signature. Property order of the summary is irrelevant.
      *
-     * @param {RasterHistogramSummary} summary Validated view model.
-     * @return {HTMLElement} Automatic chart article or bound summary button.
+     * @param {RasterHistogramSummary} summary Incoming view model.
+     * @return {string} Presentation values used to decide whether to rebuild a card.
      * @throws {TypeError} If required identity or presentation fields are bad.
      */
-    #createSummaryButton(summary) {
+    #serializeSummaryPresentation(summary) {
         const allowedStates = new Set(["idle", "loading", "ready", "error"]);
         if (
             summary === null ||
@@ -485,9 +526,28 @@ export class RasterHistogramControlsView {
         ) {
             throw new TypeError("Raster histogram summary is invalid");
         }
+        return JSON.stringify([
+            summary.label, summary.scope, summary.state, summary.counts,
+            summary.errorMessage ?? "", summary.unavailableMessage,
+            summary.valueLabel ?? "Raster value", summary.categorical,
+            Boolean(summary.automatic), summary.statistics, summary.style,
+            Boolean(summary.canRetry),
+        ]);
+    }
+
+    /**
+     * Construct a raster card and keep its listeners and chart cleanup together.
+     * @param {RasterHistogramSummary} summary Validated view model.
+     * @param {string} signature Serialized presentation used for reconciliation.
+     * @return {HistogramSummaryCard} Owned card resources.
+     */
+    #createSummaryCard(summary, signature) {
         const container = this.documentContext.createElement("article");
         container.className = "raster-histogram-summary";
         container.setAttribute("aria-label", `Histogram — ${summary.label}`);
+        container.setAttribute("tabindex", "-1");
+        const card = { key: summary.key, signature, root: container,
+            button: null, chart: null, axisControls: null, listeners: [] };
         const content = summary.automatic
             ? container
             : this.documentContext.createElement("button");
@@ -501,6 +561,8 @@ export class RasterHistogramControlsView {
                 `Show detailed histogram for ${summary.label}`
             );
             container.append(content);
+            card.button = content;
+            this.#bindSummaryAction(card, content, "onSelectHistogram");
         }
 
         const name = this.documentContext.createElement("span");
@@ -537,8 +599,8 @@ export class RasterHistogramControlsView {
             );
             chart.classList.add("raster-histogram-chart");
             const controls = this.#axisControls(summary.key, chart, summary.statistics, summary.style, summary.valueLabel);
-            this.summaryAxisControls.push(controls);
-            this.summaryCharts.push(chart);
+            card.axisControls = controls;
+            card.chart = chart;
             content.append(chart, controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             content.append(this.#createSummaryPreview(summary));
@@ -552,9 +614,7 @@ export class RasterHistogramControlsView {
         style.textContent = "Style this raster";
         style.setAttribute("aria-controls", "layer-style-editor");
         style.setAttribute("aria-label", `Style ${summary.label}`);
-        style.addEventListener("click", () =>
-            this.handlers?.onStyleHistogram(summary.key)
-        );
+        this.#bindSummaryAction(card, style, "onStyleHistogram");
         actions.append(style);
         const download = this.documentContext.createElement("button");
         download.type = "button";
@@ -576,13 +636,13 @@ export class RasterHistogramControlsView {
         downloadIcon.append(downloadPath);
         download.append(downloadIcon);
         download.setAttribute("aria-label", `Download clip of ${summary.label}`);
-        download.addEventListener("click", () => this.handlers?.onDownloadHistogram?.(summary.key));
+        this.#bindSummaryAction(card, download, "onDownloadHistogram");
         const calculate = this.documentContext.createElement("button");
         calculate.type = "button";
         calculate.className = "secondary-button";
         calculate.textContent = "Calculate statistics for this area";
         calculate.setAttribute("aria-label", "Calculate statistics for " + summary.label + " over this area");
-        calculate.addEventListener("click", () => this.handlers?.onCalculateHistogram?.(summary.key));
+        this.#bindSummaryAction(card, calculate, "onCalculateHistogram");
         actions.append(calculate, download);
         if (summary.automatic) {
             if (summary.canRetry) {
@@ -591,25 +651,12 @@ export class RasterHistogramControlsView {
                 retry.className = "secondary-button";
                 retry.textContent = "Retry histogram";
                 retry.setAttribute("aria-label", `Retry histogram for ${summary.label}`);
-                retry.addEventListener("click", () =>
-                    this.handlers?.onRetryHistogram(summary.key)
-                );
+                this.#bindSummaryAction(card, retry, "onRetryHistogram");
                 actions.append(retry);
             }
-            container.append(actions);
-            return container;
         }
-        const handleSelect = () => {
-            this.handlers?.onSelectHistogram(summary.key);
-        };
-        content.addEventListener("click", handleSelect);
-        this.summaryButtons.push({
-            button: content,
-            handleSelect,
-            key: summary.key,
-        });
         container.append(actions);
-        return container;
+        return card;
     }
 
     /**
@@ -666,26 +713,38 @@ export class RasterHistogramControlsView {
         return controls;
     }
 
-    /** Release resize observers before replacing dynamic charts. @return {void} */
-    #clearSummaryCharts() {
-        for (const controls of this.summaryAxisControls) controls.dispose();
-        this.summaryAxisControls = [];
-        for (const chart of this.summaryCharts) clearRasterHistogramChart(chart);
-        this.summaryCharts = [];
+    /**
+     * Bind one card action and retain its listener for removal with the card.
+     * @param {HistogramSummaryCard} card Owning card.
+     * @param {HTMLButtonElement} button Action control.
+     * @param {keyof RasterHistogramHandlers} handler Semantic callback name.
+     * @return {void}
+     */
+    #bindSummaryAction(card, button, handler) {
+        const handleClick = () => this.handlers?.[handler]?.(card.key);
+        button.addEventListener("click", handleClick);
+        card.listeners.push({ button, handleClick });
     }
 
-    /** Remove listeners owned by superseded summary buttons. @return {void} */
-    #clearSummaryButtonListeners() {
-        for (const { button, handleSelect } of this.summaryButtons) {
-            button.removeEventListener("click", handleSelect);
+    /**
+     * Release a removed or changed card's timers, observer and action listeners.
+     * Committed axis settings and category expansion remain available if it returns.
+     * @param {HistogramSummaryCard} card Card being replaced or removed.
+     * @return {void}
+     */
+    #disposeSummaryCard(card) {
+        card.axisControls?.dispose();
+        if (card.chart) clearRasterHistogramChart(card.chart);
+        for (const { button, handleClick } of card.listeners) {
+            button.removeEventListener("click", handleClick);
         }
-        this.summaryButtons = [];
+        card.root.remove();
     }
 
     /** Synchronize active-summary disclosure state. @return {void} */
     #synchronizeSummaryExpansion() {
-        for (const { button, key } of this.summaryButtons) {
-            button.setAttribute(
+        for (const { button, key } of this.summaryCards.values()) {
+            button?.setAttribute(
                 "aria-expanded",
                 String(key === this.activeHistogramKey && !this.histogram.hidden)
             );

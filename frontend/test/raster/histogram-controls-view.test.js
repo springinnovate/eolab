@@ -193,7 +193,7 @@ test("point readouts consume literal prepared value text and preserve raw outcom
     assert.equal(Object.hasOwn(raw.samples[0], "displayValue"), false);
 });
 
-test("replacing dynamic charts and unbinding release all resize observers", () => {
+test("unchanged cards retain chart observers; changed cards and unbinding release them", () => {
     const doc = new FakeRasterControlDocument();
     const { ResizeObserver, instances } = createFakeResizeObservers();
     doc.defaultView = { ResizeObserver };
@@ -204,6 +204,9 @@ test("replacing dynamic charts and unbinding release all resize observers", () =
     view.renderLayerHistograms([summary], "first");
     const replaced = instances[0].target;
     view.renderLayerHistograms([summary], "first");
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].disconnected, false);
+    view.renderLayerHistograms([{ ...summary, scope: "200 km map sample" }], "first");
     assert.equal(instances[0].disconnected, true);
     instances[0].resize(391);
     assert.equal(replaced.children.length, 0);
@@ -271,7 +274,7 @@ test("unavailable presentation replaces continuous charts without changing lifec
                 child.classList.contains("raster-histogram-chart") ||
                 child.classList.contains("raster-histogram-summary-preview")
             ), false);
-            assert.equal(view.summaryAxisControls.length, 0);
+            assert.equal(view.summaryCards.get("landcover").axisControls, null);
             assert.equal(summary.state, state);
         }
     }
@@ -306,7 +309,7 @@ test("unavailable presentation releases previous chart observers and can resume 
     assert.equal(instances.length, 1);
     view.renderLayerHistograms([summary], "landcover");
     assert.equal(instances.length, 2);
-    assert.equal(view.summaryAxisControls.length, 1);
+    assert.ok(view.summaryCards.get("landcover").axisControls);
     assert.throws(() => view.renderLayerHistograms([{
         ...summary, unavailableMessage: false,
     }], "landcover"), /summary is invalid/);
@@ -407,12 +410,13 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     secondButton.focus();
     view.renderLayerHistograms(summaries, "first");
     assert.equal(documentContext.activeElement, list.children[1].children[0]);
-    firstButton.dispatchEvent(new Event("click"));
+    assert.ok(firstButton === list.children[0].children[0]);
     list.children[0].children[0].dispatchEvent(new Event("click"));
     assert.deepEqual(selected, ["first", "first"]);
 
     view.unbind();
-    list.children[0].children[0].dispatchEvent(new Event("click"));
+    firstButton.dispatchEvent(new Event("click"));
+    assert.equal(list.children.length, 0);
     assert.deepEqual(selected, ["first", "first"]);
 });
 
@@ -432,5 +436,188 @@ test("axis edits redraw only the local chart and persist through a new sample", 
     assert.deepEqual(RASTER_STATISTICS, original);
     view.clearStatistics();
     assert.equal(view.detailAxesHost.children.length, 0);
+    view.unbind();
+});
+
+test("another raster completing preserves a pending axis edit and its focused controls", async () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    const second = { ...first, key: "second", label: "rain.tif", state: "loading" };
+    view.renderLayerHistograms([first, second], "first");
+    const list = doc.querySelector("#raster-histogram-list");
+    const card = list.children[0];
+    const editor = card.children.find(child => child.className === "histogram-axis-controls");
+    editor.open = true;
+    editor.dispatchEvent(new Event("toggle"));
+    const range = editor.children[2].children[2].children[1];
+    const maximum = editor.children[2].children[4].children[1];
+    range.value = "values";
+    range.dispatchEvent(new Event("change"));
+    maximum.focus();
+    maximum.value = "1";
+    maximum.dispatchEvent(new Event("input"));
+    view.renderLayerHistograms([structuredClone(first), { ...second, state: "ready" }], "first");
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.ok(list.children[0] === card, "The unchanged card must retain its DOM identity");
+    assert.ok(list.contains(maximum));
+    assert.ok(doc.activeElement === maximum);
+    assert.equal(maximum.value, "1");
+    assert.equal(editor.open, true);
+    assert.equal(view.axisStates.get("first").options.y.maximum, "1");
+    view.unbind();
+});
+
+test("card reordering preserves action focus; removing the focused card moves focus and disables old actions", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const styled = [];
+    view.bind({ onStyleHistogram: key => styled.push(key) });
+    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: [1, 2, 3] };
+    const second = { ...first, key: "second", label: "rain.tif" };
+    view.renderLayerHistograms([first, second], "first");
+    const list = doc.querySelector("#raster-histogram-list");
+    const firstCard = list.children[0];
+    const secondCard = list.children[1];
+    const style = firstCard.children.at(-1).children[0];
+    style.focus();
+    view.renderLayerHistograms([second, first], "first");
+    assert.ok(list.children[0] === secondCard && list.children[1] === firstCard);
+    assert.ok(doc.activeElement === style);
+    style.dispatchEvent(new Event("click"));
+    assert.deepEqual(styled, ["first"]);
+    view.renderLayerHistograms([second], "second");
+    assert.ok(doc.activeElement === secondCard);
+    style.dispatchEvent(new Event("click"));
+    assert.deepEqual(styled, ["first"]);
+    view.renderLayerHistograms([], null);
+    assert.ok(doc.activeElement === view.histogramEmpty);
+    assert.equal(view.histogramEmpty.hidden, false);
+    assert.equal(list.children.length, 0);
+    view.unbind();
+    view.bind({ onStyleHistogram: key => styled.push(key) });
+    view.renderLayerHistograms([first], "first");
+    style.dispatchEvent(new Event("click"));
+    list.children[0].children.at(-1).children[0].dispatchEvent(new Event("click"));
+    assert.deepEqual(styled, ["first", "first"]);
+    view.unbind();
+});
+
+test("categorical expansion and focus survive another result, then continuous and legacy transitions clean up", () => {
+    const doc = new FakeRasterControlDocument();
+    const { ResizeObserver, instances } = createFakeResizeObservers();
+    doc.defaultView = { ResizeObserver };
+    const view = new RasterHistogramControlsView(doc);
+    const first = { key: "land", label: "landcover.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: null,
+        categorical: { validHectares: 15, nodataHectares: 0, sampledPixelCount: 15,
+            rows: Array.from({ length: 15 }, (_, code) => ({ code, label: `Class ${code}`,
+                hectares: 1, percentage: 100 / 15, color: "#ffffff", opacity: 1 })) } };
+    const second = { key: "second", label: "rain.tif", scope: "Whole raster",
+        automatic: true, state: "loading", counts: null };
+    view.renderLayerHistograms([first, second], "land");
+    const list = doc.querySelector("#raster-histogram-list");
+    const card = list.children[0];
+    const categoryChart = card.children[2];
+    const toggle = categoryChart.children[2];
+    toggle.dispatchEvent(new Event("click"));
+    toggle.focus();
+    view.renderLayerHistograms([structuredClone(first), { ...second, state: "error", canRetry: true }], "land");
+    assert.ok(list.children[0] === card);
+    assert.ok(doc.activeElement === toggle);
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(categoryChart.children[1].children.length, 15);
+    const continuous = { ...first, categorical: null, statistics: RASTER_STATISTICS,
+        style: DEFAULT_RASTER_STYLE, counts: RASTER_STATISTICS.histogram.counts };
+    view.renderLayerHistograms([continuous], "land");
+    assert.ok(view.summaryCards.get("land").axisControls);
+    assert.equal(instances.length, 1);
+    view.renderLayerHistograms([{ ...first, automatic: false }], "land");
+    assert.equal(instances[0].disconnected, true);
+    const legacyCard = view.summaryCards.get("land");
+    assert.equal(legacyCard.axisControls, null);
+    const restoredChart = legacyCard.root.children[1];
+    assert.equal(restoredChart.className, "categorical-area-chart");
+    assert.ok(!legacyCard.button.contains(restoredChart), "Category controls must not be nested inside a button");
+    assert.equal(restoredChart.children[2].getAttribute("aria-expanded"), "true");
+    view.unbind();
+});
+
+test("invalid axis drafts survive unrelated updates; removal and unbinding cancel pending edits", async () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    view.renderLayerHistograms([first], "first");
+    const editor = view.summaryCards.get("first").axisControls;
+    const { fields, status } = editor.rows.get("y");
+    fields.bounds.input.value = "values";
+    fields.bounds.input.dispatchEvent(new Event("change"));
+    fields.maximum.input.value = "-1";
+    fields.maximum.input.dispatchEvent(new Event("change"));
+    assert.match(status.textContent, /Chart unchanged/);
+    const error = status.textContent;
+    view.renderLayerHistograms([first, { ...first, key: "second", state: "error" }], "first");
+    assert.ok(view.summaryCards.get("first").axisControls === editor);
+    assert.equal(fields.maximum.input.value, "-1");
+    assert.equal(status.textContent, error);
+    const options = structuredClone(view.axisStates.get("first").options);
+    fields.maximum.input.value = "1";
+    fields.maximum.input.dispatchEvent(new Event("input"));
+    view.renderLayerHistograms([], null);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.deepEqual(view.axisStates.get("first").options, options);
+    view.renderLayerHistograms([first], "first");
+    const lastEditor = view.summaryCards.get("first").axisControls;
+    const retainedState = view.axisStates.get("first");
+    const lastMaximum = lastEditor.rows.get("y").fields.maximum.input;
+    lastMaximum.value = "1";
+    lastMaximum.dispatchEvent(new Event("input"));
+    view.unbind();
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.deepEqual(retainedState.options, options);
+    assert.equal(view.summaryCards.size, 0);
+    assert.equal(view.axisStates.size, 0);
+});
+
+test("changed sample, units, style, scope and retry state refresh only that card", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const retries = [];
+    view.bind({ onRetryHistogram: key => retries.push(key) });
+    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    const second = { ...first, key: "second", label: "rain.tif" };
+    view.renderLayerHistograms([first, second], "first");
+    const untouched = view.summaryCards.get("second");
+    let previous = view.summaryCards.get("first");
+    for (const change of [
+        { scope: "200 km map sample" },
+        { label: "Renamed raster" },
+        { valueLabel: "Rainfall (mm)" },
+        { style: { ...DEFAULT_RASTER_STYLE, minimumColor: "#000000" } },
+        { statistics: { ...RASTER_STATISTICS, validSampleCount: RASTER_STATISTICS.validSampleCount - 1 } },
+        { state: "error", errorMessage: "Try again", canRetry: true },
+    ]) {
+        view.renderLayerHistograms([{ ...first, ...change }, second], "first");
+        assert.ok(view.summaryCards.get("second") === untouched);
+        const current = view.summaryCards.get("first");
+        assert.ok(current !== previous);
+        assert.equal(previous.axisControls?.enabled, previous.axisControls ? false : undefined);
+        previous = current;
+    }
+    const retry = previous.root.children.at(-1).children.at(-1);
+    retry.dispatchEvent(new Event("click"));
+    assert.deepEqual(retries, ["first"]);
+    view.renderLayerHistograms([first, second], "first");
+    retry.dispatchEvent(new Event("click"));
+    assert.deepEqual(retries, ["first"]);
+    assert.throws(() => view.renderLayerHistograms([first, first], "first"), /keys must be unique/);
+    assert.ok(view.summaryCards.get("second") === untouched);
     view.unbind();
 });

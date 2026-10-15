@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { RasterControlsView } from "../../src/raster/controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import {
     EXACT_RASTER_STATISTICS,
     RASTER_STATISTICS,
@@ -355,7 +356,7 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
 });
 
 test("RasterControlsView delegates retained histogram summaries", () => {
-    const documentContext = new FakeRasterDocument();
+    const documentContext = new FakeRasterControlDocument();
     const view = new RasterControlsView(documentContext);
 
     view.renderLayerHistograms([
