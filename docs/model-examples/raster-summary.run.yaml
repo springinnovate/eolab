@@ -1,5 +1,7 @@
-# Prepared-run export example. Identifiers/signatures/build below are synthetic.
+# Historical prepared-run export. Identifiers/signatures/build are synthetic.
 # This is provenance, not a submission accepted by the current application.
+# The execution-limit fields predate removal of calculation ceilings; they are
+# retained to demonstrate historical round trips, not current server policy.
 schema: eolab.run/v1
 jobId: ffffffffffffffffffffffffffffffff
 capturedAt: "2026-10-09T00:00:00Z"

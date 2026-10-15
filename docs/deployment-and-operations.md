@@ -43,7 +43,7 @@ the source.
 ## Required configuration
 
 Start from [`.env.example`](../.env.example) for deployment settings. Empty
-[downstream overrides](downstream-model.md#bounds-and-execution) use the defaults
+[downstream settings](downstream-model.md#resources-and-performance) use the defaults
 defined in Python. At minimum, set:
 
 ```text
@@ -377,7 +377,8 @@ remain, including old NoData colors.
 
 See [clip limits](raster-clips.md#storage-and-limits),
 [calculation limits](raster-calculations.md#limits) and
-[Jobs limits](job-service.md#lifecycle-and-limits) for the separate processing budgets.
+[Jobs limits](job-service.md#lifecycle-and-limits) for Processing execution and
+retention policies and the separate interactive Job service budgets.
 
 ## Processing storage and recovery
 
@@ -397,11 +398,28 @@ shutdown closes it after consumers stop. This does not change admission queries,
 cleanup scheduling, advisory locks or worker execution capacity.
 
 The named Processing volume is mounted at `/processing-data`, writable by
-`processing-worker` and read-only in the app. Keep it outside the source mount.
-The 20 GiB reservation budget does not allocate or cap the underlying disk;
-monitor host/volume free space. Processing also requires a 2 GiB free-space floor.
+`processing-worker` and read-only in both the app and GeoServer, as configured in
+[`docker-compose.yml`](../docker-compose.yml). Keep it outside the source mount.
+Monitor host and volume free space: Processing attempts writes without a disk
+reservation, byte ceiling or free-space floor. Actual filesystem failures fail
+the run. Publication records the verified files' actual sizes for retention and
+cleanup accounting.
 Deleting this volume loses result files even if their database records remain.
 Back up persistent database and result storage together when results must be kept.
+
+GeoTIFF model outputs use ordinary GeoServer publication, map tiles and raster
+styling from this read-only result mount. Pixel reads and statistics use the
+original private raster through the independent analysis pipeline. GeoJSON
+outputs retain their bounded display-preview path. See
+[temporary raster map delivery](raster-analysis.md#temporary-raster-map-delivery)
+and [model output delivery](model-authoring.md) for the supported paths.
+
+Private output requests use opaque run/file identities and the owning browser's
+session. Ownership and expiry remain checked at the source-access boundary.
+Interactive metadata and statistics retain their renewable leases, checksum
+verification and bounded native readers; pixel reads use the short-read contract.
+These interactive request budgets remain separate from Processing's unlimited
+calculation work. See [private raster access](raster-analysis.md#catalog-rasters-and-private-run-files).
 
 Deploy the app and Processing worker together, stopping the old containers first.
 Every Processing worker startup marks all queued, running and cancelling jobs as
@@ -409,7 +427,8 @@ interrupted with a resubmit message before consuming new work. This applies to
 upgrades, rollbacks, same-version redeployments and worker container restarts.
 No job-format version or compatibility check is needed. Completed results and
 cached calculation values survive, subject to their usual expiry. The existing
-worker cleanup removes interrupted attempt files before releasing reservations.
+worker cleanup removes interrupted attempt files before clearing their storage
+ownership records.
 Never overlap old and new worker containers with this policy.
 
 Releases predating this policy cannot perform the startup reset. Before rolling
@@ -448,10 +467,13 @@ Deploy API, worker and frontend together; see the rollback procedure above.
 
 Raster clips use `POST /api/processing/raster-clips` with the catalog source,
 explicit box or catalog selection, and a stable `requestId`. The worker prepares
-the grid and reserves disk space, publishes these details on that job, then
+the grid, publishes these details on that job, then
 creates the COG. Downloads shows preparation and clipping progress without a
 separate estimate/confirmation step. The job can be cancelled at either stage.
-Both operations retain the existing source, memory, work and disk limits.
+Both operations preserve source authorization and identity, input validity,
+cancellation and output integrity. Neither has an application-imposed calculation
+size, memory, disk or total-runtime ceiling. Worker concurrency still applies,
+and a slot remains occupied until native work exits.
 
 The independent planning API, database table, queue and native process have been
 removed. Reload older browser tabs after deployment. Unsubmitted legacy plan
@@ -540,7 +562,7 @@ Deploy the API and worker together when upgrading past the calculation profiling
 removal. The schema migration recreates the subscriber view and drops the
 diagnostic-only `processing.jobs.preparation` column. Old workers still write
 that column and must not run against the new schema. The actual prepared inputs,
-execution grid, reservations and job lifecycle remain intact.
+execution grid, retained-file accounting and job lifecycle remain intact.
 
 Job responses no longer expose `preparation`, `performance`, `executionTiming`
 or `queuedToReadySeconds`. The notification stream retains its `changed` hints
@@ -559,7 +581,7 @@ remain available.
 | Rendering connectivity/authentication error | GeoServer health and matching deployment credentials. |
 | Rendering configuration error | GeoServer initialization logs and workspace/layer resources; ambiguous partial resources are preserved for administrator inspection. |
 | Polygon outline unavailable | Jobs logs, token, Catalog connection and read-only source mount; numeric analysis is independent of the outline. |
-| Processing admission or disk-space refusal | Active jobs, result retention and free disk space; wait, cancel unnecessary work or delete finished exports. |
+| Processing filesystem or allocation failure | Worker logs and available host memory/disk space; free resources or delete unneeded finished results, then submit a new run. Processing does not reserve capacity before starting. |
 | Vector source changed | Rescan the vector and select it again; accepted jobs require unchanged original vector sources. |
 
 ## Build information
@@ -627,11 +649,16 @@ Publish changed data as a new asset with a new catalog identity; keep old source
 available until their jobs and recovery lifetimes have ended.
 
 Raster operations authorize the catalog item and resolve its path inside the
-configured mount. They do not compare filesystem timestamps or source signatures
-to detect edits. Missing or unreadable sources still fail during resolution or
-opening. Stored source identities remain in plans, provenance and cache keys;
-changing those records is not a substitute for publishing a new asset. Vector
-source checks, job ownership, cancellation and output checksum checks are unchanged.
+configured mount using scanner-recorded source identity. After native calculation,
+the Processing worker compares current file metadata before publishing a result;
+ordinary catalog summary cache hits rely on the scanner-recorded identity.
+Private run-file inputs also undergo size and checksum
+verification under their retained-input grants. See the
+[worker source checks](../src/eolab_app/processing/worker.py) and
+[raster identity contract](../src/eolab_app/raster/source_identity.py).
+Missing or unreadable sources fail during resolution or opening. Stored source
+identities remain in plans, provenance and cache keys. Vector source checks,
+job ownership, cancellation and output integrity continue to apply.
 
 
 ## Named saved maps (API preview)
