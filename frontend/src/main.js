@@ -93,10 +93,9 @@ import {
     validateVectorFeatureFocus,
 } from "./vector/inspection-observation.js";
 import { VectorFilterControls } from "./vector/filter-controls.js";
-import { vectorFilterStatus, EMPTY_VECTOR_FILTER } from "./vector/filter.js";
+import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
-import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
@@ -988,8 +987,9 @@ async function initializeCatalog(
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
-                key, label: record.entry.label, fields: record.state.labelFields,
-                filter: record.state.filter, status: vectorFilterStatus(record.state),
+                key, label: record.entry.label,
+                fields: record.adapter.describeSource(record).fields,
+                ...record.adapter.describeFilter(record),
                 apply: (candidate) => record.adapter.applyFilterState(record, candidate),
                 cancelPending: () => record.adapter.cancelPendingFilter(record),
             };
@@ -997,13 +997,22 @@ async function initializeCatalog(
     });
     mapLayerController.onFilter = key => vectorFilterControls.open(key);
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
-    /** Read catalog polygon targets for histogram and summary controls.
-     * @return {Object[]} Retained catalog identities and applied filter snapshots.
+    /** Read catalog polygon choices for Models, histogram and summary controls.
+     * Visibility and WMS publication do not determine numerical selection.
+     * @return {Array<{key:string,label:string,item:Object,
+     * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
+     * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
+     * Retained catalog identities, immutable fields and applied filter snapshots.
      */
     const catalogPolygonTargets = () => mapLayerController.retainedRecords
-        .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
-        .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
-            filter: record.adapter.exportFilterState(record) }));
+        .filter(record => record.adapter === vectorMapLayerAdapter)
+        .flatMap(record => {
+            const source = record.adapter.describeSource(record);
+            return source.geometryKind === "polygon" ? [{
+                key: record.entry.key, label: record.entry.label, item: record.entry.item,
+                fields: source.fields, filter: record.adapter.exportFilterState(record),
+            }] : [];
+        });
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
         showOutput: (job, file) => outputLayers.show(job, file),
@@ -1042,7 +1051,7 @@ async function initializeCatalog(
             return {
                 rasters: mapLayerController.snapshots().filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
-                vectors: catalogPolygonTargets().map(target => ({...describeCalculationSource(target.item, target.label), filter: target.filter, fields: vectorLabelFields(target.item)})),
+                vectors: catalogPolygonTargets().map(target => ({...describeCalculationSource(target.item, target.label), filter: target.filter, fields: target.fields})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
@@ -1185,9 +1194,8 @@ async function initializeCatalog(
             }
             return {
                 key,
-                style: record.state.style,
-                fields: record.state.labelFields,
-                notice: record.state.defaultStyleNotice,
+                ...record.adapter.describeStyle(record),
+                fields: record.adapter.describeSource(record).fields,
                 summarize: (field) =>
                     record.adapter.summarizeCategories(record, field),
                 classify: (field, method, classCount) =>
@@ -1307,22 +1315,22 @@ async function initializeCatalog(
             .filter((record) =>
                 record.entry.visible && record.adapter === vectorMapLayerAdapter
             )
-            .map((record) => ({
-                sourceId: record.entry.key,
-                label: record.entry.label,
-                opacity: record.entry.opacity,
-                bbox: [...record.entry.item.bbox],
-                publication: {
-                    layerName: record.publication.layerName,
-                    styleName: record.publication.styleName,
-                },
-                geometryKind: record.state.style.geometryKind,
-                propertyNames: vectorLabelFields(record.state.item).map(
-                    ({ name }) => name
-                ),
-                primaryGeometry:
-                    record.state.item.properties?.["table:primary_geometry"] ?? null,
-            }));
+            .map((record) => {
+                const source = record.adapter.describeSource(record);
+                return {
+                    sourceId: record.entry.key,
+                    label: record.entry.label,
+                    opacity: record.entry.opacity,
+                    bbox: [...record.entry.item.bbox],
+                    publication: {
+                        layerName: record.publication.layerName,
+                        styleName: record.publication.styleName,
+                    },
+                    geometryKind: source.geometryKind,
+                    propertyNames: source.fields.map(({ name }) => name),
+                    primaryGeometry: source.primaryGeometry,
+                };
+            });
     }
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,

@@ -238,7 +238,6 @@ test("vector style controls expose intent without knowing sibling subsystems", (
     assert.equal(STYLE_CONTROLS_SOURCE.includes(forbiddenSibling), false);
   }
   assert.match(COMPOSITION_SOURCE, /getVectorStyleTarget:\s*\(key\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /fields:\s*record\.state\.labelFields/);
   assert.match(
     COMPOSITION_SOURCE,
     /record\.adapter\.summarizeCategories\(record, field\)/,
@@ -248,4 +247,10 @@ test("vector style controls expose intent without knowing sibling subsystems", (
     /record\.adapter\.classifyNumbers\(record, field, method, classCount\)/,
   );
   assert.match(COMPOSITION_SOURCE, /record\.adapter\.applyStyle\(record, style\)/);
+});
+
+test("composition does not interpret vector-owned storage or rebuild vector metadata", () => {
+  assert.doesNotMatch(COMPOSITION_SOURCE,
+    /record\.state\??\.(?:item|style|labelFields|defaultStyleNotice|filter\w*)\b/);
+  assert.doesNotMatch(COMPOSITION_SOURCE, /\b(?:vectorLabelFields|vectorFilterStatus)\b/);
 });

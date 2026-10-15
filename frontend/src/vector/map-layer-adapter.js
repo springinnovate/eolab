@@ -28,6 +28,14 @@ import {
 } from "./style.js";
 
 /**
+ * Catalog attributes and geometry needed by vector consumers.
+ * @typedef {Object} VectorSourceDescription
+ * @property {ReturnType<typeof vectorLabelFields>} fields Frozen non-geometry fields.
+ * @property {"point"|"line"|"polygon"} geometryKind Normalized geometry family.
+ * @property {string|null} primaryGeometry Catalog geometry field, when declared.
+ */
+
+/**
  * Validate one untrusted saved vector style without accepting extra fields.
  * Rules from supported older maps receive only the new optional presentation
  * defaults; every other missing/extra field still fails the canonical check.
@@ -320,6 +328,50 @@ export function createVectorMapLayerAdapter({
                 labelFields: vectorLabelFields(item),
                 defaultStyleNotice: publication.defaultStyleNotice ?? "",
                 layer: null,
+            };
+        },
+        /**
+         * Read the fields and geometry used by filtering, styling and selection.
+         * The field list is immutable; no publication, request or renderer is read.
+         *
+         * @param {Object} record Layer record owned by this adapter.
+         * @return {VectorSourceDescription} Current source metadata.
+         */
+        describeSource(record) {
+            return {
+                fields: record.state.labelFields,
+                geometryKind: record.state.style.geometryKind,
+                primaryGeometry: record.state.item.properties?.["table:primary_geometry"] ?? null,
+            };
+        },
+        /**
+         * Read the applied filter and its current whole-layer count feedback.
+         * Rules are detached from adapter state. Read again after filter/count
+         * notifications to obtain updated feedback; this method starts no work.
+         *
+         * @param {Object} record Layer record owned by this adapter.
+         * @return {{filter:ReturnType<typeof normalizeVectorFilter>,status:string}}
+         * Validated filter values and readable current status, without request state.
+         */
+        describeFilter(record) {
+            return {
+                filter: structuredClone(record.state.filter),
+                status: vectorFilterStatus(record.state),
+            };
+        },
+        /**
+         * Read the applied appearance and its default-style explanation.
+         * The style is detached so an editor cannot mutate the applied appearance.
+         * Reading does not classify fields, apply styles or contact the server.
+         *
+         * @param {Object} record Layer record owned by this adapter.
+         * @return {{style:ReturnType<typeof normalizeVectorStyle>,notice:string}}
+         * Validated style values and the current default-style notice.
+         */
+        describeStyle(record) {
+            return {
+                style: structuredClone(record.state.style),
+                notice: record.state.defaultStyleNotice,
             };
         },
         /**
