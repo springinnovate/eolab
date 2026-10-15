@@ -558,33 +558,28 @@ def describe_clip_policy(spec: ClipSpec) -> ClipNumericalPolicy:
 
 
 def select_summary_execution(
-    spec: AggregateSpec, context: OperationContext, reserved_bytes: int
+    spec: AggregateSpec, context: OperationContext
 ) -> tuple[Callable[..., None], str, RasterAggregateLimits]:
-    """Select native summary execution after checking its disk reservation.
+    """Select the native summary target and execution settings.
 
     Args:
         spec: Prepared summary specification.
         context: Worker limits and execution capabilities.
-        reserved_bytes: Capacity granted to this attempt by job storage.
 
     Returns:
         Native target, action and calculation limits.
-
-    Raises:
-        ProcessingError: If the reservation no longer covers the calculation.
     """
     return aggregate_process_target, "calculate", context.aggregate_limits
 
 
 def select_clip_execution(
-    spec: ClipSpec, context: OperationContext, reserved_bytes: int
+    spec: ClipSpec, context: OperationContext
 ) -> tuple[Callable[..., None], str, RasterClipLimits]:
-    """Select the existing native clip target and deployment limits.
+    """Select the native clip target and execution settings.
 
     Args:
-        spec: Prepared clip specification, including its conservative output reservation.
+        spec: Prepared clip specification.
         context: Worker limits and execution capabilities.
-        reserved_bytes: Capacity granted by job storage and enforced during publication.
 
     Returns:
         Native target, action and clipping limits.

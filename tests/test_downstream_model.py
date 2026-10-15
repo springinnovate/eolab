@@ -803,7 +803,7 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
     attempt = "d" * 32
-    directory = artifacts.prepare(attempt, spec.reservedBytes, limits)
+    directory = artifacts.prepare(attempt)
 
     async def cancel_during_routing() -> None:
         """Wait for actual routing, then use the same cancellation boundary as the worker."""

@@ -12,7 +12,6 @@ from eolab_app.processing.artifact_manifest import (
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
-    ProcessingLimits,
     JobSubmission,
     ProcessingError,
     JobInputFile,
@@ -507,7 +506,7 @@ class JobStore(Protocol):
 class JobArtifactStore(Protocol):
     """Store job workspaces and publish, locate or remove their result files."""
 
-    def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
+    def prepare(self, attempt: str) -> Path:
         """Create one unique private workspace for an authorized worker attempt.
 
         There is no disk estimate or free-space preflight. Filesystem write errors
@@ -515,8 +514,6 @@ class JobArtifactStore(Protocol):
 
         Args:
             attempt: Fenced worker attempt ID.
-            reservation: Historical reservation field, accepted but not enforced.
-            limits: Processing lifecycle settings; no storage ceiling is applied.
 
         Returns:
             Empty attempt directory.
@@ -530,7 +527,6 @@ class JobArtifactStore(Protocol):
     def publish(
         self,
         attempt: str,
-        reservation: int,
         declarations: tuple[FileDeclaration, ...],
         cancelled: Event,
     ) -> ArtifactManifest:
@@ -538,7 +534,6 @@ class JobArtifactStore(Protocol):
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
-            reservation: Historical reservation field, accepted but not enforced.
             declarations: Files explicitly approved for retention by the application.
             cancelled: Signal checked during hashing and before publication. The
                 caller must wait for publication to exit before cleaning up.

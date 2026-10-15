@@ -21,7 +21,7 @@ from eolab_app.processing.artifact_manifest import (
     FileName,
 )
 
-from eolab_app.processing.models import ProcessingError, ProcessingLimits
+from eolab_app.processing.models import ProcessingError
 
 
 def write_progress(
@@ -112,14 +112,11 @@ class LocalJobArtifacts:
             raise ValueError("Job path escapes its owned storage")
         return candidate
 
-    def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
+    def prepare(self, attempt: str) -> Path:
         """Create a unique private directory for a claimed calculation attempt.
 
         Args:
             attempt: Current worker attempt ID.
-            reservation: Historical byte estimate accepted by the storage interface;
-                it does not restrict writes or trigger a free-space check.
-            limits: Shared lifecycle settings; there is no disk-space admission policy.
 
         Returns:
             Empty attempt directory confined to private Processing storage.
@@ -135,7 +132,6 @@ class LocalJobArtifacts:
     def publish(
         self,
         attempt: str,
-        reservation: int,
         declarations: tuple[FileDeclaration, ...],
         cancelled: Event,
     ) -> ArtifactManifest:
@@ -148,7 +144,6 @@ class LocalJobArtifacts:
 
         Args:
             attempt: Fenced attempt whose native operation completed successfully.
-            reservation: Historical storage estimate; completed files have no byte ceiling.
             declarations: Complete files approved by the owning application.
             cancelled: Signal set when the worker loses its attempt or is cancelled.
 

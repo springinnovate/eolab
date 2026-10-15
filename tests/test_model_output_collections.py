@@ -20,7 +20,7 @@ from eolab_app.processing.model_runs import (
     serialize_model_artifacts,
 )
 from eolab_app.processing.model_run_contracts import ModelArtifactManifest, ModelOutcome
-from eolab_app.processing.models import ProcessingError, ProcessingLimits
+from eolab_app.processing.models import ProcessingError
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def routing_dem_files(
     """
     storage = LocalJobArtifacts(tmp_path)
     storage.initialize()
-    directory = storage.prepare("a" * 32, 0, ProcessingLimits())
+    directory = storage.prepare("a" * 32)
     statistics = b"value\n42\n"
     (directory / "result.csv").write_bytes(statistics)
     outputs = []
@@ -118,7 +118,7 @@ def test_collection_members_use_normal_publication_and_cleanup(
         "Terrain used for routing · Drain 2",
         "Terrain used for routing · Drain 3",
     ]
-    manifest = storage.publish("a" * 32, 0, declarations, Event())
+    manifest = storage.publish("a" * 32, declarations, Event())
     for file, original in zip(
         manifest.files[1:], artifact.additional_outputs, strict=True
     ):
@@ -143,7 +143,7 @@ def test_omitted_collection_is_discarded_with_scratch(
     """
     storage, row, artifact = routing_dem_files
     del row["summary"]["outputs"]["routing_dem"]
-    manifest = storage.publish("a" * 32, 0, declare_model_files(row, artifact), Event())
+    manifest = storage.publish("a" * 32, declare_model_files(row, artifact), Event())
     assert [file.name for file in manifest.files] == ["total"]
     with pytest.raises(ProcessingError, match="no longer available"):
         storage.artifact_path("a" * 32, artifact.additional_outputs[0].storage_name)
@@ -159,9 +159,9 @@ def test_many_drainage_files_publish_without_an_inventory_ceiling(
     """
     storage, row, artifact = routing_dem_files
     source_manifest = storage.publish(
-        "a" * 32, 0, declare_model_files(row, artifact), Event()
+        "a" * 32, declare_model_files(row, artifact), Event()
     )
-    directory = storage.prepare("b" * 32, 0, ProcessingLimits())
+    directory = storage.prepare("b" * 32)
     for source in source_manifest.files[:2]:
         (directory / source.storage_name).write_bytes(
             storage.artifact_path("a" * 32, source.storage_name).read_bytes()
@@ -182,9 +182,7 @@ def test_many_drainage_files_publish_without_an_inventory_ceiling(
             )
         )
     collection = replace(artifact, additional_outputs=tuple(files))
-    manifest = storage.publish(
-        "b" * 32, 0, declare_model_files(row, collection), Event()
-    )
+    manifest = storage.publish("b" * 32, declare_model_files(row, collection), Event())
     assert len(manifest.files) == 201
     assert manifest.total_bytes - sum(file.size for file in manifest.files) > 64 * 1024
     response = ModelArtifactManifest.model_validate(
