@@ -75,6 +75,25 @@ import {
 } from "./categorical-presentation.js";
 import { RasterControlsView } from "./controls-view.js";
 
+/**
+ * Statistics and sampling state owned by a single raster, with or without WMS.
+ *
+ * @typedef {Object} RasterAnalysisState
+ * @property {Object|null} rasterStatistics Last presented statistics, possibly stale.
+ * @property {boolean} rasterStatisticsIsApplicable Whether percentiles may be applied.
+ * @property {Object|null} wholeRasterStatistics Last successful whole-raster result.
+ * @property {"idle"|"loading"|"ready"|"error"} wholeRasterStatisticsState Request status.
+ * @property {Error|null} wholeRasterStatisticsError Current whole-raster failure.
+ * @property {Readonly<Object>|null} selectedRasterBounds Selected WGS84 map bounds.
+ * @property {Readonly<Object>|null} selectedCatalogSelection Catalog predicate and label.
+ * @property {Readonly<{longitude:number,latitude:number}>|null} selectedRasterCenter Original click.
+ * @property {number|null} selectedRasterWindowSizeKm Selected map-window side length.
+ * @property {Object|null} selectedRasterStatistics Last successful selected-area result.
+ * @property {"idle"|"loading"|"ready"|"error"} selectedRasterStatisticsState Request status.
+ * @property {Error|null} selectedRasterStatisticsError Current selected-area failure.
+ * @property {string|null} statisticsCategoryIdentity Category codes used by the latest request.
+ */
+
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 const MAXIMUM_VISIBLE_RASTER_HISTOGRAMS = 16;
 const CATEGORICAL_HISTOGRAM_MESSAGE = "Categorical areas need a matching native raster sample.";
@@ -294,7 +313,7 @@ export function initializeRasterViewer(
     function loadStatisticsWithRetry(item, area, signal) {
         const session = mapLayers.getRecord(rasterSourceKey(item))?.state;
         const codes = sessionCategoryValues(session);
-        if (session) session.statisticsCategoryIdentity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
+        if (session) session.analysis.statisticsCategoryIdentity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
         return requestRasterStatistics(() => loadStatistics(item, area, signal, undefined, codes), signal, clock);
     }
     ensureRasterSampleWindowPane(leafletMap);
@@ -321,19 +340,8 @@ export function initializeRasterViewer(
     let rasterStyleCommitTimeout = null;
     let rasterSampleWindowResizeTimeout = null;
     let rasterStyleWasEdited = false;
-    let rasterStatistics = null;
-    let rasterStatisticsIsApplicable = false;
-    let wholeRasterStatistics = null;
-    let wholeRasterStatisticsState = "idle";
-    let wholeRasterStatisticsError = null;
-    let selectedRasterBounds = null;
-    let selectedCatalogSelection = null;
-    let selectedRasterCenter = null;
-    let selectedRasterWindowSizeKm = null;
     let activeRasterItem = null;
-    let selectedRasterStatistics = null;
-    let selectedRasterStatisticsState = "idle";
-    let selectedRasterStatisticsError = null;
+    let rasterAnalysis = createRasterAnalysisState();
     const bivariateMode = new BivariateRasterMode();
     let bivariateCandidates = [];
     let bivariateStatistics = null;
@@ -344,6 +352,33 @@ export function initializeRasterViewer(
     let invalidVectorSamplingId = null;
     let bivariateSelectedCenter = null;
     let bivariateSelectedWindowSizeKm = null;
+
+    /**
+     * Create the authoritative statistics and sampling state for one raster.
+     *
+     * Whole-raster and selected-area results are separate caches. The presented
+     * result may remain visible as a reference while a replacement is pending.
+     *
+     * @param {Readonly<Object>|null} [selection=null] Initial catalog selection.
+     * @return {RasterAnalysisState} Mutable state owned by one raster session.
+     */
+    function createRasterAnalysisState(selection = null) {
+        return {
+            rasterStatistics: null,
+            rasterStatisticsIsApplicable: false,
+            wholeRasterStatistics: null,
+            wholeRasterStatisticsState: "idle",
+            wholeRasterStatisticsError: null,
+            selectedRasterBounds: null,
+            selectedCatalogSelection: selection,
+            selectedRasterCenter: null,
+            selectedRasterWindowSizeKm: null,
+            selectedRasterStatistics: null,
+            selectedRasterStatisticsState: "idle",
+            selectedRasterStatisticsError: null,
+            statisticsCategoryIdentity: null,
+        };
+    }
 
     /**
      * Return whether shared controls own a renderer-independent session.
@@ -382,18 +417,7 @@ export function initializeRasterViewer(
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
-            rasterStatistics: null,
-            rasterStatisticsIsApplicable: false,
-            wholeRasterStatistics: null,
-            wholeRasterStatisticsState: "idle",
-            wholeRasterStatisticsError: null,
-            selectedRasterBounds: null,
-            selectedCatalogSelection: initialPolygonSamplingArea(),
-            selectedRasterCenter: null,
-            selectedRasterWindowSizeKm: null,
-            selectedRasterStatistics: null,
-            selectedRasterStatisticsState: "idle",
-            selectedRasterStatisticsError: null,
+            analysis: createRasterAnalysisState(initialPolygonSamplingArea()),
             layerHistogramController: null,
             layer: null,
             error: null,
@@ -418,57 +442,25 @@ export function initializeRasterViewer(
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
-            rasterStatistics: null,
-            rasterStatisticsIsApplicable: false,
-            wholeRasterStatistics: null,
-            wholeRasterStatisticsState: "idle",
-            wholeRasterStatisticsError: null,
-            selectedRasterBounds: null,
-            selectedCatalogSelection: initialPolygonSamplingArea(),
-            selectedRasterCenter: null,
-            selectedRasterWindowSizeKm: null,
-            selectedRasterStatistics: null,
-            selectedRasterStatisticsState: "idle",
-            selectedRasterStatisticsError: null,
+            analysis: createRasterAnalysisState(initialPolygonSamplingArea()),
         };
     }
 
     /**
-     * Copy renderer-neutral controls and analysis state between sessions.
+     * Adopt the same raster's analysis state while retaining renderer ownership.
      *
-     * @param {Object} target Newly established renderer session.
-     * @param {Object} source Existing analysis-only session for the same Item.
-     * @param {boolean} [includeAppearance=true] Whether style and palette state
-     * can transfer to the target renderer.
+     * Controllers and Leaflet resources stay with their own wrapper. Analysis
+     * state remains authoritative when a renderer is attached or removed.
+     *
+     * @param {Object} target New renderer or detached raster session.
+     * @param {Object} source Existing session for the same raster.
      * @return {void}
      */
-    function copyRasterInteractionState(
-        target,
-        source,
-        includeAppearance = true
-    ) {
-        Object.assign(target, {
-            rasterStatistics: source.rasterStatistics,
-            rasterStatisticsIsApplicable:
-                source.rasterStatisticsIsApplicable,
-            wholeRasterStatistics: source.wholeRasterStatistics,
-            wholeRasterStatisticsState: source.wholeRasterStatisticsState,
-            wholeRasterStatisticsError: source.wholeRasterStatisticsError,
-            selectedRasterBounds: source.selectedRasterBounds,
-            selectedCatalogSelection: source.selectedCatalogSelection,
-            selectedRasterCenter: source.selectedRasterCenter,
-            selectedRasterWindowSizeKm: source.selectedRasterWindowSizeKm,
-            selectedRasterStatistics: source.selectedRasterStatistics,
-            selectedRasterStatisticsState: source.selectedRasterStatisticsState,
-            selectedRasterStatisticsError: source.selectedRasterStatisticsError,
-        });
-        if (includeAppearance) {
-            Object.assign(target, {
-                rasterStyle: { ...source.rasterStyle },
-                paletteName: source.paletteName,
-                rasterStyleWasEdited: source.rasterStyleWasEdited,
-            });
-        }
+    function adoptRasterInteractionState(target, source) {
+        target.analysis = source.analysis;
+        target.rasterStyle = { ...source.rasterStyle };
+        target.paletteName = source.paletteName;
+        target.rasterStyleWasEdited = source.rasterStyleWasEdited;
     }
 
     /**
@@ -479,7 +471,7 @@ export function initializeRasterViewer(
      */
     function detachAnalysisSession(source) {
         const session = createAnalysisSession(source.item);
-        copyRasterInteractionState(session, source);
+        adoptRasterInteractionState(session, source);
         return session;
     }
 
@@ -645,62 +637,39 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Persist the shared active-control state into its retained session.
+     * Retain active appearance edits and refresh the session's presentations.
+     *
+     * Analysis changes already belong to the session and need no synchronization.
      *
      * @return {void}
      */
-    function saveActiveLayerSession() {
+    function refreshActiveSessionPresentation() {
         if (activeLayerKey === null) {
             return;
         }
         const session = activeDetachedRasterSession() ??
             requireLayerSession(activeLayerKey);
-        Object.assign(session, {
-            rasterStyle: { ...rasterStyle },
-            paletteName: activePaletteName,
-            rasterStyleWasEdited,
-            rasterStatistics,
-            rasterStatisticsIsApplicable,
-            wholeRasterStatistics,
-            wholeRasterStatisticsState,
-            wholeRasterStatisticsError,
-            selectedRasterBounds,
-            selectedCatalogSelection,
-            selectedRasterCenter,
-            selectedRasterWindowSizeKm,
-            selectedRasterStatistics,
-            selectedRasterStatisticsState,
-            selectedRasterStatisticsError,
-        });
+        session.rasterStyle = { ...rasterStyle };
+        session.paletteName = activePaletteName;
+        session.rasterStyleWasEdited = rasterStyleWasEdited;
         syncBivariateCandidate(session);
         refreshStyle();
         publishHistogramPresentation();
     }
 
     /**
-     * Load one retained session into the shared active-control state.
+     * Select a session's authoritative analysis state and its appearance controls.
      *
-     * @param {Object} session Retained per-layer interaction state.
+     * @param {Object} session Renderer or detached raster session.
      * @return {void}
      */
-    function loadActiveLayerSession(session) {
+    function selectActiveRasterSession(session) {
         activeLayerKey = session.key;
         activeRasterItem = session.item;
+        rasterAnalysis = session.analysis;
         rasterStyle = { ...session.rasterStyle };
         activePaletteName = session.paletteName;
         rasterStyleWasEdited = session.rasterStyleWasEdited;
-        rasterStatistics = session.rasterStatistics;
-        rasterStatisticsIsApplicable = session.rasterStatisticsIsApplicable;
-        wholeRasterStatistics = session.wholeRasterStatistics;
-        wholeRasterStatisticsState = session.wholeRasterStatisticsState;
-        wholeRasterStatisticsError = session.wholeRasterStatisticsError;
-        selectedRasterBounds = session.selectedRasterBounds;
-        selectedCatalogSelection = session.selectedCatalogSelection;
-        selectedRasterCenter = session.selectedRasterCenter;
-        selectedRasterWindowSizeKm = session.selectedRasterWindowSizeKm;
-        selectedRasterStatistics = session.selectedRasterStatistics;
-        selectedRasterStatisticsState = session.selectedRasterStatisticsState;
-        selectedRasterStatisticsError = session.selectedRasterStatisticsError;
     }
 
     /**
@@ -898,29 +867,29 @@ export function initializeRasterViewer(
      * One sampling scope's result, lifecycle and failure for analysis/style presentation.
      */
     function getLayerHistogramPresentation(session) {
-        if (session.selectedCatalogSelection !== null) {
+        if (session.analysis.selectedCatalogSelection !== null) {
             return {
-                state: session.selectedRasterStatisticsState,
-                statistics: session.selectedRasterStatistics,
-                scope: `Vector selection · ${session.selectedCatalogSelection.filename}`,
-                error: session.selectedRasterStatisticsError,
+                state: session.analysis.selectedRasterStatisticsState,
+                statistics: session.analysis.selectedRasterStatistics,
+                scope: `Vector selection · ${session.analysis.selectedCatalogSelection.filename}`,
+                error: session.analysis.selectedRasterStatisticsError,
             };
         }
-        if (session.selectedRasterBounds !== null) {
+        if (session.analysis.selectedRasterBounds !== null) {
             return {
-                state: session.selectedRasterStatisticsState,
-                statistics: session.selectedRasterStatistics,
-                scope: session.selectedRasterWindowSizeKm === null
+                state: session.analysis.selectedRasterStatisticsState,
+                statistics: session.analysis.selectedRasterStatistics,
+                scope: session.analysis.selectedRasterWindowSizeKm === null
                     ? "Map sample"
-                    : `${session.selectedRasterWindowSizeKm} km map sample`,
-                error: session.selectedRasterStatisticsError,
+                    : `${session.analysis.selectedRasterWindowSizeKm} km map sample`,
+                error: session.analysis.selectedRasterStatisticsError,
             };
         }
         return {
-            state: session.wholeRasterStatisticsState,
-            statistics: session.wholeRasterStatistics,
+            state: session.analysis.wholeRasterStatisticsState,
+            statistics: session.analysis.wholeRasterStatistics,
             scope: "Whole raster",
-            error: session.wholeRasterStatisticsError,
+            error: session.analysis.wholeRasterStatisticsError,
         };
     }
 
@@ -938,8 +907,8 @@ export function initializeRasterViewer(
         const presentation = getLayerHistogramPresentation(session);
         const categorical = session.appearanceMode === "categorical";
         const counts = presentation.statistics?.histogram?.counts;
-        const error = session.selectedCatalogSelection !== null || session.selectedRasterBounds !== null
-            ? session.selectedRasterStatisticsError : session.wholeRasterStatisticsError;
+        const error = session.analysis.selectedCatalogSelection !== null || session.analysis.selectedRasterBounds !== null
+            ? session.analysis.selectedRasterStatisticsError : session.analysis.wholeRasterStatisticsError;
         return {
             key: session.key,
             label: session.label,
@@ -1305,7 +1274,7 @@ export function initializeRasterViewer(
         const loading = states.some(state => state === "loading" || state === "idle");
         const failures = states.filter(state => state === "error").length;
         const state = loading ? "loading" : failures ? "error" : "ready";
-        const selection = bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection;
+        const selection = bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection;
         const scope = bivariateMode.active
             ? selection ? `Vector selection · ${selection.filename}` : bivariateSelectedBounds ? "Map box · 2D comparison" : "Whole overlap · 2D comparison"
             : presentations[0].scope;
@@ -1328,31 +1297,86 @@ export function initializeRasterViewer(
      */
     function setSessionSamplingArea(session, samplingArea) {
         if (samplingArea.kind === "wholeRaster") {
-            session.selectedRasterBounds = null;
-            session.selectedCatalogSelection = null;
-            session.selectedRasterCenter = null;
-            session.selectedRasterWindowSizeKm = null;
-            session.selectedRasterStatistics = null;
-            session.selectedRasterStatisticsState = "idle";
-            session.selectedRasterStatisticsError = null;
+            session.analysis.selectedRasterBounds = null;
+            session.analysis.selectedCatalogSelection = null;
+            session.analysis.selectedRasterCenter = null;
+            session.analysis.selectedRasterWindowSizeKm = null;
+            session.analysis.selectedRasterStatistics = null;
+            session.analysis.selectedRasterStatisticsState = "idle";
+            session.analysis.selectedRasterStatisticsError = null;
             return;
         }
-        session.selectedRasterBounds = samplingArea.kind === "selectedArea"
+        session.analysis.selectedRasterBounds = samplingArea.kind === "selectedArea"
             ? samplingArea.selectedBounds
             : null;
-        session.selectedCatalogSelection = samplingArea.kind === "catalogSelection"
-            ? selectedCatalogSelection
+        session.analysis.selectedCatalogSelection = samplingArea.kind === "catalogSelection"
+            ? rasterAnalysis.selectedCatalogSelection
             : null;
-        session.selectedRasterCenter = samplingArea.kind === "selectedArea"
-            ? selectedRasterCenter
+        session.analysis.selectedRasterCenter = samplingArea.kind === "selectedArea"
+            ? rasterAnalysis.selectedRasterCenter
             : null;
-        session.selectedRasterWindowSizeKm = samplingArea.kind === "selectedArea"
-            ? selectedRasterWindowSizeKm
+        session.analysis.selectedRasterWindowSizeKm = samplingArea.kind === "selectedArea"
+            ? rasterAnalysis.selectedRasterWindowSizeKm
             : null;
-        session.selectedRasterStatistics = null;
-        session.selectedRasterStatisticsState = "idle";
-        session.selectedRasterStatisticsError = null;
-        session.rasterStatisticsIsApplicable = false;
+        session.analysis.selectedRasterStatistics = null;
+        session.analysis.selectedRasterStatisticsState = "idle";
+        session.analysis.selectedRasterStatisticsError = null;
+        session.analysis.rasterStatisticsIsApplicable = false;
+    }
+
+    /**
+     * Mark one raster's requested scope as loading without discarding prior data.
+     *
+     * @param {RasterAnalysisState} analysis Authoritative per-raster state.
+     * @param {"wholeRaster"|"selectedArea"|"catalogSelection"} scope Requested scope.
+     * @return {void}
+     */
+    function markRasterStatisticsLoading(analysis, scope) {
+        if (scope === "wholeRaster") {
+            analysis.wholeRasterStatisticsState = "loading";
+            analysis.wholeRasterStatisticsError = null;
+        } else {
+            analysis.selectedRasterStatisticsState = "loading";
+            analysis.selectedRasterStatisticsError = null;
+        }
+    }
+
+    /**
+     * Cache a successful result in its whole-raster or selected-area scope.
+     *
+     * @param {RasterAnalysisState} analysis Authoritative per-raster state.
+     * @param {Object} statistics Validated current response.
+     * @param {"wholeRaster"|"selectedArea"|"catalogSelection"} scope Response scope.
+     * @return {void}
+     */
+    function storeRasterStatisticsResult(analysis, statistics, scope) {
+        if (scope === "wholeRaster") {
+            analysis.wholeRasterStatistics = statistics;
+            analysis.wholeRasterStatisticsState = "ready";
+            analysis.wholeRasterStatisticsError = null;
+        } else {
+            analysis.selectedRasterStatistics = statistics;
+            analysis.selectedRasterStatisticsState = "ready";
+            analysis.selectedRasterStatisticsError = null;
+        }
+    }
+
+    /**
+     * Retain a scope's request failure without erasing its previous result.
+     *
+     * @param {RasterAnalysisState} analysis Authoritative per-raster state.
+     * @param {Error} error Current non-abort request failure.
+     * @param {"wholeRaster"|"selectedArea"|"catalogSelection"} scope Failed scope.
+     * @return {void}
+     */
+    function storeRasterStatisticsError(analysis, error, scope) {
+        if (scope === "wholeRaster") {
+            analysis.wholeRasterStatisticsState = "error";
+            analysis.wholeRasterStatisticsError = error;
+        } else {
+            analysis.selectedRasterStatisticsState = "error";
+            analysis.selectedRasterStatisticsError = error;
+        }
     }
 
     /**
@@ -1364,17 +1388,9 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function storeLayerHistogramResult(session, statistics, samplingArea) {
-        if (samplingArea.kind === "wholeRaster") {
-            session.wholeRasterStatistics = statistics;
-            session.wholeRasterStatisticsState = "ready";
-            session.wholeRasterStatisticsError = null;
-        } else {
-            session.selectedRasterStatistics = statistics;
-            session.selectedRasterStatisticsState = "ready";
-            session.selectedRasterStatisticsError = null;
-        }
-        session.rasterStatistics = statistics;
-        session.rasterStatisticsIsApplicable = true;
+        storeRasterStatisticsResult(session.analysis, statistics, samplingArea.kind);
+        session.analysis.rasterStatistics = statistics;
+        session.analysis.rasterStatisticsIsApplicable = true;
         if (samplingArea.kind === "wholeRaster" && session.appearanceMode !== "categorical") {
             const style = deriveInitialRasterStyleFromStatistics(
                 session.rasterStyle, statistics, session.rasterStyleWasEdited
@@ -1399,14 +1415,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function storeLayerHistogramError(session, error, samplingArea) {
-        if (samplingArea.kind === "wholeRaster") {
-            session.wholeRasterStatisticsState = "error";
-            session.wholeRasterStatisticsError = error;
-        } else {
-            session.selectedRasterStatisticsState = "error";
-            session.selectedRasterStatisticsError = error;
-        }
-        session.rasterStatisticsIsApplicable = false;
+        storeRasterStatisticsError(session.analysis, error, samplingArea.kind);
+        session.analysis.rasterStatisticsIsApplicable = false;
         renderLayerStack();
         if (editingLayerKey === session.key) refreshStyle();
     }
@@ -1428,14 +1438,8 @@ export function initializeRasterViewer(
              * @return {void}
              */
             (_, samplingArea) => {
-                if (samplingArea.kind === "wholeRaster") {
-                    session.wholeRasterStatisticsState = "loading";
-                    session.wholeRasterStatisticsError = null;
-                } else {
-                    session.selectedRasterStatisticsState = "loading";
-                    session.selectedRasterStatisticsError = null;
-                }
-                session.rasterStatisticsIsApplicable = false;
+                markRasterStatisticsLoading(session.analysis, samplingArea.kind);
+                session.analysis.rasterStatisticsIsApplicable = false;
                 renderLayerStack();
                 if (editingLayerKey === session.key) refreshStyle();
             },
@@ -1472,8 +1476,7 @@ export function initializeRasterViewer(
      */
     function cancelLayerHistogramRequest(session) {
         session.layerHistogramController?.clear();
-        if (session.wholeRasterStatisticsState === "loading") session.wholeRasterStatisticsState = "idle";
-        if (session.selectedRasterStatisticsState === "loading") session.selectedRasterStatisticsState = "idle";
+        resetPendingRasterStatisticsState(session.analysis);
     }
 
     /**
@@ -1488,7 +1491,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function refreshRetainedLayerHistograms(samplingArea, onlyMissing = false) {
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
         const analyzedKeys = followsVisibleLayers
             ? new Set(visibleRasterRecords().map(({ entry }) => entry.key))
             : null;
@@ -1516,16 +1519,16 @@ export function initializeRasterViewer(
      * @return {Readonly<Object>} Strict whole/bounds/polygon selection sampling-area union.
      */
     function currentRasterSamplingArea() {
-        if (selectedCatalogSelection !== null) {
+        if (rasterAnalysis.selectedCatalogSelection !== null) {
             return normalizeRasterSamplingArea({
                 kind: "catalogSelection",
-                catalogSelection: selectedCatalogSelection.selection
+                catalogSelection: rasterAnalysis.selectedCatalogSelection.selection
             });
         }
-        if (selectedRasterBounds !== null) {
+        if (rasterAnalysis.selectedRasterBounds !== null) {
             return normalizeRasterSamplingArea({
                 kind: "selectedArea",
-                selectedBounds: selectedRasterBounds
+                selectedBounds: rasterAnalysis.selectedRasterBounds
             });
         }
         return WHOLE_RASTER_SAMPLING_AREA;
@@ -1539,22 +1542,21 @@ export function initializeRasterViewer(
      * @return {Readonly<Object>|null} Frozen box/polygon selection selection or no explicit area.
      */
     function getSelectedArea(key = null, mode = "presented") {
-        if (invalidVectorSamplingId && (bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection)?.id === invalidVectorSamplingId) return null;
+        if (invalidVectorSamplingId && (bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection)?.id === invalidVectorSamplingId) return null;
         if (mode === "2d" || (mode === "presented" && bivariateMode.active)) {
             if (bivariateCatalogSelection) return normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection: bivariateCatalogSelection.selection });
             return bivariateSelectedBounds === null ? null : normalizeRasterSamplingArea({
                 kind: "selectedArea", selectedBounds: bivariateSelectedBounds,
             });
         }
-        const session = key === null || key === activeLayerKey ? {
-            selectedCatalogSelection, selectedRasterBounds,
-        } : getBivariateCandidateSession(key);
-        if (!session) return null;
-        if (session.selectedCatalogSelection) return normalizeRasterSamplingArea({
-            kind: "catalogSelection", catalogSelection: session.selectedCatalogSelection.selection,
+        const analysis = key === null || key === activeLayerKey
+            ? rasterAnalysis : getBivariateCandidateSession(key)?.analysis;
+        if (!analysis) return null;
+        if (analysis.selectedCatalogSelection) return normalizeRasterSamplingArea({
+            kind: "catalogSelection", catalogSelection: analysis.selectedCatalogSelection.selection,
         });
-        return session.selectedRasterBounds === null ? null : normalizeRasterSamplingArea({
-            kind: "selectedArea", selectedBounds: session.selectedRasterBounds,
+        return analysis.selectedRasterBounds === null ? null : normalizeRasterSamplingArea({
+            kind: "selectedArea", selectedBounds: analysis.selectedRasterBounds,
         });
     }
 
@@ -1583,16 +1585,17 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Release a superseded controller request's loading marker.
+     * Release cancelled loading markers while preserving completed results.
      *
+     * @param {RasterAnalysisState} [analysis=rasterAnalysis] Cancelled raster state.
      * @return {void}
      */
-    function resetPendingRasterStatisticsState() {
-        if (wholeRasterStatisticsState === "loading") {
-            wholeRasterStatisticsState = "idle";
+    function resetPendingRasterStatisticsState(analysis = rasterAnalysis) {
+        if (analysis.wholeRasterStatisticsState === "loading") {
+            analysis.wholeRasterStatisticsState = "idle";
         }
-        if (selectedRasterStatisticsState === "loading") {
-            selectedRasterStatisticsState = "idle";
+        if (analysis.selectedRasterStatisticsState === "loading") {
+            analysis.selectedRasterStatisticsState = "idle";
         }
     }
 
@@ -1602,7 +1605,7 @@ export function initializeRasterViewer(
      * @return {boolean} Whether bounds or a catalog selection owns the histogram.
      */
     function hasSelectedRasterSamplingArea() {
-        return selectedRasterBounds !== null || selectedCatalogSelection !== null;
+        return rasterAnalysis.selectedRasterBounds !== null || rasterAnalysis.selectedCatalogSelection !== null;
     }
 
     /**
@@ -1612,10 +1615,10 @@ export function initializeRasterViewer(
      * mode.
      */
     function getRasterSamplingAreaMode() {
-        if (selectedCatalogSelection !== null) {
+        if (rasterAnalysis.selectedCatalogSelection !== null) {
             return "catalogSelection";
         }
-        return selectedRasterBounds === null ? "wholeRaster" : "selectedArea";
+        return rasterAnalysis.selectedRasterBounds === null ? "wholeRaster" : "selectedArea";
     }
 
     /**
@@ -1627,12 +1630,12 @@ export function initializeRasterViewer(
     function getPresentedSampleWindow() {
         return bivariateMode.active
             ? [bivariateSelectedBounds, bivariateSelectedWindowSizeKm, bivariateSelectedCenter]
-            : [selectedRasterBounds, selectedRasterWindowSizeKm, selectedRasterCenter];
+            : [rasterAnalysis.selectedRasterBounds, rasterAnalysis.selectedRasterWindowSizeKm, rasterAnalysis.selectedRasterCenter];
     }
 
     /** Preserve an active vector area when adding a raster. @return {Object|null} Initial area. */
     function initialPolygonSamplingArea() {
-        const area = bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection;
+        const area = bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection;
         return area;
     }
 
@@ -1650,7 +1653,7 @@ export function initializeRasterViewer(
             : bivariateMode.active
                 ? (bivariateCatalogSelection ? "catalogSelection" : presentedBounds === null ? "wholeRaster" : "selectedArea")
                 : samplingMode;
-        const presentedSelection = bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection;
+        const presentedSelection = bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection;
         const samplingLabel = presentedSelection?.id === invalidVectorSamplingId ? "Vector selection changed · choose an area" : presentedMode === "selectedArea"
             ? presentedWindowSizeKm === null
                 ? "Map box"
@@ -1896,16 +1899,16 @@ export function initializeRasterViewer(
         if (rasterStyleCommitTimeout !== null) {
             commitRasterStyle();
         }
-        saveActiveLayerSession();
-        bivariateCatalogSelection = selectedCatalogSelection;
-        bivariateSelectedBounds = selectedRasterBounds === null
+        refreshActiveSessionPresentation();
+        bivariateCatalogSelection = rasterAnalysis.selectedCatalogSelection;
+        bivariateSelectedBounds = rasterAnalysis.selectedRasterBounds === null
             ? null
-            : { ...selectedRasterBounds };
-        bivariateSelectedCenter = selectedRasterCenter;
-        bivariateSelectedWindowSizeKm = selectedRasterWindowSizeKm;
+            : { ...rasterAnalysis.selectedRasterBounds };
+        bivariateSelectedCenter = rasterAnalysis.selectedRasterCenter;
+        bivariateSelectedWindowSizeKm = rasterAnalysis.selectedRasterWindowSizeKm;
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
         for (const record of mapLayers.retainedRecords) {
             if (record.adapter === rasterMapLayerAdapter) cancelLayerHistogramRequest(record.state);
         }
@@ -1960,9 +1963,9 @@ export function initializeRasterViewer(
         controlsView.setUnivariateHistogramVisible?.(true);
         renderRasterSamplingAreaControls();
         rasterSampleWindowController.clearSelection();
-        if (selectedRasterBounds !== null) {
+        if (rasterAnalysis.selectedRasterBounds !== null) {
             rasterSampleWindowController.restoreSelection(
-                selectedRasterBounds
+                rasterAnalysis.selectedRasterBounds
             );
         }
         if (restoreAnalysis && activeRasterItem !== null) {
@@ -2007,7 +2010,7 @@ export function initializeRasterViewer(
             item ??= source.raster;
             const analysisSession = matchingAnalysisSession(item);
             if (analysisSession !== null) {
-                saveActiveLayerSession();
+                refreshActiveSessionPresentation();
             }
             const session = createLayerSession(entry, publication ?? {bbox: item.bbox});
             session.item = item;
@@ -2019,7 +2022,7 @@ export function initializeRasterViewer(
                 session.rasterStyleWasEdited = appearance.continuous.styleWasEdited;
             }
             if (analysisSession !== null) {
-                copyRasterInteractionState(session, analysisSession);
+                adoptRasterInteractionState(session, analysisSession);
             }
             return session;
         },
@@ -2067,7 +2070,7 @@ export function initializeRasterViewer(
          */
         snapshot(record) {
             if (activeLayerKey === record.entry.key) {
-                saveActiveLayerSession();
+                refreshActiveSessionPresentation();
             }
             const source = rasterSourceReference(record.state.item);
             const metadata = {source, bounds: record.state.item.bbox,
@@ -2124,7 +2127,7 @@ export function initializeRasterViewer(
          */
         exportSavedState(record) {
             if (activeLayerKey === record.entry.key) {
-                saveActiveLayerSession();
+                refreshActiveSessionPresentation();
             }
             return normalizeRasterAppearanceState({
                 kind: "raster",
@@ -2170,7 +2173,7 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         /**
-         * Copy matching detached analysis state before activating a renderer.
+         * Adopt matching detached analysis state before activating a renderer.
          *
          * @param {Object} record Retained raster record to prepare in place.
          * @return {void}
@@ -2178,8 +2181,8 @@ export function initializeRasterViewer(
         prepare(record) {
             const analysisSession = matchingAnalysisSession(record.state.item);
             if (analysisSession !== null) {
-                saveActiveLayerSession();
-                copyRasterInteractionState(record.state, analysisSession);
+                refreshActiveSessionPresentation();
+                adoptRasterInteractionState(record.state, analysisSession);
             }
         },
         /**
@@ -2261,10 +2264,10 @@ export function initializeRasterViewer(
                 renderBivariateAvailability();
                 return;
             }
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             controlsView.setActiveLayer(record.entry.label, visible);
             renderRasterSampleWindowGuidance("");
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             renderBivariateAvailability();
         },
         /**
@@ -2369,13 +2372,8 @@ export function initializeRasterViewer(
         rasterStatisticsController.clear();
         rasterSampleWindowController.clear();
         pointSamplesController.clear();
-        if (wholeRasterStatisticsState === "loading") {
-            wholeRasterStatisticsState = "idle";
-        }
-        if (selectedRasterStatisticsState === "loading") {
-            selectedRasterStatisticsState = "idle";
-        }
-        saveActiveLayerSession();
+        resetPendingRasterStatisticsState();
+        refreshActiveSessionPresentation();
         activeLayerKey = null;
         activeRasterItem = null;
     }
@@ -2390,33 +2388,33 @@ export function initializeRasterViewer(
     function restoreActiveLayerStatistics() {
         const codes = sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state);
         if (hasSelectedRasterSamplingArea()) {
-            if (selectedRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(selectedRasterStatistics, codes)) {
-                selectedRasterStatisticsState = "idle";
+            if (rasterAnalysis.selectedRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(rasterAnalysis.selectedRasterStatistics, codes)) {
+                rasterAnalysis.selectedRasterStatisticsState = "idle";
             }
-            if (selectedRasterStatisticsState === "ready") {
-                renderRasterStatistics(selectedRasterStatistics);
-            } else if (selectedRasterStatisticsState === "error") {
+            if (rasterAnalysis.selectedRasterStatisticsState === "ready") {
+                renderRasterStatistics(rasterAnalysis.selectedRasterStatistics);
+            } else if (rasterAnalysis.selectedRasterStatisticsState === "error") {
                 renderSelectedRasterStatisticsError(
-                    selectedRasterStatisticsError
+                    rasterAnalysis.selectedRasterStatisticsError
                 );
             } else {
-                selectedRasterStatisticsState = "idle";
+                rasterAnalysis.selectedRasterStatisticsState = "idle";
                 void rasterStatisticsController.activate(
                     activeRasterItem,
                     currentRasterSamplingArea()
                 );
             }
-        } else if (wholeRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(wholeRasterStatistics, codes)) {
+        } else if (rasterAnalysis.wholeRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(rasterAnalysis.wholeRasterStatistics, codes)) {
             void rasterStatisticsController.activate(activeRasterItem, WHOLE_RASTER_SAMPLING_AREA);
-        } else if (wholeRasterStatisticsState === "ready") {
-            renderRasterStatistics(wholeRasterStatistics);
-        } else if (wholeRasterStatisticsState === "error") {
+        } else if (rasterAnalysis.wholeRasterStatisticsState === "ready") {
+            renderRasterStatistics(rasterAnalysis.wholeRasterStatistics);
+        } else if (rasterAnalysis.wholeRasterStatisticsState === "error") {
             renderRasterStatisticsError(
-                wholeRasterStatisticsError,
+                rasterAnalysis.wholeRasterStatisticsError,
                 "wholeRaster"
             );
         } else {
-            wholeRasterStatisticsState = "idle";
+            rasterAnalysis.wholeRasterStatisticsState = "idle";
             void rasterStatisticsController.activate(
                 activeRasterItem,
                 WHOLE_RASTER_SAMPLING_AREA
@@ -2435,7 +2433,7 @@ export function initializeRasterViewer(
         if (activeLayerKey === entry.key) {
             return;
         }
-        loadActiveLayerSession(session);
+        selectActiveRasterSession(session);
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
@@ -2444,7 +2442,7 @@ export function initializeRasterViewer(
 
         if (!bivariateMode.active) {
             rasterSampleWindowController.setWindowSize(
-                selectedRasterWindowSizeKm ??
+                rasterAnalysis.selectedRasterWindowSizeKm ??
                     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
             );
         }
@@ -2465,7 +2463,7 @@ export function initializeRasterViewer(
         if (bivariateMode.active) {
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
             return;
@@ -2473,7 +2471,7 @@ export function initializeRasterViewer(
         renderRasterSampleWindowGuidance("");
 
         restoreActiveLayerStatistics();
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -2495,7 +2493,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function activateDetachedSession(session) {
-        loadActiveLayerSession(session);
+        selectActiveRasterSession(session);
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(false);
         controlsView.setActiveLayer(session.label, true);
@@ -2503,7 +2501,7 @@ export function initializeRasterViewer(
         resetRasterPercentileControls();
         if (!bivariateMode.active) {
             rasterSampleWindowController.setWindowSize(
-                selectedRasterWindowSizeKm ??
+                rasterAnalysis.selectedRasterWindowSizeKm ??
                     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
             );
         }
@@ -2524,7 +2522,7 @@ export function initializeRasterViewer(
         if (bivariateMode.active) {
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
             renderLayerStack();
@@ -2532,7 +2530,7 @@ export function initializeRasterViewer(
         }
         renderRasterSampleWindowGuidance("");
         restoreActiveLayerStatistics();
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
         renderLayerStack();
     }
 
@@ -2571,8 +2569,8 @@ export function initializeRasterViewer(
         if (retainedSession !== undefined) {
             const analysisSession = matchingAnalysisSession(item);
             if (analysisSession !== null) {
-                saveActiveLayerSession();
-                copyRasterInteractionState(retainedSession, analysisSession);
+                refreshActiveSessionPresentation();
+                adoptRasterInteractionState(retainedSession, analysisSession);
             }
             activateLayer(retainedKey);
             return;
@@ -2676,7 +2674,7 @@ export function initializeRasterViewer(
         }
         const presentation = getLayerHistogramPresentation(session);
         const categorical = editingAppearanceMode === "categorical";
-        const candidate = presentation.state === "ready" ? presentation.statistics : session.rasterStatistics;
+        const candidate = presentation.state === "ready" ? presentation.statistics : session.analysis.rasterStatistics;
         const statistics = categorical && (session.appearanceMode !== "categorical" ||
             !rasterStatisticsMatchCategories(candidate, sessionCategoryValues(session))) ? null : candidate;
         let message = "";
@@ -2776,10 +2774,10 @@ export function initializeRasterViewer(
         controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsBusy(false);
         const session = mapLayers.getRecord(activeLayerKey)?.state;
-        if (rasterStatisticsIsApplicable &&
-            rasterStatisticsMatchCategories(rasterStatistics, sessionCategoryValues(session))) {
+        if (rasterAnalysis.rasterStatisticsIsApplicable &&
+            rasterStatisticsMatchCategories(rasterAnalysis.rasterStatistics, sessionCategoryValues(session))) {
             controlsView.renderCategoricalHistogram?.(
-                presentCategoricalRasterDistribution(rasterStatistics, session.categoricalStyle));
+                presentCategoricalRasterDistribution(rasterAnalysis.rasterStatistics, session.categoricalStyle));
             controlsView.setStatisticsStatus("Estimated categorical ground area; percentages include Unmapped and exclude NoData.");
         } else {
             controlsView.setStatisticsStatus(CATEGORICAL_HISTOGRAM_MESSAGE);
@@ -2805,11 +2803,11 @@ export function initializeRasterViewer(
      */
     function refreshSessionStatisticsForAppearance(session) {
         if (!mapLayers.getRecord(session.key)) return;
-        if (session.key === activeLayerKey) saveActiveLayerSession();
+        if (session.key === activeLayerKey) refreshActiveSessionPresentation();
         const codes = sessionCategoryValues(session);
         const presentation = getLayerHistogramPresentation(session);
         const identity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
-        if (["loading", "error"].includes(presentation.state) && session.statisticsCategoryIdentity === identity) return;
+        if (["loading", "error"].includes(presentation.state) && session.analysis.statisticsCategoryIdentity === identity) return;
         if (presentation.state === "ready" && rasterStatisticsMatchCategories(presentation.statistics, codes)) {
             if (session.key === activeLayerKey) renderRasterStatistics(presentation.statistics);
             return;
@@ -2836,7 +2834,7 @@ export function initializeRasterViewer(
         const session = record?.adapter === rasterMapLayerAdapter
             ? record.state : null;
         if (session === null) return false;
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
         editingLayerKey = key;
         presentSessionAppearance(session);
         controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
@@ -2895,7 +2893,7 @@ export function initializeRasterViewer(
         controlsView.setRenderingControlsAvailable(true);
         controlsView.setAppearanceEnabled(!bivariateMode.contains(editingLayerKey));
         controlsView.setPercentileControlsVisible(
-            editingAppearanceMode !== "categorical" && session.rasterStatistics !== null
+            editingAppearanceMode !== "categorical" && session.analysis.rasterStatistics !== null
         );
         if (editingAppearanceMode === "categorical") {
             controlsView.setApplyPercentilesEnabled(false);
@@ -2903,7 +2901,7 @@ export function initializeRasterViewer(
             return;
         }
         updateRasterPercentileValues();
-        if (session.rasterStatistics === null) {
+        if (session.analysis.rasterStatistics === null) {
             renderEditingStyleHistogram(session.rasterStyle);
         }
     }
@@ -2934,12 +2932,12 @@ export function initializeRasterViewer(
             rasterStyleWasEdited = wasEdited;
             if (session.appearanceMode === "categorical") {
                 presentCategoricalHistogram();
-            } else if (rasterStatistics !== null) {
-                renderRasterStatistics(rasterStatistics, false, rasterStatisticsIsApplicable);
+            } else if (rasterAnalysis.rasterStatistics !== null) {
+                renderRasterStatistics(rasterAnalysis.rasterStatistics, false, rasterAnalysis.rasterStatisticsIsApplicable);
             } else {
                 controlsView.setStatisticsStatus("");
             }
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
         }
         syncBivariateCandidate(session);
         refreshRasterPixelPresentation();
@@ -3036,10 +3034,10 @@ export function initializeRasterViewer(
      */
     function resetRasterStyle() {
         const session = editingSession();
-        const style = session?.wholeRasterStatistics == null
+        const style = session?.analysis.wholeRasterStatistics == null
                 ? { ...DEFAULT_RASTER_STYLE }
                 : deriveRasterStyleFromStatistics(
-                    DEFAULT_RASTER_STYLE, session.wholeRasterStatistics
+                    DEFAULT_RASTER_STYLE, session.analysis.wholeRasterStatistics
                 );
         controlsView.setStyle({
             ...style, minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1
@@ -3074,10 +3072,10 @@ export function initializeRasterViewer(
             return null;
         }
         const statistics = editingLayerKey === null
-            ? rasterStatistics : session?.rasterStatistics ?? null;
+            ? rasterAnalysis.rasterStatistics : session?.analysis.rasterStatistics ?? null;
         const applicable = editingLayerKey === null
-            ? rasterStatisticsIsApplicable
-            : session?.rasterStatisticsIsApplicable === true;
+            ? rasterAnalysis.rasterStatisticsIsApplicable
+            : session?.analysis.rasterStatisticsIsApplicable === true;
         if (statistics === null) {
             return null;
         }
@@ -3123,11 +3121,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function clearRasterStatisticsPresentation() {
-        rasterStatistics = null;
-        rasterStatisticsIsApplicable = false;
+        rasterAnalysis.rasterStatistics = null;
+        rasterAnalysis.rasterStatisticsIsApplicable = false;
         controlsView.clearStatistics();
         resetRasterPercentileControls();
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3145,7 +3143,7 @@ export function initializeRasterViewer(
                 ? "Calculating a bounded histogram for the selected area..."
                 : "Calculating a bounded whole-raster histogram..."
         );
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3194,8 +3192,8 @@ export function initializeRasterViewer(
         initialRangeApplied = false,
         allowApply = true
     ) {
-        rasterStatistics = statistics;
-        rasterStatisticsIsApplicable =
+        rasterAnalysis.rasterStatistics = statistics;
+        rasterAnalysis.rasterStatisticsIsApplicable =
             allowApply &&
             rasterStatisticsMatchesSelection(
                 statistics,
@@ -3205,7 +3203,7 @@ export function initializeRasterViewer(
         controlsView.setStatisticsRetryVisible(false);
         if (activeAppearanceIsCategorical()) {
             presentCategoricalHistogram();
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             return;
         }
         controlsView.renderHistogram(statistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
@@ -3221,8 +3219,8 @@ export function initializeRasterViewer(
             : "source-cell window";
         const approximation = statistics.estimated ? "approximate" : "exact";
         const scopeDescription = statistics.scope === "catalogSelection"
-            ? `Vector selection ${selectedCatalogSelection?.filename ?? "area"}, ` +
-              `layer ${selectedCatalogSelection?.selectedDataset ?? "selected"}, ` +
+            ? `Vector selection ${rasterAnalysis.selectedCatalogSelection?.filename ?? "area"}, ` +
+              `layer ${rasterAnalysis.selectedCatalogSelection?.selectedDataset ?? "selected"}, ` +
               `${approximation} bounded histogram`
             : statistics.scope === "selectedArea"
                 ? `Selected-area ${approximation} bounded histogram`
@@ -3255,7 +3253,7 @@ export function initializeRasterViewer(
                 "Initialized the color range from the whole-raster histogram."
             );
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3266,8 +3264,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderRasterStatisticsError(error, scope) {
-        rasterStatistics = null;
-        rasterStatisticsIsApplicable = false;
+        rasterAnalysis.rasterStatistics = null;
+        rasterAnalysis.rasterStatisticsIsApplicable = false;
         controlsView.setStatisticsBusy(false);
         controlsView.clearHistogram();
         controlsView.setPercentileControlsVisible(false);
@@ -3279,7 +3277,7 @@ export function initializeRasterViewer(
             `histogram unavailable: ${error.message} ` +
             "Manual appearance controls remain available."
         );
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3288,12 +3286,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderWholeRasterStatisticsLoading() {
-        wholeRasterStatisticsState = "loading";
-        wholeRasterStatisticsError = null;
+        markRasterStatisticsLoading(rasterAnalysis, "wholeRaster");
         if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatisticsLoading("wholeRaster");
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3303,16 +3300,14 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderWholeRasterStatistics(statistics) {
-        wholeRasterStatistics = statistics;
-        wholeRasterStatisticsState = "ready";
-        wholeRasterStatisticsError = null;
+        storeRasterStatisticsResult(rasterAnalysis, statistics, "wholeRaster");
         const initialRangeApplied = hasSelectedRasterSamplingArea()
             ? false
             : applyInitialWholeRasterStyle(statistics);
         if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatistics(statistics, initialRangeApplied);
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3322,12 +3317,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderWholeRasterStatisticsError(error) {
-        wholeRasterStatisticsState = "error";
-        wholeRasterStatisticsError = error;
+        storeRasterStatisticsError(rasterAnalysis, error, "wholeRaster");
         if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatisticsError(error, "wholeRaster");
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3336,9 +3330,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderSelectedRasterStatisticsLoading() {
-        selectedRasterStatisticsState = "loading";
-        selectedRasterStatisticsError = null;
-        rasterStatisticsIsApplicable = false;
+        markRasterStatisticsLoading(rasterAnalysis, "selectedArea");
+        rasterAnalysis.rasterStatisticsIsApplicable = false;
         controlsView.setStatisticsBusy(true);
         if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
         controlsView.setStatisticsRetryVisible(false);
@@ -3346,13 +3339,13 @@ export function initializeRasterViewer(
         controlsView.setStatisticsStatus(
             activeAppearanceIsCategorical()
                 ? "Calculating categorical ground areas for the selected area…"
-            : rasterStatistics === null
+            : rasterAnalysis.rasterStatistics === null
                 ? selectedRasterStatisticsLoadingMessage()
                 : selectedRasterStatisticsLoadingMessage() + " " +
                   "The previous histogram remains visible for reference and " +
                   "cannot be applied to this selection."
         );
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3361,13 +3354,13 @@ export function initializeRasterViewer(
      * @return {string} Accessible loading announcement for bounds or polygon selection.
      */
     function selectedRasterStatisticsLoadingMessage() {
-        if (selectedCatalogSelection === null) {
+        if (rasterAnalysis.selectedCatalogSelection === null) {
             return "Calculating a bounded histogram for the selected area...";
         }
         return (
             `Calculating a bounded histogram for catalog vector ` +
-            `${selectedCatalogSelection.filename}, layer ` +
-            `${selectedCatalogSelection.selectedDataset}...`
+            `${rasterAnalysis.selectedCatalogSelection.filename}, layer ` +
+            `${rasterAnalysis.selectedCatalogSelection.selectedDataset}...`
         );
     }
 
@@ -3378,9 +3371,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderSelectedRasterStatistics(statistics) {
-        selectedRasterStatistics = statistics;
-        selectedRasterStatisticsState = "ready";
-        selectedRasterStatisticsError = null;
+        storeRasterStatisticsResult(rasterAnalysis, statistics, "selectedArea");
         renderRasterStatistics(statistics);
     }
 
@@ -3391,11 +3382,10 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderSelectedRasterStatisticsError(error) {
-        selectedRasterStatisticsState = "error";
-        selectedRasterStatisticsError = error;
-        rasterStatisticsIsApplicable = false;
-        if (rasterStatistics === null && wholeRasterStatisticsState === "ready") {
-            renderRasterStatistics(wholeRasterStatistics, false, false);
+        storeRasterStatisticsError(rasterAnalysis, error, "selectedArea");
+        rasterAnalysis.rasterStatisticsIsApplicable = false;
+        if (rasterAnalysis.rasterStatistics === null && rasterAnalysis.wholeRasterStatisticsState === "ready") {
+            renderRasterStatistics(rasterAnalysis.wholeRasterStatistics, false, false);
         }
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(
@@ -3403,14 +3393,14 @@ export function initializeRasterViewer(
         );
         controlsView.setApplyPercentilesEnabled(false);
         if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
-        const areaName = selectedCatalogSelection === null
+        const areaName = rasterAnalysis.selectedCatalogSelection === null
             ? "Selected-area"
-            : `Vector selection ${selectedCatalogSelection.filename}, layer ` +
-              selectedCatalogSelection.selectedDataset;
+            : `Vector selection ${rasterAnalysis.selectedCatalogSelection.filename}, layer ` +
+              rasterAnalysis.selectedCatalogSelection.selectedDataset;
         controlsView.setStatisticsStatus(
             activeAppearanceIsCategorical()
                 ? `Categorical ground areas unavailable: ${error.message}`
-            : rasterStatistics === null
+            : rasterAnalysis.rasterStatistics === null
                 ? `${areaName} histogram unavailable: ${error.message} ` +
                   "Manual appearance controls remain available."
                 : `${areaName} histogram unavailable: ${error.message} ` +
@@ -3418,7 +3408,7 @@ export function initializeRasterViewer(
                   "cannot be applied to this selection. Your appearance was " +
                   "preserved."
         );
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3440,24 +3430,24 @@ export function initializeRasterViewer(
         }
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
-        selectedRasterBounds = null;
-        selectedCatalogSelection = null;
-        selectedRasterCenter = null;
-        selectedRasterWindowSizeKm = null;
-        selectedRasterStatistics = null;
-        selectedRasterStatisticsState = "idle";
-        selectedRasterStatisticsError = null;
+        rasterAnalysis.selectedRasterBounds = null;
+        rasterAnalysis.selectedCatalogSelection = null;
+        rasterAnalysis.selectedRasterCenter = null;
+        rasterAnalysis.selectedRasterWindowSizeKm = null;
+        rasterAnalysis.selectedRasterStatistics = null;
+        rasterAnalysis.selectedRasterStatisticsState = "idle";
+        rasterAnalysis.selectedRasterStatisticsError = null;
         rasterSampleWindowController.clearSelection();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        if (wholeRasterStatisticsState === "ready" &&
-            !rasterStatisticsMatchCategories(wholeRasterStatistics, sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state))) {
+        if (rasterAnalysis.wholeRasterStatisticsState === "ready" &&
+            !rasterStatisticsMatchCategories(rasterAnalysis.wholeRasterStatistics, sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state))) {
             void rasterStatisticsController.activate(activeRasterItem, WHOLE_RASTER_SAMPLING_AREA);
-        } else if (wholeRasterStatisticsState === "ready") {
-            renderRasterStatistics(wholeRasterStatistics);
-        } else if (wholeRasterStatisticsState === "error") {
+        } else if (rasterAnalysis.wholeRasterStatisticsState === "ready") {
+            renderRasterStatistics(rasterAnalysis.wholeRasterStatistics);
+        } else if (rasterAnalysis.wholeRasterStatisticsState === "error") {
             renderRasterStatisticsError(
-                wholeRasterStatisticsError,
+                rasterAnalysis.wholeRasterStatisticsError,
                 "wholeRaster"
             );
         } else {
@@ -3469,7 +3459,7 @@ export function initializeRasterViewer(
                 );
             }
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3496,8 +3486,8 @@ export function initializeRasterViewer(
                         ? " The paired distribution uses this shared area."
                         : ""
                 }`;
-        } else if ((bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection) !== null) {
-            const area = bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection;
+        } else if ((bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection) !== null) {
+            const area = bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection;
             nextStatus = `Vector selection selected: ${area.filename}. ` +
                 "Polygon boundaries and holes define the histogram selection.";
         } else if (bivariateMode.active) {
@@ -3534,10 +3524,10 @@ export function initializeRasterViewer(
             requestBivariateStatistics();
             return;
         }
-        selectedRasterCenter = center;
-        selectedRasterBounds = bounds;
-        selectedCatalogSelection = null;
-        selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
+        rasterAnalysis.selectedRasterCenter = center;
+        rasterAnalysis.selectedRasterBounds = bounds;
+        rasterAnalysis.selectedCatalogSelection = null;
+        rasterAnalysis.selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         showHistogramWorkspace();
@@ -3546,7 +3536,7 @@ export function initializeRasterViewer(
             activeRasterItem,
             currentRasterSamplingArea()
         );
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3569,7 +3559,7 @@ export function initializeRasterViewer(
         if (!canUseRasterMapInteractions() && rasterPointSampleParticipants().length === 0) {
             return false;
         }
-        if (vectorSelection && (bivariateMode.active ? bivariateCatalogSelection : selectedCatalogSelection)?.id === vectorSelection.id) {
+        if (vectorSelection && (bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection)?.id === vectorSelection.id) {
             onSelected(getSelectedArea());
             return true;
         }
@@ -3584,7 +3574,7 @@ export function initializeRasterViewer(
         const participants = rasterPointSampleParticipants();
         const openHistogram = shouldOpenRasterHistogram(participants, point);
         if (openHistogram) {
-            if (selectedCatalogSelection !== null) {
+            if (rasterAnalysis.selectedCatalogSelection !== null) {
                 restoreWholeRasterStatistics();
             }
             if (rasterSampleWindowController.selectAt(position) === null) {
@@ -3642,8 +3632,8 @@ export function initializeRasterViewer(
             renderRasterSamplingAreaControls();
             return;
         }
-        if (vectorSelection && (selectedCatalogSelection?.id === vectorSelection.id || bivariateCatalogSelection?.id === vectorSelection.id)) {
-            selectedCatalogSelection = null; bivariateCatalogSelection = null;
+        if (vectorSelection && (rasterAnalysis.selectedCatalogSelection?.id === vectorSelection.id || bivariateCatalogSelection?.id === vectorSelection.id)) {
+            rasterAnalysis.selectedCatalogSelection = null; bivariateCatalogSelection = null;
         }
         exploreAt(leafletMap.getCenter());
     }
@@ -3684,7 +3674,7 @@ export function initializeRasterViewer(
             cancelRasterSampleWindowResize();
             renderRasterSampleWindowGuidance("");
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
         return true;
     }
 
@@ -3698,13 +3688,13 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clear();
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
-        selectedRasterBounds = null;
-        selectedCatalogSelection = null;
-        selectedRasterCenter = null;
-        selectedRasterWindowSizeKm = null;
-        selectedRasterStatistics = null;
-        selectedRasterStatisticsState = "idle";
-        selectedRasterStatisticsError = null;
+        rasterAnalysis.selectedRasterBounds = null;
+        rasterAnalysis.selectedCatalogSelection = null;
+        rasterAnalysis.selectedRasterCenter = null;
+        rasterAnalysis.selectedRasterWindowSizeKm = null;
+        rasterAnalysis.selectedRasterStatistics = null;
+        rasterAnalysis.selectedRasterStatisticsState = "idle";
+        rasterAnalysis.selectedRasterStatisticsError = null;
         setRasterSampleWindowSize(DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM);
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
@@ -3721,12 +3711,12 @@ export function initializeRasterViewer(
         invalidVectorSamplingId = null;
         if (bivariateMode.active) {
             if (!selection) return;
-            selectedCatalogSelection = selection;
-            selectedRasterBounds = null;
+            rasterAnalysis.selectedCatalogSelection = selection;
+            rasterAnalysis.selectedRasterBounds = null;
             for (const record of mapLayers.retainedRecords) {
                 if (record.adapter === rasterMapLayerAdapter) replaceSessionCatalogSelection(record.state, selection);
             }
-            saveActiveLayerSession();
+            refreshActiveSessionPresentation();
             bivariateCatalogSelection = selection;
             bivariateSelectedBounds = null;
             rasterSampleWindowController.clear();
@@ -3745,13 +3735,13 @@ export function initializeRasterViewer(
         cancelRasterSampleWindowResize();
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
-        selectedRasterBounds = null;
-        selectedCatalogSelection = selection;
-        selectedRasterCenter = null;
-        selectedRasterWindowSizeKm = null;
-        selectedRasterStatistics = null;
-        selectedRasterStatisticsState = "idle";
-        selectedRasterStatisticsError = null;
+        rasterAnalysis.selectedRasterBounds = null;
+        rasterAnalysis.selectedCatalogSelection = selection;
+        rasterAnalysis.selectedRasterCenter = null;
+        rasterAnalysis.selectedRasterWindowSizeKm = null;
+        rasterAnalysis.selectedRasterStatistics = null;
+        rasterAnalysis.selectedRasterStatisticsState = "idle";
+        rasterAnalysis.selectedRasterStatisticsError = null;
         rasterSampleWindowController.clear();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
@@ -3763,7 +3753,7 @@ export function initializeRasterViewer(
                 currentRasterSamplingArea()
             );
         }
-        saveActiveLayerSession();
+        refreshActiveSessionPresentation();
     }
 
     /**
@@ -3946,7 +3936,7 @@ export function initializeRasterViewer(
             return;
         }
         refreshSessionStatisticsForAppearance(session);
-        if (session.key === activeLayerKey && rasterStatisticsIsApplicable) presentCategoricalHistogram();
+        if (session.key === activeLayerKey && rasterAnalysis.rasterStatisticsIsApplicable) presentCategoricalHistogram();
         syncBivariateCandidate(session);
         refreshRasterPixelPresentation();
         renderBivariateAvailability();
@@ -4140,12 +4130,12 @@ export function initializeRasterViewer(
         const session = editingSession();
         const percentiles = updateRasterPercentileValues();
         if (session === null || percentiles === null ||
-            !session.rasterStatisticsIsApplicable ||
+            !session.analysis.rasterStatisticsIsApplicable ||
             bivariateMode.contains(session.key)) return;
         session.rasterStyleWasEdited = true;
         if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         const style = deriveRasterStyleFromStatistics(
-            session.rasterStyle, session.rasterStatistics, percentiles
+            session.rasterStyle, session.analysis.rasterStatistics, percentiles
         );
         controlsView.setStyle(style, session.paletteName);
         commitRasterStyle();
@@ -4161,13 +4151,13 @@ export function initializeRasterViewer(
         showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         if (hasSelectedRasterSamplingArea()) {
-            selectedRasterStatisticsState = "idle";
+            rasterAnalysis.selectedRasterStatisticsState = "idle";
             void rasterStatisticsController.activate(
                 activeRasterItem,
                 currentRasterSamplingArea()
             );
         } else {
-            wholeRasterStatisticsState = "idle";
+            rasterAnalysis.wholeRasterStatisticsState = "idle";
             void rasterStatisticsController.activate(
                 activeRasterItem,
                 WHOLE_RASTER_SAMPLING_AREA
@@ -4305,18 +4295,7 @@ export function initializeRasterViewer(
         activeLayerKey = null;
         rasterStyle = { ...DEFAULT_RASTER_STYLE };
         rasterStyleWasEdited = false;
-        rasterStatistics = null;
-        rasterStatisticsIsApplicable = false;
-        wholeRasterStatistics = null;
-        wholeRasterStatisticsState = "idle";
-        wholeRasterStatisticsError = null;
-        selectedRasterBounds = null;
-        selectedCatalogSelection = null;
-        selectedRasterCenter = null;
-        selectedRasterWindowSizeKm = null;
-        selectedRasterStatistics = null;
-        selectedRasterStatisticsState = "idle";
-        selectedRasterStatisticsError = null;
+        rasterAnalysis = createRasterAnalysisState();
         bivariateStatistics = null;
         bivariateCandidates = [];
         bivariateSelectedBounds = null;
@@ -4412,14 +4391,14 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function replaceSessionCatalogSelection(session, nextCatalogSelection) {
-        session.selectedRasterBounds = null;
-        session.selectedCatalogSelection = nextCatalogSelection;
-        session.selectedRasterCenter = null;
-        session.selectedRasterWindowSizeKm = null;
-        session.selectedRasterStatistics = null;
-        session.selectedRasterStatisticsState = "idle";
-        session.selectedRasterStatisticsError = null;
-        session.rasterStatisticsIsApplicable = false;
+        session.analysis.selectedRasterBounds = null;
+        session.analysis.selectedCatalogSelection = nextCatalogSelection;
+        session.analysis.selectedRasterCenter = null;
+        session.analysis.selectedRasterWindowSizeKm = null;
+        session.analysis.selectedRasterStatistics = null;
+        session.analysis.selectedRasterStatisticsState = "idle";
+        session.analysis.selectedRasterStatisticsError = null;
+        session.analysis.rasterStatisticsIsApplicable = false;
     }
 
     /**
@@ -4439,20 +4418,19 @@ export function initializeRasterViewer(
         invalidVectorSamplingId = previous.id;
         const message = "Vector selection changed. Use these features again, or choose another sampling area.";
         for (const record of mapLayers.retainedRecords) {
-            if (record.state.selectedCatalogSelection?.id === previous.id) {
+            if (record.state.analysis?.selectedCatalogSelection?.id === previous.id) {
                 cancelLayerHistogramRequest(record.state);
                 replaceSessionCatalogSelection(record.state, previous);
-                record.state.selectedRasterStatisticsState = "error";
-                record.state.selectedRasterStatisticsError = new Error(message);
+                record.state.analysis.selectedRasterStatisticsState = "error";
+                record.state.analysis.selectedRasterStatisticsError = new Error(message);
             }
         }
-        if (selectedCatalogSelection?.id === previous.id) {
+        if (rasterAnalysis.selectedCatalogSelection?.id === previous.id) {
             rasterStatisticsController.clear();
-            selectedRasterStatistics = null;
-            selectedRasterStatisticsState = "error";
-            selectedRasterStatisticsError = new Error(message);
+            rasterAnalysis.selectedRasterStatistics = null;
+            rasterAnalysis.selectedRasterStatisticsState = "error";
+            rasterAnalysis.selectedRasterStatisticsError = new Error(message);
             resetPendingRasterStatisticsState();
-            if (activeLayerKey) loadActiveLayerSession(activeDetachedRasterSession() ?? requireLayerSession(activeLayerKey));
             controlsView.clearStatistics();
             controlsView.setStatisticsStatus(message);
         }
