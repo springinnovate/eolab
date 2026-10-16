@@ -1,7 +1,12 @@
 /** Keep opt-in output displays tied to their originating run and file lifetime. */
-import { PREVIEW_MEDIA_TYPES, readArtifactPreview } from "./api.js";
+import { readArtifactPreview } from "./api.js";
 import { describeRasterSource } from "../raster/source-api.js";
 import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
+
+/** Output formats displayed through ordinary raster rendering or GeoJSON previews.
+ * @type {Set<string>}
+ */
+const MAP_OUTPUT_MEDIA_TYPES = new Set(["image/tiff", "application/geo+json"]);
 
 /** Return the map identity of one run's immutable file.
  * @param {string} jobId Run identity. @param {string} artifactId File identity.
@@ -34,7 +39,7 @@ export class ModelOutputLayers {
      * @param {(job:Object)=>void} [dependencies.onRunObserved] Share revalidated run state through composition.
      * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addRaster Attach through the common raster owner.
      * @param {Function} [dependencies.describe=describeRasterSource] Original-source metadata reader.
-     * @param {Function} [dependencies.read=readArtifactPreview] Bounded preview reader.
+     * @param {(jobId:string,file:Object,signal:AbortSignal)=>Promise<Object>} [dependencies.read=readArtifactPreview] Bounded GeoJSON preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
      */
     constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved = () => {}, describe = describeRasterSource, read = readArtifactPreview, clock = globalThis}) {
@@ -50,7 +55,7 @@ export class ModelOutputLayers {
      */
     state(jobId, artifactId, file) {
         const key = artifactLayerKey(jobId, artifactId);
-        return {canShow: PREVIEW_MEDIA_TYPES.has(file.mediaType) && file.role !== "provenance",
+        return {canShow: MAP_OUTPUT_MEDIA_TYPES.has(file.mediaType) && file.role !== "provenance",
             onMap: this.layers.has(key), busy: this.pending.has(key), error: this.messages.get(key) ?? ""};
     }
 
@@ -85,7 +90,7 @@ export class ModelOutputLayers {
         let layer;
         try {
             if (this.layers.size + this.pending.size > 8) throw new Error("Remove a result layer before adding another. Up to eight results can be on the map at once.");
-            if (!PREVIEW_MEDIA_TYPES.has(file.mediaType) || job.status !== "ready" || Date.parse(job.expiresAt) <= Date.now()) {
+            if (!MAP_OUTPUT_MEDIA_TYPES.has(file.mediaType) || job.status !== "ready" || Date.parse(job.expiresAt) <= Date.now()) {
                 throw new Error("This result is no longer available. Run the model again.");
             }
             if (file.mediaType === "image/tiff") {

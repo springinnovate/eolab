@@ -32,7 +32,6 @@ from eolab_app.raster.statistics import (
     read_raster_statistics,
 )
 from eolab_app.raster.paired_statistics import read_raster_paired_statistics
-from eolab_app.rendering.artifact_preview import read_raster_preview
 from eolab_app.sampling_area import WholeRasterSamplingArea
 from test_raster_aggregates import make_spec as summary_spec
 from test_raster_clips import make_spec as clip_spec, LIMITS as CLIP_LIMITS
@@ -250,44 +249,6 @@ def test_sampled_continuous_categorical_and_paired_reads_keep_native_masks(
     paired = read_raster_paired_statistics(path, y_path, None)
     both = selected_valid & y_validity[np.ix_(centers, centers)]
     assert paired.paired_sample_count == int(both.sum())
-    if overviews != "none":
-        original = write_masked_raster(tmp_path / "original.tif", values, validity)
-        assert read_raster_preview(path) == read_raster_preview(original)
-
-
-def test_preview_keeps_mask_nodata_nonfinite_and_valid_zero(tmp_path: Path) -> None:
-    """Use the shared validity rule on the preview's independently warped grid.
-
-    Args:
-        tmp_path: Native fixture directory.
-    """
-    values = np.array(
-        [[0, 1, 2, 3], [4, -9999, np.nan, np.inf], [8, 9, 10, 11], [12, 13, 14, 15]],
-        dtype="float32",
-    )
-    validity = np.ones((4, 4), dtype=bool)
-    validity[0, 1] = False
-    result = read_raster_preview(
-        write_masked_raster(tmp_path / "preview.tif", values, validity, -9999)
-    )
-    assert result["values"] == [
-        0,
-        None,
-        2,
-        3,
-        4,
-        None,
-        None,
-        None,
-        8,
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-    ]
 
 
 def test_clip_output_can_be_summarized_and_clipped_again(tmp_path: Path) -> None:

@@ -7,11 +7,9 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
-import numpy as np
 import pytest
-import rasterio
-from rasterio.transform import from_origin
 
 from eolab_app.source_files import (
     LeasedSourceFiles,
@@ -22,56 +20,35 @@ from eolab_app.source_files import (
 from eolab_app.rendering.artifact_preview import (
     ArtifactPreviewError,
     ArtifactPreviewService,
-    read_raster_preview,
     read_vector_preview,
 )
 
 
-def write_preview_raster(path: Path) -> Path:
-    """Create numeric values with an internal mask and native NoData.
+def write_preview_vector(path: Path) -> Path:
+    """Create a small GeoJSON file with geometry and an arbitrary property.
 
     Args:
         path: Isolated test output path.
 
     Returns:
-        GeoTIFF path whose upper-left cell must remain transparent.
+        GeoJSON path whose preview should contain only display geometry.
     """
-    with (
-        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True),
-        rasterio.open(
-            path,
-            "w",
-            driver="GTiff",
-            width=4,
-            height=4,
-            count=1,
-            dtype="float32",
-            crs="EPSG:4326",
-            transform=from_origin(-5, 5, 1, 1),
-            nodata=-9999,
-        ) as target,
-    ):
-        values = np.arange(16, dtype="float32").reshape(4, 4)
-        values[3, 3] = -9999
-        target.write(values, 1)
-        mask = np.full((4, 4), 255, dtype="uint8")
-        mask[0, 0] = 0
-        mask[3, 3] = 0
-        target.write_mask(mask)
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"html": "<script>bad()</script>"},
+                        "geometry": {"type": "Point", "coordinates": [0, 2]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
-
-
-def test_raster_preview_keeps_masks_and_projects_to_map(tmp_path: Path) -> None:
-    """Preserve internal validity masks while limiting display cells and geographic bounds.
-
-    Args:
-        tmp_path: Isolated filesystem root.
-    """
-    data = read_raster_preview(write_preview_raster(tmp_path / "masked.tif"))
-    assert data["bounds"] == [-5, 1, -1, 5]
-    assert data["width"] <= 512 and data["height"] <= 512
-    assert data["values"][0] is None and data["values"][-1] is None
-    assert {value for value in data["values"] if value is not None} == set(range(1, 15))
 
 
 class Capture:
@@ -92,7 +69,7 @@ def test_native_preview_checks_checksum_before_read(tmp_path: Path) -> None:
     Args:
         tmp_path: Isolated filesystem root.
     """
-    path = write_preview_raster(tmp_path / "changed.tif")
+    path = write_preview_vector(tmp_path / "changed.geojson")
     captured = Capture()
     verify_source_file(captured, path, path.stat().st_size, "0" * 64)
     assert captured.value is None
@@ -173,7 +150,7 @@ class LeasedFile:
     path: Path
     size: int
     sha256: str
-    media_type: str = "image/tiff"
+    media_type: str = "application/geo+json"
     lease_id: str = "lease"
 
 
@@ -276,7 +253,7 @@ def test_preview_rechecks_access_and_releases_lease(
         Returns:
             Successful native envelope.
         """
-        return {"data": {"kind": "raster"}}
+        return {"data": {"kind": "vector"}}
 
     monkeypatch.setattr(
         "eolab_app.rendering.artifact_preview.run_bounded_process", native
@@ -296,7 +273,7 @@ def test_supervised_native_preview_runs_without_geoserver(tmp_path: Path) -> Non
     Args:
         tmp_path: Isolated filesystem root.
     """
-    path = write_preview_raster(tmp_path / "native.tif")
+    path = write_preview_vector(tmp_path / "native.geojson")
     file = LeasedFile(
         path, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()
     )
@@ -332,8 +309,49 @@ def test_supervised_native_preview_runs_without_geoserver(tmp_path: Path) -> Non
             "owner", "run", "file"
         )
     )
-    assert result["kind"] == "raster" and result["sha256"] == file.sha256
+    assert result["kind"] == "vector" and result["sha256"] == file.sha256
+    assert result["bounds"] == [0, 2, 0, 2]
+    assert result["geojson"]["features"][0]["properties"] == {}
     assert releases == ["lease", "lease"]
+
+
+def test_tiff_preview_rejection_authorizes_and_releases_without_decoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject an authorized TIFF format without starting the retired preview reader.
+
+    Args:
+        tmp_path: Isolated immutable-file location.
+        monkeypatch: Observe the native preview execution boundary.
+    """
+    path = tmp_path / "output.tif"
+    path.write_bytes(b"not decoded by the preview service")
+    file = LeasedFile(
+        path,
+        path.stat().st_size,
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+        media_type="image/tiff",
+    )
+    acquire = AsyncMock(return_value=file)
+    release = AsyncMock(return_value=True)
+    native = AsyncMock(side_effect=AssertionError("TIFF preview decoding is retired"))
+    monkeypatch.setattr(
+        "eolab_app.rendering.artifact_preview.run_bounded_process", native
+    )
+    with pytest.raises(ArtifactPreviewError) as error:
+        asyncio.run(
+            ArtifactPreviewService(preview_sources(acquire, release)).read(
+                "owner", "run", "file"
+            )
+        )
+    assert error.value.status == 422
+    assert str(error.value) == (
+        "GeoTIFF outputs use ordinary raster rendering. "
+        "Download the file or use Show on map."
+    )
+    acquire.assert_awaited_once_with("owner", "run", "file")
+    release.assert_awaited_once_with("lease")
+    native.assert_not_awaited()
 
 
 def test_cancelled_acquisition_releases_its_late_lease(tmp_path: Path) -> None:

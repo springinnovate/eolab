@@ -290,6 +290,9 @@ per-request access checks reject expired/deleted outputs immediately even while
 cleanup is pending. The bounded in-memory composite cache may retain inaccessible
 bytes until normal eviction, but cannot deliver them without a fresh access check.
 
-The historical run-file `/preview` endpoint remains for existing clients; ordinary
-raster display no longer calls it. Existing vector previews are unchanged.
+The run-file `/preview` endpoint supplies GeoJSON geometry only; GeoTIFF requests
+receive HTTP 422 after source-access checks. Ordinary raster display uses the
+publication pipeline described above. See
+[retired raster JSON previews](model-authoring.md#retired-raster-json-previews)
+for the compatibility decision and available raster APIs.
 Rendering availability does not authorize or gate any numerical operation.

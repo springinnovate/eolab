@@ -1115,7 +1115,7 @@ def create_processing_router(
     async def preview_model_artifact(
         job_id: JobId, artifact_id: JobId, request: Request, response: Response
     ) -> dict[str, Any]:
-        """Read a small private map preview while its requesting browser is connected.
+        """Read a private GeoJSON map preview while its requesting browser is connected.
 
         Args:
             job_id: Opaque model-run identity.
@@ -1124,7 +1124,7 @@ def create_processing_router(
             response: Response receiving private, no-store headers.
 
         Returns:
-            Bounded raster cells or vector geometry for display only.
+            Bounded vector geometry for display only.
 
         Raises:
             HTTPException: If unauthorized, expired, unsupported, busy or disconnected.
@@ -1154,9 +1154,7 @@ def create_processing_router(
                 detail = {"code": error.code, "message": str(error)}
                 if error.status in {429, 503}:
                     headers["Retry-After"] = "5"
-            raise HTTPException(
-                error.status, detail, headers=headers
-            ) from error
+            raise HTTPException(error.status, detail, headers=headers) from error
         except HTTPException as error:
             error.headers = {
                 **(error.headers or {}),

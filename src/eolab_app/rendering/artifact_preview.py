@@ -1,4 +1,4 @@
-"""Read small map previews from leased, immutable model-run files."""
+"""Read small GeoJSON map previews from leased, immutable model-run files."""
 
 import asyncio
 import json
@@ -11,20 +11,12 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
     ProcessDeadlineError,
 )
-from eolab_app.raster.source_contract import (
-    mask_invalid_raster_values,
-    require_pixel_source_structure,
-    require_raster_analysis_georeferencing,
-    require_signed_raster_dependencies,
-)
 from eolab_app.source_files import LeasedSourceFiles
 
 MAX_PREVIEW_BYTES = 8 * 1024 * 1024
-MAX_PREVIEW_SIDE = 512
 MAX_VECTOR_FEATURES = 5000
 MAX_VECTOR_POSITIONS = 100_000
 PREVIEW_SECONDS = 30
-PREVIEW_MEDIA_TYPES = frozenset({"image/tiff", "application/geo+json"})
 
 
 class ArtifactPreviewError(Exception):
@@ -39,98 +31,6 @@ class ArtifactPreviewError(Exception):
         """
         super().__init__(message)
         self.status = status
-
-
-def read_raster_preview(path: Path) -> dict[str, Any]:
-    """Sample a GeoTIFF into a masked Web Mercator grid of at most 512 × 512 cells.
-
-    Args:
-        path: Confined, checksum-verified file held under a delivery lease.
-
-    Returns:
-        WGS84 image bounds, grid dimensions and row-major values with null NoData.
-
-    Raises:
-        ValueError: If the raster cannot safely provide this display preview.
-        RasterioError: If the native reader cannot open or project the file.
-    """
-    import numpy as np
-    import rasterio
-    from rasterio.enums import MaskFlags, Resampling
-    from rasterio.transform import from_bounds
-    from rasterio.vrt import WarpedVRT
-    from rasterio.warp import transform_bounds
-
-    with (
-        rasterio.Env(GDAL_CACHEMAX=32 * 1024 * 1024, GDAL_NUM_THREADS="1"),
-        rasterio.open(path, driver="GTiff") as source,
-    ):
-        require_signed_raster_dependencies(source, path)
-        if (
-            source.count != 1
-            or source.crs is None
-            or source.dtypes[0]
-            not in {"uint8", "uint16", "int16", "uint32", "int32", "float32", "float64"}
-        ):
-            raise ValueError(
-                "Preview requires a georeferenced, single-band numeric GeoTIFF."
-            )
-        require_raster_analysis_georeferencing(source)
-        require_pixel_source_structure(source)
-        west, south, east, north = transform_bounds(
-            source.crs, "EPSG:4326", *source.bounds, densify_pts=21
-        )
-        if (
-            not all(math.isfinite(value) for value in (west, south, east, north))
-            or west >= east
-        ):
-            raise ValueError(
-                "This raster crosses unsupported map bounds. Download the file instead."
-            )
-        west, east = max(-180, west), min(180, east)
-        south, north = max(-85.05112878, south), min(85.05112878, north)
-        if west >= east or south >= north:
-            raise ValueError(
-                "This raster is outside the map's supported latitude range."
-            )
-        bounds = (west, south, east, north)
-        projected = transform_bounds("EPSG:4326", "EPSG:3857", *bounds)
-        x_span, y_span = projected[2] - projected[0], projected[3] - projected[1]
-        scale = min(MAX_PREVIEW_SIDE, max(source.width, source.height)) / max(
-            x_span, y_span
-        )
-        width, height = min(512, max(1, math.ceil(x_span * scale))), min(
-            512, max(1, math.ceil(y_span * scale))
-        )
-        with WarpedVRT(
-            source,
-            crs="EPSG:3857",
-            transform=from_bounds(*projected, width, height),
-            width=width,
-            height=height,
-            resampling=Resampling.nearest,
-            dtype="float64",
-            src_nodata=(
-                None
-                if MaskFlags.per_dataset in source.mask_flag_enums[0]
-                else source.nodata
-            ),
-            add_alpha=True,
-            init_dest_nodata=False,
-            warp_mem_limit=32,
-        ) as preview:
-            values = mask_invalid_raster_values(
-                preview.read(1), source.nodata, preview.read(preview.count)
-            )
-            cells = values.data.astype(object)
-            cells[np.ma.getmaskarray(values)] = None
-            return {
-                "kind": "raster",
-                "bounds": list(bounds),
-                "width": width,
-                "height": height,
-                "values": cells.ravel().tolist(),
-            }
 
 
 def read_vector_preview(path: Path) -> dict[str, Any]:
@@ -243,28 +143,24 @@ def read_vector_preview(path: Path) -> dict[str, Any]:
     }
 
 
-def artifact_preview_process(writer: Any, path: Path, media_type: str) -> None:
-    """Read an authorized immutable file into one bounded display preview.
+def artifact_preview_process(writer: Any, path: Path) -> None:
+    """Read an authorized immutable GeoJSON file into one bounded display preview.
 
     Args:
         writer: Supervisor's one-result pipe writer.
         path: Delivery-authorized confined path, never accepted from HTTP input.
-        media_type: Manifest format, restricted by the preview delivery service.
 
     The parent bounds runtime and concurrency. Linux additionally limits address
-    space to 2 GiB; decoded blocks and preview bytes have platform-independent caps.
-    Failures contain no private paths or native-library diagnostics.
+    space to 2 GiB; source bytes, geometry counts and preview bytes have
+    platform-independent caps. Failures contain no private paths or native-library
+    diagnostics.
     """
     try:
         if sys.platform == "linux":
             import resource
 
             resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-        reader = {
-            "image/tiff": read_raster_preview,
-            "application/geo+json": read_vector_preview,
-        }[media_type]
-        preview = reader(path)
+        preview = read_vector_preview(path)
         encoded = json.dumps(preview, allow_nan=False, separators=(",", ":")).encode()
         if len(encoded) > MAX_PREVIEW_BYTES:
             raise ValueError("This preview is too large. Download the file instead.")
@@ -277,9 +173,7 @@ def artifact_preview_process(writer: Any, path: Path, media_type: str) -> None:
                     if str(error).startswith(
                         (
                             "Preview",
-                            "Raster blocks",
                             "This ",
-                            "The result",
                             "Vector ",
                             "Unsupported vector",
                             "Invalid GeoJSON",
@@ -294,7 +188,7 @@ def artifact_preview_process(writer: Any, path: Path, media_type: str) -> None:
 
 
 class ArtifactPreviewService:
-    """Deliver bounded previews using injected file authorization and lifetime contracts."""
+    """Deliver GeoJSON previews using injected file authorization and lifetime contracts."""
 
     def __init__(self, files: LeasedSourceFiles) -> None:
         """Connect the common immutable-file source access boundary.
@@ -306,7 +200,10 @@ class ArtifactPreviewService:
         self._slots = asyncio.Semaphore(2)
 
     async def read(self, owner: str, run_id: str, artifact_id: str) -> dict[str, Any]:
-        """Authorize, generate and reauthorize a preview without retaining a server cache.
+        """Authorize, generate and reauthorize a GeoJSON preview without a server cache.
+
+        GeoTIFFs retain the ordinary raster rendering and original-file download
+        paths. Their preview requests are rejected after source authorization.
 
         Args:
             owner: Hashed browser-session identity, supplied by the HTTP boundary.
@@ -324,14 +221,19 @@ class ArtifactPreviewService:
         if self._slots.locked():
             raise ArtifactPreviewError("Map previews are busy. Try again shortly.", 429)
         async with self._slots, self.files.open(owner, run_id, artifact_id) as source:
-            if source.media_type not in PREVIEW_MEDIA_TYPES:
+            if source.media_type == "image/tiff":
+                raise ArtifactPreviewError(
+                    "GeoTIFF outputs use ordinary raster rendering. "
+                    "Download the file or use Show on map."
+                )
+            if source.media_type != "application/geo+json":
                 raise ArtifactPreviewError(
                     "This file has no map preview. Download it instead."
                 )
             try:
                 result = await run_bounded_process(
                     artifact_preview_process,
-                    (source.path, source.media_type),
+                    (source.path,),
                     PREVIEW_SECONDS,
                 )
             except ProcessDeadlineError as error:
