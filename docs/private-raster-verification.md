@@ -81,3 +81,28 @@ local benchmark.
 Sequential cached requests deliberately retain their verification cost. The
 change addresses overlapping duplicate scans only; it does not remove integrity
 checks or change Processing calculation limits.
+
+## Before and after
+
+All 108 corresponding samples retained the same authorization-check counts.
+For every overlapping two-caller case, hash calls and bytes were halved:
+ordinary statistics and metadata went from two scans to one; paired statistics
+went from four scans to two. First and repeated single-caller requests kept
+their original scan counts and bytes. No source leases remained after a group.
+
+For two concurrent paired-statistics requests with 256 MiB per input, verified
+bytes fell from **1,073,776,104 to 536,888,052**, with all eight authorization
+checks preserved. Those are bytes read into the checksum calculation, not
+measured physical-device reads.
+
+Median elapsed seconds for two concurrent callers, before → after:
+
+| Pixel payload per file | Cached statistics | Cached paired statistics | Metadata |
+| --- | --- | --- | --- |
+| 1 MiB | 0.833 → 0.761 | 1.702 → 1.522 | 1.702 → 1.631 |
+| 64 MiB | 0.891 → 0.809 | 1.790 → 1.631 | 1.896 → 1.733 |
+| 256 MiB | 1.087 → 1.021 | 2.176 → 1.924 | 1.991 → 1.814 |
+
+The repeatable benefit is avoiding duplicate reads and process launches for
+overlapping checks. Local elapsed-time changes are modest and are subject to
+the environment limits above; they are not a Resilience performance prediction.

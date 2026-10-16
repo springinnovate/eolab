@@ -866,6 +866,40 @@ async def consume_private_source(
         pass
 
 
+def test_missing_file_before_verification_keeps_its_integrity_error(
+    tmp_path: Path,
+) -> None:
+    """Preserve the integrity failure and release retention when a leased file disappears.
+
+    Args:
+        tmp_path: Directory holding the published file before its disappearance.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+    files = authority.files()
+
+    async def acquire_then_remove(owner: str, run: str, file: str) -> FileLease:
+        """Remove the file immediately after its authority grants a read lease.
+
+        Args:
+            owner: Requesting session.
+            run: Opaque run identity.
+            file: Opaque file identity.
+
+        Returns:
+            Authorized lease whose file disappears before verification starts.
+        """
+        lease = await authority.acquire(owner, run, file)
+        authority.path.unlink()
+        return lease
+
+    files.acquire = acquire_then_remove
+    with pytest.raises(
+        SourceFileError, match="changed and is no longer valid"
+    ) as error:
+        asyncio.run(consume_private_source(files))
+    assert error.value.status == 422 and not authority.leases
+
+
 @pytest.mark.parametrize("outcome", ["success", "changed", "timeout", "stat_changed"])
 def test_pending_verification_shares_work_but_not_leases_or_completed_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str

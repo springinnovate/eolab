@@ -263,12 +263,18 @@ class LeasedSourceFiles:
 
         Raises:
             SourceFileError: If admission, verification or its deadline fails.
-            OSError: If the original file is unavailable.
+            OSError: If native process supervision cannot start.
             asyncio.CancelledError: After detaching or stopping the final scan.
         """
         if self._verification_slots.locked():
             raise SourceFileError("Source checks are busy. Try again shortly.", 429)
         async with self._verification_slots:
+            try:
+                identity_before_verification = file_identity(source.path)
+            except OSError as error:
+                raise SourceFileError(
+                    "The source file changed and is no longer valid.", 422
+                ) from error
             key = (
                 owner,
                 run_id,
@@ -277,7 +283,7 @@ class LeasedSourceFiles:
                 source.size,
                 source.sha256,
                 source.media_type,
-                file_identity(source.path),
+                identity_before_verification,
             )
             pending = self._pending_verifications.get(key)
             if pending is None or pending.task.done():
