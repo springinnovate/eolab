@@ -132,6 +132,19 @@ async def finish_source_task(task: asyncio.Task[Any]) -> None:
         task.exception()
 
 
+@dataclass
+class _PendingVerification:
+    """An unfinished checksum scan retained by its independently leased callers.
+
+    Attributes:
+        task: Supervised scan that stops native work before completing.
+        callers: Admitted requests still waiting for this scan.
+    """
+
+    task: asyncio.Task[tuple[int, int, int, int, int] | None]
+    callers: int = 0
+
+
 class LeasedSourceFiles:
     """Authorize file reads and renew cleanup protection for long-running readers.
 
@@ -174,6 +187,7 @@ class LeasedSourceFiles:
         self.renewal_seconds = renewal_seconds
         self._resolve = resolve
         self._verification_slots = asyncio.Semaphore(2)
+        self._pending_verifications: dict[tuple[object, ...], _PendingVerification] = {}
 
     async def resolve(
         self, owner: str, run_id: str, file_id: str
@@ -228,6 +242,76 @@ class LeasedSourceFiles:
                 )
             raise
 
+    async def _verify(
+        self, owner: str, run_id: str, file_id: str, source: LeasedSourceFile
+    ) -> tuple[int, int, int, int, int]:
+        """Share an unfinished checksum scan between matching authorized requests.
+
+        Each caller retains its own admission slot and renewable lease. Completed
+        scans are never reused. The final departing caller stops native work
+        before releasing its slot; another caller's cancellation leaves the scan
+        protected by the remaining caller's lease.
+
+        Args:
+            owner: Server-derived requesting session hash.
+            run_id: Opaque run identity already authorized by the source owner.
+            file_id: Opaque file identity already authorized by the source owner.
+            source: Independently leased file and its publication metadata.
+
+        Returns:
+            File metadata established by a complete successful checksum scan.
+
+        Raises:
+            SourceFileError: If admission, verification or its deadline fails.
+            OSError: If the original file is unavailable.
+            asyncio.CancelledError: After detaching or stopping the final scan.
+        """
+        if self._verification_slots.locked():
+            raise SourceFileError("Source checks are busy. Try again shortly.", 429)
+        async with self._verification_slots:
+            key = (
+                owner,
+                run_id,
+                file_id,
+                source.path,
+                source.size,
+                source.sha256,
+                source.media_type,
+                file_identity(source.path),
+            )
+            pending = self._pending_verifications.get(key)
+            if pending is None or pending.task.done():
+                pending = _PendingVerification(
+                    asyncio.create_task(
+                        run_bounded_process(
+                            verify_source_file,
+                            (source.path, source.size, source.sha256),
+                            30,
+                        )
+                    )
+                )
+                self._pending_verifications[key] = pending
+            pending.callers += 1
+            try:
+                verified_identity = await asyncio.shield(pending.task)
+            except ProcessDeadlineError as error:
+                raise SourceFileError(
+                    "The source check took too long. Try a smaller file.", 504
+                ) from error
+            finally:
+                pending.callers -= 1
+                if pending.callers == 0:
+                    if self._pending_verifications.get(key) is pending:
+                        del self._pending_verifications[key]
+                    if not pending.task.done():
+                        pending.task.cancel()
+                    await finish_source_task(pending.task)
+            if verified_identity is None:
+                raise SourceFileError(
+                    "The source file changed and is no longer valid.", 422
+                )
+            return verified_identity
+
     @asynccontextmanager
     async def open(
         self, owner: str, run_id: str, file_id: str
@@ -235,9 +319,10 @@ class LeasedSourceFiles:
         """Verify, retain and reauthorize one file around a complete consumer read.
 
         Consumers must finish or stop their native work before leaving this scope.
-        Checksums have two verification slots and a 30-second hard deadline.
+        Checksums admit two requests and have a 30-second hard deadline.
+        Matching requests can share an unfinished scan, with independent leases.
         Renewal failure cancels the consumer; successful delivery rechecks access
-        and metadata. There is no shared authorization or checksum cache.
+        and metadata. Authorization and completed checksum results are never cached.
 
         Args:
             owner: Requesting session hash, never a client-supplied owner name.
@@ -270,20 +355,8 @@ class LeasedSourceFiles:
 
         lease_renewal_task = asyncio.create_task(renew_lease_while_reading())
         try:
-            if self._verification_slots.locked():
-                raise SourceFileError("Source checks are busy. Try again shortly.", 429)
-            async with self._verification_slots:
-                try:
-                    verified_file_identity = await run_bounded_process(
-                        verify_source_file,
-                        (source.path, source.size, source.sha256),
-                        30,
-                    )
-                except ProcessDeadlineError as error:
-                    raise SourceFileError(
-                        "The source check took too long. Try a smaller file.", 504
-                    ) from error
-            if verified_file_identity is None:
+            verified_file_identity = await self._verify(owner, run_id, file_id, source)
+            if file_identity(source.path) != verified_file_identity:
                 raise SourceFileError(
                     "The source file changed and is no longer valid.", 422
                 )
