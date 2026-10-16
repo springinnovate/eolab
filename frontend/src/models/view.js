@@ -29,20 +29,18 @@ export function describeModelArea(area) {
     return "Previously selected polygons; the server checks that the input is still available.";
 }
 
-/** Describe measured stage progress without inventing an overall percentage.
- * @param {Object} job Current model run status.
- * @return {string} State or current stage with measured work when available.
+/** Describe a model's lifecycle or server-supplied stage without interpreting operation phases.
+ * Missing descriptions from older responses use a generic running label. Counts
+ * describe the current stage, never an estimated percentage of the whole run.
+ * @param {{status:string,expiresAt?:string|null,progress:{description?:string|null,completed?:number|null,total?:number|null,unit?:string|null}}} job Validated model run status.
+ * @return {string} Lifecycle label or literal stage description with measured work when available.
  */
 export function describeModelProgress(job) {
     const status = job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
     if (status !== "running") return ({queued: "Queued", cancelling: "Cancelling…", ready: "Ready", failed: "Failed",
         cancelled: "Cancelled", interrupted: "Interrupted", expired: "Results expired", deleted: "Deleted"})[status] ?? status;
-    const phase = ({preparing: "Preparing inputs", preparing_selected_polygons: "Reading selected features",
-        preparing_polygon_mask: "Creating the analysis mask", calculating: "Calculating", writing_results: "Writing results",
-        clipping: "Clipping raster", creating_cog: "Preparing GeoTIFF", validating: "Checking GeoTIFF", checksumming: "Finishing download",
-        preparing_starting_mask: "Preparing starting cells", routing_downstream: "Tracing downstream flow",
-        buffering_downstream_coverage: "Buffering downstream coverage", summarizing_values: "Summarizing raster values"})[job.progress.phase] ?? "Preparing calculation";
-    return job.progress.total > 0 ? `${phase} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${phase}…`;
+    const description = job.progress.description ?? "Running model";
+    return job.progress.total > 0 ? `${description} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${description}…`;
 }
 
 /** Keep setup fields and run controls stable while progress updates arrive. */

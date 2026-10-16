@@ -103,6 +103,8 @@ function validateExecution(execution) {
 }
 
 /** Check a job's status, progress, results and download links before displaying it.
+ * Model stage descriptions are optional literal text: when present, they must
+ * contain non-whitespace text and at most 200 Unicode code points.
  * @param {Object} job API response, including optional cache metadata.
  * @return {Object} Validated job.
  * @throws {Error} If the lifecycle, results, metadata or download links are invalid.
@@ -113,6 +115,9 @@ function validateJob(job) {
         !job.progress || typeof job.progress !== "object") throw new Error("Processing returned an invalid job state.");
     if (job.operation === "model.run.v1") {
         validateModelIdentity(job.model);
+        const description = job.progress.description;
+        if (description != null && (typeof description !== "string" || !description.trim() || [...description].length > 200))
+            throw new Error("Processing returned an invalid model progress description.");
         if (typeof job.name !== "string" || !job.name.trim() || [...job.name].length > 80 ||
             typeof job.nameTimestamp !== "string" || !/^\d{4}(?:_\d{2}){5}$/.test(job.nameTimestamp) ||
             job.label !== `${job.name} · ${job.nameTimestamp}` || !["createdAt", "updatedAt"].every(key => Number.isFinite(Date.parse(job[key]))) ||

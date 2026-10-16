@@ -47,6 +47,22 @@ from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing.operation_context import OperationContext
 
+# Plain stage descriptions supplied by the registered raster operations.
+SUMMARY_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
+    ("preparing", "Preparing inputs"),
+    ("preparing_selected_polygons", "Reading selected features"),
+    ("preparing_polygon_mask", "Creating the analysis mask"),
+    ("calculating", "Calculating"),
+    ("writing_results", "Writing results"),
+)
+CLIP_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
+    ("preparing", "Preparing inputs"),
+    ("clipping", "Clipping raster"),
+    ("creating_cog", "Preparing GeoTIFF"),
+    ("validating", "Checking GeoTIFF"),
+    ("checksumming", "Finishing download"),
+)
+
 
 async def prepare_raster_execution(
     context: OperationContext,

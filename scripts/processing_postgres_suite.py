@@ -101,6 +101,8 @@ def main() -> int:
                 *(str(root / "tests" / name) for name in SUITES),
                 str(root / "tests" / "test_processing_database_safety.py"),
                 str(root / "tests" / "test_model_definitions.py"),
+                str(root / "tests" / "test_model_progress.py"),
+                str(root / "tests" / "test_downstream_model.py"),
             ],
             plugins=[RequiredDatabaseTests()],
         )

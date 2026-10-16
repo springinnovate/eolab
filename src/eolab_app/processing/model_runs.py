@@ -541,7 +541,13 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Model identity, status, progress, errors, expiry and available result links.
+        Running progress includes an installed operation's stage description when
+        available. Unknown phases or unavailable operations omit the description;
+        the response schema validates the resulting progress before delivery.
         Expired results have no download links.
+
+    Raises:
+        ProcessingError: If a completed result's operation or format is unsupported.
     """
     summary = row.get("summary") or row["spec"]
     status = row["status"]
@@ -549,7 +555,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         status = "expired"
     artifact = row.get("artifact") if status == "ready" else None
     progress = row["progress"]
-    # Both existing operations report native blocks within the current phase.
+    # Preserve both historical block counters and operation-supplied work units.
     measured = {"phase": progress.get("phase")}
     if "completed" in progress and progress.get("total", 0) > 0:
         measured.update(
@@ -563,6 +569,16 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             total=progress["totalBlocks"],
             unit="blocks",
         )
+    if status == "running" and isinstance(measured["phase"], str):
+        try:
+            operation = get_model_operation(read_model_job_operation_id(row))
+        except ProcessingError as error:
+            if error.code != "unsupported_model_operation":
+                raise
+        else:
+            measured["description"] = dict(operation.progress_descriptions).get(
+                measured["phase"]
+            )
     identifier = row["id"]
     result = None
     if artifact is not None:

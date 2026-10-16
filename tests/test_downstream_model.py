@@ -275,6 +275,85 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     }
 
 
+def test_downstream_progress_counts_drainage_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Report both native drainage stages in groups through private progress files.
+
+    Args:
+        tmp_path: Native source fixtures and private calculation outputs.
+        monkeypatch: Capture each progress snapshot after its atomic write.
+    """
+    from shapely.geometry import box, mapping
+    from eolab_app.processing.artifacts import LocalJobArtifacts, write_progress
+
+    pytest.importorskip("ecoshard.geoprocessing.routing")
+    sources, request, limits = downstream_fixture(
+        tmp_path / "sources",
+        records=[
+            {
+                "id": index + 1,
+                "next": 0,
+                "sink": index + 1,
+                "geometry": mapping(box(0, index * 2, 6, (index + 1) * 2)),
+            }
+            for index in range(2)
+        ],
+    )
+    spec = plan_downstream(sources, request, limits)
+    artifacts = LocalJobArtifacts(tmp_path / "artifacts")
+    artifacts.initialize()
+    attempt = "a" * 32
+    directory = artifacts.prepare(attempt)
+    snapshots: list[dict[str, Any]] = []
+
+    def capture_progress(
+        directory: Path,
+        phase: str,
+        complete: int,
+        total: int,
+        *,
+        unit: str = "blocks",
+    ) -> None:
+        """Capture the native snapshot through the worker's ordinary artifact reader.
+
+        Args:
+            directory: Private attempt output directory.
+            phase: Native stage reported by the model.
+            complete: Number of work units already completed.
+            total: Number of work units for this stage.
+            unit: Operation-owned unit for the stage count.
+        """
+        write_progress(directory, phase, complete, total, unit=unit)
+        snapshots.append(artifacts.progress(attempt))
+
+    monkeypatch.setattr(
+        "eolab_app.processing.downstream_runner.write_progress", capture_progress
+    )
+    artifact = calculate_downstream(sources, spec, directory, limits)
+
+    assert (
+        sum(
+            item.name.startswith("routing_dem_") for item in artifact.additional_outputs
+        )
+        == 2
+    )
+    assert [
+        snapshot
+        for snapshot in snapshots
+        if snapshot["phase"] in {"routing_downstream", "buffering_downstream_coverage"}
+    ] == [
+        {
+            "phase": phase,
+            "completed": completed,
+            "total": 2,
+            "unit": "drainage groups",
+        }
+        for completed in range(2)
+        for phase in ("routing_downstream", "buffering_downstream_coverage")
+    ]
+
+
 def test_nodata_values_preserve_original_zero_total(tmp_path: Path) -> None:
     """Missing values retain the original model's zero sum and nonempty coverage.
 

@@ -1523,6 +1523,9 @@ def test_model_navigation_progress_and_running_cancel(
             assert state["status"] == "running"
             assert 0 <= state["progress"]["completed"] <= state["progress"]["total"]
             assert state["progress"]["unit"] == "blocks"
+            assert state["progress"]["description"] == (
+                "Finishing download" if model_id == "raster-clip" else "Writing results"
+            )
             stopped = client.post(
                 f"/api/processing/jobs/{identifier}/cancel", headers=HEADERS
             )

@@ -170,6 +170,17 @@ those values; the generic runner binds and stores the validated result.
 Ordinary summary cache behavior is also registered. Model runs execute afresh
 and do not join ordinary shared calculations or reuse their scalar cache.
 
+Each operation supplies `progress_descriptions` as native phase/description pairs
+on its registration. Descriptions are plain text, contain non-whitespace content
+and may use up to 200 Unicode characters. The Models status response adds the
+optional `progress.description` alongside the existing phase and measured counts;
+the browser displays it without recognizing algorithm stages. Unknown phases and
+older responses without a description display **Running model**. Native code uses
+the existing `write_progress(..., unit=...)` contract for its actual work units:
+raster operations count blocks, while downstream routing and buffering count
+drainage groups. These are current-stage counts, not an overall percentage.
+Ordinary clip/summary job presentation keeps its existing separate contract.
+
 The worker continues to own authorization, concurrency, attempt fencing,
 cancellation, restart recovery and atomic file publication. A worker slot stays
 occupied until its native process exits. Result expiry and renewable worker
