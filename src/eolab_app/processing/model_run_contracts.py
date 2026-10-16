@@ -343,9 +343,16 @@ class ModelProgress(JobProgressResponse):
     """Completed and total work for the current stage of a model run.
 
     For example, a raster summary reports processed raster blocks. A missing
-    total means that the amount of work is not yet known.
+    total means that the amount of work is not yet known. ``description`` is
+    operation-owned plain text for the stage, limited to 200 Unicode characters.
+    It may be absent for historical responses or unrecognized phases; clients
+    then use a generic running-state label without interpreting ``phase``.
     """
 
+    description: (
+        Annotated[str, Field(strict=True, min_length=1, max_length=200, pattern=r"\S")]
+        | None
+    ) = None
     completed: Annotated[int, Field(ge=0)] | None = None
     total: Annotated[int, Field(ge=0)] | None = None
     unit: str | None = None

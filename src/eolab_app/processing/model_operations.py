@@ -98,6 +98,10 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         validate_invocation: Validate captured operation metadata using input role
             types, selected values and extra fields; return canonical JSON fields.
             Operations without this callback accept no extra invocation fields.
+        progress_descriptions: Native phase names and their plain user-facing
+            descriptions, each containing non-whitespace text up to 200 characters.
+            Missing phases use the client's generic running-state description.
+            Native progress writers supply the measured work units separately.
     """
 
     id: str
@@ -150,6 +154,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         ]
         | None
     ) = None
+
+    progress_descriptions: tuple[tuple[str, str], ...] = ()
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
@@ -253,6 +259,7 @@ OPERATIONS = MappingProxyType(
                     ("prepared_hydrology", TypeAdapter(HydrologyReference)),
                 ),
                 validate_invocation=downstream.validate_downstream_invocation,
+                progress_descriptions=downstream.DOWNSTREAM_PROGRESS_DESCRIPTIONS,
             ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
                 id="raster.aggregate.v1",
@@ -277,6 +284,7 @@ OPERATIONS = MappingProxyType(
                 outcome=raster.describe_summary_outcome,
                 cached=raster.restore_summary_result,
                 reusable=raster.collect_summary_cache_values,
+                progress_descriptions=raster.SUMMARY_PROGRESS_DESCRIPTIONS,
             ),
             ModelOperation[ClipJobRequest, UnpreparedClip, ClipSpec](
                 id="raster.clip.v1",
@@ -299,6 +307,7 @@ OPERATIONS = MappingProxyType(
                 policy=raster.describe_clip_policy,
                 result=raster.describe_clip_result,
                 outcome=raster.describe_clip_outcome,
+                progress_descriptions=raster.CLIP_PROGRESS_DESCRIPTIONS,
             ),
         )
     }

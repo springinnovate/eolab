@@ -95,6 +95,21 @@ test("malformed model definitions and inconsistent progress are rejected", async
     await assert.rejects(broken.api.getJob(job().jobId), /model run details/);
 });
 
+test("model progress accepts optional descriptions and bounded literal text for unfamiliar phases", async () => {
+    for (const progress of [{phase: "historical_stage"}, ...[null, "Measuring habitat", "x".repeat(200), "🌳".repeat(200), "Checking <strong>habitat</strong>"]
+        .map(description => ({phase: "unfamiliar_stage", description}))]) {
+        const h = fixture(() => job({status: "running", progress}));
+        assert.deepEqual((await h.api.getJob(job().jobId)).progress, progress);
+    }
+});
+
+test("model progress rejects malformed or oversized descriptions", async () => {
+    for (const description of [false, 0, {}, [], "", " \t\n", "x".repeat(201), "🌳".repeat(201)]) {
+        const h = fixture(() => job({status: "running", progress: {phase: "unfamiliar_stage", description}}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid model progress description/);
+    }
+});
+
 
 test("raster model results validate native grids, file metadata and owned download links", async () => {
     const result = structuredClone(clipResult);

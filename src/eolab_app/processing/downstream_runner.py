@@ -283,7 +283,8 @@ def run_original_downstream(
     its supervised native process. No upstream numerical function is replaced or
     patched. Pit filling ignores NoData exits using the saved pit-search cutoff;
     subsequent MFD routing is unchanged. Only complete declared files remain for
-    normal artifact publication.
+    normal artifact publication. Routing and coverage progress counts completed
+    terminal drainage groups.
 
     Args:
         sources: Authorized paths and immutable vector selections.
@@ -340,7 +341,11 @@ def run_original_downstream(
         partition_dem_path = str(partition_directory / "dem.tif")
         flow_direction_path = str(partition_directory / "flow.tif")
         write_progress(
-            directory, "routing_downstream", index, len(watershed_partitions_by_sink)
+            directory,
+            "routing_downstream",
+            index,
+            len(watershed_partitions_by_sink),
+            unit="drainage groups",
         )
         try:
             beneficiaries_model.align_and_resize_raster_on_vector(
@@ -369,6 +374,7 @@ def run_original_downstream(
             "buffering_downstream_coverage",
             index,
             len(watershed_partitions_by_sink),
+            unit="drainage groups",
         )
         beneficiaries_model.calculate_downstream_coverage_from_conditional_raster(
             partition_vector_path,

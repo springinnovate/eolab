@@ -25,6 +25,16 @@ from eolab_app.processing.operation_context import OperationContext
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
 from eolab_app.raster.source_models import RasterSourceReference
 
+# Stage wording belongs to this operation, not the generic Models interface.
+DOWNSTREAM_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
+    ("preparing", "Preparing inputs"),
+    ("preparing_starting_mask", "Preparing starting cells"),
+    ("routing_downstream", "Tracing downstream flow"),
+    ("buffering_downstream_coverage", "Buffering downstream coverage"),
+    ("summarizing_values", "Summarizing raster values"),
+    ("writing_results", "Writing results"),
+)
+
 
 def validate_downstream_invocation(
     input_types: dict[str, str],

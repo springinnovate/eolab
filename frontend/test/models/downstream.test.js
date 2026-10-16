@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ModelsController } from "../../src/models/controller.js";
-import { ModelsView, describeModelProgress } from "../../src/models/view.js";
+import { ModelsView } from "../../src/models/view.js";
 import { captureModelSubmission, modelSourceKey } from "../../src/models/inputs.js";
 import { ProcessingApiClient } from "../../src/processing/api.js";
 import { hydrologyReference } from "../../src/processing/hydrology.js";
@@ -173,15 +173,11 @@ test("historical hydrology reports remain readable and must match their saved in
     await assert.rejects(api.readModelInvocation(job().jobId), /Invalid prepared hydrology details/);
 });
 
-test("historical hydrology details stay read-only and progress reports downstream stages", () => {
+test("historical hydrology details stay read-only", () => {
     const registered = structuredClone(hydrology);
     registered.validation.validator = "eolab.hydrology-registration/v1";
     const rows = hydrologyDetails(registered);
     assert.ok(rows.some(([label]) => label === "Registered"));
     assert.ok(!rows.some(([label]) => label === "Validated"));
     assert.ok(rows.some(([, value]) => /NEXT_SINK equals HYBAS_ID/.test(value)));
-    for (const [phase, expected] of [["preparing_starting_mask", "Preparing starting cells"], ["routing_downstream", "Tracing downstream flow"],
-        ["buffering_downstream_coverage", "Buffering downstream coverage"], ["summarizing_values", "Summarizing raster values"]])
-        assert.equal(describeModelProgress(job({status: "running", progress: {phase}})), expected + "…");
-    assert.match(describeModelProgress(job({status: "running", progress: {phase: "summarizing_values", completed: 2, total: 5, unit: "blocks"}})), /2 of 5 blocks/);
 });

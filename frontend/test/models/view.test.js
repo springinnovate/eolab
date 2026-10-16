@@ -200,9 +200,9 @@ test("run files distinguish coverage from results and replace legacy duplicate l
 test("run controls and open details remain stable through progress updates", () => {
     const h = fixture(); h.state.page = "run"; h.state.selectedRun = job().jobId; h.state.runs = [job({status: "running"})];
     h.view.render(h.state); const cancel = h.view.run.cancel; cancel.focus(); h.view.run.details.root.open = true;
-    h.state.runs[0].progress = {phase: "calculating", completed: 3, total: 8, unit: "blocks"}; h.view.render(h.state);
+    h.state.runs[0].progress = {phase: "unfamiliar_stage", description: "Measuring habitat", completed: 3, total: 8, unit: "blocks"}; h.view.render(h.state);
     assert.equal(h.view.run.cancel, cancel); assert.equal(h.doc.activeElement, cancel); assert.equal(h.view.run.details.root.open, true);
-    assert.equal(h.view.run.progress.value, 3); assert.match(h.view.run.status.textContent, /3 of 8 blocks/);
+    assert.equal(h.view.run.progress.value, 3); assert.equal(h.view.run.status.textContent, "Measuring habitat · 3 of 8 blocks");
     h.state.runs[0].status = "cancelling"; h.view.render(h.state); assert.equal(cancel.disabled, true);
 });
 
@@ -312,10 +312,48 @@ test("file cards show independent opt-in map actions and display loading and map
     button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount + 1);
 });
 
-test("stage feedback covers terminal states and an unknown total stays indeterminate", () => {
-    for (const status of ["queued", "running", "cancelling", "ready", "failed", "cancelled", "interrupted", "expired"])
-        assert.ok(describeModelProgress(job({status})));
-    assert.equal(describeModelProgress(job({status: "running", progress: {phase: "preparing_polygon_mask"}})), "Creating the analysis mask…");
+test("model progress uses the supplied description without reading operation phases", () => {
+    const progress = {description: "Measuring habitat", completed: 2, total: 5, unit: "regions"};
+    Object.defineProperty(progress, "phase", {get: () => assert.fail("Models must not inspect operation phases.")});
+    const run = job({model: {...model, id: "unfamiliar-habitat-model"}, status: "running", progress});
+    assert.equal(describeModelProgress(run), "Measuring habitat · 2 of 5 regions");
+    progress.completed = null; progress.unit = null;
+    assert.equal(describeModelProgress(run), "Measuring habitat · 0 of 5 units");
+    progress.total = null;
+    assert.equal(describeModelProgress(run), "Measuring habitat…");
+});
+
+test("historical progress uses a generic running label while lifecycle states take precedence", () => {
+    for (const progress of [{phase: "preparing_polygon_mask"}, {phase: "unfamiliar_stage", description: null}, {}]) {
+        assert.equal(describeModelProgress(job({status: "running", progress})), "Running model…");
+        assert.equal(describeModelProgress(job({status: "running", progress: {...progress, completed: 2, total: 5, unit: "blocks"}})), "Running model · 2 of 5 blocks");
+    }
+    for (const [status, expected] of Object.entries({queued: "Queued", cancelling: "Cancelling…", ready: "Ready", failed: "Failed",
+        cancelled: "Cancelled", interrupted: "Interrupted", expired: "Results expired", deleted: "Deleted"})) {
+        assert.equal(describeModelProgress(job({status, expiresAt: "2099-01-01T00:00:00Z", progress: {description: "Measuring habitat"}})), expected);
+    }
+    assert.equal(describeModelProgress(job({status: "ready", expiresAt: "2000-01-01T00:00:00Z", progress: {description: "Measuring habitat"}})), "Results expired");
+});
+
+test("run and history progress render descriptions as text and keep unknown totals indeterminate", () => {
+    const h = fixture(), description = '<img src=x onerror="alert(1)">';
+    const run = job({status: "running", progress: {phase: "unfamiliar_stage", description, completed: 1, total: 4, unit: "regions"}});
+    Object.assign(h.state, {page: "run", selectedRun: run.jobId, runs: [run]});
+    h.view.render(h.state);
+    const status = h.view.run.status, historyStatus = h.view.runCards.get(run.jobId).status;
+    assert.equal(status.textContent, `${description} · 1 of 4 regions`);
+    assert.equal(historyStatus.textContent, `${description} · 1 of 4 regions · 2026-10-08 00:00:00`);
+    for (const node of [status, historyStatus]) {
+        assert.equal(node.children.length, 0);
+        Object.defineProperty(node, "innerHTML", {set: () => assert.fail("Progress must remain literal text.")});
+    }
+    h.view.run.progress.setAttribute("value", "1");
+    run.progress = {phase: "another_unfamiliar_stage", description: "Checking <strong>habitat</strong>"};
+    h.view.render(h.state);
+    assert.equal(h.view.run.status, status); assert.equal(h.view.runCards.get(run.jobId).status, historyStatus);
+    assert.equal(status.textContent, "Checking <strong>habitat</strong>…");
+    assert.equal(historyStatus.textContent, "Checking <strong>habitat</strong>… · 2026-10-08 00:00:00");
+    assert.equal(h.view.run.progress.hidden, false); assert.equal(h.view.run.progress.getAttribute("value"), null);
 });
 
 
@@ -404,7 +442,7 @@ test("clip setup shows supported areas and no summary formula", () => {
     assert.deepEqual(h.view.setup.parameters, {}); assert.equal(h.view.setup.run.disabled, false);
 });
 
-test("clip results offer a GeoTIFF with dimensions, expire correctly and retain clip progress phases", () => {
+test("clip results offer a GeoTIFF with dimensions and expire correctly", () => {
     const h = fixture(), id = job().jobId;
     h.state.page = "run"; h.state.selectedRun = id;
     h.state.invocation = {...invocation, model: {...clipModel, definition: clipModel}, parameters: {}};
@@ -416,8 +454,6 @@ test("clip results offer a GeoTIFF with dimensions, expire correctly and retain 
     const links = h.view.run.result.children[1].children;
     assert.equal(links[0].textContent, "Download GeoTIFF"); assert.equal(links[0].href, clipResult.url);
     h.state.runs[0].status = "expired"; h.view.render(h.state); assert.equal(h.view.run.result.children.length, 0);
-    for (const phase of ["clipping", "creating_cog", "validating", "checksumming"])
-        assert.doesNotMatch(describeModelProgress(job({status: "running", progress: {phase}})), /Preparing calculation/);
 });
 
 test("result cards use captured YAML labels for unfamiliar models", () => {
