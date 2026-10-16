@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -37,8 +38,10 @@ from eolab_app.source_files import (
     LeasedSourceFiles,
     ResolvedSourceFile,
     SourceFileError,
+    file_identity,
     finish_source_task,
 )
+from eolab_app.execution.bounded_process import ProcessDeadlineError
 from test_raster_statistics_service import _statistics
 
 CATALOG = {
@@ -796,6 +799,7 @@ def test_source_verification_has_bounded_capacity(
     """
     path = write_source(tmp_path / "source.tif")
     authority = FileAuthority(path)
+    authority.owners.add("second-owner")
 
     async def exercise() -> None:
         """Occupy both source-check slots, then reject and clean up the third request."""
@@ -820,12 +824,19 @@ def test_source_verification_has_bounded_capacity(
         monkeypatch.setattr("eolab_app.source_files.run_bounded_process", verify)
         files = authority.files()
 
-        async def consume() -> None:
-            """Hold the authorized file around a consumer's complete read."""
-            async with files.open("owner", PRIVATE["jobId"], PRIVATE["artifactId"]):
+        async def consume(owner: str = "owner") -> None:
+            """Hold the authorized file around a consumer's complete read.
+
+            Args:
+                owner: Requesting session, distinguishing independently admitted checks.
+            """
+            async with files.open(owner, PRIVATE["jobId"], PRIVATE["artifactId"]):
                 pytest.fail("The checksum fixture must not return a source")
 
-        first, second = asyncio.create_task(consume()), asyncio.create_task(consume())
+        first, second = (
+            asyncio.create_task(consume()),
+            asyncio.create_task(consume("second-owner")),
+        )
         await asyncio.wait_for(entered.wait(), 10)
         with pytest.raises(SourceFileError) as failure:
             await consume()
@@ -834,5 +845,353 @@ def test_source_verification_has_bounded_capacity(
         second.cancel()
         await asyncio.gather(first, second, return_exceptions=True)
         assert not authority.leases
+
+    asyncio.run(exercise())
+
+
+async def consume_private_source(
+    files: LeasedSourceFiles, owner: str = "owner"
+) -> None:
+    """Complete a file read through its authorization, verification and release boundary.
+
+    Args:
+        files: Production file access with a controlled test authority.
+        owner: Session requesting the fixed private test source.
+
+    Raises:
+        SourceFileError: If authorization, verification or final access checks fail.
+        asyncio.CancelledError: After the cancelled request's retention ends.
+    """
+    async with files.open(owner, PRIVATE["jobId"], PRIVATE["artifactId"]):
+        pass
+
+
+def test_missing_file_before_verification_keeps_its_integrity_error(
+    tmp_path: Path,
+) -> None:
+    """Preserve the integrity failure and release retention when a leased file disappears.
+
+    Args:
+        tmp_path: Directory holding the published file before its disappearance.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+    files = authority.files()
+
+    async def acquire_then_remove(owner: str, run: str, file: str) -> FileLease:
+        """Remove the file immediately after its authority grants a read lease.
+
+        Args:
+            owner: Requesting session.
+            run: Opaque run identity.
+            file: Opaque file identity.
+
+        Returns:
+            Authorized lease whose file disappears before verification starts.
+        """
+        lease = await authority.acquire(owner, run, file)
+        authority.path.unlink()
+        return lease
+
+    files.acquire = acquire_then_remove
+    with pytest.raises(
+        SourceFileError, match="changed and is no longer valid"
+    ) as error:
+        asyncio.run(consume_private_source(files))
+    assert error.value.status == 422 and not authority.leases
+
+
+@pytest.mark.parametrize("outcome", ["success", "changed", "timeout", "stat_changed"])
+def test_pending_verification_shares_work_but_not_leases_or_completed_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """Share one pending checksum while preserving admission, access checks and fresh retries.
+
+    Args:
+        tmp_path: Original immutable-file directory.
+        monkeypatch: Control only the supervised checksum execution boundary.
+        outcome: Verification success, content mismatch, timeout or mutation before delivery.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+
+    async def exercise() -> None:
+        """Join two checks, reject a third request and verify again after completion."""
+        entered, finish = asyncio.Event(), asyncio.Event()
+        second_admitted = asyncio.Event()
+        calls = 0
+        current_outcome = outcome
+
+        async def renew(lease: str) -> bool:
+            """Observe the second pending request through its live retention callback.
+
+            Args:
+                lease: Independently acquired request lease.
+
+            Returns:
+                Whether the authority still retains the lease.
+            """
+            if lease == "2":
+                second_admitted.set()
+            return lease in authority.leases
+
+        async def verify(*arguments: Any) -> tuple[int, int, int, int, int] | None:
+            """Hold one checksum and return the chosen native verification outcome.
+
+            Args:
+                arguments: Existing supervised target, file metadata and deadline.
+
+            Returns:
+                Current file identity, or None for a changed file.
+
+            Raises:
+                ProcessDeadlineError: For the controlled verification timeout.
+            """
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await finish.wait()
+            if current_outcome == "timeout":
+                raise ProcessDeadlineError
+            if current_outcome == "changed":
+                return None
+            identity = file_identity(authority.path)
+            if current_outcome == "stat_changed":
+                stat = authority.path.stat()
+                os.utime(
+                    authority.path,
+                    ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000),
+                )
+            return identity
+
+        monkeypatch.setattr("eolab_app.source_files.run_bounded_process", verify)
+        monkeypatch.setattr(authority, "renew", renew)
+        files = authority.files(renewal_seconds=0.01)
+        first = asyncio.create_task(consume_private_source(files))
+        await asyncio.wait_for(entered.wait(), 3)
+        second = asyncio.create_task(consume_private_source(files))
+        try:
+            await asyncio.wait_for(second_admitted.wait(), 3)
+            with pytest.raises(SourceFileError) as rejected:
+                await asyncio.wait_for(consume_private_source(files), 3)
+            assert rejected.value.status == 429
+            assert calls == 1 and len(authority.leases) == 2
+            finish.set()
+            results = await asyncio.gather(first, second, return_exceptions=True)
+            if outcome == "success":
+                assert results == [None, None]
+                assert authority.check_count == 5
+            else:
+                assert all(isinstance(result, SourceFileError) for result in results)
+                assert [result.status for result in results] == [
+                    504 if outcome == "timeout" else 422
+                ] * 2
+            assert not authority.leases
+            current_outcome = "success"
+            await consume_private_source(files)
+            assert calls == 2 and not authority.leases
+        finally:
+            first.cancel()
+            second.cancel()
+            await asyncio.gather(first, second, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_completed_verification_rejects_same_size_content_change(
+    tmp_path: Path,
+) -> None:
+    """Recheck the published checksum when content changes but size and mtime do not.
+
+    Args:
+        tmp_path: Original immutable-file directory.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+
+    async def exercise() -> None:
+        """Complete a real checksum, replace one byte and reject its former identity."""
+        files = authority.files()
+        await consume_private_source(files)
+        assert not authority.leases
+        original = authority.path.stat()
+        data = bytearray(authority.path.read_bytes())
+        data[-1] ^= 1
+        authority.path.write_bytes(data)
+        os.utime(authority.path, ns=(original.st_atime_ns, original.st_mtime_ns))
+        changed = authority.path.stat()
+        assert changed.st_size == original.st_size
+        assert changed.st_mtime_ns == original.st_mtime_ns
+        with pytest.raises(SourceFileError, match="changed") as rejected:
+            await consume_private_source(files)
+        assert rejected.value.status == 422 and not authority.leases
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("difference", ["owner", "file", "stat"])
+def test_pending_verification_does_not_cross_source_or_owner_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, difference: str
+) -> None:
+    """Verify independently when an overlapping caller has a different source identity.
+
+    Args:
+        tmp_path: Original and replacement immutable-file directory.
+        monkeypatch: Hold native checks while both requests are admitted.
+        difference: Changed requesting owner, physical file or file-stat identity.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+
+    async def exercise() -> None:
+        """Admit two distinct identities and stop both native checks before releasing files."""
+        first_entered, both_entered = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def verify(*arguments: Any) -> None:
+            """Retain each distinct verification until its request is cancelled.
+
+            Args:
+                arguments: Existing supervised target, file metadata and deadline.
+            """
+            nonlocal calls
+            calls += 1
+            first_entered.set()
+            if calls == 2:
+                both_entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr("eolab_app.source_files.run_bounded_process", verify)
+        files = authority.files()
+        first = asyncio.create_task(consume_private_source(files))
+        await asyncio.wait_for(first_entered.wait(), 3)
+        owner = "owner"
+        if difference == "owner":
+            owner = "second-owner"
+            authority.owners.add(owner)
+        elif difference == "file":
+            authority.path = write_source(tmp_path / "other.tif")
+        else:
+            stat = authority.path.stat()
+            os.utime(
+                authority.path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000)
+            )
+        second = asyncio.create_task(consume_private_source(files, owner))
+        try:
+            await asyncio.wait_for(both_entered.wait(), 3)
+            assert calls == 2 and len(authority.leases) == 2
+        finally:
+            first.cancel()
+            second.cancel()
+            await asyncio.gather(first, second, return_exceptions=True)
+        assert not authority.leases
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("cancel_first", [0, 1])
+@pytest.mark.parametrize("finish_remaining", [True, False])
+@pytest.mark.parametrize("stop_reason", ["cancel", "lease_loss"])
+def test_shared_verification_cancellation_keeps_the_other_request_protected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_first: int,
+    finish_remaining: bool,
+    stop_reason: str,
+) -> None:
+    """Detach either cancelled caller and stop shared native work before its final lease ends.
+
+    Args:
+        tmp_path: Immutable-file fixture directory.
+        monkeypatch: Control native verification and its final stop.
+        cancel_first: Whether the first or second admitted caller cancels first.
+        finish_remaining: Complete the surviving request or repeatedly cancel it.
+        stop_reason: Explicit caller cancellation or loss of its renewable lease.
+    """
+    authority = FileAuthority(write_source(tmp_path / "source.tif"))
+
+    async def exercise() -> None:
+        """Cancel one caller promptly, then complete or cancel the remaining checksum owner."""
+        entered, finish = asyncio.Event(), asyncio.Event()
+        second_admitted = asyncio.Event()
+        stopping, allow_stop, stopped = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+        calls = 0
+        lost_lease: str | None = None
+
+        async def renew(lease: str) -> bool:
+            """Renew each request's lease until that specific retention token is lost.
+
+            Args:
+                lease: Independently acquired retention token.
+
+            Returns:
+                Whether the test authority still retains this request's lease.
+            """
+            if lease == "2":
+                second_admitted.set()
+            return lease in authority.leases and lease != lost_lease
+
+        async def verify(*arguments: Any) -> tuple[int, int, int, int, int]:
+            """Keep native verification alive until completion or controlled cancellation.
+
+            Args:
+                arguments: Existing supervised target, file metadata and deadline.
+
+            Returns:
+                Verified file identity after successful completion.
+            """
+            nonlocal calls
+            calls += 1
+            entered.set()
+            try:
+                await finish.wait()
+                return file_identity(authority.path)
+            finally:
+                stopping.set()
+                await allow_stop.wait()
+                assert authority.leases
+                stopped.set()
+
+        monkeypatch.setattr("eolab_app.source_files.run_bounded_process", verify)
+        monkeypatch.setattr(authority, "renew", renew)
+        files = authority.files(renewal_seconds=0.01)
+        tasks = [asyncio.create_task(consume_private_source(files))]
+        await asyncio.wait_for(entered.wait(), 3)
+        tasks.append(asyncio.create_task(consume_private_source(files)))
+        try:
+            await asyncio.wait_for(second_admitted.wait(), 3)
+            with pytest.raises(SourceFileError) as rejected:
+                await asyncio.wait_for(consume_private_source(files), 3)
+            assert rejected.value.status == 429 and calls == 1
+            if stop_reason == "cancel":
+                tasks[cancel_first].cancel()
+            else:
+                lost_lease = str(cancel_first + 1)
+            expected_error = (
+                asyncio.CancelledError if stop_reason == "cancel" else SourceFileError
+            )
+            with pytest.raises(expected_error):
+                await asyncio.wait_for(tasks[cancel_first], 3)
+            assert len(authority.leases) == 1 and not stopping.is_set()
+            remaining = tasks[1 - cancel_first]
+            if finish_remaining:
+                allow_stop.set()
+                finish.set()
+                await asyncio.wait_for(remaining, 3)
+            else:
+                remaining.cancel()
+                await asyncio.wait_for(stopping.wait(), 3)
+                remaining.cancel()
+                await asyncio.sleep(0)
+                assert not remaining.done() and len(authority.leases) == 1
+                allow_stop.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(remaining, 3)
+            assert stopped.is_set() and not authority.leases and calls == 1
+        finally:
+            allow_stop.set()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     asyncio.run(exercise())
