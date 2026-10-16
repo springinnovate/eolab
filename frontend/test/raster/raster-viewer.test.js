@@ -974,7 +974,7 @@ for (const mode of ["continuous", "categorical"]) {
         await h.viewer.show(item); await flushPromises();
         const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
         if (mode === "categorical") { editCategoricalAppearance(h, key); await flushPromises(); }
-        const whole = record.state.wholeRasterStatistics;
+        const whole = record.state.analysis.wholeRasterStatistics;
         await h.viewer.show(createRasterItem("style-scope-neighbor")); await flushPromises();
         h.viewer.openStyle(key);
         const preview = () => mode === "categorical" ? h.controlsView.categoricalStyleHistogram : h.controlsView.styleHistogram;
@@ -990,12 +990,12 @@ for (const mode of ["continuous", "categorical"]) {
         assert.equal(preview().scopeLabel, "Previous distribution · Whole raster");
         assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
         assert.equal(preview().feedback.isBusy, false);
-        assert.equal(record.state.wholeRasterStatistics, whole, "Retained whole data remains available");
-        assert.equal(record.state.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
+        assert.equal(record.state.analysis.wholeRasterStatistics, whole, "Retained whole data remains available");
+        assert.equal(record.state.analysis.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
         if (mode === "continuous") assert.equal(preview().statistics, whole);
         h.controlsView.handlers.onClearSampleWindow(); await flushPromises(); h.viewer.openStyle(key);
         assert.equal(preview().scopeLabel, "Whole raster"); assert.equal(preview().feedback.message, "");
-        assert.equal(record.state.wholeRasterStatistics.itemId, item.id);
+        assert.equal(record.state.analysis.wholeRasterStatistics.itemId, item.id);
         h.destroy();
     });
 
@@ -1416,7 +1416,7 @@ test("late active and inactive whole-raster statistics cannot replace categorica
     await flushPromises();
 
     for (const [index, record] of records.entries()) {
-        assert.equal(record.state.wholeRasterStatisticsState, "ready");
+        assert.equal(record.state.analysis.wholeRasterStatisticsState, "ready");
         assert.deepEqual(record.adapter.exportSavedState(record), committed[index]);
         assert.equal(record.state.layer.parameterUpdates.length, updates[index]);
         assert.equal(Object.hasOwn(record.state.layer.wmsParams, "env"), false);
@@ -1643,7 +1643,7 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     assert.equal(statisticsReads.length, readsBefore + 2);
     assert.deepEqual(new Set(pixelReads), new Set([continuous.entry.item.id, categorical.entry.item.id]));
     assert.ok(h.controlsView.pointSamples.samples.every((sample) => sample.state === "value" && sample.value === 41));
-    assert.equal(categorical.state.rasterStatistics.scope, "selectedArea");
+    assert.equal(categorical.state.analysis.rasterStatistics.scope, "selectedArea");
     const summary = h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key);
     assert.equal(summary.state, "ready");
     assert.equal(summary.counts, null);
@@ -1654,14 +1654,14 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     pendingCategoricalStatistics = createDeferred();
     assert.equal(h.viewer.exploreAt({ lng: 2, lat: 2 }), true);
     await flushPromises();
-    assert.equal(categorical.state.selectedRasterStatisticsState, "loading");
+    assert.equal(categorical.state.analysis.selectedRasterStatisticsState, "loading");
     assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "loading");
     assert.match(h.controlsView.statisticsStatus, /categorical/i);
     assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
     assert.equal(h.controlsView.displayedStatistics, null);
     pendingCategoricalStatistics.reject(new Error("Selected sample unavailable"));
     await flushPromises();
-    assert.equal(categorical.state.selectedRasterStatisticsState, "error");
+    assert.equal(categorical.state.analysis.selectedRasterStatisticsState, "error");
     assert.equal(h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key).state, "error");
     assert.match(h.controlsView.statisticsStatus, /categorical/i);
     assert.doesNotMatch(h.controlsView.statisticsStatus, /previous histogram/);
@@ -1670,7 +1670,7 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     pendingCategoricalStatistics = null;
     assert.equal(h.viewer.exploreAt({ lng: 3, lat: 3 }), true);
     await flushPromises();
-    assert.equal(categorical.state.selectedRasterStatisticsState, "ready");
+    assert.equal(categorical.state.analysis.selectedRasterStatisticsState, "ready");
 
     h.controlsView.handlers.onAppearanceModeChange("continuous");
     await flushPromises();
@@ -2480,7 +2480,9 @@ test('a vector AOI drives both histogram modes and invalidation cannot fall back
     await h.viewer.show(createRasterItem('added-after-selection')); await flushPromises();
     assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
     assert.deepEqual(areas.at(-1).catalogSelection, aoi.selection);
-    assert.ok(h.mapLayers.retainedRecords.every(record => JSON.stringify(record.state.selectedCatalogSelection?.selection) === JSON.stringify(aoi.selection)));
+    for (const record of h.mapLayers.retainedRecords) {
+        assert.deepEqual(h.viewer.getSelectedArea(record.entry.key, "1d").catalogSelection, aoi.selection);
+    }
     h.controlsView.handlers.onBivariateModeChange('bivariate');await flushPromises();
     assert.deepEqual(pairedAreas.at(-1).catalogSelection, aoi.selection);
     assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
@@ -3063,6 +3065,62 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     viewer.destroy();
+});
+
+test("WMS handoff keeps the selected area and rejects an obsolete detached result", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const reads = [];
+    const item = createRasterItem("pending-analysis-handoff");
+    const viewer = initializeRasterViewer({
+        wmsUrl: "/geoserver/eolab/wms", leafletMap, leaflet, onTileError() {},
+    }, {
+        controlsView, layerStackView: createFakeLayerStackView(),
+        publishRaster: async () => ({ layerName: "eolab:handoff", bbox: [-180, -90, 180, 90] }),
+        loadStatistics: (source, area, signal) => {
+            if (area.kind === "wholeRaster") return Promise.resolve(createLayerStatistics(source));
+            const pending = createDeferred();
+            reads.push({ source, area, signal, pending });
+            return pending.promise;
+        },
+        samplePixel: async () => ({ inBounds: true, value: 1 }),
+    });
+    try {
+        viewer.activateAnalysis(item);
+        await flushPromises();
+        viewer.exploreAt({ lng: -74, lat: 41 });
+        const area = viewer.getSelectedArea();
+        const detachedRead = reads.at(-1);
+        controlsView.setPaletteName("viridis");
+        controlsView.handlers.onPaletteChange();
+
+        await viewer.show(item);
+        const retainedRead = reads.at(-1);
+        assert.notEqual(retainedRead, detachedRead);
+        assert.equal(detachedRead.signal.aborted, true);
+        assert.equal(retainedRead.signal.aborted, false);
+        assert.deepEqual(retainedRead.area, detachedRead.area);
+        assert.deepEqual(viewer.getSelectedArea(), area);
+        assert.equal(controlsView.paletteName, "viridis");
+        assert.equal(wmsLayers.length, 1);
+        assert.equal(controlsView.renderingControlsAvailable, true);
+
+        const obsolete = { ...createLayerStatistics(item, area.selectedBounds), sampleMinimum: -999 };
+        detachedRead.pending.resolve(obsolete);
+        await flushPromises();
+        assert.equal(controlsView.renderedStatistics.includes(obsolete), false);
+        assert.equal(controlsView.applyPercentilesEnabled, false);
+
+        const current = createLayerStatistics(item, area.selectedBounds);
+        retainedRead.pending.resolve(current);
+        await flushPromises();
+        assert.equal(controlsView.displayedStatistics, current);
+        assert.equal(controlsView.statisticsRetryVisible, false);
+        assert.equal(controlsView.paletteName, "viridis");
+    } finally {
+        viewer.destroy();
+    }
 });
 
 test("a pending WMS publication cannot steal newer Catalog analysis", async () => {
@@ -3696,6 +3754,67 @@ test("a restored whole-raster statistics error retries the active layer", async 
     assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
     assert.equal(controlsView.statisticsRetryVisible, false);
     viewer.destroy();
+});
+
+test("selected-area failure survives a layer switch and retries its original area", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const first = createRasterItem("retry-selected-first");
+    const second = createRasterItem("retry-selected-second");
+    const reads = [];
+    let failSelected = true;
+    const viewer = initializeRasterViewer({
+        wmsUrl: "/geoserver/eolab/wms", leafletMap, leaflet, onTileError() {},
+    }, {
+        controlsView, layerStackView: createFakeLayerStackView(),
+        publishRaster: async item => ({ layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90] }),
+        loadStatistics: async (item, area, signal) => {
+            reads.push({ item, area, signal });
+            if (item === first && area.kind === "selectedArea" && failSelected) {
+                throw new Error("Selected-area read failed");
+            }
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        },
+        samplePixel: async () => ({ inBounds: true, value: 1 }),
+    });
+    try {
+        await viewer.show(first);
+        await flushPromises();
+        viewer.exploreAt({ lng: -74, lat: 41 });
+        await flushPromises();
+        const failedRead = reads.at(-1);
+        assert.equal(failedRead.item, first);
+        assert.equal(failedRead.area.kind, "selectedArea");
+        assert.match(controlsView.statisticsStatus, /Selected-area read failed/);
+        assert.equal(controlsView.statisticsRetryVisible, true);
+
+        await viewer.show(second);
+        await flushPromises();
+        assert.equal(controlsView.displayedStatistics.itemId, second.id);
+        const beforeRestore = reads.length;
+        viewer.activateAnalysis(first);
+        assert.equal(reads.length, beforeRestore, "Restoring an error does not silently retry");
+        assert.match(controlsView.statisticsStatus, /Selected-area read failed/);
+        assert.equal(controlsView.statisticsRetryVisible, true);
+        assert.deepEqual(viewer.getSelectedArea().selectedBounds, failedRead.area.selectedBounds);
+
+        failSelected = false;
+        controlsView.handlers.onRetryStatistics();
+        await flushPromises();
+        const retriedReads = reads.slice(beforeRestore);
+        const activeRetries = retriedReads.filter(read => read.item === first);
+        assert.equal(activeRetries.length, 1);
+        for (const read of retriedReads) assert.deepEqual(read.area, failedRead.area);
+        assert.equal(activeRetries[0].signal.aborted, false);
+        assert.equal(controlsView.displayedStatistics.itemId, first.id);
+        assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+        assert.deepEqual(controlsView.displayedStatistics.selectedBounds, failedRead.area.selectedBounds);
+        assert.equal(controlsView.statisticsRetryVisible, false);
+        assert.doesNotMatch(controlsView.statisticsStatus, /read failed/);
+    } finally {
+        viewer.destroy();
+    }
 });
 
 test("exhausted capacity retries offer manual recovery without stale histograms", async () => {
@@ -4624,6 +4743,46 @@ test("hide all cancels pending histograms and drops late results; show all resto
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ["ready", "ready"]);
     h.destroy();
 });
+
+for (const outcome of ["result", "error"]) {
+    test(`a removed raster's late statistics ${outcome} cannot replace its re-added analysis`, async () => {
+        const reads = [];
+        const h = visibleLayerFixture((item, area, signal) => {
+            const pending = createDeferred();
+            reads.push({ item, area, signal, pending });
+            return pending.promise;
+        });
+        try {
+            const item = createRasterItem("replaced-analysis");
+            await h.viewer.show(item);
+            h.viewer.remove(item);
+            const obsoleteReads = [...reads];
+            assert.ok(obsoleteReads.length > 0);
+            assert.ok(obsoleteReads.every(read => read.signal.aborted));
+
+            await h.viewer.show(item);
+            const currentRead = reads.at(-1);
+            assert.equal(obsoleteReads.includes(currentRead), false);
+            assert.equal(currentRead.signal.aborted, false);
+            const current = { ...createLayerStatistics(item), sampleMaximum: 777 };
+            currentRead.pending.resolve(current);
+            await flushPromises();
+            assert.equal(h.controlsView.displayedStatistics, current);
+
+            for (const read of obsoleteReads) {
+                if (outcome === "error") read.pending.reject(new Error("Removed raster read failed"));
+                else read.pending.resolve({ ...createLayerStatistics(item), sampleMaximum: -999 });
+            }
+            await flushPromises();
+            assert.equal(h.controlsView.displayedStatistics, current);
+            assert.equal(h.controlsView.statisticsRetryVisible, false);
+            assert.doesNotMatch(h.controlsView.statisticsStatus, /Removed raster read failed/);
+            assert.deepEqual(h.controlsView.layerHistograms.map(histogram => histogram.state), ["ready"]);
+        } finally {
+            h.destroy();
+        }
+    });
+}
 
 
 test("category code changes cancel stale statistics while label, color and opacity reuse area samples", async () => {
