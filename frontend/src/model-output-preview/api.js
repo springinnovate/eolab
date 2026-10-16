@@ -1,14 +1,13 @@
-/** Fetch and validate small map previews of this browser session's model outputs. */
+/** Fetch and validate GeoJSON map previews of this browser session's model outputs. */
 
-export const PREVIEW_MEDIA_TYPES = new Set(["image/tiff", "application/geo+json"]);
 const MAX_BYTES = 8 * 1024 * 1024;
 
-/** Check a preview's file identity, extent and raster values or vector coordinates.
+/** Check a GeoJSON preview's file identity, extent and vector coordinates.
  * @param {Object} value Untrusted preview response.
  * @param {string} jobId Requested run identity.
- * @param {Object} file Validated manifest file.
- * @return {Object} Checked display data.
- * @throws {Error} If identity, checksum, dimensions or coordinate limits differ.
+ * @param {Object} file Validated GeoJSON manifest file.
+ * @return {Object} Checked vector display data.
+ * @throws {Error} If format, identity, checksum, geometry or coordinate limits differ.
  */
 export function validateArtifactPreview(value, jobId, file) {
     /** Report malformed preview data without exposing server paths.
@@ -20,11 +19,7 @@ export function validateArtifactPreview(value, jobId, file) {
         !Array.isArray(value.bounds) || value.bounds.length !== 4 || !value.bounds.every(Number.isFinite)) rejectInvalidPreview();
     const [west, south, east, north] = value.bounds;
     if (west < -180 || east > 180 || south < -85.051129 || north > 85.051129 || west > east || south > north) rejectInvalidPreview();
-    if (value.kind === "raster" && file.mediaType === "image/tiff") {
-        if (![value.width, value.height].every(n => Number.isInteger(n) && n > 0 && n <= 512) ||
-            west === east || south === north || !Array.isArray(value.values) || value.values.length !== value.width * value.height ||
-            value.values.some(n => n !== null && !Number.isFinite(n))) rejectInvalidPreview();
-    } else if (value.kind === "vector" && file.mediaType === "application/geo+json") {
+    if (value.kind === "vector" && file.mediaType === "application/geo+json") {
         const geometryCoordinateLayouts = {Point: [0, "point"], MultiPoint: [1, "point"], LineString: [1, "line"],
             MultiLineString: [2, "line"], Polygon: [2, "polygon"], MultiPolygon: [3, "polygon"]};
         let coordinateCount = 0;
@@ -51,16 +46,16 @@ export function validateArtifactPreview(value, jobId, file) {
     return value;
 }
 
-/** Fetch one private display copy without putting its response in the browser HTTP cache.
+/** Fetch one private GeoJSON display without putting its response in the browser HTTP cache.
  * @param {string} jobId Opaque run identity.
- * @param {Object} file Manifest identity, MIME type and checksum.
- * @param {AbortSignal} signal Cancellation when the display request is superseded.
+ * @param {Object} file GeoJSON manifest identity, MIME type and checksum.
+ * @param {AbortSignal} [signal] Cancellation when the display request is superseded.
  * @param {typeof fetch} [fetcher=globalThis.fetch] HTTP transport.
- * @return {Promise<Object>} Bounded validated display data.
- * @throws {Error} If access, transport, size or the display contract fails.
+ * @return {Promise<Object>} Bounded validated vector display data.
+ * @throws {Error} If format, access, transport, size or the display contract fails.
  */
 export async function readArtifactPreview(jobId, file, signal, fetcher = globalThis.fetch) {
-    if (![jobId, file.artifactId].every(id => /^[a-f0-9]{32}$/.test(id)) || !PREVIEW_MEDIA_TYPES.has(file.mediaType)) {
+    if (![jobId, file.artifactId].every(id => /^[a-f0-9]{32}$/.test(id)) || file.mediaType !== "application/geo+json") {
         throw new Error("This file has no supported map preview.");
     }
     const response = await fetcher(`/api/processing/jobs/${jobId}/artifacts/${file.artifactId}/preview`,

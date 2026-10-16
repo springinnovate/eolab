@@ -345,16 +345,24 @@ holds a renewable transfer lease while native work runs and rechecks access
 before returning. HTTP responses use `private, no-store`; there is no server
 preview cache. Downloads and calculations do not depend on preview availability.
 
-### Legacy raster JSON preview endpoint
+### Retired raster JSON previews
 
-The same `/preview` endpoint still accepts GeoTIFFs, although the current browser's
-GeoTIFF **Show on map** path does not call it. This supported implementation remains
-in [`rendering/artifact_preview.py`](../src/eolab_app/rendering/artifact_preview.py);
-its removal is a separate compatibility decision. It reads one georeferenced
-numeric band, respecting native NoData and internal validity masks. Raster
-responses include `width`, `height` and row-major `values` with null invalid
-cells. The sampled grid is Web Mercator, uses nearest-neighbor resampling and is
-at most 512 × 512 cells. These display values are not a reusable Processing input.
+The `/preview` endpoint accepts GeoJSON only. After session, file and lifetime
+checks, an available GeoTIFF receives HTTP 422 instead of the former sampled
+`width`, `height` and `values` response. This variant was retired after confirming
+there were no supported external clients in
+[issue #753](https://github.com/springinnovate/eolab/issues/753).
+
+For GeoTIFF display, use **Show on map** or the ordinary raster API:
+`POST /api/raster-analysis/sources` describes the original
+`{kind: "runArtifact", jobId, artifactId}` source, and
+`POST /api/rendering/layers` accepts `{source: ...}` and returns its
+`{layerName, bbox}` for WMS rendering. For numerical values, use the existing
+`/api/raster-analysis/pixels` or `/api/raster-analysis/statistics` APIs; download
+the original artifact when the complete raster is needed. These APIs serve
+different purposes and do not reproduce the retired sampled-grid JSON format.
+They retain their session, request-header and expiry requirements; see the
+[raster API contracts](raster-analysis.md).
 
 ### Preview budgets and temporary map layers
 
@@ -362,9 +370,8 @@ The `/preview` endpoint admits at most two concurrent reads per API process and 
 no waiting queue. Shared checksum verification separately admits two checks with
 a 30-second deadline. Native preview work is killed after 30 seconds or HTTP
 disconnection. The file lease renews every 10 seconds until reading stops.
-Linux native processes have a 2 GiB address-space ceiling; GDAL's cache and warp
-buffer are 32 MiB each, decoded source blocks are limited to 64 MiB, and output
-JSON is limited to 8 MiB. GeoJSON input is also limited to 8 MiB, 5,000 features
+Linux preview processes have a 2 GiB address-space ceiling, and output JSON is
+limited to 8 MiB. GeoJSON input is also limited to 8 MiB, 5,000 features
 and 100,000 positions. Preview latitudes are limited to Web Mercator's supported
 range. These endpoint-specific limits do not apply to ordinary GeoTIFF tile
 delivery or impose ceilings on Processing calculations. They do not change the

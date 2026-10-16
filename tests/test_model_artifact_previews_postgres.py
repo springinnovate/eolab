@@ -1,7 +1,9 @@
 """Private map previews through real Processing ownership, storage and HTTP boundaries."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 import hashlib
+import json
 from typing import Any
 
 from fastapi import FastAPI
@@ -10,7 +12,14 @@ import psycopg
 import pytest
 
 from eolab_app.rendering.artifact_preview import ArtifactPreviewService
+from eolab_app.execution.bounded_process import ProcessResultWriter
+from eolab_app.processing.artifact_manifest import ProducedFile
+from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing.model_operations import OperationOutput
+from eolab_app.processing.raster_clip import create_clip, clip_process_target
 from eolab_app.processing.source_access import create_model_source_files
+import eolab_app.processing.model_definitions as definitions
+import eolab_app.processing.model_operations as operation_registry
 from eolab_app.routes.processing import (
     COOKIE,
     create_processing_router,
@@ -74,16 +83,169 @@ def preview_boundary(model_boundary: Any) -> Iterator[Any]:
         yield client, worker, service
 
 
+def clip_with_vector_target(
+    writer: ProcessResultWriter, action: str, arguments: tuple[Any, ...]
+) -> None:
+    """Produce a real clip with a registered GeoJSON output for preview delivery.
+
+    Args:
+        writer: Supervised native result transport.
+        action: Trusted clip operation stage.
+        arguments: Source, prepared clip specification, workspace and limits.
+    """
+    if action != "clip":
+        clip_process_target(writer, action, arguments)
+        return
+    artifact = create_clip(*arguments)
+    data = json.dumps(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"html": "<script>bad()</script>"},
+                    "geometry": {"type": "Point", "coordinates": [0.5, 9.5]},
+                }
+            ],
+        }
+    ).encode()
+    (arguments[2] / "area.geojson").write_bytes(data)
+    output = ProducedFile(
+        name="area",
+        storage_name="area.geojson",
+        filename="area.geojson",
+        media_type="application/geo+json",
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    writer.put(("ok", replace(artifact, additional_outputs=(output,))))
+
+
 @pytest.mark.parametrize("terminal", ["delete", "expire"])
-def test_private_preview_and_download_lifetimes(
+def test_geojson_preview_and_download_share_owned_file_lifetimes(
+    preview_boundary: Any,
+    store: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+) -> None:
+    """Deliver real published GeoJSON only to its owner while the run remains available.
+
+    Args:
+        preview_boundary: Actual HTTP, native worker, publication and file access.
+        store: Disposable PostgreSQL lifecycle authority.
+        monkeypatch: Register one test-only vector output on the clip operation.
+        terminal: Explicit deletion or retention expiry after successful delivery.
+    """
+    client, worker, service = preview_boundary
+    original = operation_registry.get_model_operation("raster.clip.v1")
+    registry = {
+        **operation_registry.OPERATIONS,
+        original.id: replace(
+            original,
+            additional_outputs=(
+                OperationOutput(
+                    "area",
+                    "vector",
+                    "map",
+                    "application/geo+json",
+                    "Starting area",
+                    "intermediate",
+                ),
+            ),
+        ),
+    }
+    monkeypatch.setattr(operation_registry, "OPERATIONS", registry)
+    monkeypatch.setattr(definitions, "OPERATIONS", registry)
+    document = ModelRegistry.load_installed().get("raster-clip", "1.1.0").to_document()
+    document["outputs"]["starting_area"] = {
+        "source": "clip.area",
+        "type": "vector",
+        "role": "intermediate",
+        "presentation": "map",
+        "saveEligible": False,
+    }
+    service.model_registry = ModelRegistry((ModelDefinition.model_validate(document),))
+    monkeypatch.setattr(
+        "eolab_app.processing.raster_operations.clip_process_target",
+        clip_with_vector_target,
+    )
+    job = submit(
+        client,
+        model_request(
+            client,
+            "raster-clip",
+            inputs={
+                "raster": SOURCE,
+                "area": {"kind": "selectedArea", "selectedBounds": AREA},
+            },
+        ),
+    )
+    base = f"/api/processing/jobs/{job['jobId']}"
+    assert client.portal.call(worker.run_once)
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    file = next(
+        file
+        for file in ready["artifacts"]["files"]
+        if file["mediaType"] == "application/geo+json"
+    )
+    url = file["url"] + "/preview"
+    response = client.get(url)
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["jobId"] == job["jobId"]
+    assert preview["artifactId"] == file["artifactId"]
+    assert preview["sha256"] == file["sha256"]
+    assert preview["kind"] == "vector" and preview["geometryKind"] == "point"
+    assert preview["bounds"] == [0.5, 9.5, 0.5, 9.5]
+    assert preview["geojson"]["features"] == [
+        {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {"type": "Point", "coordinates": [0.5, 9.5]},
+        }
+    ]
+    assert "no-store" in response.headers["cache-control"]
+    assert str(worker.artifacts.root) not in response.text
+    download = client.get(file["url"])
+    assert download.status_code == 200
+    assert hashlib.sha256(download.content).hexdigest() == file["sha256"]
+    assert download.json()["features"][0]["properties"] == {
+        "html": "<script>bad()</script>"
+    }
+    with TestClient(client.app, base_url="https://testserver") as foreign:
+        assert foreign.get(url).status_code == 404
+        assert foreign.get(file["url"]).status_code == 404
+    if terminal == "delete":
+        assert client.delete(base, headers=HEADERS).status_code == 200
+    else:
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute(
+                "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+                (job["jobId"],),
+            )
+    assert client.get(url).status_code == 409
+    assert client.get(file["url"]).status_code == 409
+    client.portal.call(worker.cleanup)
+    with psycopg.connect(store.conninfo) as connection:
+        assert (
+            connection.execute("SELECT count(*) FROM processing.transfers").fetchone()[
+                0
+            ]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("terminal", ["delete", "expire"])
+def test_retired_tiff_preview_preserves_ordinary_raster_lifetimes(
     preview_boundary: Any, store: Any, terminal: str
 ) -> None:
-    """Authorize preview and masked statistics only while the owned run is available.
+    """Reject TIFF previews while ordinary rendering, analysis and downloads remain usable.
 
     Args:
         preview_boundary: Actual HTTP, rendering, worker and store composition.
         store: Disposable PostgreSQL authority.
-        terminal: Explicit deletion or expiry after preview and statistics succeed.
+        terminal: Explicit deletion or expiry after ordinary raster access succeeds.
     """
 
     client, worker, service = preview_boundary
@@ -106,13 +268,11 @@ def test_private_preview_and_download_lifetimes(
     )
     url = file["url"] + "/preview"
     response = client.get(url)
-    assert response.status_code == 200, response.text
-    preview = response.json()
-    assert (
-        preview["jobId"] == job["jobId"] and preview["artifactId"] == file["artifactId"]
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        "GeoTIFF outputs use ordinary raster rendering. "
+        "Download the file or use Show on map."
     )
-    assert preview["sha256"] == file["sha256"]
-    assert len(preview["values"]) <= 512 * 512
     assert "no-store" in response.headers["cache-control"]
     assert str(worker.artifacts.root) not in response.text
     reference = {
@@ -270,10 +430,10 @@ def test_private_preview_and_download_lifetimes(
         )
 
 
-def test_preview_rejects_same_size_storage_change(
+def test_retired_tiff_preview_checks_source_integrity_before_format_rejection(
     preview_boundary: Any, store: Any
 ) -> None:
-    """A changed GeoTIFF cannot be displayed under the run's original checksum.
+    """Report a changed GeoTIFF before the unsupported-preview-format explanation.
 
     Args:
         preview_boundary: Actual delivery and rendering boundary.

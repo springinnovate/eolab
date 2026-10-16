@@ -265,9 +265,39 @@ test("obsolete display requests never attach and preview failures leave download
 
 test("browser preview boundary rejects substituted files, unsupported geometries and coordinates", () => {
     const h = fixture(); assert.equal(validateArtifactPreview(h.data, h.run.jobId, h.file), h.data);
-    for (const changes of [{jobId: "2".repeat(32)}, {sha256: "b".repeat(64)}, {geometryKind: "point"}, {geojson: {}}, {bounds: [-181, 0, 1, 1]}]) {
+    for (const changes of [{jobId: "2".repeat(32)}, {artifactId: "3".repeat(32)}, {sha256: "b".repeat(64)}, {geometryKind: "point"}, {geojson: {}}, {bounds: [-181, 0, 1, 1]}]) {
         assert.throws(() => validateArtifactPreview({...h.data, ...changes}, h.run.jobId, h.file), /invalid/);
     }
+});
+
+test("GeoJSON previews retain feature, coordinate and extent limits", () => {
+    const h = fixture();
+    const point = {type: "Feature", properties: {}, geometry: {type: "Point", coordinates: [0.5, 0.5]}};
+    for (const features of [
+        Array(5001).fill(point),
+        [{...point, geometry: {type: "MultiPoint", coordinates: Array(100001).fill([0.5, 0.5])}}],
+        [{...point, geometry: {type: "Point", coordinates: [2, 0.5]}}],
+        [{...point, geometry: {type: "Point", coordinates: [Number.NaN, 0.5]}}],
+    ]) {
+        const data = {...h.data, geometryKind: "point", geojson: {type: "FeatureCollection", features}};
+        assert.throws(() => validateArtifactPreview(data, h.run.jobId, h.file), /invalid/);
+    }
+});
+
+test("GeoJSON preview validation rejects the retired raster grid response", () => {
+    const h = fixture();
+    const file = {...h.file, mediaType: "image/tiff"};
+    const raster = {jobId: h.run.jobId, artifactId: file.artifactId, sha256: file.sha256,
+        kind: "raster", bounds: [0, 0, 1, 1], width: 1, height: 1, values: [42]};
+    assert.throws(() => validateArtifactPreview(raster, h.run.jobId, file), /invalid/);
+    assert.throws(() => validateArtifactPreview(raster, h.run.jobId, h.file), /invalid/);
+});
+
+test("TIFF files cannot request the GeoJSON preview endpoint", async () => {
+    const h = fixture(); let requests = 0;
+    await assert.rejects(readArtifactPreview(h.run.jobId, {...h.file, mediaType: "image/tiff"}, undefined,
+        async () => { requests++; return new Response(JSON.stringify(h.data)); }), /no supported map preview/);
+    assert.equal(requests, 0);
 });
 
 test("preview transport uses same-origin no-store requests and cancels oversized responses", async () => {
@@ -289,7 +319,10 @@ test("raster display delegates to the common raster owner using original identit
         describe: async source => ({source, version: "a".repeat(64), bounds: [0,0,1,1], capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
         addRaster: (raster, lifecycle, presentation) => { attachment = {raster, lifecycle, presentation}; copy = lifecycle.copy({kind: "raster"}); }});
     h.file.mediaType = "image/tiff"; h.file.sha256 = "a".repeat(64);
+    assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).canShow, true);
     await h.owner.show(h.run, h.file);
+    assert.deepEqual(h.owner.state(h.run.jobId, h.file.artifactId, h.file),
+        {canShow: true, onMap: true, busy: false, error: ""});
     assert.deepEqual(attachment.raster.source, {kind: "runArtifact", jobId: h.run.jobId, artifactId: h.file.artifactId});
     assert.deepEqual(attachment.raster.group, {id: h.run.jobId, label: h.run.label, actionLabel: "Delete run and results"});
     assert.equal(attachment.presentation.sourceName, attachment.raster.label);
