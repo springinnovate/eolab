@@ -474,9 +474,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
         document.pop("definitionSha256")
         if document["id"] == "downstream-beneficiaries":
             document["steps"][0]["inputs"]["hydrology"] = {
-                "value": request.hydrology.model_dump(
-                    mode="json", by_alias=True
-                )
+                "value": request.hydrology.model_dump(mode="json", by_alias=True)
             }
         definitions.append(ModelDefinition.model_validate(document))
     service = ProcessingService(
