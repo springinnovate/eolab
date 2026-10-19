@@ -355,6 +355,13 @@ affect layout, visibility, focus, or interaction.
 
 ## Documentation requirements
 
+Keep human-facing documentation in the README, limited to useful setup and
+usage information. Link to configuration and executable examples instead of
+copying their contents. Do not create or maintain feature manuals,
+implementation recaps or change histories under `docs/` unless explicitly
+requested. Routine implementation refactors do not require prose updates;
+update the README only when its setup or user-facing guidance changes.
+
 Every new or materially modified named class, function, method, or public
 contract must have complete type information and documentation.
 

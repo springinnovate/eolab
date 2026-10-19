@@ -85,7 +85,7 @@ being clipped. Touch layouts use larger targets and wrap the utility icons.
 
 Raster styles offer minimum, midpoint, and maximum colors and opacities. Vector
 styles adapt to point, line, or polygon geometry. They support a single symbol,
-categorical values with [CSV category tables](docs/vector-categorical-style.md), graduated numeric classes with editable exact break values,
+categorical values with CSV category tables, graduated numeric classes with editable exact break values,
 and optional labels. New catalog vectors start with labels off; enable **Show
 labels** in **Style** to display them. Valid vector edits update the map automatically after a
 short pause, with the current state reported beside the controls. Appearance
@@ -148,7 +148,8 @@ current Catalog, so missing or changed sources can prevent full restoration.
 
 ## Add your own data
 
-EOLab deployments read from a configured, read-only data directory.
+EOLab deployments read from a configured, read-only data directory. Treat admitted
+datasets as immutable; publish changed data under a new identity.
 
 1. Prepare georeferenced GeoTIFFs and vector datasets before the session.
 2. Copy them into the deployment's mounted data directory.
@@ -170,30 +171,45 @@ are not yet renderable.
 
 For polygon-based analysis, choose a mounted Catalog vector layer and apply an
 attribute filter in **Sampling area → Vector layer**. The selection reads the
-original source directly. See [vector selections](docs/vector-sampling.md).
+original source directly.
 
 ## Running your own EOLab workspace
 
-Deployment owners can run EOLab with Docker Compose or Coolify. The concise
-[deployment and operations guide](docs/deployment-and-operations.md) covers the
-required passwords, read-only data mount, startup, scanning, verification, and
-resource controls.
+Copy [.env.example](.env.example) to `.env` and fill in its required passwords,
+Jobs token and host data-directory path. That file describes the settings;
+[docker-compose.yml](docker-compose.yml) defines the services and persistent
+volumes. Keep the database password stable after the first deployment and use
+distinct volume names for separate deployments.
 
-## Understanding analysis results
+For a local workspace:
 
-- [Raster pixels and histograms](docs/raster-analysis.md): sampling and missing data.
-- [Comparing two rasters](docs/bivariate-raster.md): paired grids and histogram colors.
-- [Raster calculations](docs/raster-calculations.md): formulas, results and limits.
-- [Ground-area calculations](docs/ground-area-calculations.md): hectares and boundary fractions.
-- [Vector filters](docs/vector-filters.md) and [sampling selections](docs/vector-sampling.md).
-- [Raster clips](docs/raster-clips.md): exported values, masks and downloads.
+```sh
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --detach
+```
 
-EOLab is open-source software under the [Apache License 2.0](LICENSE).
+Open `http://localhost:8000`, then scan the data directory from **Status**.
+For Coolify, use the repository's Docker Compose build pack and
+`docker-compose.yml`, set the variables from `.env.example`, and attach the
+public domain to the `app` service on port `8000`. Keep the other services
+private. Enable **Include Source Commit in Build** to display the deployed
+revision.
+
+Back up persistent volumes before upgrades. Run one `processing-worker`
+container and stop the previous one before replacing it: worker startup
+interrupts unfinished jobs. Deleting volumes deletes their stored data.
 
 ## Model library
 
 Use **Tools → Models** to run **Raster summary** or **Raster clip**, then inspect
 progress, results and YAML in the right-hand Analysis panel. Raster summary
 returns values and a CSV; Raster clip returns a GeoTIFF for the selected area.
-See [Run a model](docs/model-library.md) for input selection, cancellation,
-recovery and temporary result downloads.
+
+The downstream model's DEM, watershed layer and topology fields are configured
+in its [bundled YAML recipe](src/eolab_app/processing/recipes/downstream-beneficiaries.yaml),
+under `steps[0].inputs.hydrology.value`. Set these Catalog references for your
+deployment before building it.
+
+EOLab is open-source software under the [Apache License 2.0](LICENSE). Bivariate
+palette definitions originate in the
+[ESOS-C data viewer](https://github.com/springinnovate/esos-c-dataviewer), also under
+the [Apache License 2.0](https://github.com/springinnovate/esos-c-dataviewer/blob/main/LICENSE).
