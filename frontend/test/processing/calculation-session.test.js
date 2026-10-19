@@ -65,10 +65,10 @@ test("legacy summary and series records migrate only to their owner without chan
     }
 });
 
-for (const operation of ["clip", "calculation"]) for (const legacy of [false, true]) {
-    test(`${operation} recovery preserves its ${legacy ? "legacy" : "current"} vector HTTP request`, async () => {
+for (const operation of ["clip", "calculation"]) {
+    test(`${operation} recovery preserves its vector HTTP request`, async () => {
         const selection = {collectionId: "eolab-mounted-vectors", itemId: "countries", assetKey: "data", layerName: "countries",
-            ...(legacy ? {sourceSignature: "a".repeat(64)} : {}), filter: {enabled: false, match: "all", rules: []}};
+            filter: {enabled: false, match: "all", rules: []}};
         const saved = record(), backing = storage(), requests = [];
         saved.intent.area = {kind: "catalogSelection", catalogSelection: selection};
         const requestId = saved.pending.requestId;

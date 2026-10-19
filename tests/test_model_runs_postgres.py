@@ -1309,10 +1309,10 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
-def test_model_vector_filter_accepts_legacy_signature(
+def test_model_vector_filter_preserves_catalog_selection(
     model_boundary: Any, boundary: Any, tmp_path: Path, model_id: str
 ) -> None:
-    """Capture the filtered catalog descriptor without requiring legacy fingerprints.
+    """Run with the filtered catalog descriptor and retain it in the saved inputs.
 
     Args:
         model_id: Summary or clip recipe under the same lifecycle contract.
@@ -1358,11 +1358,6 @@ def test_model_vector_filter_accepts_legacy_signature(
         client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
     )
     assert capture["invocation"]["inputs"]["area"]["selection"] == selection
-    selection["sourceSignature"] = "0" * 64
-    stale = submit(client, model_request(client, model_id, inputs=body["inputs"]))
-    assert client.portal.call(worker.run_once)
-    ready = client.get(f"/api/processing/jobs/{stale['jobId']}").json()
-    assert ready["status"] == "ready", ready
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])

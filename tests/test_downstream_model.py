@@ -1238,46 +1238,6 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     assert reader.resolve_source.await_count == 1
 
 
-def test_worker_does_not_compare_legacy_registration_fingerprints(
-    tmp_path: Path,
-) -> None:
-    """Retained registration metadata does not become a new-run eligibility gate.
-
-    Args:
-        tmp_path: Configured source files and legacy registration metadata.
-    """
-    from eolab_app.processing.downstream_operation import resolve_downstream_sources
-    from test_prepared_hydrology import legacy_snapshot
-
-    sources, request, limits = downstream_fixture(tmp_path / "current")
-    definition, dem, network, _ = prepare_sources(tmp_path / "historical")
-    historical = legacy_snapshot(definition, dem, network)
-    request = request.model_copy(update={"hydrology": historical})
-    reader = SimpleNamespace(
-        resolve_source=AsyncMock(return_value=sources.network),
-        resolve_for_sampling=AsyncMock(
-            side_effect=AssertionError("Historical signature used")
-        ),
-    )
-    context = SimpleNamespace(
-        areas=reader,
-        rasters={
-            name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
-            for name, path in sources.rasters.items()
-            if name != "values"
-        },
-    )
-    values = AuthorizedRaster(
-        sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
-    )
-    resolved = asyncio.run(resolve_downstream_sources(context, request, values))
-    assert resolved.network == sources.network
-    reader.resolve_source.assert_awaited_once_with(historical.definition.watersheds)
-    reader.resolve_for_sampling.assert_not_awaited()
-    plan = plan_downstream(resolved, request, limits)
-    assert plan.watershed_selection == sources.network.selection
-
-
 def test_missing_configured_watershed_names_the_runtime_input(tmp_path: Path) -> None:
     """A missing watershed reports the model's configured input without private paths.
 

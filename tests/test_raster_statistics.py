@@ -1035,7 +1035,6 @@ def test_raster_statistics_request_enforces_the_strict_sampling_area_union() -> 
         itemId="polygons",
         assetKey="data",
         layerName="polygons",
-        sourceSignature="a" * 64,
         filter={},
     )
     aoi_request = CatalogRasterStatisticsRequest.model_validate(

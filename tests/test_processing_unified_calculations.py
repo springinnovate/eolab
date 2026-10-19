@@ -23,8 +23,6 @@ from eolab_app.processing.aggregate_models import (
     AggregatePlanRequest,
 )
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.clip_models import ClipJobRequest
-from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.service import ProcessingService
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
@@ -192,61 +190,6 @@ def test_summary_prepares_and_calculates_without_a_plan_request(
     assert cached["status"] == "ready", cached
     assert cached["result"]["cacheHit"]
     assert cached["result"]["rows"] == completed["result"]["rows"]
-
-
-@pytest.mark.parametrize("operation", ["raster-clips", "raster-calculations"])
-def test_legacy_vector_request_retries_with_its_persisted_hash(
-    boundary: Any, store: PostgresJobStore, operation: str
-) -> None:
-    """Recover an accepted request whose historical hash includes a vector fingerprint.
-
-    Args:
-        boundary: Real HTTP and Processing composition.
-        store: Disposable PostgreSQL store holding the historical request identity.
-        operation: Clip or scalar calculation endpoint receiving the saved retry.
-    """
-    client, *_ = boundary
-    selection = {
-        "collectionId": "eolab-mounted-vectors",
-        "itemId": "saved-selection",
-        "assetKey": "data",
-        "layerName": "area",
-        "sourceSignature": "a" * 64,
-        "filter": {"enabled": False, "match": "all", "rules": []},
-    }
-    legacy_inputs = {"selectedBounds": None, "catalogSelection": selection}
-    if operation == "raster-clips":
-        legacy_inputs.update(SOURCE)
-        request_type, identifier = ClipJobRequest, "raster.clip.v1"
-    else:
-        legacy_inputs.update(
-            sources={"a": SOURCE},
-            calculations=[{"label": "Mean", "expression": "mean(a)"}],
-            polygonArea=None,
-            wholeRaster=None,
-            targetChunkPixels=None,
-        )
-        request_type, identifier = AggregateJobRequest, "raster.aggregate.v1"
-    request_id = uuid4().hex
-    body = {**legacy_inputs, "requestId": request_id}
-    historical_hash = hashlib.sha256(
-        json.dumps(legacy_inputs, sort_keys=True).encode()
-    ).hexdigest()
-    assert client.get("/api/processing/jobs").status_code == 200
-    owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
-    prepared = get_model_operation(identifier).queue(request_type(**body), None)
-    saved = store.submit(owner, request_id, prepared, historical_hash)
-    response = client.post(f"/api/processing/{operation}", json=body, headers=HEADERS)
-    assert response.status_code == 202, response.text
-    assert response.json()["jobId"] == saved["id"]
-    assert store.get(saved["id"], owner)["request_hash"] == historical_hash
-    body["catalogSelection"] = {**selection, "layerName": "other-layer"}
-    assert (
-        client.post(
-            f"/api/processing/{operation}", json=body, headers=HEADERS
-        ).status_code
-        == 409
-    )
 
 
 @pytest.mark.parametrize("mixed", [False, True])

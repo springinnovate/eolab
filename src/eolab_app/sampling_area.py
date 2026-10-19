@@ -60,7 +60,7 @@ class CatalogSelectionSamplingArea:
         Returns:
             Scope and deterministic descriptor JSON for cache/coalescing keys.
         """
-        return self.kind, self.resolved.selection.cache_identity()
+        return self.kind, self.resolved.selection.model_dump_json(by_alias=True)
 
 
 RasterSamplingArea: TypeAlias = (

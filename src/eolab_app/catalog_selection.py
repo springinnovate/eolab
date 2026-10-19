@@ -14,25 +14,13 @@ class CatalogSelection(CatalogVectorRequest):
     """A catalog vector layer and attribute filter identifying features for analysis.
 
     Asset and layer names are checked against the authoritative Catalog on every
-    resolution. Supplied legacy fingerprints survive serialization for existing
-    idempotent requests, but do not identify or authorize the immutable selection.
+    resolution. Source files are immutable after admission.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
     filter: VectorFilter
     assetKey: str = Field(min_length=1, max_length=256)
     layerName: str = Field(min_length=1, max_length=256)
-    sourceSignature: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None
-    )
-
-    def cache_identity(self) -> str:
-        """Return the Catalog binding and predicate, without legacy fingerprints.
-
-        Returns:
-            Canonical JSON including source, native layer, and typed predicate.
-        """
-        return self.model_dump_json(by_alias=True, exclude={"sourceSignature"})
 
 
 class SelectionUnavailableError(ValueError):

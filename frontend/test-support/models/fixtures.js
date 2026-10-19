@@ -6,7 +6,7 @@ export const model = {schema: "eolab.model/v1", id: "raster-summary", version: "
 export const raster = {collectionId: "eolab-mounted-geotiffs", itemId: "population", label: "Population", visible: true};
 export const area = {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}};
 export const invocation = {model: {...model, definition: model}, inputs: {raster: {collectionId: raster.collectionId, itemId: raster.itemId}, area}, parameters: {summary: "sum(a)"}, label: "Population total"};
-export const selection = {collectionId: "eolab-mounted-vectors", itemId: "watersheds", assetKey: "data", layerName: "basins", sourceSignature: "b".repeat(64),
+export const selection = {collectionId: "eolab-mounted-vectors", itemId: "watersheds", assetKey: "data", layerName: "basins",
     filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
 
 /** A recipe using downstream capabilities with input names chosen by YAML. */

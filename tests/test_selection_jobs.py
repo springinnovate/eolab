@@ -46,7 +46,7 @@ MEASUREMENTS = {
 }
 
 
-@pytest.mark.parametrize("case", ["valid", "empty", "legacy", "wrong-layer"])
+@pytest.mark.parametrize("case", ["valid", "empty", "wrong-layer"])
 def test_registered_measurement_reads_original_filtered_polygons(
     outline_case: tuple,
     tmp_path: Path,
@@ -57,7 +57,7 @@ def test_registered_measurement_reads_original_filtered_polygons(
     Args:
         outline_case: HTTP Catalog and mounted polygons used by outline tests too.
         tmp_path: Readable fixture mount, injected only as deployment configuration.
-        case: Valid or historical selection, empty predicate, or wrong native layer.
+        case: Valid selection, empty predicate, or wrong native layer.
     """
     selection, _, url = outline_case
     if case == "empty":
@@ -71,8 +71,6 @@ def test_registered_measurement_reads_original_filtered_polygons(
     if case == "wrong-layer":
         selection = selection.model_copy(update={"layerName": "other"})
     descriptor = selection.model_dump(mode="json", by_alias=True)
-    if case == "legacy":
-        descriptor["sourceSignature"] = "f" * 64
     command = (
         "from pathlib import Path; from eolab_app.vector import selection_operation as op; "
         f"op.CATALOG_URL={url!r}; op.SCAN_MOUNT=Path({str(tmp_path)!r}); "

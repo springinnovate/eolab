@@ -310,7 +310,6 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
         itemId="countries",
         assetKey="data",
         layerName="countries",
-        sourceSignature="a" * 64,
         filter=VectorFilter(
             enabled=True,
             match="all",
@@ -325,34 +324,10 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
     request = AggregatePlanRequest(
         sources=plan.sources, calculations=plan.calculations, catalogSelection=selection
     )
+    assert (
+        cache.calculation_result_cache_keys(request, plan.sourceSignature) == expected
+    )
     expected_work = identify_shared_calculation(UnpreparedCalculation(request=request))
-    for signature in (None, "b" * 64):
-        compatible = selection.model_copy(update={"sourceSignature": signature})
-        assert (
-            cache.calculation_result_cache_keys(
-                plan.model_copy(
-                    update={
-                        "area": area.model_copy(update={"catalogSelection": compatible})
-                    }
-                )
-            )
-            == expected
-        )
-        assert (
-            identify_shared_calculation(
-                UnpreparedCalculation(
-                    request=request.model_copy(update={"catalogSelection": compatible})
-                )
-            )
-            == expected_work
-        )
-        assert (
-            cache.calculation_result_cache_keys(
-                request.model_copy(update={"catalogSelection": compatible}),
-                plan.sourceSignature,
-            )
-            == expected
-        )
     for update in (
         {"item_id": "different-vector"},
         {"assetKey": "other-data"},
@@ -514,7 +489,6 @@ def test_cache_hit_skips_planning_and_pins_values(
                 itemId="countries",
                 assetKey="data",
                 layerName="countries",
-                sourceSignature="a" * 64,
                 filter={"enabled": False, "match": "all", "rules": []},
             ),
         )

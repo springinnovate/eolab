@@ -207,6 +207,13 @@ ownership or dependency responsibilities.
 
 ## Programming-by-contract and validation
 
+Admitted source datasets and published outputs are immutable for the lifetime
+of an EOLab instance. Validate them at admission or publication, then trust that
+contract. Do not add runtime hashing, filesystem fingerprint comparisons or
+before/after mutation checks for those datasets. Preserve source identity,
+authorization, path confinement, actual read errors, output publication integrity,
+expiry, cleanup and cancellation.
+
 Processing calculations intentionally have no application-imposed ceiling on
 cells, feature/coordinate counts, memory, disk use, or total planning/execution
 time. Attempt the requested calculation; do not add preflight data scans or
@@ -227,7 +234,7 @@ Validation is normally required at:
 - HTTP, browser, CLI, upload, and other user-input boundaries;
 - catalog and external metadata boundaries;
 - filesystem and mounted-source resolution;
-- source signatures and staleness checks;
+- source identity at admission and publication;
 - database reads, migrations, persisted jobs, and serialization;
 - native libraries, subprocesses, GDAL, GeoServer, and other external systems;
 - authorization, session ownership, and lifecycle transitions;
@@ -339,7 +346,7 @@ affect layout, visibility, focus, or interaction.
 - Do not add unrelated responsibilities to coordinator, composition, route,
   viewer, or service modules.
 - Prefer an existing interface or protocol at a component boundary.
-- Do not bypass authorization, source-signature, lifecycle, resource-limit,
+- Do not bypass authorization, source-identity, lifecycle, resource-limit,
   cache, error, ownership, or cancellation contracts.
 - Do not weaken a safety policy to simplify code.
 - Do not duplicate a lower-level implementation inside another subsystem.
@@ -349,8 +356,12 @@ affect layout, visibility, focus, or interaction.
 - Do not reformat unrelated code.
 - Preserve unrelated user changes.
 - Separate behavior-preserving cleanup from behavior or performance changes.
-- Do not add a compatibility shim unless an actual supported caller requires
-  it.
+- Removing a feature includes its obsolete fields, checks, serialization paths
+  and compatibility-only tests. Do not retain or add compatibility shims,
+  migrations, aliases or optional legacy fields without an explicit product
+  requirement. Historical saved requests alone do not establish that requirement.
+  Report any loss of compatibility; do not silently implement compatibility to
+  avoid it.
 - Do not modify tests merely to accept a new coupling or changed architecture.
 
 ## Documentation requirements

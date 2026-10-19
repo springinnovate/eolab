@@ -121,7 +121,7 @@ def outline_case(tmp_path: Path) -> tuple[CatalogSelection, dict[str, Any], str]
         thread.join()
 
 
-@pytest.mark.parametrize("case", ["valid", "legacy", "wrong-layer"])
+@pytest.mark.parametrize("case", ["valid", "wrong-layer"])
 def test_registered_native_outline_preserves_algorithm_result(
     outline_case: tuple[CatalogSelection, dict[str, Any], str],
     tmp_path: Path,
@@ -135,12 +135,10 @@ def test_registered_native_outline_preserves_algorithm_result(
     Args:
         outline_case: Real source, authorized descriptor and algorithm output.
         tmp_path: Source mount supplied to the native child.
-        case: Current or historical selection, or a conflicting native layer.
+        case: Valid selection or a conflicting native layer.
     """
     selection, expected, url = outline_case
     descriptor = selection.model_dump(mode="json", by_alias=True)
-    if case == "legacy":
-        descriptor["sourceSignature"] = "f" * 64
     if case == "wrong-layer":
         descriptor["layerName"] = "other"
     command = (

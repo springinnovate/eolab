@@ -77,7 +77,7 @@ class VectorSamplingService:
             raise SelectionUnavailableError(
                 "The catalog vector is unavailable; select it again."
             ) from error
-        if resolved.selection.cache_identity() != selection.cache_identity():
+        if resolved.selection != selection:
             raise SelectionUnavailableError(
                 "The catalog vector identity changed; select it again."
             )

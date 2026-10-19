@@ -79,8 +79,6 @@ def calculation_result_cache_keys(
                 ),
             ).model_dump(mode="json", by_alias=True)
         target_chunk_pixels = calculation.targetChunkPixels
-    if area.get("catalogSelection") is not None:
-        area["catalogSelection"].pop("sourceSignature", None)
     roots = [
         compile_expression(item.expression, alias) for item in calculation.calculations
     ]

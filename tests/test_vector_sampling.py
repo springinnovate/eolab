@@ -208,7 +208,7 @@ def test_selection_reauthorizes_after_restart_without_storage(
 def test_configured_source_trusts_immutable_identity_without_scanning(
     source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ignore historical fingerprints without weakening Catalog binding checks.
+    """Resolve the configured source without scanning its features.
 
     Args:
         source: Real configured polygon layer.
@@ -236,15 +236,12 @@ def test_configured_source_trusts_immutable_identity_without_scanning(
             VectorSamplingService(catalog, catalog).resolve_source(request)
         )
     assert not first.selection.filter.active
-    legacy = CatalogSelection.model_validate(
-        {**first.selection.model_dump(), "sourceSignature": "f" * 64}
-    )
-    assert legacy.cache_identity() == first.selection.cache_identity()
-    assert legacy.model_dump()["sourceSignature"] == "f" * 64
-    assert "sourceSignature" not in first.selection.model_dump()
     with pytest.raises(ValueError):
-        CatalogSelection.model_validate({**legacy.model_dump(), "path": "/private"})
+        CatalogSelection.model_validate(
+            {**first.selection.model_dump(), "path": "/private"}
+        )
     restarted = VectorSamplingService(catalog, catalog)
     assert (
-        asyncio.run(restarted.resolve_for_sampling(legacy)).selection == first.selection
+        asyncio.run(restarted.resolve_for_sampling(first.selection)).selection
+        == first.selection
     )

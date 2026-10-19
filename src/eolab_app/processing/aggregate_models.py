@@ -268,8 +268,7 @@ class AggregateArea(BaseModel):
                 )
             if (
                 self.resolved is not None
-                and self.resolved.selection.cache_identity()
-                != self.catalogSelection.cache_identity()
+                and self.resolved.selection != self.catalogSelection
             ):
                 raise ValueError("Resolved source does not match the catalog selection")
         elif self.catalogSelection is not None or self.resolved is not None:

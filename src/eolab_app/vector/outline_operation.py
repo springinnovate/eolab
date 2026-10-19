@@ -108,7 +108,7 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
         catalog = StacVectorCatalog(client, CATALOG_URL)
         resolver = MountedVectorResolver(SCAN_MOUNT)
         resolved = await resolve_selection(catalog, resolver, inputs.selection)
-        if resolved.selection.cache_identity() != inputs.selection.cache_identity():
+        if resolved.selection != inputs.selection:
             raise SelectionUnavailableError(
                 "The catalog vector identity changed; select it again."
             )
