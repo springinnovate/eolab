@@ -1,7 +1,6 @@
 """Current catalog hydrology sources and immutable historical Run YAML records."""
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -206,7 +205,9 @@ def legacy_snapshot(
     report = PreparedHydrologySnapshot.model_construct(
         definition=definition,
         demSignature=compute_document_checksum(dem.source_signature.to_catalog()),
-        watershedSelection=watersheds.selection,
+        watershedSelection=watersheds.selection.model_copy(
+            update={"sourceSignature": "a" * 64}
+        ),
         validation=HydrologyRegistration(
             validator="eolab.hydrology-registration/v1",
             validatedAt=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -271,21 +272,26 @@ def test_historical_reports_keep_their_wire_checksum(
 def test_current_watershed_resolution_does_not_use_historical_signature(
     tmp_path: Path,
 ) -> None:
-    """A new run accepts current sources while an active run keeps its own identity.
+    """Ignore historical fingerprints while preserving the Catalog source binding.
 
     Args:
         tmp_path: Isolated catalog vector and elevation fixtures.
     """
     definition, dem, watersheds, reader = prepare_sources(tmp_path)
     old_report = legacy_snapshot(definition, dem, watersheds)
-    path = tmp_path / "watersheds.gpkg"
-    stat = path.stat()
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
     current = asyncio.run(reader.resolve_source(definition.watersheds))
-    assert current.selection != old_report.watershedSelection
+    historical = old_report.watershedSelection
+    assert historical.sourceSignature == "a" * 64
+    assert current.selection.cache_identity() == historical.cache_identity()
     assert not current.selection.filter.active
-    with pytest.raises(SelectionUnavailableError):
-        asyncio.run(reader.resolve_for_sampling(old_report.watershedSelection))
+    assert asyncio.run(reader.resolve_for_sampling(historical)) == current
+    for field in ("assetKey", "layerName"):
+        with pytest.raises(SelectionUnavailableError, match="identity changed"):
+            asyncio.run(
+                reader.resolve_for_sampling(
+                    historical.model_copy(update={field: "other"})
+                )
+            )
     assert asyncio.run(reader.resolve_for_sampling(current.selection)) == current
 
 

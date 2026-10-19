@@ -791,8 +791,7 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
                 "catalogSelection": catalog_selection,
             },
         )
-        with aoi_path.open("ab") as source:
-            source.write(b"changed")
+        aoi_path.unlink()
         removed_aoi_response = client.post(
             "/api/raster-analysis/statistics",
             json={
@@ -873,7 +872,7 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
     assert sum(aoi_document["histogram"]["counts"]) == 2
 
     assert removed_aoi_response.status_code == 409
-    assert "identity changed" in removed_aoi_response.json()["detail"]
+    assert "unavailable" in removed_aoi_response.json()["detail"]
 
     assert outside_response.status_code == 409
     assert outside_response.json() == {
