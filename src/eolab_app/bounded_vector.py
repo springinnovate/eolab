@@ -79,12 +79,11 @@ def _source_collection(
         resolved: Current private source capability.
 
     Yields:
-        Original native layer, closed before its source signature is rechecked.
+        Original immutable native layer, closed when the context exits.
 
     Raises:
-        SelectionUnavailableError: If the source changed or its driver cannot read it.
+        SelectionUnavailableError: If the source or its driver cannot be read.
     """
-    resolved.require_current()
     try:
         with fiona.open(
             resolved.path,
@@ -96,7 +95,6 @@ def _source_collection(
         raise SelectionUnavailableError(
             "The catalog vector could not be read safely."
         ) from error
-    resolved.require_current()
 
 
 @contextmanager
@@ -122,7 +120,7 @@ def polygon_features(
 
     Raises:
         GeometryValidationError: For invalid topology or actual read-work limits.
-        SelectionUnavailableError: If a source component changed.
+        SelectionUnavailableError: If a source component cannot be read.
     """
     with polygon_records(
         resolved,
@@ -173,7 +171,7 @@ def polygon_records(
     Raises:
         ValueError: If the requested time budget is not a positive finite number.
         GeometryValidationError: If a requested field is missing or geometry/work limits fail.
-        SelectionUnavailableError: If a source component changed or cannot be read.
+        SelectionUnavailableError: If a source component cannot be read.
     """
     if timeout_seconds is not None and (
         type(timeout_seconds) not in (int, float)
@@ -181,7 +179,6 @@ def polygon_records(
         or timeout_seconds <= 0
     ):
         raise ValueError("Vector read timeout must be a positive finite number")
-    resolved.require_current()
     deadline = None if timeout_seconds is None else monotonic() + timeout_seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
         with _source_collection(resolved) as dataset:
@@ -267,7 +264,6 @@ def polygon_records(
                     }
 
             yield iterate()
-    resolved.require_current()
 
 
 def selection_summary(
@@ -318,7 +314,6 @@ def selection_summary(
         raise GeometryValidationError("No matching polygon features; change the filter")
     with _source_collection(resolved) as dataset:
         total = len(dataset)
-    resolved.require_current()
     return {
         "bbox": tuple(bounds),
         "matched": matched,

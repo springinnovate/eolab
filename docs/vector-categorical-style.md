@@ -73,7 +73,7 @@ validation adds only these defaults and continues rejecting other missing or
 unsupported fields. Existing opaque saved-map envelopes need no schema change.
 
 Vector-owned API validation and style generation preserve Catalog source/field
-authorization, signatures, geometry, scalar types, rule limits, and immutable
+authorization, geometry, scalar types, rule limits, and immutable
 style/cache identity. Counts do not authorize explicit categories. The same SLD
 generator applies category opacity through ordinary and composite rendering;
 literal legend text never becomes a GeoServer expression.

@@ -25,7 +25,7 @@ class OutlineJobs:
         """Create a simplified map outline for a catalog feature selection.
 
         Args:
-            selection: Immutable Catalog identity, source signature and filter.
+            selection: Immutable Catalog binding and feature filter.
 
         Returns:
             Validated GeoJSON FeatureCollection and its WGS 84 bounding box.

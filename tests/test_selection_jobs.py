@@ -46,7 +46,7 @@ MEASUREMENTS = {
 }
 
 
-@pytest.mark.parametrize("case", ["valid", "empty", "stale"])
+@pytest.mark.parametrize("case", ["valid", "empty", "legacy", "wrong-layer"])
 def test_registered_measurement_reads_original_filtered_polygons(
     outline_case: tuple,
     tmp_path: Path,
@@ -57,7 +57,7 @@ def test_registered_measurement_reads_original_filtered_polygons(
     Args:
         outline_case: HTTP Catalog and mounted polygons used by outline tests too.
         tmp_path: Readable fixture mount, injected only as deployment configuration.
-        case: Valid selection, empty predicate, or obsolete source signature.
+        case: Valid or historical selection, empty predicate, or wrong native layer.
     """
     selection, _, url = outline_case
     if case == "empty":
@@ -68,8 +68,11 @@ def test_registered_measurement_reads_original_filtered_polygons(
                 )
             }
         )
-    if case == "stale":
-        selection = selection.model_copy(update={"sourceSignature": "f" * 64})
+    if case == "wrong-layer":
+        selection = selection.model_copy(update={"layerName": "other"})
+    descriptor = selection.model_dump(mode="json", by_alias=True)
+    if case == "legacy":
+        descriptor["sourceSignature"] = "f" * 64
     command = (
         "from pathlib import Path; from eolab_app.vector import selection_operation as op; "
         f"op.CATALOG_URL={url!r}; op.SCAN_MOUNT=Path({str(tmp_path)!r}); "
@@ -82,7 +85,7 @@ def test_registered_measurement_reads_original_filtered_polygons(
             {
                 "operation": "vector.selection-measurement.v1",
                 "inputs": {
-                    "selection": selection.model_dump(mode="json", by_alias=True),
+                    "selection": descriptor,
                 },
             }
         ).encode(),
@@ -91,7 +94,7 @@ def test_registered_measurement_reads_original_filtered_polygons(
     )
     assert result.returncode == 0, result.stderr.decode()
     reply = json.loads(result.stdout)
-    if case == "stale":
+    if case == "wrong-layer":
         assert reply["ok"]
         assert reply["value"]["measurements"] is None
         assert "identity changed" in reply["value"]["error"]
@@ -145,7 +148,6 @@ def test_measurement_contract_rejects_paths_and_inconsistent_results(
         "expired",
         "timed_out",
         "failed",
-        "stale",
     ],
 )
 def test_application_selects_only_through_jobs(
@@ -164,7 +166,7 @@ def test_application_selects_only_through_jobs(
         monkeypatch: Isolated app deployment settings.
         configured_environment: Complete application environment.
         version_file_path: Application version fixture.
-        outcome: Jobs completion, rejection, source change, or lifecycle failure.
+        outcome: Jobs completion, rejection, or lifecycle failure.
     """
     selection, _, catalog_url = outline_case
     monkeypatch.setenv("CATALOG_INTERNAL_URL", catalog_url)
@@ -191,9 +193,6 @@ def test_application_selects_only_through_jobs(
         if outcome == "restart" and request.method == "GET":
             return httpx2.Response(404)
         if request.url.path.endswith("/result"):
-            if outcome == "stale":
-                with (tmp_path / "polygons.gpkg").open("ab") as stream:
-                    stream.write(b"changed")
             value = (
                 {"error": "No matching polygon features; change the filter"}
                 if outcome == "empty"
@@ -243,7 +242,6 @@ def test_application_selects_only_through_jobs(
             "expired": "waited too long",
             "timed_out": "time budget",
             "failed": "could not be measured",
-            "stale": "changed",
         }[outcome]
         assert expected in response.text
 

@@ -10,7 +10,6 @@ from eolab_app.vector.filters import VectorFilter, filter_ecql, filter_vector_sl
 from eolab_app.vector.models import (
     ResolvedVectorSource,
     VectorStyle,
-    VectorSourceSignature,
 )
 from eolab_app.vector.styles import (
     build_vector_sld,
@@ -25,7 +24,6 @@ class PublishedVectorAuthorization:
 
     Attributes:
         source: Exact mounted source and native layer identity.
-        source_signature: Complete filesystem identity approved at publication.
         style_name: Only WMS style authorized for this layer.
         geometry_name: GeoServer geometry attribute retained with the style.
         upstream_layer_name: Original authorized publication for a filtered view.
@@ -33,7 +31,6 @@ class PublishedVectorAuthorization:
     """
 
     source: ResolvedVectorSource
-    source_signature: VectorSourceSignature
     style_name: str
     geometry_name: str | None = None
     upstream_layer_name: str | None = None

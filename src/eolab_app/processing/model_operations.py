@@ -74,7 +74,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         output: Primary result contract, required by every recipe using this operation.
         additional_outputs: Other complete files recipes may explicitly retain.
         execution_profile: Server resource policy required by compatible recipes.
-        reuse_prepared_source: Whether immediate execution reuses preparation authorization.
         queued_type: Persisted input schema before preparation.
         prepared_type: Persisted execution schema after preparation.
         policy_type: Schema validating recorded numerical implementation facts.
@@ -92,7 +91,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         primary_input: Argument bound to the main raster source and its grid metadata.
         extra_sources: Additional catalog rasters to capture and check with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
-        check_execution: Recheck vector access and identity before result publication.
         fixed_input_models: Argument names and schemas for values fixed in Model YAML.
         input_adapters: Additional operation-owned types accepted by selected inputs.
         validate_invocation: Validate captured operation metadata using input role
@@ -109,7 +107,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     parameters: tuple[tuple[str, str], ...]
     output: OperationOutput
     execution_profile: str
-    reuse_prepared_source: bool
     queued_type: type[Queued]
     prepared_type: type[Prepared]
     policy_type: type[BaseModel]
@@ -142,9 +139,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     execution_inputs: Callable[
         [OperationContext, Prepared, AuthorizedRaster], Awaitable[tuple[Any, Prepared]]
     ] = raster.prepare_raster_execution
-    check_execution: Callable[[OperationContext, Prepared], Awaitable[None]] = (
-        raster.check_raster_execution
-    )
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
     validate_invocation: (
@@ -236,7 +230,6 @@ OPERATIONS = MappingProxyType(
                     ),
                 ),
                 execution_profile="downstream-small-region",
-                reuse_prepared_source=False,
                 queued_type=QueuedDownstream,
                 prepared_type=DownstreamPlan,
                 policy_type=DownstreamPolicy,
@@ -252,7 +245,6 @@ OPERATIONS = MappingProxyType(
                 primary_input="values",
                 extra_sources=downstream.get_additional_sources,
                 execution_inputs=downstream.resolve_downstream_execution_inputs,
-                check_execution=downstream.check_downstream_execution,
                 fixed_input_models=(("hydrology", HydrologySources),),
                 input_adapters=(
                     ("mask_source", TypeAdapter(StartingMask)),
@@ -269,7 +261,6 @@ OPERATIONS = MappingProxyType(
                     "statistics", "statistics", "table", "text/csv", "Statistics"
                 ),
                 execution_profile="raster-summary",
-                reuse_prepared_source=True,
                 queued_type=UnpreparedCalculation,
                 prepared_type=AggregateSpec,
                 policy_type=raster.SummaryNumericalPolicy,
@@ -294,7 +285,6 @@ OPERATIONS = MappingProxyType(
                     "raster", "raster", "map", "image/tiff", "Raster"
                 ),
                 execution_profile="raster-clip",
-                reuse_prepared_source=False,
                 queued_type=UnpreparedClip,
                 prepared_type=ClipSpec,
                 policy_type=raster.ClipNumericalPolicy,

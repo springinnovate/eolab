@@ -22,6 +22,7 @@ def identify_shared_calculation(
     the submitting caller; only their validated content hash affects identity.
     Submission retry identifiers are excluded when a calculation request is
     reused directly, so they cannot split otherwise identical shared work.
+    Legacy vector fingerprints do not affect the immutable computation identity.
 
     Args:
         inputs: Validated clip or summary inputs, with owned polygons resolved.
@@ -34,6 +35,8 @@ def identify_shared_calculation(
         ValueError: If inputs cannot be serialized as finite JSON.
     """
     request = inputs.request.model_dump(mode="json", by_alias=True)
+    if request.get("catalogSelection") is not None:
+        request["catalogSelection"].pop("sourceSignature", None)
     if isinstance(inputs, UnpreparedCalculation):
         request.pop("requestId", None)
         alias = next(iter(inputs.request.sources))

@@ -149,8 +149,10 @@ def test_exact_counts_and_partial_counts_share_bounded_field_reader(tmp_path):
     assert reader.count_filter(source, predicate(("observed", "ge", "2026-08-01")), 8, Event()).matched == 8
 
 
-def test_filtered_publications_are_isolated_current_bounded_and_style_preserving(tmp_path):
-    """Keep base authorization unchanged and invalidate stale or evicted aliases.
+def test_filtered_publications_are_isolated_current_bounded_and_style_preserving(
+    tmp_path: Path,
+) -> None:
+    """Keep base authorization unchanged and expire evicted filter aliases.
 
     Args:
         tmp_path: Isolated assessed mounted source.
@@ -181,10 +183,8 @@ def test_filtered_publications_are_isolated_current_bounded_and_style_preserving
         registry.require_current(other.layerName)
     current = registry.authorize_filter(publication.layer_name, candidate)
     path.touch()
-    with pytest.raises(PublishedLayerChangedError):
-        registry.require_current(current)
-    with pytest.raises(VectorConflictError):
-        asyncio.run(service.count_filter(request_for(item, candidate)))
+    assert registry.require_current(current).filter == candidate
+    assert asyncio.run(service.count_filter(request_for(item, candidate))) == result
 
 
 def test_selection_intersects_category_else_rules_and_label_rules():

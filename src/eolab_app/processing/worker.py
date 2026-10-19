@@ -23,7 +23,6 @@ from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.raster.source_identity import RasterSourceIdentity
-from eolab_app.source_files import verify_source_file
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.downstream_models import DownstreamLimits
@@ -93,7 +92,7 @@ class ProcessingWorker:
 
         Args:
             reuse_results: Whether this attempt may reuse scalar results.
-            source_checksum: Verified published checksum when using a private file.
+            source_checksum: Published checksum when using a private file.
 
         Returns:
             Operation context without browser, recipe or rendering state.
@@ -113,20 +112,22 @@ class ProcessingWorker:
     async def _resolve_source(
         self, row: dict[str, Any], source: RasterSourceReference
     ) -> tuple[AuthorizedRaster, str | None]:
-        """Authorize catalog data or verify a file retained by this accepted job.
+        """Authorize catalog data or resolve a file retained by this accepted job.
 
         Args:
             row: Claimed computation with its current attempt token.
             source: Operation-owned catalog or published-file reference.
 
         Returns:
-            Confined raster path and stat identity, plus its published checksum
+            Confined raster path and captured metadata, plus its published checksum
             for private inputs. The durable grant survives parent expiry/deletion.
+            Private metadata is captured once for saved plans and cache identity;
+            published bytes are not rehashed or checked for later mutation.
 
         Raises:
-            ProcessingError: If the accepted grant or file identity is invalid.
+            ProcessingError: If the accepted grant or confined file is unavailable.
             RasterFeatureError: If catalog authorization fails.
-            ProcessDeadlineError: If the native checksum process exits without a result.
+            OSError: If private-file metadata cannot be read.
         """
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
@@ -140,37 +141,19 @@ class ProcessingWorker:
         path = await asyncio.to_thread(
             self.artifacts.artifact_path, parent_attempt, file.storage_name
         )
-        identity = await run_process(
-            verify_source_file,
-            (path, file.size, file.sha256),
-            None,
-            self.native,
-        )
-        if identity is None:
-            raise ProcessingError(
-                "source_changed",
-                "The retained raster is no longer intact. Run the parent model again.",
-                409,
-            )
         return (
-            AuthorizedRaster(
-                path, RasterSourceIdentity.from_catalog(list(identity[1:]))
-            ),
+            AuthorizedRaster(path, RasterSourceIdentity.read(path)),
             file.sha256,
         )
 
     async def _resolve_additional_sources(
         self,
-        row: dict[str, Any],
-        model: ModelRunSpec | None,
         spec: Any,
         operation: Any,
     ) -> dict[str, AuthorizedRaster]:
-        """Authorize every additional raster against its accepted catalog identity.
+        """Authorize every additional raster reference declared by the operation.
 
         Args:
-            row: Current fenced attempt.
-            model: Captured model identities, absent for ordinary raster operations.
             spec: Queued or prepared operation specification.
             operation: Registered adapter declaring the additional raster references.
 
@@ -178,7 +161,7 @@ class ProcessingWorker:
             Authorized native sources for this preparation or execution phase.
 
         Raises:
-            ProcessingError: If a named source is unavailable or changed since admission.
+            ProcessingError: If a named source is unavailable.
         """
         result = {}
         for name, reference in (
@@ -192,14 +175,6 @@ class ProcessingWorker:
                     f"The model's {name} input is unavailable. {error.detail}",
                     422,
                 ) from error
-            if model is None or tuple(
-                source.source_signature.to_catalog()
-            ) != model.additionalSourceSignatures.get(name):
-                raise ProcessingError(
-                    "source_changed",
-                    f"The model's {name} input changed after this run was accepted.",
-                    409,
-                )
             result[name] = source
         return result
 
@@ -236,19 +211,9 @@ class ProcessingWorker:
                 "job_cancelled", "Calculation stopped before preparation.", 409
             )
         authorized, checksum = await self._resolve_source(row, operation.source(queued))
-        if (
-            model is not None
-            and model.sourceSignature is not None
-            and tuple(authorized.source_signature.to_catalog()) != model.sourceSignature
-        ):
-            raise ProcessingError(
-                "source_changed",
-                "The raster changed after this model run was accepted.",
-                409,
-            )
         context = self._operation_context(model is None, checksum)
         context.rasters.update(
-            await self._resolve_additional_sources(row, model, queued, operation)
+            await self._resolve_additional_sources(queued, operation)
         )
         prepared = await operation.prepare(context, queued, authorized)
         if model is not None:
@@ -296,8 +261,6 @@ class ProcessingWorker:
         checksum = None
         if isinstance(calculation, handler.queued_type):
             authorized, checksum = await self._prepare_operation(row)
-            if not handler.reuse_prepared_source:
-                authorized = None
         calculation_spec = (
             ModelRunSpec.model_validate(row["spec"]).calculation
             if model
@@ -311,20 +274,8 @@ class ProcessingWorker:
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
         context = self._operation_context(model is None, checksum)
-        context.rasters.update(
-            await self._resolve_additional_sources(row, model, spec, handler)
-        )
+        context.rasters.update(await self._resolve_additional_sources(spec, handler))
         native_sources, spec = await handler.execution_inputs(context, spec, authorized)
-        if (
-            model is not None
-            and model.sourceSignature is not None
-            and tuple(authorized.source_signature.to_catalog()) != model.sourceSignature
-        ):
-            raise ProcessingError(
-                "source_changed",
-                "The raster changed after this model run was accepted.",
-                409,
-            )
         directory = await asyncio.to_thread(
             self.artifacts.prepare,
             row["attempt_id"],
@@ -332,17 +283,6 @@ class ProcessingWorker:
         if model is None and handler.cached is not None:
             value = await handler.cached(context, spec, directory)
             if value is not None:
-                await handler.check_execution(context, spec)
-                if (
-                    checksum is not None
-                    and RasterSourceIdentity.read(authorized.source_path)
-                    != authorized.source_signature
-                ):
-                    raise ProcessingError(
-                        "source_changed",
-                        "The retained raster changed during calculation.",
-                        409,
-                    )
                 return await self._publish_result(row, value)
         status, value = await run_process(
             target,
@@ -352,22 +292,6 @@ class ProcessingWorker:
         )
         if status != "ok":
             raise ProcessingError(*value)
-        if (
-            RasterSourceIdentity.read(authorized.source_path)
-            != authorized.source_signature
-        ):
-            raise ProcessingError(
-                "source_changed", "The raster changed during calculation.", 409
-            )
-        for additional in context.rasters.values():
-            if (
-                RasterSourceIdentity.read(additional.source_path)
-                != additional.source_signature
-            ):
-                raise ProcessingError(
-                    "source_changed", "A model input changed during calculation.", 409
-                )
-        await handler.check_execution(context, spec)
         return await self._publish_result(row, value)
 
     async def _publish_result(
@@ -518,7 +442,7 @@ class ProcessingWorker:
             elif isinstance(error, (RasterFeatureError, SelectionUnavailableError)):
                 detail = {
                     "code": "source_unavailable",
-                    "detail": "The catalog source is unavailable or changed. Check the layer, then submit the job again.",
+                    "detail": "The catalog source is unavailable. Check the layer, then submit the job again.",
                 }
             else:
                 detail = {

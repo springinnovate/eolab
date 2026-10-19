@@ -59,11 +59,12 @@ A file removed between authorization and reading produces the ordinary source
 error. Cancellation discards the response but retains the concurrency slot until
 the native read finishes.
 
-Longer private statistics and metadata operations retain the existing renewable
-transfer lease, checksum verification, availability recheck and supervised native
-reader. They keep their transfer limits, 30-second native deadline and Linux
-2 GiB address-space ceiling; this change does not weaken queued model input
-retention or download integrity checks.
+Longer private statistics and metadata operations retain a renewable transfer
+lease, recheck access before delivery and use the supervised native reader.
+Published contents are immutable, so requests trust the publication checksum
+without rehashing files or comparing filesystem fingerprints. Reader transfer
+limits, the 30-second native deadline, Linux's 2 GiB address-space ceiling and
+queued model input retention still apply.
 
 Private statistics use the existing bounded cache and request coalescing, keyed
 by owner, run, file, checksum and byte count as well as area and numerical policy.

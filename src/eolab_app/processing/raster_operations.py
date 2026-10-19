@@ -100,22 +100,6 @@ async def prepare_raster_execution(
     return authorized.source_path, spec
 
 
-async def check_raster_execution(
-    context: OperationContext, spec: AggregateSpec | ClipSpec
-) -> None:
-    """Recheck vector selection identity after a summary or clip finishes.
-
-    Args:
-        context: Worker capabilities used to resolve the selection.
-        spec: Executed plan with its ephemeral resolved selection.
-
-    Raises:
-        SelectionUnavailableError: If the selected source changed or lost access.
-    """
-    if spec.area.kind == "catalogSelection":
-        await context.areas.resolve_for_sampling(spec.area.catalogSelection)
-
-
 class SummaryNumericalPolicy(BaseModel):
     """Numerical rules actually used by the native raster-summary operation.
 
@@ -166,7 +150,7 @@ async def prepare_summary(
     Args:
         context: Worker capabilities and resource limits for this attempt.
         queued: Validated summary inputs, including any owned polygon copy.
-        authorized: Source already authorized and signature-checked by the worker.
+        authorized: Source already authorized by the worker.
 
     Returns:
         Prepared summary plan and its disk reservation.
@@ -242,8 +226,6 @@ async def prepare_summary(
         )
         if status != "ok":
             raise ProcessingError(*grid)
-        if resolved is not None:
-            await context.areas.resolve_for_sampling(request.catalogSelection)
         spec = AggregateSpec(
             sources=request.sources,
             sourceSignature=signature,
@@ -267,7 +249,7 @@ async def prepare_clip(
     Args:
         context: Worker capabilities and resource limits for this attempt.
         queued: Validated explicit clip inputs.
-        authorized: Source already authorized and signature-checked by the worker.
+        authorized: Source already authorized by the worker.
 
     Returns:
         Prepared clip plan and its disk reservation.
@@ -307,8 +289,6 @@ async def prepare_clip(
     )
     if status != "ok":
         raise ProcessingError(*grid)
-    if request.catalogSelection:
-        await context.areas.resolve_for_sampling(request.catalogSelection)
     spec = ClipSpec(
         source=source,
         sourceSignature=signature,

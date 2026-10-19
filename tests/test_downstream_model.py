@@ -1192,7 +1192,7 @@ def test_missing_configured_raster_names_the_runtime_input(
 def test_worker_captures_configured_watershed_then_keeps_that_identity(
     tmp_path: Path,
 ) -> None:
-    """Fresh runs resolve current sources and execution rechecks only that run's identity.
+    """Fresh runs capture configured sources and execution resolves those descriptors.
 
     Args:
         tmp_path: Real source files and current catalog descriptors.
@@ -1201,7 +1201,6 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     from eolab_app.processing.downstream_operation import (
         resolve_downstream_sources,
         resolve_downstream_execution_inputs,
-        check_downstream_execution,
     )
 
     sources, request, limits = downstream_fixture(tmp_path)
@@ -1233,11 +1232,9 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     )
     assert execution_sources.network == sources.network
     reader.resolve_for_sampling.assert_awaited_once_with(sources.network.selection)
-    reader.resolve_for_sampling.side_effect = SelectionUnavailableError("changed")
+    reader.resolve_for_sampling.side_effect = SelectionUnavailableError("unavailable")
     with pytest.raises(ProcessingError, match="watershed layer"):
         asyncio.run(resolve_downstream_execution_inputs(context, restored, values))
-    with pytest.raises(ProcessingError, match="watershed layer"):
-        asyncio.run(check_downstream_execution(context, restored))
     assert reader.resolve_source.await_count == 1
 
 

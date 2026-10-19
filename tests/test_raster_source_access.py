@@ -138,16 +138,13 @@ class FileAuthority:
         self.sequence = 0
         self.check_count = 0
 
-    async def check(self, owner: str, run: str, file: str) -> tuple[int, str, str]:
+    async def check(self, owner: str, run: str, file: str) -> None:
         """Authorize the requesting session against current source availability.
 
         Args:
             owner: Server-derived owner.
             run: Opaque run identity.
             file: Opaque file identity.
-
-        Returns:
-            Published size, checksum and format.
 
         Raises:
             SourceFileError: If ownership or availability fails.
@@ -161,7 +158,6 @@ class FileAuthority:
             raise SourceFileError("Unavailable to this session", 404)
         if not self.ready:
             raise SourceFileError("Result expired or deleted", 409)
-        return self.size, self.sha256, "image/tiff"
 
     async def acquire(self, owner: str, run: str, file: str) -> FileLease:
         """Authorize and retain a file before any native read.
@@ -230,7 +226,7 @@ class FileAuthority:
             renewal_seconds: Shortened only for the lease-loss fixture.
 
         Returns:
-            Production source lifetime/verification code with controlled authority.
+            Production source lifetime code with controlled authority.
         """
         return LeasedSourceFiles(
             self.acquire,
@@ -318,10 +314,6 @@ def test_catalog_and_private_sources_use_the_same_native_analysis(
         with pytest.raises(SourceFileError) as error:
             await statistics.get(request, "foreign")
         assert error.value.status == 404
-        with path.open("ab") as stream:
-            stream.write(b"changed")
-        with pytest.raises(SourceFileError, match="changed"):
-            await statistics.get(request, "owner")
         assert not authority.leases
 
     asyncio.run(exercise())
@@ -617,24 +609,49 @@ def test_private_no_overlap_uses_the_existing_statistics_error(tmp_path: Path) -
     asyncio.run(exercise())
 
 
-def test_mutation_during_a_read_prevents_source_delivery(tmp_path: Path) -> None:
-    """Do not deliver derived data when a verified file changes during its read scope.
+def test_source_access_trusts_published_identity_without_file_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated access authorizes published files without reading bytes or metadata.
 
     Args:
         tmp_path: Isolated immutable source fixture.
+        monkeypatch: Reject filesystem access while the source scope authorizes reads.
     """
     path = write_source(tmp_path / "source.tif")
     authority = FileAuthority(path)
 
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        """Reject an unnecessary file open or stat during source authorization.
+
+        Args:
+            args: Unexpected filesystem operation arguments.
+            kwargs: Unexpected filesystem operation options.
+
+        Raises:
+            AssertionError: Always; only the consumer needs to read the source.
+        """
+        raise AssertionError("Immutable source access must not inspect file contents")
+
     async def exercise() -> None:
-        """Modify the retained file after checksum verification, before delivery."""
-        with pytest.raises(SourceFileError, match="changed while"):
+        """Authorize repeated reads, then translate an actual missing-file failure."""
+        files = authority.files()
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "open", forbidden)
+            patch.setattr(Path, "stat", forbidden)
+            for _ in range(3):
+                async with files.open(
+                    "owner", PRIVATE["jobId"], PRIVATE["artifactId"]
+                ) as source:
+                    assert source.sha256 == authority.sha256
+        assert authority.check_count == 6 and not authority.leases
+        path.unlink()
+        with pytest.raises(SourceFileError) as error:
             async with authority.files().open(
                 "owner", PRIVATE["jobId"], PRIVATE["artifactId"]
-            ):
-                with path.open("ab") as stream:
-                    stream.write(b"changed")
-        assert not authority.leases
+            ) as source:
+                source.path.open("rb")
+        assert error.value.status == 410 and not authority.leases
 
     asyncio.run(exercise())
 
@@ -665,7 +682,6 @@ def test_private_pixel_reuses_short_reader_without_checksums_or_processes(
         """
         raise AssertionError("Pixel picking must not hash files or spawn children")
 
-    monkeypatch.setattr("eolab_app.source_files.run_bounded_process", forbidden)
     monkeypatch.setattr("eolab_app.raster.source_access.run_bounded_process", forbidden)
     sources = RasterSourceAccess(CatalogAuthority(path), authority.files())
     service = RasterPixelService(sources, 1, pixel_reader=read_raster_pixel)
@@ -759,7 +775,7 @@ def test_lost_lease_cannot_be_hidden_by_shielded_consumer_cleanup(
         reading = False
 
         async def renew(lease: str) -> bool:
-            """Lose retention after source verification succeeds.
+            """Lose retention after the consumer starts reading.
 
             Args:
                 lease: Current file retention token.
@@ -780,59 +796,6 @@ def test_lost_lease_cannot_be_hidden_by_shielded_consumer_cleanup(
             async with files.open("owner", PRIVATE["jobId"], PRIVATE["artifactId"]):
                 reading = True
                 await finish_source_task(asyncio.create_task(asyncio.sleep(0.1)))
-        assert not authority.leases
-
-    asyncio.run(exercise())
-
-
-def test_source_verification_has_bounded_capacity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Reject excess verification before a third file read starts and release all leases.
-
-    Args:
-        tmp_path: Isolated immutable source fixture.
-        monkeypatch: Hold the supervised checksum boundary while admission fills.
-    """
-    path = write_source(tmp_path / "source.tif")
-    authority = FileAuthority(path)
-
-    async def exercise() -> None:
-        """Occupy both source-check slots, then reject and clean up the third request."""
-        entered = asyncio.Event()
-        calls = 0
-
-        async def verify(*arguments: Any) -> Any:
-            """Hold native checksum work until the request is cancelled.
-
-            Args:
-                arguments: Source-verification process arguments.
-
-            Returns:
-                No result because the fixture is cancelled.
-            """
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                entered.set()
-            await asyncio.Event().wait()
-
-        monkeypatch.setattr("eolab_app.source_files.run_bounded_process", verify)
-        files = authority.files()
-
-        async def consume() -> None:
-            """Hold the authorized file around a consumer's complete read."""
-            async with files.open("owner", PRIVATE["jobId"], PRIVATE["artifactId"]):
-                pytest.fail("The checksum fixture must not return a source")
-
-        first, second = asyncio.create_task(consume()), asyncio.create_task(consume())
-        await asyncio.wait_for(entered.wait(), 10)
-        with pytest.raises(SourceFileError) as failure:
-            await consume()
-        assert failure.value.status == 429 and calls == 2
-        first.cancel()
-        second.cancel()
-        await asyncio.gather(first, second, return_exceptions=True)
         assert not authority.leases
 
     asyncio.run(exercise())

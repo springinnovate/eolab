@@ -89,7 +89,7 @@ def measure_selected_features(
         inputs: Catalog layer identity and immutable attribute filter.
 
     Returns:
-        Measurements, or a safe explanation of empty, invalid, or changed inputs.
+        Measurements, or a safe explanation of empty, invalid, or unreadable inputs.
 
     Raises:
         VectorFeatureError: Catalog cannot authorize the requested layer/filter.
@@ -116,7 +116,7 @@ async def _measure_selected_features(
         Counts/bounds for the same source identified by the request.
 
     Raises:
-        SelectionUnavailableError: The source identity changed while queued or read.
+        SelectionUnavailableError: The Catalog binding or source is unavailable.
         GeometryValidationError: No polygons match, geometry is invalid, or a
             polygon exceeds its read budget.
         VectorFeatureError: Catalog cannot authorize the requested layer/filter.
@@ -136,17 +136,12 @@ async def _measure_selected_features(
         catalog = StacVectorCatalog(client, CATALOG_URL)
         resolver = MountedVectorResolver(SCAN_MOUNT)
         resolved = await resolve_selection(catalog, resolver, inputs.selection)
-        if resolved.selection != inputs.selection:
+        if resolved.selection.cache_identity() != inputs.selection.cache_identity():
             raise SelectionUnavailableError(
                 "The catalog vector identity changed; select it again."
             )
         with _limit_memory():
             measurements = FeatureMeasurements.model_validate(
                 selection_summary(resolved)
-            )
-        current = await resolve_selection(catalog, resolver, inputs.selection)
-        if current.selection != inputs.selection:
-            raise SelectionUnavailableError(
-                "The catalog vector identity changed; select it again."
             )
         return SelectionMeasurementResult(measurements=measurements)

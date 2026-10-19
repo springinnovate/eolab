@@ -41,7 +41,12 @@ from eolab_app.raster.statistics import (
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.raster.source_access import RasterSourceAccess
 from catalog_selection_support import write_selection
-from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
+from eolab_app.catalog_selection import (
+    CatalogSelection,
+    ResolvedCatalogSelection,
+    SelectionUnavailableError,
+)
+from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 from eolab_app.sampling_area import (
     RasterSamplingArea,
     SelectedBoundsSamplingArea,
@@ -1950,91 +1955,14 @@ def test_statistics_service_keys_cache_by_fixed_policy_parameters(
     assert len(service._cache) == 2
 
 
-def test_final_waiter_cancelled_during_postcheck_is_not_cached() -> None:
-    """Reject abandoned work canceled after reading and before caching."""
-    postcheck_started = asyncio.Event()
-    release_postcheck = asyncio.Event()
-    read_count = 0
+def test_statistics_service_authorizes_selection_once_per_request(
+    tmp_path: Path,
+) -> None:
+    """Authorize every request before cache lookup and trust its immutable selection.
 
-    class BlockingPostcheckService(RasterStatisticsService):
-        """Pause after reading so the last request can cancel before caching."""
-
-        async def _require_current_sampling_area(
-            self, sampling_area: RasterSamplingArea
-        ) -> None:
-            """Check the area, then pause after the first read.
-
-            Args:
-                sampling_area: Area whose lifecycle must remain valid.
-            """
-            await super()._require_current_sampling_area(sampling_area)
-            if read_count == 1:
-                postcheck_started.set()
-                await release_postcheck.wait()
-
-    def statistics_reader(
-        _: Path,
-        area: RasterSamplingArea,
-        __: object,
-    ) -> RasterStatistics:
-        """Return immediately so cancellation occurs after source I/O.
-
-        Args:
-            _: Ignored authorized source path.
-            area: Normalized statistics sampling area.
-            __: Ignored cooperative cancellation predicate.
-
-        Returns:
-            Controlled statistics identifying this bounded read.
-        """
-        nonlocal read_count
-        read_count += 1
-        return _statistics_result(float(read_count), area)
-
-    service = BlockingPostcheckService(
-        RasterSourceAccess(_SourceAuthorizer()),
-        1,
-        32,
-        statistics_reader=statistics_reader,  # type: ignore[arg-type]
-    )
-    request = CatalogRasterStatisticsRequest.model_validate({
-        "collectionId": "eolab-mounted-geotiffs",
-        "itemId": ITEM_ID,
-    })
-
-    async def cancel_during_postcheck() -> None:
-        """Abandon the final waiter while its completed read is rechecked.
-
-        Returns:
-            None.
-        """
-        first_waiter = asyncio.create_task(service.get(request))
-        await asyncio.wait_for(postcheck_started.wait(), timeout=1)
-        first_waiter.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await first_waiter
-        assert not service._cache
-
-        release_postcheck.set()
-
-        async def wait_for_abandoned_work() -> None:
-            """Wait until the cooperative worker leaves admission."""
-            while service._inflight:
-                await asyncio.sleep(0)
-
-        await asyncio.wait_for(wait_for_abandoned_work(), timeout=1)
-        assert not service._cache
-
-        replacement = await service.get(request)
-        assert replacement.sample_minimum == 2
-
-    asyncio.run(cancel_during_postcheck())
-    assert read_count == 2
-    assert len(service._cache) == 1
-
-
-def test_statistics_service_rechecks_catalog_selection(tmp_path: Path) -> None:
-    """Source revocation rejects cache hits and mid-read publication independently."""
+    Args:
+        tmp_path: Directory containing the real vector selection fixture.
+    """
     resolved = write_selection(
         tmp_path / "area.gpkg",
         [
@@ -2046,19 +1974,46 @@ def test_statistics_service_rechecks_catalog_selection(tmp_path: Path) -> None:
     )
 
     class Reader:
-        available = True
+        """Authorize the fixture selection and count request-boundary resolutions."""
 
-        async def resolve_for_sampling(self, selection: CatalogSelection):
-            """Authorize only the current fixture descriptor."""
+        available: bool = True
+        resolutions: int = 0
+
+        async def resolve_for_sampling(
+            self, selection: CatalogSelection
+        ) -> ResolvedCatalogSelection:
+            """Authorize the requested fixture descriptor once.
+
+            Args:
+                selection: Public vector and predicate descriptor.
+
+            Returns:
+                The resolved immutable fixture selection.
+
+            Raises:
+                SelectionUnavailableError: If access is unavailable or the descriptor differs.
+            """
+            self.resolutions += 1
             if not self.available or selection != resolved.selection:
-                raise SelectionUnavailableError("The catalog vector changed")
+                raise SelectionUnavailableError("The catalog vector is unavailable")
             return resolved
 
     reader = Reader()
-    calls = []
+    calls: list[RasterSamplingArea] = []
 
-    def compute(path, area, cancellation):
-        """Observe immutable input and optionally revoke it during the read."""
+    def compute(
+        path: Path, area: RasterSamplingArea, cancellation: RasterReadCancellationCheck
+    ) -> RasterStatistics:
+        """Return statistics without requiring a second selection resolution.
+
+        Args:
+            path: Authorized raster path, unused by this controlled reader.
+            area: Selection already authorized for this request.
+            cancellation: Caller cancellation predicate, unused by this immediate read.
+
+        Returns:
+            Controlled statistics identifying the current computation.
+        """
         calls.append(area)
         if len(calls) == 2:
             reader.available = False
@@ -2077,20 +2032,26 @@ def test_statistics_service_rechecks_catalog_selection(tmp_path: Path) -> None:
         catalogSelection=resolved.selection,
     )
 
-    async def exercise():
-        """Exercise cache admission and before-publication reauthorization."""
+    async def exercise() -> None:
+        """Require fresh authorization for cache hits without rechecking ongoing reads."""
         first = await service.get(request)
+        assert reader.resolutions == 1
         assert await service.get(request) is first
+        assert reader.resolutions == 2
         reader.available = False
-        with pytest.raises(RasterConflictError, match="changed"):
+        with pytest.raises(RasterConflictError, match="unavailable"):
             await service.get(request)
+        assert reader.resolutions == 3
         reader.available = True
         service._cache.clear()
-        with pytest.raises(RasterConflictError, match="changed"):
+        assert (await service.get(request)).sample_minimum == 2
+        assert reader.resolutions == 4
+        with pytest.raises(RasterConflictError, match="unavailable"):
             await service.get(request)
+        assert reader.resolutions == 5
 
     asyncio.run(exercise())
-    assert len(calls) == 2 and not service._cache
+    assert len(calls) == 2 and len(service._cache) == 1
 
 
 def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
@@ -2176,6 +2137,7 @@ def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
         release_reads.set()
         while service._tasks:
             await asyncio.sleep(0)
+        assert not service._cache
         await service.get(requests[1])
 
     asyncio.run(cancel_during_read())

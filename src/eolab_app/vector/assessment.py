@@ -163,7 +163,7 @@ class VectorAssessmentFinalizer:
             The same Item with normalized source and rendering contracts.
 
         Raises:
-            VectorConflictError: If a mounted source changes during assessment.
+            VectorConflictError: If a mounted source cannot be inspected.
             VectorUpstreamError: If the deployed reader probe is unavailable.
         """
         if item.get("collection") != MOUNTED_VECTOR_COLLECTION_ID:
@@ -233,14 +233,6 @@ class VectorAssessmentFinalizer:
             source.source_path,
             source.layer_name,
         )
-        current_signature = await asyncio.to_thread(
-            self._signature_reader,
-            source,
-        )
-        if current_signature != inspected_signature:
-            raise VectorConflictError(
-                "The vector source changed while it was being assessed"
-            )
         if assessment.compatible:
             metadata = _rendering_metadata(
                 eligible=True,

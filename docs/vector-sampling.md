@@ -77,7 +77,7 @@ selected polygon. Inclusion depends on the requested analysis:
 A narrow polygon may intersect pixels without containing their centers. Thus its
 area may be positive even when a numeric calculation has no selected cells.
 
-## Large areas and source changes
+## Large areas and immutable sources
 
 Direct **Use these features** asks for review on an unfiltered multi-feature
 selection or an envelope over 5 million km², and again above 100 million km².
@@ -92,9 +92,12 @@ boundaries can reach a limit even when the geographic area is small. Reduce the
 selection or repair invalid source geometry when the error requests it; EOLab
 does not silently replace exact analysis polygons with their bounding boxes.
 
-Raster and vector sources must remain unchanged until accepted work finishes.
-Rescan changed sources and select them again. Completed results remain available
-under their normal expiry policy. Sampling selections are not saved in shared
-map links; the same browser session can recover accepted jobs after reload.
+Catalog raster and vector sources are immutable; changed data needs a new Catalog
+identity. Reads trust that contract and report actual opening or reading failures.
+Selections contain the Catalog collection, item, asset, native layer and predicate.
+Historical `sourceSignature` fields remain accepted in saved requests but are not
+used or included in new selections. Completed results keep their normal expiry.
+Sampling selections are not saved in shared map links; the same browser session
+can recover accepted jobs after reload.
 
 For missing outline errors, operators should check the [Job service](job-service.md).

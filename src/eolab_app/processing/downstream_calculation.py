@@ -157,7 +157,6 @@ def plan_downstream(
     Raises:
         ProcessingError: If a raster is missing, unreadable or violates the source
             reader's supported file contract.
-        SelectionUnavailableError: If the watershed changed during preparation.
     """
     grid = None
     for name in ("dem", "values"):
@@ -173,7 +172,6 @@ def plan_downstream(
                 f"The model's {label} is missing or unreadable. Check the source and try again.",
                 422,
             ) from error
-    sources.network.require_current()
     return DownstreamPlan(
         inputs=request,
         grid=grid,
@@ -246,8 +244,8 @@ def downstream_process_target(
             (
                 "error",
                 (
-                    "source_changed",
-                    "A selected vector changed. Select it again before running the model.",
+                    "source_unavailable",
+                    "A selected vector is unavailable. Select it again before running the model.",
                     409,
                 ),
             )

@@ -783,7 +783,6 @@ def test_vector_composite_sld_multiplies_symbol_opacity() -> None:
     style = default_vector_style("polygon")
     authorization = PublishedVectorAuthorization(
         source=object(),  # type: ignore[arg-type]
-        source_signature=(),
         style_name="vector-polygon",
     )
     document = authorization.build_composite_sld(

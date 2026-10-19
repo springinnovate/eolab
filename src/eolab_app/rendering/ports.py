@@ -127,6 +127,6 @@ class PublishedLayerRegistry(Protocol):
         Raises:
             PublishedLayerNotAuthorizedError: If this registry does not own the
                 layer.
-            PublishedLayerChangedError: If its mounted source changed.
+            PublishedLayerChangedError: If its filter expired or source binding changed.
         """
         ...

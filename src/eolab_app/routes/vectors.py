@@ -133,7 +133,7 @@ def create_vector_feature(
             Typed top values, observed counts, completeness, and server limits.
 
         Raises:
-            HTTPException: If the Item, source signature, field, or bounded
+            HTTPException: If the Item, source binding, field, or bounded
                 reader is not current and authorized for this operation.
         """
         try:
@@ -158,7 +158,7 @@ def create_vector_feature(
             server-advertised class-count limits.
 
         Raises:
-            HTTPException: If the Item, source signature, numeric field, or
+            HTTPException: If the Item, source binding, numeric field, or
                 bounded reader cannot safely satisfy the operation.
         """
         try:

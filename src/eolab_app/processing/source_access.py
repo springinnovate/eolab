@@ -8,6 +8,7 @@ from eolab_app.source_files import (
     SourceFileError,
 )
 
+
 def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
     """Adapt model-result ownership checks and file retention for raster source readers.
 
@@ -39,7 +40,7 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
                 error.detail, error.status, code=error.code
             ) from error
 
-    async def check(owner: str, run_id: str, file_id: str) -> tuple[int, str, str]:
+    async def check(owner: str, run_id: str, file_id: str) -> None:
         """Reauthorize a file before its derived data is delivered.
 
         Args:
@@ -47,14 +48,11 @@ def create_model_source_files(service: ProcessingService) -> LeasedSourceFiles:
             run_id: Opaque run identity.
             file_id: Opaque file identity.
 
-        Returns:
-            Published size, checksum and media type.
-
         Raises:
             SourceFileError: If Processing no longer authorizes the file.
         """
         try:
-            return await service.check_model_artifact(owner, run_id, file_id)
+            await service.check_model_artifact(owner, run_id, file_id)
         except ProcessingError as error:
             raise SourceFileError(
                 error.detail, error.status, code=error.code

@@ -20,8 +20,7 @@ def build_outline(resolved: ResolvedCatalogSelection) -> dict[str, Any]:
 
     Args:
         resolved: Server-resolved dataset path, native layer name, attribute
-            filter (for example, iso3 == "PER"), and file signatures used to
-            detect source changes while reading.
+            filter (for example, iso3 == "PER").
 
     Returns:
         A dict with ``geometry`` (a simplified WGS84 FeatureCollection) and

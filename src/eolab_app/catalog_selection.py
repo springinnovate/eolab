@@ -14,22 +14,25 @@ class CatalogSelection(CatalogVectorRequest):
     """A catalog vector layer and attribute filter identifying features for analysis.
 
     Asset and layer names are checked against the authoritative Catalog on every
-    resolution. The signature is a digest of all mounted source components.
+    resolution. Supplied legacy fingerprints survive serialization for existing
+    idempotent requests, but do not identify or authorize the immutable selection.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
     filter: VectorFilter
     assetKey: str = Field(min_length=1, max_length=256)
     layerName: str = Field(min_length=1, max_length=256)
-    sourceSignature: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sourceSignature: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
 
     def cache_identity(self) -> str:
-        """Return a deterministic identity containing every selection input.
+        """Return the Catalog binding and predicate, without legacy fingerprints.
 
         Returns:
             Canonical JSON including source, native layer, and typed predicate.
         """
-        return self.model_dump_json(by_alias=True)
+        return self.model_dump_json(by_alias=True, exclude={"sourceSignature"})
 
 
 class SelectionUnavailableError(ValueError):
@@ -47,45 +50,19 @@ class SelectionUnavailableError(ValueError):
 
 @dataclass(frozen=True)
 class ResolvedCatalogSelection:
-    """An authorized vector source, its feature filter and its file-change checks.
+    """An authorized immutable vector source and its feature filter.
 
     Attributes:
         selection: Public immutable selection definition.
         path: Private exact mounted dataset path.
         driver: Allowed Fiona driver.
-        components: Private files and their stat identities, checked around reads.
         where: Server-compiled conservative OGR predicate.
     """
 
     selection: CatalogSelection
     path: Path
     driver: str
-    components: tuple[tuple[Path, tuple[int, ...]], ...]
     where: str | None
-
-    def require_current(self) -> None:
-        """Reject a selection if any of its source files changed or disappeared.
-
-        Raises:
-            SelectionUnavailableError: If a file disappeared or changed.
-        """
-        try:
-            for path, expected in self.components:
-                stat = path.stat()
-                if (
-                    stat.st_dev,
-                    stat.st_ino,
-                    stat.st_size,
-                    stat.st_mtime_ns,
-                    stat.st_ctime_ns,
-                ) != expected:
-                    raise SelectionUnavailableError(
-                        "The catalog vector changed; select it again."
-                    )
-        except OSError as error:
-            raise SelectionUnavailableError(
-                "The catalog vector is no longer available."
-            ) from error
 
 
 class CatalogSelectionReader(Protocol):
@@ -100,7 +77,7 @@ class CatalogSelectionReader(Protocol):
             source: Catalog collection and item identifying the configured layer.
 
         Returns:
-            Current full-layer descriptor, authorized path and file-change checks.
+            Full-layer descriptor and authorized path.
 
         Raises:
             SelectionUnavailableError: If the source cannot be resolved or inspected.
@@ -113,7 +90,7 @@ class CatalogSelectionReader(Protocol):
         """Find and authorize the source files and filter for a catalog selection.
 
         Args:
-            selection: Validated catalog identity, source signature and feature filter.
+            selection: Validated catalog identity and feature filter.
 
         Returns:
             Current source and server-compiled predicate.

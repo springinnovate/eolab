@@ -115,7 +115,7 @@ test("raster statistics apply only to their current whole or selected scope", ()
       CATALOG_SELECTION_RASTER_STATISTICS,
       {
         kind: "catalogSelection",
-        catalogSelection: { ...CATALOG_SELECTION, sourceSignature: "b".repeat(64) },
+        catalogSelection: { ...CATALOG_SELECTION, itemId: "other-countries" },
       },
     ),
     false,

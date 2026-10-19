@@ -13,7 +13,6 @@
         "itemId": "vector-222222222222222222222222",
         "assetKey": "data",
         "layerName": "project_areas",
-        "sourceSignature": "2222222222222222222222222222222222222222222222222222222222222222",
         "filter": {
           "enabled": true,
           "match": "all",

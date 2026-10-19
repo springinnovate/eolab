@@ -20,6 +20,17 @@ test("selection identity ignores object property order and copies immutable rule
     assert.equal(Object.isFrozen(normalized.filter.rules[0]), true);
 });
 
+test("selection identity ignores saved fingerprints while preserving retries", () => {
+    const current = validateCatalogSelection({...selection, sourceSignature: undefined});
+    assert.equal(Object.hasOwn(current, "sourceSignature"), false);
+    assert.equal(validateCatalogSelection(selection).sourceSignature, selection.sourceSignature);
+    assert.equal(catalogSelectionsEqual(current, selection), true);
+    assert.equal(catalogSelectionsEqual(current, { ...selection, sourceSignature: "b".repeat(64) }), true);
+    assert.equal(catalogSelectionsEqual(current, { ...current, layerName: "other" }), false);
+    assert.throws(() => validateCatalogSelection({ ...current, path: "/private/source" }), TypeError);
+    assert.throws(() => validateCatalogSelection({ ...current, sourceSignature: "invalid" }), TypeError);
+});
+
 test("a failed optional outline neither mutates nor invalidates the analysis descriptor", async (t) => {
     const area = Object.freeze({ selection: validateCatalogSelection(selection) });
     let calls = 0;

@@ -434,8 +434,12 @@ def test_fractional_union_matches_historical_exact_area(
                 )
 
 
-def test_predicate_source_signature_and_spatial_candidates(tmp_path: Path) -> None:
-    """Native pruning keeps exact selected values and rejects changed source files."""
+def test_predicate_and_spatial_candidates(tmp_path: Path) -> None:
+    """Native pruning keeps exact selected values without file-mutation checks.
+
+    Args:
+        tmp_path: Isolated source directory.
+    """
     candidate = VectorFilter(
         rules=[{"field": "selected", "operator": "eq", "value": 6060007000}]
     )
@@ -448,7 +452,6 @@ def test_predicate_source_signature_and_spatial_candidates(tmp_path: Path) -> No
     assert selection_summary(resolved)["matched"] == 2
     with polygon_features(resolved, (1.9, -1, 2.9, 1)) as features:
         assert len(list(features)) == 1
-    with resolved.path.open("ab") as source:
-        source.write(b"changed")
-    with pytest.raises(SelectionUnavailableError, match="changed"):
+    resolved.path.unlink()
+    with pytest.raises(SelectionUnavailableError, match="could not be read"):
         selection_summary(resolved)

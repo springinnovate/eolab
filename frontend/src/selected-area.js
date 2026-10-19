@@ -85,17 +85,19 @@ export function normalizeRasterSamplingArea(
 }
 
 /** Validate and copy an immutable catalog vector selection.
+ * Preserve supplied legacy fingerprints so saved submissions retry unchanged;
+ * selection comparisons ignore them and new descriptors do not require one.
  * @param {Object} value Public source identity and typed predicate.
  * @return {Readonly<Object>} Deeply immutable descriptor.
  * @throws {TypeError} For paths, geometry, malformed identity or filter fields.
  */
 export function validateCatalogSelection(value) {
-    const keys = ["assetKey", "collectionId", "filter", "itemId", "layerName", "sourceSignature"];
-    if (!value || typeof value !== "object" || Object.keys(value).sort().join() !== keys.join() ||
+    const keys = ["assetKey", "collectionId", "filter", "itemId", "layerName"];
+    if (!value || typeof value !== "object" || Object.keys(value).filter(key => key !== "sourceSignature").sort().join() !== keys.join() ||
         value.collectionId !== "eolab-mounted-vectors" ||
         typeof value.itemId !== "string" || value.itemId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value.itemId) ||
         ![value.assetKey, value.layerName].every(v => typeof v === "string" && v.length > 0 && v.length <= 256) ||
-        !/^[0-9a-f]{64}$/.test(value.sourceSignature)) throw new TypeError("Invalid catalog selection identity");
+        value.sourceSignature != null && !/^[0-9a-f]{64}$/.test(value.sourceSignature)) throw new TypeError("Invalid catalog selection identity");
     const input = value.filter;
     if (!input || Object.keys(input).sort().join() !== "enabled,match,rules" ||
         typeof input.enabled !== "boolean" || !["all", "any"].includes(input.match) ||
@@ -111,16 +113,20 @@ export function validateCatalogSelection(value) {
     });
     const filter = Object.freeze({ enabled: input.enabled, match: input.match, rules: Object.freeze(rules) });
     return Object.freeze({ collectionId: value.collectionId, itemId: value.itemId,
-        assetKey: value.assetKey, layerName: value.layerName, sourceSignature: value.sourceSignature, filter });
+        assetKey: value.assetKey, layerName: value.layerName,
+        ...(value.sourceSignature == null ? {} : {sourceSignature: value.sourceSignature}), filter });
 }
 
-/** Compare immutable selections independently of JSON property order.
+/** Compare immutable selections independently of property order and legacy fingerprints.
  * @param {Object|null|undefined} left First descriptor.
  * @param {Object|null|undefined} right Second descriptor.
  * @return {boolean} Whether both descriptors identify the same exact selection.
  * @throws {TypeError} When a present descriptor violates its public contract.
  */
 export function catalogSelectionsEqual(left, right) {
-    return left != null && right != null &&
-        JSON.stringify(validateCatalogSelection(left)) === JSON.stringify(validateCatalogSelection(right));
+    if (left == null || right == null) return false;
+    const leftIdentity = {...validateCatalogSelection(left)}, rightIdentity = {...validateCatalogSelection(right)};
+    delete leftIdentity.sourceSignature;
+    delete rightIdentity.sourceSignature;
+    return JSON.stringify(leftIdentity) === JSON.stringify(rightIdentity);
 }

@@ -135,7 +135,7 @@ test("whole-raster context never becomes an implicit clip export", async () => {
 
 test("new catalog intent replaces the selection while an accepted job preserves its area", async () => {
     const h=fixture(); h.controller.open(source,{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION});
-    const changed={...CATALOG_SELECTION,sourceSignature:"b".repeat(64)};
+    const changed={...CATALOG_SELECTION,itemId:"other-countries"};
     h.controller.open(source,{kind:"catalogSelection",catalogSelection:changed});
     await h.controller.submit();
     const accepted=structuredClone(h.view.state.jobs[0]);

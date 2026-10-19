@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { calculationIntent, CalculationSessionStorage } from "../../src/processing/calculation-session.js";
+import { PendingSubmissionStorage } from "../../src/processing/pending-submission.js";
+import { ProcessingApiClient } from "../../src/processing/api.js";
 
 /** @return {Object} Valid unfinished submission with a recoverable request key. */
 function record() {
@@ -62,6 +64,35 @@ test("legacy summary and series records migrate only to their owner without chan
         assert.deepEqual(scoped.read(),recovered);
     }
 });
+
+for (const operation of ["clip", "calculation"]) for (const legacy of [false, true]) {
+    test(`${operation} recovery preserves its ${legacy ? "legacy" : "current"} vector HTTP request`, async () => {
+        const selection = {collectionId: "eolab-mounted-vectors", itemId: "countries", assetKey: "data", layerName: "countries",
+            ...(legacy ? {sourceSignature: "a".repeat(64)} : {}), filter: {enabled: false, match: "all", rules: []}};
+        const saved = record(), backing = storage(), requests = [];
+        saved.intent.area = {kind: "catalogSelection", catalogSelection: selection};
+        const requestId = saved.pending.requestId;
+        const api = new ProcessingApiClient(async (url, options) => {
+            if (url.endsWith("/jobs")) return new Response(JSON.stringify({jobs: []}));
+            const payload = JSON.parse(options.body);
+            requests.push(url.endsWith("/batch") ? payload.items[0] : payload);
+            const job = {jobId: "a".repeat(32), operation: operation === "clip" ? "raster.clip.v1" : "raster.aggregate.v1",
+                status: "queued", progress: {}, result: null};
+            return new Response(JSON.stringify(url.endsWith("/batch") ? {items: [{index: 0, job}]} : job));
+        });
+        if (operation === "clip") {
+            new PendingSubmissionStorage(backing).write({...saved.intent, requestId, label: "Saved clip"});
+            await api.submitClip(new PendingSubmissionStorage(backing).read());
+        } else {
+            new CalculationSessionStorage(backing).write(saved);
+            const restored = new CalculationSessionStorage(backing).read();
+            await api.submitCalculation({...restored.intent, requestId: restored.pending.requestId});
+        }
+        const source = {collectionId: saved.intent.source.collectionId, itemId: saved.intent.source.itemId};
+        assert.deepEqual(requests, [{requestId, catalogSelection: selection,
+            ...(operation === "clip" ? source : {sources: {a: source}, calculations: saved.intent.calculations})}]);
+    });
+}
 
 test("failed migration preserves the legacy key and an independent peer record",()=>{
     const data=new Map(), backing=storage(data), root=new CalculationSessionStorage(backing);

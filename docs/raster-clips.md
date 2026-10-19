@@ -37,8 +37,8 @@ a new review; it does not cancel the existing download. Other active or availabl
 downloads are listed under a collapsed **Recent downloads** disclosure only when
 relevant. Selecting one inspects its original source/area without submitting work;
 active entries retain Cancel even while another submission is unconfirmed.
-The original Catalog sources must remain available and unchanged until execution
-and publication finish. **Download details** holds native grid/CRS, size estimates,
+Catalog sources are immutable and must remain available until execution finishes.
+**Download details** holds native grid/CRS, size estimates,
 provenance and the explicit Delete result action. Closing or switching tools leaves
 accepted work running. Downloads go directly through the browser, support resuming,
 and avoid a JavaScript Blob buffer.

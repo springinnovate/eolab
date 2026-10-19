@@ -30,7 +30,7 @@ def calculation_result_cache_keys(
         calculation: Validated request before planning, or a completed job plan.
         source_signature: Authorized raster metadata, required for a request.
             Stored plans already contain this metadata.
-        source_checksum: Verified published checksum when the input is a private file.
+        source_checksum: Published checksum when the input is a private file.
 
     Returns:
         One hash per formula. Identity includes the immutable raster, exact
@@ -79,6 +79,8 @@ def calculation_result_cache_keys(
                 ),
             ).model_dump(mode="json", by_alias=True)
         target_chunk_pixels = calculation.targetChunkPixels
+    if area.get("catalogSelection") is not None:
+        area["catalogSelection"].pop("sourceSignature", None)
     roots = [
         compile_expression(item.expression, alias) for item in calculation.calculations
     ]
@@ -204,7 +206,7 @@ def restore_cached_calculation_plan(
         source_signature: Current authorized raster metadata.
         cached_results: Unexpired cache entries indexed by requested input hash.
         polygon_area: Authorized polygon input, kept out of shared result-cache records.
-        source_checksum: Verified published identity for a private raster input.
+        source_checksum: Published identity for a private raster input.
 
     Returns:
         A plan retaining all requested values, or None for a missing, malformed

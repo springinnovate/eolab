@@ -14,7 +14,6 @@ import pytest
 from eolab_app.source_files import (
     LeasedSourceFiles,
     SourceFileError,
-    verify_source_file,
 )
 
 from eolab_app.rendering.artifact_preview import (
@@ -49,31 +48,6 @@ def write_preview_vector(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
-
-
-class Capture:
-    """Capture the native target's single supervised response."""
-
-    def put(self, value: dict[str, Any]) -> None:
-        """Retain one response for assertions.
-
-        Args:
-            value: Native success or sanitized error envelope.
-        """
-        self.value = value
-
-
-def test_native_preview_checks_checksum_before_read(tmp_path: Path) -> None:
-    """A same-sized changed file cannot be served under its old immutable identity.
-
-    Args:
-        tmp_path: Isolated filesystem root.
-    """
-    path = write_preview_vector(tmp_path / "changed.geojson")
-    captured = Capture()
-    verify_source_file(captured, path, path.stat().st_size, "0" * 64)
-    assert captured.value is None
-    assert str(path) not in json.dumps(captured.value)
 
 
 @pytest.mark.parametrize(
@@ -165,10 +139,10 @@ def preview_sources(
         release: Controlled lease release.
 
     Returns:
-        Shared source access with a controlled metadata check and renewal.
+        Shared source access with controlled ownership checks and renewal.
     """
 
-    async def check(owner: str, run: str, artifact: str) -> tuple[int, str, str]:
+    async def check(owner: str, run: str, artifact: str) -> None:
         """Check the controlled authority again before delivery.
 
         Args:
@@ -176,12 +150,9 @@ def preview_sources(
             run: Run identity.
             artifact: File identity.
 
-        Returns:
-            Current published metadata.
         """
         current = await acquire(owner, run, artifact)
         await release(current.lease_id)
-        return current.size, current.sha256, current.media_type
 
     async def renew(lease: str) -> bool:
         """Keep a controlled lease live.
@@ -268,7 +239,7 @@ def test_preview_rechecks_access_and_releases_lease(
 
 
 def test_supervised_native_preview_runs_without_geoserver(tmp_path: Path) -> None:
-    """Exercise checksum verification, native-process isolation and complete lease release.
+    """Exercise native-process isolation and complete lease release for a published file.
 
     Args:
         tmp_path: Isolated filesystem root.

@@ -7,14 +7,12 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class RasterSourceIdentity:
-    """Content-relevant identity of one mounted GeoTIFF.
+    """Filesystem metadata captured for an immutable GeoTIFF's stored identity.
 
     Device number is deliberately excluded because it identifies a mount
     instance rather than the file and can change when an unchanged NFS-backed
-    source is remounted into a replacement application container. Inode
-    detects replacement at the same path, size and modification time detect
-    content changes, and metadata-change time strengthens replacement and
-    mutation detection.
+    source is remounted into a replacement application container. Reads trust
+    this captured identity rather than checking for later file changes.
 
     Attributes:
         inode: Filesystem object number within the mounted filesystem.

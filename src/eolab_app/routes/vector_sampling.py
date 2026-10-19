@@ -34,7 +34,7 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
 
         Returns:
             Feature counts, geographic bounds and a descriptor containing the
-            catalog identity, source signature and filter, without file paths.
+            catalog binding and feature filter, without file paths.
 
         Raises:
             HTTPException: For cancellation, invalid source, or bounded-read failure.
@@ -60,7 +60,7 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
             Display-only approximate polygon outline.
 
         Raises:
-            HTTPException: For cancellation, stale source or display capacity.
+            HTTPException: For cancellation, unavailable source or display capacity.
         """
         try:
             return await run_until_http_disconnect(request, service.outline(payload))

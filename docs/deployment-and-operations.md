@@ -416,8 +416,8 @@ and [model output delivery](model-authoring.md) for the supported paths.
 
 Private output requests use opaque run/file identities and the owning browser's
 session. Ownership and expiry remain checked at the source-access boundary.
-Interactive metadata and statistics retain their renewable leases, checksum
-verification and bounded native readers; pixel reads use the short-read contract.
+Interactive metadata and statistics trust the published checksum and retain
+renewable leases and bounded native readers; pixel reads use the short-read contract.
 These interactive request budgets remain separate from Processing's unlimited
 calculation work. See [private raster access](raster-analysis.md#catalog-rasters-and-private-run-files).
 
@@ -582,7 +582,7 @@ remain available.
 | Rendering configuration error | GeoServer initialization logs and workspace/layer resources; ambiguous partial resources are preserved for administrator inspection. |
 | Polygon outline unavailable | Jobs logs, token, Catalog connection and read-only source mount; numeric analysis is independent of the outline. |
 | Processing filesystem or allocation failure | Worker logs and available host memory/disk space; free resources or delete unneeded finished results, then submit a new run. Processing does not reserve capacity before starting. |
-| Vector source changed | Rescan the vector and select it again; accepted jobs require unchanged original vector sources. |
+| Vector input missing or unreadable | Check that the configured source is mounted and readable; restore the original source or select another catalog layer. |
 
 ## Build information
 
@@ -640,25 +640,25 @@ builds.
 - Catalog-vector selections read the original mounted source. The web application,
   Processing worker and Job service need the same read-only source mount.
 
-## Immutable raster inputs
+## Immutable datasets
 
-Treat every cataloged raster as immutable for its catalog lifetime. Do not overwrite
-its data, grid, or embedded metadata in place. This also applies while jobs are
-queued, executing, or recoverable, and across deployments that retain those jobs.
-Publish changed data as a new asset with a new catalog identity; keep old sources
-available until their jobs and recovery lifetimes have ended.
+Catalog rasters, catalog vectors and published model outputs are immutable for
+their lifetime in EOlab. Do not overwrite their data, grids, native layers,
+sidecars or metadata in place. Publish changed data under a new catalog or output
+identity. Keep original inputs available while jobs are queued, executing or
+recoverable, including across deployments that retain those jobs.
 
-Raster operations authorize the catalog item and resolve its path inside the
-configured mount using scanner-recorded source identity. After native calculation,
-the Processing worker compares current file metadata before publishing a result;
-ordinary catalog summary cache hits rely on the scanner-recorded identity.
-Private run-file inputs also undergo size and checksum
-verification under their retained-input grants. See the
-[worker source checks](../src/eolab_app/processing/worker.py) and
-[raster identity contract](../src/eolab_app/raster/source_identity.py).
-Missing or unreadable sources fail during resolution or opening. Stored source
-identities remain in plans, provenance and cache keys. Vector source checks,
-job ownership, cancellation and output integrity continue to apply.
+Reads and calculations trust the admitted identity. They do not rescan complete
+files for checksums or compare filesystem fingerprints before and after work.
+Stored identities and published checksums remain in plans, provenance, downloads
+and cache keys. Missing or unreadable sources fail during resolution or reading.
+
+Source access still validates catalog assets, native layers, predicates, allowed
+file dependencies and confined paths. Private reads retain ownership, deletion,
+expiry and renewable retention checks; cancellation waits for native work to
+exit. Initial ingestion checks, output completeness and digest validation at
+publication, persisted grant integrity and model-definition compatibility remain
+in their owning boundaries.
 
 
 ## Named saved maps (API preview)

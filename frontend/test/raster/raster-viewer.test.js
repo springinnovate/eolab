@@ -4700,7 +4700,7 @@ test("catalog selection replacement aborts stale requests and clears a map box",
     await h.viewer.show(createRasterItem("one")); await flushPromises();
     h.viewer.setVectorSelection({selection:CATALOG_SELECTION,label:"First"});
     await flushPromises();
-    const changed={...CATALOG_SELECTION,sourceSignature:"b".repeat(64)};
+    const changed={...CATALOG_SELECTION,itemId:"other-countries"};
     h.viewer.setVectorSelection({selection:changed,label:"Replacement"});
     assert.ok(requests[0].signal.aborted);
     requests[0].deferred.resolve(CATALOG_SELECTION_RASTER_STATISTICS); await flushPromises();

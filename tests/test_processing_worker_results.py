@@ -26,15 +26,23 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
 
-def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
-    """Native execution returns durable results without publishing private paths.
+def test_real_plan_worker_and_public_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native execution trusts catalog metadata and returns path-free durable results.
 
     Args:
         tmp_path: Isolated source and artifact directories.
+        monkeypatch: Reject runtime attempts to recapture catalog file identity.
     """
     path = write_source(tmp_path / "source.tif", np.ones((32, 32), dtype="uint16"))
     authorized = SimpleNamespace(
         source_path=path, source_signature=RasterSourceIdentity.read(path)
+    )
+    monkeypatch.setattr(
+        RasterSourceIdentity,
+        "read",
+        Mock(side_effect=AssertionError("Catalog files are immutable")),
     )
     authorizer = SimpleNamespace(authorize=AsyncMock(return_value=authorized))
     store = Mock()

@@ -181,7 +181,7 @@ async def resolve_downstream_sources(
     values: AuthorizedRaster,
     watershed_selection: CatalogSelection | None = None,
 ) -> DownstreamSources:
-    """Resolve configured source files and preserve identities within one calculation.
+    """Resolve configured source files and selected catalog vectors for a calculation.
 
     Args:
         context: Worker capabilities with captured additional raster identities.
@@ -194,8 +194,8 @@ async def resolve_downstream_sources(
         Ephemeral native paths and exact selection readers.
 
     Raises:
-        ProcessingError: If the configured watershed is missing, unreadable or changed.
-        SelectionUnavailableError: If the user-selected starting vector changed.
+        ProcessingError: If the configured watershed is missing or unreadable.
+        SelectionUnavailableError: If the user-selected starting vector is unavailable.
     """
     if context.areas is None:
         raise ProcessingError(
@@ -210,7 +210,7 @@ async def resolve_downstream_sources(
     except SelectionUnavailableError as error:
         raise ProcessingError(
             "watershed_unavailable",
-            "The model's configured watershed layer is missing, unreadable or changed during this run. Check the configured source and try again.",
+            "The model's configured watershed layer is missing or unreadable. Check the configured source and try again.",
             409,
         ) from error
     starting = (
@@ -242,7 +242,7 @@ async def prepare_downstream(
         Values grid metadata and the watershed identity captured for this run.
 
     Raises:
-        ProcessingError: If preparation or source verification fails.
+        ProcessingError: If preparation or source access fails.
         ProcessDeadlineError: If the supervised process exits without a result.
     """
     sources = await resolve_downstream_sources(context, queued.request, authorized)
@@ -255,7 +255,6 @@ async def prepare_downstream(
     if status != "ok":
         raise ProcessingError(*result)
     spec = result.model_copy(update={"sourceChecksum": context.source_checksum})
-    await check_downstream_execution(context, spec)
     return PreparedJobPlan(
         operation=spec.operation,
         specification=spec.model_dump(mode="json", by_alias=True),
@@ -273,7 +272,7 @@ async def resolve_downstream_execution_inputs(
     handles. This adapter resolves its vector inputs and binds its native
     arguments at execution. The checksum comparison concerns a retained values
     raster from a previous model run, not routine edits to the prepared DEM.
-    That persisted-file identity must agree with the source verified by the worker.
+    That persisted-file identity must agree with the input grant held by the worker.
 
     Args:
         context: Worker capabilities and additional authorized rasters.
@@ -296,31 +295,6 @@ async def resolve_downstream_execution_inputs(
         ),
         spec,
     )
-
-
-async def check_downstream_execution(
-    context: OperationContext, spec: DownstreamPlan
-) -> None:
-    """Recheck the run's watershed and starting-vector identities before publication.
-
-    Args:
-        context: Existing catalog selection reader.
-        spec: Executed inputs and their immutable source predicates.
-
-    Raises:
-        ProcessingError: If the configured watershed changed or lost access.
-        SelectionUnavailableError: If the user-selected starting vector changed.
-    """
-    try:
-        await context.areas.resolve_for_sampling(spec.watershed_selection)
-    except SelectionUnavailableError as error:
-        raise ProcessingError(
-            "watershed_changed",
-            "The model's configured watershed layer changed or became unreadable during this run. Check the source and try again.",
-            409,
-        ) from error
-    if isinstance(spec.inputs.starting_mask, VectorStartingMask):
-        await context.areas.resolve_for_sampling(spec.inputs.starting_mask.selection)
 
 
 def select_downstream_execution(

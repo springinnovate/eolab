@@ -150,12 +150,10 @@ def test_shared_raster_access_has_no_private_storage_or_renderer_dependency() ->
         assert not {
             module for module in imports(path) if module.startswith(forbidden)
         }, path
-    assert {
+    assert not {
         module
         for module in imports(Path("src/eolab_app/source_files.py"))
         if module.startswith("eolab_app.")
-    } == {
-        "eolab_app.execution.bounded_process",
     }
 
 

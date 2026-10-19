@@ -4,14 +4,8 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 from typing import Any, Protocol
-
-from eolab_app.execution.bounded_process import (
-    ProcessDeadlineError,
-    run_bounded_process,
-)
 
 
 class LeasedSourceFile(Protocol):
@@ -67,54 +61,6 @@ class SourceFileError(Exception):
         self.code = code
 
 
-def file_identity(path: Path) -> tuple[int, int, int, int, int]:
-    """Read metadata that can reveal replacement or mutation of an immutable file.
-
-    Args:
-        path: Authorized source path.
-
-    Returns:
-        Device, inode, byte size, modification time and metadata-change time.
-
-    Raises:
-        OSError: If the file is no longer readable.
-    """
-    stat = path.stat()
-    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
-
-
-def verify_source_file(writer: Any, path: Path, size: int, sha256: str) -> None:
-    """Read a file's checksum and report whether it matches its published metadata.
-
-    The writer receives the file's stat identity if size, checksum and stat
-    metadata agree before and after reading, or None if verification fails.
-    The supervising process enforces the time limit for this complete-file read.
-
-    Args:
-        writer: Supervisor's one-result pipe writer.
-        path: Confined source path supplied by its authority.
-        size: Published byte count.
-        sha256: Published immutable checksum.
-    """
-    try:
-        identity_before_read = file_identity(path)
-        checksum_hasher = hashlib.sha256()
-        with path.open("rb") as stream:
-            while block := stream.read(1024 * 1024):
-                checksum_hasher.update(block)
-        content_matches_publication = (
-            identity_before_read[2] == size and checksum_hasher.hexdigest() == sha256
-        )
-        writer.put(
-            identity_before_read
-            if content_matches_publication
-            and identity_before_read == file_identity(path)
-            else None
-        )
-    except OSError:
-        writer.put(None)
-
-
 async def finish_source_task(task: asyncio.Task[Any]) -> None:
     """Wait through repeated cancellation until source work or cleanup has finished.
 
@@ -136,15 +82,15 @@ class LeasedSourceFiles:
     """Authorize file reads and renew cleanup protection for long-running readers.
 
     Storage callbacks check access and manage leases. Short reads use resolve()
-    without a lease; open() verifies the checksum and protects the file until
-    the reader finishes.
+    without a lease; open() protects the file until the reader finishes.
+    Published contents and metadata are immutable and are not reverified.
     """
 
     def __init__(
         self,
         acquire: Callable[[str, str, str], Awaitable[LeasedSourceFile]],
         release: Callable[[str], Awaitable[bool]],
-        check: Callable[[str, str, str], Awaitable[tuple[int, str, str]]],
+        check: Callable[[str, str, str], Awaitable[None]],
         renew: Callable[[str], Awaitable[bool]],
         *,
         renewal_seconds: float = 10,
@@ -155,7 +101,7 @@ class LeasedSourceFiles:
         Args:
             acquire: Authorize owner and opaque source identities, acquiring a lease.
             release: Release a lease after all owned native work stops.
-            check: Reauthorize and return current size, checksum and media type.
+            check: Reauthorize the file's ownership and availability before delivery.
             renew: Extend a live lease; false means it was lost.
             renewal_seconds: Interval shorter than the owning lease lifetime.
             resolve: Owner-checked file resolution for short reads without retention.
@@ -173,7 +119,6 @@ class LeasedSourceFiles:
         )
         self.renewal_seconds = renewal_seconds
         self._resolve = resolve
-        self._verification_slots = asyncio.Semaphore(2)
 
     async def resolve(
         self, owner: str, run_id: str, file_id: str
@@ -232,12 +177,11 @@ class LeasedSourceFiles:
     async def open(
         self, owner: str, run_id: str, file_id: str
     ) -> AsyncIterator[LeasedSourceFile]:
-        """Verify, retain and reauthorize one file around a complete consumer read.
+        """Retain and reauthorize one immutable file around a complete consumer read.
 
         Consumers must finish or stop their native work before leaving this scope.
-        Checksums have two verification slots and a 30-second hard deadline.
-        Renewal failure cancels the consumer; successful delivery rechecks access
-        and metadata. There is no shared authorization or checksum cache.
+        Renewal failure cancels the consumer; successful delivery rechecks access.
+        The consumer owns its read limits and reports actual file-read failures.
 
         Args:
             owner: Requesting session hash, never a client-supplied owner name.
@@ -245,10 +189,10 @@ class LeasedSourceFiles:
             file_id: Opaque immutable file identity.
 
         Yields:
-            Checksum-verified file protected by a renewable lease.
+            Published immutable file protected by a renewable lease.
 
         Raises:
-            SourceFileError: On mutation, verification capacity/deadline or lease loss.
+            SourceFileError: If the lease is lost or the consumer cannot read the file.
             Exception: On source-owner authorization failure.
             asyncio.CancelledError: After the consumer and lease cleanup finish.
         """
@@ -270,37 +214,13 @@ class LeasedSourceFiles:
 
         lease_renewal_task = asyncio.create_task(renew_lease_while_reading())
         try:
-            if self._verification_slots.locked():
-                raise SourceFileError("Source checks are busy. Try again shortly.", 429)
-            async with self._verification_slots:
-                try:
-                    verified_file_identity = await run_bounded_process(
-                        verify_source_file,
-                        (source.path, source.size, source.sha256),
-                        30,
-                    )
-                except ProcessDeadlineError as error:
-                    raise SourceFileError(
-                        "The source check took too long. Try a smaller file.", 504
-                    ) from error
-            if verified_file_identity is None:
-                raise SourceFileError(
-                    "The source file changed and is no longer valid.", 422
-                )
             yield source
             # A consumer may shield its final native cleanup from cancellation.
             # Renewal loss still forbids delivery even if that cleanup consumed
             # the cancellation raised by the heartbeat.
             if lease_lost:
                 raise SourceFileError("The source file is no longer available.")
-            current_file_metadata = await self.check(owner, run_id, file_id)
-            if (
-                current_file_metadata != (source.size, source.sha256, source.media_type)
-                or file_identity(source.path) != verified_file_identity
-            ):
-                raise SourceFileError(
-                    "The source file changed while it was being read.", 422
-                )
+            await self.check(owner, run_id, file_id)
         except asyncio.CancelledError:
             if lease_lost:
                 raise SourceFileError(

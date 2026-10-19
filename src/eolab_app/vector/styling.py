@@ -50,7 +50,6 @@ from eolab_app.vector.ports import (
 from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
-    vector_source_signature,
 )
 
 
@@ -101,8 +100,8 @@ class VectorStyleService:
         Raises:
             VectorFeatureError: If the Catalog Item, exact source, field, or
                 bounded reader cannot safely satisfy the request.
-            VectorConflictError: If assessment metadata or source identity is
-                stale, or if the field type is not categorically styleable.
+            VectorConflictError: If assessment metadata is unavailable or the
+                field type is not categorically styleable.
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
@@ -276,7 +275,7 @@ class VectorStyleService:
         ],
         operation: str,
     ) -> tuple[_FieldRead, int]:
-        """Execute one capped field read with current-source verification.
+        """Read an immutable vector field within its interactive work limits.
 
         Args:
             item: Authoritative Catalog Item.
@@ -289,20 +288,11 @@ class VectorStyleService:
             Field-reader result and authoritative Catalog feature count.
 
         Raises:
-            VectorConflictError: If assessment metadata or source identity is
-                stale, changes during the read, or disagrees with row count.
+            VectorConflictError: If assessment metadata is unavailable or the
+                read result disagrees with its Catalog row count.
         """
         feature_count = _catalog_vector_feature_count(item, operation)
-        try:
-            source_signature = await asyncio.to_thread(
-                vector_source_signature,
-                source,
-            )
-        except (OSError, ValueError) as error:
-            raise VectorConflictError(
-                f"{operation} unavailable: reassess the current vector Item."
-            ) from error
-        _require_assessed_metadata(item, source_signature, operation)
+        _require_assessed_metadata(item, operation)
         cancel_event = Event()
         try:
             async with self._field_slots:
@@ -316,21 +306,6 @@ class VectorStyleService:
         except asyncio.CancelledError:
             cancel_event.set()
             raise
-        try:
-            final_signature = await asyncio.to_thread(
-                vector_source_signature,
-                source,
-            )
-        except (OSError, ValueError) as error:
-            raise VectorConflictError(
-                f"{operation} unavailable: the vector source changed during "
-                "the bounded read."
-            ) from error
-        if final_signature != source_signature:
-            raise VectorConflictError(
-                f"{operation} unavailable: the vector source changed during "
-                "the bounded read."
-            )
         complete = getattr(result, "complete", None)
         scanned_feature_count = getattr(result, "scanned_feature_count", None)
         if complete is True and scanned_feature_count != feature_count:
@@ -355,7 +330,7 @@ class VectorStyleService:
         Raises:
             VectorFeatureError: If catalog, source, authorization, or GeoServer
                 boundaries cannot safely complete the operation.
-            VectorConflictError: If the layer is unpublished, changed, or the
+            VectorConflictError: If the layer is unpublished, its binding conflicts, or the
                 requested geometry disagrees with authoritative assessment.
         """
         async with self._style_lock:
@@ -363,10 +338,7 @@ class VectorStyleService:
             source = self._source_resolver.resolve(item)
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
             try:
-                authorization = await asyncio.to_thread(
-                    self._vector_registry.require_current,
-                    layer_name,
-                )
+                authorization = self._vector_registry.require_current(layer_name)
             except (
                 PublishedLayerChangedError,
                 PublishedLayerNotAuthorizedError,
@@ -389,9 +361,6 @@ class VectorStyleService:
                 or metadata.get("eligible") is not True
                 or metadata.get("reader_contract") != VECTOR_READER_CONTRACT
                 or metadata.get("reader_compatible") is not True
-                or metadata.get("source_signature") != [
-                    list(entry) for entry in authorization.source_signature
-                ]
             ):
                 raise VectorConflictError(
                     "Style unavailable: reassess and add the current vector "
@@ -461,17 +430,12 @@ class VectorStyleService:
                 request.item_id,
                 request.style,
             )
-            try:
-                await asyncio.to_thread(
-                    self._vector_registry.authorize,
-                    layer_name,
-                    source,
-                    authorization.source_signature,
-                    publication.style_name,
-                    publication.geometry_name,
-                )
-            except PublishedLayerChangedError as error:
-                raise VectorConflictError(str(error)) from error
+            self._vector_registry.authorize(
+                layer_name,
+                source,
+                publication.style_name,
+                publication.geometry_name,
+            )
             return AppliedVectorStyle(
                 styleName=publication.style_name,
                 style=request.style,

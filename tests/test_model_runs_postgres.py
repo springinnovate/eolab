@@ -495,17 +495,15 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
             client.portal.call(catalog.aclose)
 
 
-@pytest.mark.parametrize(
-    "change_source", [None, "dem", "starting_mask", "private_values"]
-)
+@pytest.mark.parametrize("change_source", [None, "private_values"])
 def test_downstream_http_captures_sources_and_publishes_owned_files(
     downstream_boundary: Any, change_source: str | None
 ) -> None:
-    """A model run owns its output files and refuses sources changed after submission.
+    """A model run captures catalog or published input identities and owns its outputs.
 
     Args:
         downstream_boundary: Real API, database, source and native worker composition.
-        change_source: Changed catalog input, a private values raster, or unchanged inputs.
+        change_source: A private values raster or the original catalog values.
     """
     client, worker, request, items, sources = downstream_boundary
     values = request.values.model_dump(by_alias=True)
@@ -567,27 +565,8 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
         "hydrology"
     ]["value"] == request.hydrology_sources.model_dump(mode="json", by_alias=True)
     assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
-    if change_source in {"dem", "starting_mask"}:
-        reference = (
-            request.hydrology_sources.dem
-            if change_source == "dem"
-            else request.starting_mask.source
-        )
-        with rasterio.open(sources.rasters[change_source], "r+") as dataset:
-            dataset.update_tags(changed="after submission")
-        from app_support import mounted_geotiff_item
-
-        items[reference.item_id] = {
-            **mounted_geotiff_item(sources.rasters[change_source].as_uri()),
-            "id": reference.item_id,
-        }
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{identifier}").json()
-    if change_source in {"dem", "starting_mask"}:
-        assert ready["status"] == "failed", ready
-        assert ready["error"]["code"] == "source_changed", ready
-        assert ready.get("result") is None
-        return
     assert ready["status"] == "ready", ready
     assert float(ready["result"]["rows"][0]["value"]) == 24
     assert {item["name"] for item in ready["artifacts"]["files"]} == {
@@ -1330,10 +1309,10 @@ def test_model_origin_size_and_metadata_limits(model_boundary: Any, store: Any) 
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
-def test_model_vector_filter_and_changed_signature(
+def test_model_vector_filter_accepts_legacy_signature(
     model_boundary: Any, boundary: Any, tmp_path: Path, model_id: str
 ) -> None:
-    """Capture the actual filtered catalog descriptor and revalidate it in the worker.
+    """Capture the filtered catalog descriptor without requiring legacy fingerprints.
 
     Args:
         model_id: Summary or clip recipe under the same lifecycle contract.
@@ -1382,17 +1361,15 @@ def test_model_vector_filter_and_changed_signature(
     selection["sourceSignature"] = "0" * 64
     stale = submit(client, model_request(client, model_id, inputs=body["inputs"]))
     assert client.portal.call(worker.run_once)
-    failed = client.get(f"/api/processing/jobs/{stale['jobId']}").json()
-    assert (
-        failed["status"] == "failed" and failed["error"]["code"] == "source_unavailable"
-    )
+    ready = client.get(f"/api/processing/jobs/{stale['jobId']}").json()
+    assert ready["status"] == "ready", ready
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])
-def test_model_raster_identity_rechecked_before_execution(
+def test_model_raster_uses_authorized_catalog_source(
     model_boundary: Any, model_id: str
 ) -> None:
-    """A changed authorized catalog signature cannot silently replace accepted input.
+    """Resolve accepted catalog references without comparing historical fingerprints.
 
     Args:
         model_id: Summary or clip recipe under the same lifecycle contract.
@@ -1423,8 +1400,8 @@ def test_model_raster_identity_rechecked_before_execution(
 
     worker.authorizer = ChangedCatalog()
     assert client.portal.call(worker.run_once)
-    failed = client.get(f"/api/processing/jobs/{job['jobId']}").json()
-    assert failed["status"] == "failed" and failed["error"]["code"] == "source_changed"
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
 
 
 @pytest.mark.parametrize("area_kind", ["wholeRaster", "polygonArea"])

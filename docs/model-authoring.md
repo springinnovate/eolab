@@ -125,15 +125,16 @@ first stops the previous container, then interrupts unfinished jobs and releases
 Ordinary physical cleanup releases disk accounting only after file removal.
 
 The worker resolves original files through the grant and confined artifact storage,
-checks their SHA-256 in a supervised process without a total-runtime deadline,
-then uses the same native
-planning and execution adapters as catalog rasters. Run YAML retains upstream
+trusts their published checksum, and uses the same native planning and execution
+adapters as catalog rasters. It captures file metadata once for the existing saved
+plan and cache identity; it does not rehash published bytes or compare filesystem
+metadata around calculations. Run YAML retains upstream
 run/file references, checksum and byte count; prepared calculation provenance adds
 the source checksum. Public and persisted specifications contain no filesystem paths.
 
 Private submissions do not join shared active computations. Ordinary summary cache
-keys include the run/file reference, verified checksum and source signature; each
-use requires a fresh accepted grant and integrity check, even on a cache hit.
+keys include the run/file reference, published checksum and source identity; each
+use requires a fresh accepted grant, even on a cache hit.
 Identical bytes do not grant another session access. Catalog sharing and cache
 behavior remain unchanged, and Models still execute fresh. No renderer, preview,
 map visibility or GeoServer availability is involved.
@@ -320,7 +321,7 @@ Pixel reads, statistics and reuse as a model input read the original raster
 through their own source-access contracts. They do not require map visibility,
 GeoServer publication or a successful display preview. Private source access
 continues to enforce session ownership, file identity and expiry. Interactive
-metadata/statistics readers hold renewable leases and verify checksums; short
+metadata/statistics readers hold renewable leases; short
 pixel requests use the separate short-read contract. See
 [private raster access](raster-analysis.md#catalog-rasters-and-private-run-files)
 and [temporary raster map delivery](raster-analysis.md#temporary-raster-map-delivery)
@@ -340,7 +341,7 @@ omitted. The browser displays this geometry through its vector map adapter; the
 preview does not become a catalog source or a reusable Processing selection.
 
 The preview endpoint authorizes the session, run, file and expiry on every
-request. Its immutable-file access scope verifies the published checksum,
+request. Its immutable-file access scope trusts the published checksum,
 holds a renewable transfer lease while native work runs and rechecks access
 before returning. HTTP responses use `private, no-store`; there is no server
 preview cache. Downloads and calculations do not depend on preview availability.
@@ -367,8 +368,7 @@ They retain their session, request-header and expiry requirements; see the
 ### Preview budgets and temporary map layers
 
 The `/preview` endpoint admits at most two concurrent reads per API process and has
-no waiting queue. Shared checksum verification separately admits two checks with
-a 30-second deadline. Native preview work is killed after 30 seconds or HTTP
+no waiting queue. Native preview work is killed after 30 seconds or HTTP
 disconnection. The file lease renews every 10 seconds until reading stops.
 Linux preview processes have a 2 GiB address-space ceiling, and output JSON is
 limited to 8 MiB. GeoJSON input is also limited to 8 MiB, 5,000 features

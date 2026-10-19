@@ -1,14 +1,9 @@
 """Locate catalog vector files and prepare the filter used to select features.
 
 VectorCatalog supplies the Item and MountedVectorResolver locates its dataset.
-The filter is validated against catalog fields, and source file signatures are
-recorded for change detection. Feature readers apply the filter later; source
-resolution does not load polygons.
+The filter is validated against catalog fields. Feature readers apply it later;
+source resolution does not load polygons or inspect file mutation fingerprints.
 """
-
-import asyncio
-import hashlib
-import json
 
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from eolab_app.attribute_filter import ogr_predicate
@@ -20,7 +15,7 @@ from eolab_app.vector.filters import (
 )
 from eolab_app.vector.metadata import catalog_vector_fields
 from eolab_app.vector.ports import VectorCatalog
-from eolab_app.vector.sources import MountedVectorResolver, vector_source_signature
+from eolab_app.vector.sources import MountedVectorResolver
 
 
 async def resolve_selection(
@@ -43,11 +38,10 @@ async def resolve_selection(
 
     Returns:
         Server-only dataset path, driver, layer/filter selection, compiled OGR
-        WHERE expression, and file signatures for detecting source changes.
+        WHERE expression.
 
     Raises:
         VectorFeatureError: If identity, source or predicate is unavailable.
-        OSError: If a source component cannot be inspected.
     """
     item = await catalog.get_item(request)
     source = resolver.resolve(item)
@@ -60,28 +54,16 @@ async def resolve_selection(
             "sampling requires a mounted Shapefile or GeoPackage polygon layer."
         )
     validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
-    source_file_signature = await asyncio.to_thread(vector_source_signature, source)
-    source_signature_hash = hashlib.sha256(
-        json.dumps(source_file_signature).encode()
-    ).hexdigest()
     selection = CatalogSelection(
         collectionId=request.collection_id,
         itemId=request.item_id,
         assetKey=source.asset_key,
         layerName=source.layer_name,
-        sourceSignature=source_signature_hash,
         filter=validated_filter,
     )
-    component_paths_by_name = {
-        p.name: p for p in (source.component_paths or (source.source_path,))
-    }
     return ResolvedCatalogSelection(
         selection,
         source.source_path,
         "GPKG" if source.source_format == "geopackage" else "ESRI Shapefile",
-        tuple(
-            (component_paths_by_name[name], tuple(values))
-            for name, *values in source_file_signature
-        ),
         ogr_predicate(validated_filter),
     )

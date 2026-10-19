@@ -69,7 +69,7 @@ export const SELECTED_RASTER_STATISTICS = Object.freeze({
 /** @type {Readonly<Object>} Complete immutable catalog selection. */
 export const CATALOG_SELECTION = Object.freeze({
   collectionId: "eolab-mounted-vectors", itemId: "countries", assetKey: "data",
-  layerName: "countries", sourceSignature: "a".repeat(64),
+  layerName: "countries",
   filter: { enabled: true, match: "all", rules: [{ field: "iso3", operator: "eq", value: "PER" }] },
 });
 

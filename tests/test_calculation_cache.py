@@ -322,9 +322,40 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
     )
     plan = calculation_plan.model_copy(update={"area": area})
     expected = cache.calculation_result_cache_keys(plan)
+    request = AggregatePlanRequest(
+        sources=plan.sources, calculations=plan.calculations, catalogSelection=selection
+    )
+    expected_work = identify_shared_calculation(UnpreparedCalculation(request=request))
+    for signature in (None, "b" * 64):
+        compatible = selection.model_copy(update={"sourceSignature": signature})
+        assert (
+            cache.calculation_result_cache_keys(
+                plan.model_copy(
+                    update={
+                        "area": area.model_copy(update={"catalogSelection": compatible})
+                    }
+                )
+            )
+            == expected
+        )
+        assert (
+            identify_shared_calculation(
+                UnpreparedCalculation(
+                    request=request.model_copy(update={"catalogSelection": compatible})
+                )
+            )
+            == expected_work
+        )
+        assert (
+            cache.calculation_result_cache_keys(
+                request.model_copy(update={"catalogSelection": compatible}),
+                plan.sourceSignature,
+            )
+            == expected
+        )
     for update in (
         {"item_id": "different-vector"},
-        {"sourceSignature": "b" * 64},
+        {"assetKey": "other-data"},
         {"layerName": "other"},
         {
             "filter": VectorFilter(
@@ -342,6 +373,16 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
                 plan.model_copy(update={"area": changed_area})
             )
             != expected
+        )
+        assert (
+            identify_shared_calculation(
+                UnpreparedCalculation(
+                    request=request.model_copy(
+                        update={"catalogSelection": changed_area.catalogSelection}
+                    )
+                )
+            )
+            != expected_work
         )
 
 

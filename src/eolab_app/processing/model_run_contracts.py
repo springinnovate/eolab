@@ -256,9 +256,9 @@ class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
     The calculation starts as submitted inputs and becomes the registered
-    operation's prepared plan. Primary and additional raster signatures let the
-    worker reject source changes between submission and execution; the
-    implementation checksum detects changes to the numerical code and packages.
+    operation's prepared plan. Primary and additional raster signatures record
+    admitted source identities for provenance; the implementation checksum detects
+    changes to the numerical code and packages.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION

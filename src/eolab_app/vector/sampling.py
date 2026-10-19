@@ -60,13 +60,13 @@ class VectorSamplingService:
     async def resolve_for_sampling(
         self, selection: CatalogSelection
     ) -> ResolvedCatalogSelection:
-        """Verify that a saved feature selection still refers to the same source and filter.
+        """Authorize a saved feature selection against its Catalog binding and filter.
 
         Args:
             selection: Validated catalog source identity and feature filter.
 
         Returns:
-            Authorized dataset path, feature filter and file-change checks.
+            Authorized dataset path and feature filter.
 
         Raises:
             SelectionUnavailableError: If identity, source or predicate changed.
@@ -77,7 +77,7 @@ class VectorSamplingService:
             raise SelectionUnavailableError(
                 "The catalog vector is unavailable; select it again."
             ) from error
-        if resolved.selection != selection:
+        if resolved.selection.cache_identity() != selection.cache_identity():
             raise SelectionUnavailableError(
                 "The catalog vector identity changed; select it again."
             )
@@ -89,10 +89,10 @@ class VectorSamplingService:
         """Authorize a current full catalog layer without scanning its features.
 
         Args:
-            source: Configured catalog collection and item, with no saved signature.
+            source: Configured catalog collection and item.
 
         Returns:
-            Full-layer selection and file identities for one calculation.
+            Full-layer selection and authorized path for one calculation.
 
         Raises:
             SelectionUnavailableError: If catalog access or source inspection fails.
@@ -120,14 +120,13 @@ class VectorSamplingService:
 
         Raises:
             VectorConflictError: If unavailable, empty, over budget or queue-full.
-            SelectionUnavailableError: If the source changes while work waits/runs.
+            SelectionUnavailableError: If the source cannot be read.
             asyncio.CancelledError: After the Jobs client cancels abandoned work.
         """
         resolved = await resolve_selection(self.catalog, self.resolver, request)
         if self._selection_executor is None:
             raise VectorConflictError("The vector selection executor is unavailable")
         result = await self._selection_executor(resolved.selection)
-        await self.resolve_for_sampling(resolved.selection)
         return {
             **result,
             "selection": resolved.selection.model_dump(mode="json", by_alias=True),
@@ -147,12 +146,11 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If no executor is supplied, or Jobs display work
                 is unavailable or over budget.
-            SelectionUnavailableError: If the source changed before or during work.
+            SelectionUnavailableError: If the Catalog binding or source is unavailable.
             asyncio.CancelledError: After the executor's bounded cleanup.
         """
         await self.resolve_for_sampling(selection)
         if self._outline_executor is None:
             raise VectorConflictError("The map outline executor is unavailable")
         result = await self._outline_executor(selection)
-        await self.resolve_for_sampling(selection)
         return result
