@@ -165,12 +165,14 @@ class ClipGrid(BaseModel):
 
 
 class ClipSpec(BaseModel):
-    """A path-free clip plan retaining its source identity and private-file checksum."""
+    """A path-free clip plan with catalog identity or a published-file checksum."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["raster.clip.v1"] = OPERATION_VERSION
     source: RasterSourceReference
-    sourceSignature: tuple[int, int, int, int]
+    sourceSignature: tuple[int, int, int, int] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     sourceChecksum: str | None = Field(
         default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None
     )
@@ -179,18 +181,19 @@ class ClipSpec(BaseModel):
 
     @model_validator(mode="after")
     def check_source_checksum(self) -> "ClipSpec":
-        """Require a published checksum for private input files in stored plans.
+        """Require catalog metadata or a published checksum for the plan's source.
 
         Returns:
             The prepared clip with the correct source identity contract.
 
         Raises:
-            ValueError: If the checksum disagrees with the source reference type.
+            ValueError: If the signature or checksum disagrees with the source type.
         """
-        if isinstance(self.source, RunArtifactReference) != (
-            self.sourceChecksum is not None
-        ):
+        private = isinstance(self.source, RunArtifactReference)
+        if private != (self.sourceChecksum is not None):
             raise ValueError("Private raster plans require their published checksum")
+        if private != (self.sourceSignature is None):
+            raise ValueError("Only catalog raster plans require a source signature")
         return self
 
 

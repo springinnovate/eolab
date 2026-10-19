@@ -207,11 +207,13 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
         model_boundary: Actual model/ordinary HTTP routes and native worker.
         store: Disposable PostgreSQL store.
         operation: Existing clip or scalar calculation endpoint.
-        monkeypatch: Count initial private metadata captures across fresh and cached work.
+        monkeypatch: Forbid filesystem fingerprints for published inputs.
     """
     client, worker, _ = model_boundary
     parent, source, path = publish_input(model_boundary)
-    identity_reads = Mock(wraps=RasterSourceIdentity.read)
+    identity_reads = Mock(
+        side_effect=AssertionError("Published inputs must not be fingerprinted")
+    )
     monkeypatch.setattr(RasterSourceIdentity, "read", identity_reads)
     inputs = (
         {"source": source, "selectedBounds": AREA}
@@ -229,20 +231,31 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
     job = response.json()
     assert input_counts(store) == (1, 0)
     assert client.portal.call(worker.run_once)
-    identity_reads.assert_called_once_with(path)
+    identity_reads.assert_not_called()
     result = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert result["status"] == "ready", result
+    provenance = client.get(result["result"]["provenanceUrl"]).json()
+    assert "sourceSignature" not in provenance
+    assert provenance["sourceChecksum"] == parent["result"]["sha256"]
     if operation == "raster-calculations":
         assert (
             int(result["result"]["rows"][0]["value"]) == parent["result"]["validPixels"]
         )
+        path.touch()
         second = client.post(
             route, json={**body, "requestId": uuid4().hex}, headers=HEADERS
         ).json()
         assert client.portal.call(worker.run_once)
-        assert identity_reads.call_count == 2
+        identity_reads.assert_not_called()
         reused = client.get(f"/api/processing/jobs/{second['jobId']}").json()
         assert reused["result"]["cacheHit"]
+    else:
+        with (
+            rasterio.MemoryFile(client.get(result["result"]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            assert "EOLAB_SOURCE_SIGNATURE" not in raster.tags()
+            assert raster.tags()["EOLAB_SOURCE_SHA256"] == parent["result"]["sha256"]
     with TestClient(client.app, base_url="https://testserver") as foreign:
         denied = foreign.post(
             route, json={**body, "requestId": uuid4().hex}, headers=HEADERS

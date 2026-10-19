@@ -28,8 +28,9 @@ def calculation_result_cache_keys(
 
     Args:
         calculation: Validated request before planning, or a completed job plan.
-        source_signature: Authorized raster metadata, required for a request.
-            Stored plans already contain this metadata.
+        source_signature: Captured metadata for a catalog raster request.
+            Private files use their published checksum; stored plans carry the
+            identity appropriate to their source.
         source_checksum: Published checksum when the input is a private file.
 
     Returns:
@@ -39,7 +40,7 @@ def calculation_result_cache_keys(
         formula whitespace and resource estimates do not affect matching.
 
     Raises:
-        ValueError: If a request has no authorized source metadata.
+        ValueError: If a request has neither catalog identity nor a published checksum.
         ProcessingError: If a stored expression is invalid.
     """
     alias, source = next(iter(calculation.sources.items()))
@@ -58,8 +59,8 @@ def calculation_result_cache_keys(
             else None
         )
     else:
-        if source_signature is None:
-            raise ValueError("Authorized raster metadata is required")
+        if source_signature is None and source_checksum is None:
+            raise ValueError("Catalog identity or a published checksum is required")
         if calculation.polygonArea is not None:
             area = {"kind": "polygons", "geometryHash": calculation.polygonArea.sha256}
         elif calculation.catalogSelection is not None:
@@ -85,13 +86,14 @@ def calculation_result_cache_keys(
     common = {
         "version": CALCULATION_CACHE_VERSION,
         "source": source.model_dump(mode="json", by_alias=True),
-        "sourceSignature": source_signature,
         "area": area,
         "targetChunkPixels": target_chunk_pixels,
         "usesAreaWeights": any(
             node.op == "areaha" for root in roots for node in walk(root)
         ),
     }
+    if source_signature is not None:
+        common["sourceSignature"] = source_signature
     if source_checksum is not None:
         common["sourceChecksum"] = source_checksum
     if calculation.pixelPoint is not None and any(
@@ -192,7 +194,7 @@ def prepare_calculation_values_for_cache(
 
 def restore_cached_calculation_plan(
     request: AggregatePlanRequest,
-    source_signature: tuple[int, int, int, int],
+    source_signature: tuple[int, int, int, int] | None,
     cached_results: dict[str, dict[str, object]],
     polygon_area: AggregateArea | None = None,
     source_checksum: str | None = None,
@@ -201,7 +203,7 @@ def restore_cached_calculation_plan(
 
     Args:
         request: Validated formulas and area whose sources are authorized.
-        source_signature: Current authorized raster metadata.
+        source_signature: Captured catalog metadata, or None for a private file.
         cached_results: Unexpired cache entries indexed by requested input hash.
         polygon_area: Authorized polygon input, kept out of shared result-cache records.
         source_checksum: Published identity for a private raster input.

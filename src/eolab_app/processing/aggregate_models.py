@@ -429,8 +429,8 @@ class AggregateSpec(BaseModel):
     pixelPoint supplies the independent clicked location for pixelValue formulas.
     grid contains the selected window's dimensions, pixel alignment and planned
     read sizes. It contains metadata, not raster pixel values.
-    sourceSignature is source metadata retained in the stored job contract.
-    sourceChecksum records the published bytes when a private run file is used.
+    sourceSignature records captured catalog metadata for catalog inputs only.
+    sourceChecksum identifies a private run file by its published bytes instead.
     cachedRows holds already-computed values when planning found a cache hit;
     that job writes result files without recalculating pixels.
     """
@@ -440,7 +440,9 @@ class AggregateSpec(BaseModel):
     sources: Annotated[
         dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
     ]
-    sourceSignature: tuple[int, int, int, int]
+    sourceSignature: tuple[int, int, int, int] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     sourceChecksum: str | None = Field(
         default=None, pattern=r"^[a-f0-9]{64}$", exclude_if=lambda value: value is None
     )
@@ -483,6 +485,8 @@ class AggregateSpec(BaseModel):
         private = isinstance(next(iter(self.sources.values())), RunArtifactReference)
         if private != (self.sourceChecksum is not None):
             raise ValueError("Private raster plans require their published checksum")
+        if private != (self.sourceSignature is None):
+            raise ValueError("Only catalog raster plans require a source signature")
         if self.pixelPoint is None and any(
             node.op == "pixelValue"
             for item in self.calculations

@@ -160,7 +160,11 @@ async def prepare_summary(
     """
     request = queued.request
     alias = next(iter(request.sources))
-    signature = tuple(authorized.source_signature.to_catalog())
+    signature = (
+        tuple(authorized.source_signature.to_catalog())
+        if authorized.source_signature is not None
+        else None
+    )
     resolved = None
     if request.catalogSelection:
         if context.areas is None:
@@ -259,7 +263,11 @@ async def prepare_clip(
     """
     request = queued.request
     source = get_clip_source(queued)
-    signature = tuple(authorized.source_signature.to_catalog())
+    signature = (
+        tuple(authorized.source_signature.to_catalog())
+        if authorized.source_signature is not None
+        else None
+    )
     if request.selectedBounds:
         area = ClipArea(kind="bounds", bounds=request.selectedBounds.canonical_tuple())
     else:

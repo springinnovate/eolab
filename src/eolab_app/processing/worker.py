@@ -22,7 +22,6 @@ from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.downstream_models import DownstreamLimits
@@ -119,15 +118,12 @@ class ProcessingWorker:
             source: Operation-owned catalog or published-file reference.
 
         Returns:
-            Confined raster path and captured metadata, plus its published checksum
-            for private inputs. The durable grant survives parent expiry/deletion.
-            Private metadata is captured once for saved plans and cache identity;
-            published bytes are not rehashed or checked for later mutation.
+            Confined raster path with catalog identity or the private input's
+            published checksum. The durable grant survives parent expiry/deletion.
 
         Raises:
             ProcessingError: If the accepted grant or confined file is unavailable.
             RasterFeatureError: If catalog authorization fails.
-            OSError: If private-file metadata cannot be read.
         """
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
@@ -142,7 +138,7 @@ class ProcessingWorker:
             self.artifacts.artifact_path, parent_attempt, file.storage_name
         )
         return (
-            AuthorizedRaster(path, RasterSourceIdentity.read(path)),
+            AuthorizedRaster(path, None),
             file.sha256,
         )
 
