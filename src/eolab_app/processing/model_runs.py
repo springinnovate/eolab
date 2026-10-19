@@ -354,8 +354,6 @@ def build_model_job_submission(
     export_yaml(metadata, run=True)
     spec = ModelRunSpec(
         calculation=prepared.specification,
-        sourceSignature=signature,
-        additionalSourceSignatures=additional_signatures or {},
         implementationRevision=revision,
         applicationBuild=build,
     )

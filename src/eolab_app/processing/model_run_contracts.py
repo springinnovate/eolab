@@ -37,7 +37,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult
@@ -242,17 +242,12 @@ class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
     The calculation starts as submitted inputs and becomes the registered
-    operation's prepared plan. Primary and additional raster signatures record
-    admitted source identities for provenance; the implementation checksum detects
-    changes to the numerical code and packages.
+    operation's prepared plan. The implementation checksum detects changes to
+    the numerical code and packages.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
     calculation: SerializeAsAny[BaseModel]
-    sourceSignature: tuple[int, int, int, int] | None
-    additionalSourceSignatures: dict[Name, tuple[int, int, int, int]] = Field(
-        default_factory=dict, max_length=16, exclude_if=lambda value: not value
-    )
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
 
@@ -281,29 +276,6 @@ class ModelRunSpec(ModelSchema):
         if not isinstance(identifier, str):
             raise ValueError("Stored calculation requires an operation ID")
         return get_model_operation(identifier).parse_specification(value)
-
-    @model_validator(mode="after")
-    def check_source_identity(self) -> "ModelRunSpec":
-        """Require catalog signatures while private inputs use accepted file grants.
-
-        Returns:
-            The stored run with the identity contract appropriate to its source.
-
-        Raises:
-            ValueError: If the signature is absent for catalog data or supplied for a run file.
-        """
-        source = get_model_operation(self.calculation.operation).source(
-            self.calculation
-        )
-        if isinstance(source, RunArtifactReference) != (self.sourceSignature is None):
-            raise ValueError("Source identity does not match the raster reference")
-        operation = get_model_operation(self.calculation.operation)
-        additional = (
-            operation.extra_sources(self.calculation) if operation.extra_sources else {}
-        )
-        if set(additional) != set(self.additionalSourceSignatures):
-            raise ValueError("Capture every additional raster source identity")
-        return self
 
 
 class ModelDeletionAction(ModelSchema):
