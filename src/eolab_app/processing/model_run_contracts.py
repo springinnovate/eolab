@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AwareDatetime,
     BaseModel,
-    ConfigDict,
     Field,
     JsonValue,
     SerializeAsAny,
@@ -195,11 +194,8 @@ class ModelInvocation(ModelSchema):
 
     Unlike a submission request, this includes the complete recipe and the
     default values filled in when the run was accepted. Registered operations
-    validate their own additional input types and saved metadata fields.
+    validate their own additional input types.
     """
-
-    model_config = ConfigDict(extra="allow")
-    __pydantic_extra__: dict[str, JsonValue] = Field(init=False)
 
     model: CapturedModel
     inputs: dict[Name, JsonValue]
@@ -211,10 +207,10 @@ class ModelInvocation(ModelSchema):
         """Check the saved inputs and parameters against the saved model definition.
 
         Returns:
-            This invocation after validating its inputs, formulas and operation metadata.
+            This invocation after validating its inputs and formulas.
 
         Raises:
-            ValueError: If a saved input, parameter or metadata field is missing,
+            ValueError: If a saved input or parameter is missing,
                 unknown or invalid.
             ProcessingError: If the recorded operation is unavailable.
         """
@@ -239,16 +235,6 @@ class ModelInvocation(ModelSchema):
             type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
             )
-        extra = self.__pydantic_extra__ or {}
-        if operation.validate_invocation is not None:
-            extra = operation.validate_invocation(
-                {name: role.type for name, role in definition.inputs.items()},
-                self.inputs,
-                extra,
-            )
-        elif extra:
-            raise ValueError("The operation does not support extra invocation fields")
-        object.__setattr__(self, "__pydantic_extra__", extra)
         return self
 
 

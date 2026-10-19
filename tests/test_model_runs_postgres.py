@@ -431,7 +431,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
     sources, request, _ = downstream_fixture(tmp_path / "sources")
     references = {
         "values": request.values,
-        "dem": request.hydrology_sources.dem,
+        "dem": request.hydrology.dem,
         "starting_mask": request.starting_mask.source,
     }
     items = {
@@ -474,7 +474,7 @@ def downstream_boundary(tmp_path: Path, store: Any) -> Iterator[Any]:
         document.pop("definitionSha256")
         if document["id"] == "downstream-beneficiaries":
             document["steps"][0]["inputs"]["hydrology"] = {
-                "value": request.hydrology_sources.model_dump(
+                "value": request.hydrology.model_dump(
                     mode="json", by_alias=True
                 )
             }
@@ -563,7 +563,7 @@ def test_downstream_http_captures_sources_and_publishes_owned_files(
     assert pending["invocation"]["inputs"] == body["inputs"]
     assert pending["invocation"]["model"]["definition"]["steps"][0]["inputs"][
         "hydrology"
-    ]["value"] == request.hydrology_sources.model_dump(mode="json", by_alias=True)
+    ]["value"] == request.hydrology.model_dump(mode="json", by_alias=True)
     assert set(pending["execution"]["additionalSources"]) == {"dem", "starting_mask"}
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{identifier}").json()

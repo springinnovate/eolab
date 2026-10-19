@@ -2,12 +2,9 @@
 
 from typing import Any, Callable
 
-from pydantic import JsonValue
-
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.downstream_models import (
     DownstreamLimits,
-    DownstreamInvocationMetadata,
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
@@ -34,44 +31,6 @@ DOWNSTREAM_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
     ("summarizing_values", "Summarizing raster values"),
     ("writing_results", "Writing results"),
 )
-
-
-def validate_downstream_invocation(
-    input_types: dict[str, str],
-    inputs: dict[str, JsonValue],
-    extra: dict[str, JsonValue],
-) -> dict[str, JsonValue]:
-    """Check saved downstream registration snapshots against their selected references.
-
-    Args:
-        input_types: Model input names and their validated declared types.
-        inputs: Captured input values already checked by their registered adapters.
-        extra: Additional fields saved alongside the generic model invocation.
-
-    Returns:
-        Validated metadata in its historical JSON form, omitting an empty snapshot map.
-
-    Raises:
-        ValueError: If snapshots are missing, extra or different from selected references.
-        ValidationError: If saved metadata contains unknown fields or invalid snapshots.
-    """
-    metadata = DownstreamInvocationMetadata.model_validate(extra)
-    roles = {
-        name
-        for name, input_type in input_types.items()
-        if input_type == "prepared_hydrology"
-    }
-    if set(metadata.hydrology) != roles:
-        raise ValueError(
-            "Capture every selected hydrology configuration with its source identities"
-        )
-    for name in roles:
-        reference = metadata.hydrology[name].reference.model_dump(mode="json")
-        if reference != inputs[name]:
-            raise ValueError(
-                "Captured hydrology does not match the selected configuration"
-            )
-    return metadata.model_dump(mode="json", by_alias=True)
 
 
 def bind_downstream(
@@ -136,7 +95,7 @@ def get_additional_sources(
         Additional catalog rasters keyed by stable operation argument names.
     """
     request = downstream_inputs(value)
-    result = {"dem": request.hydrology_sources.dem}
+    result = {"dem": request.hydrology.dem}
     if isinstance(request.starting_mask, RasterStartingMask):
         result["starting_mask"] = request.starting_mask.source
     return result
@@ -203,7 +162,7 @@ async def resolve_downstream_sources(
         )
     try:
         network = (
-            await context.areas.resolve_source(request.hydrology_sources.watersheds)
+            await context.areas.resolve_source(request.hydrology.watersheds)
             if watershed_selection is None
             else await context.areas.resolve_for_sampling(watershed_selection)
         )
@@ -291,7 +250,7 @@ async def resolve_downstream_execution_inputs(
         )
     return (
         await resolve_downstream_sources(
-            context, spec.inputs, authorized, spec.watershed_selection
+            context, spec.inputs, authorized, spec.watershedSelection
         ),
         spec,
     )

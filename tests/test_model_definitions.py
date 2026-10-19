@@ -600,16 +600,11 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     )
     calculation, invocation = build_model_calculation_request(submitted, registry)
     assert isinstance(calculation, DownstreamRequest)
-    assert calculation.hydrology_sources == binding.value
+    assert calculation.hydrology == binding.value
     assert "hydrology" not in invocation.model_dump(mode="json", by_alias=True)
     saved_invocation = invocation.model_dump(mode="json", by_alias=True)
-    explicit_empty_metadata = ModelInvocation.model_validate(
-        {**saved_invocation, "hydrology": {}}
-    )
-    assert (
-        explicit_empty_metadata.model_dump(mode="json", by_alias=True)
-        == saved_invocation
-    )
+    with pytest.raises(ValidationError, match="hydrology"):
+        ModelInvocation.model_validate({**saved_invocation, "hydrology": {}})
     assert (
         ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
         == invocation
@@ -651,39 +646,6 @@ def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) 
         document["inputs"].pop("values")
     with pytest.raises((ValidationError, ProcessingError)):
         ModelRegistry((ModelDefinition.model_validate(document),))
-
-
-def test_legacy_recipe_round_trip_preserves_its_original_checksum() -> None:
-    """Adding fixed bindings does not add fields to historical user-input recipes."""
-    from eolab_app.processing.model_run_contracts import CapturedModel
-    from eolab_app.processing.model_yaml import compute_document_checksum
-
-    document = (
-        ModelRegistry.load_installed()
-        .get("downstream-beneficiaries", "4.0.0")
-        .to_document()
-    )
-    document["version"] = "3.0.0"
-    document["inputs"]["hydrology"] = {
-        "type": "prepared_hydrology",
-        "label": "Prepared hydrology",
-    }
-    document["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
-    original_checksum = compute_document_checksum(document)
-    captured = CapturedModel.model_validate(
-        {
-            "id": document["id"],
-            "version": document["version"],
-            "definitionSha256": original_checksum,
-            "definition": document,
-        }
-    )
-    assert captured.definition.to_document() == document
-    assert captured.definition.digest == original_checksum
-    assert (
-        ModelRegistry((captured.definition,)).get(document["id"], "3.0.0")
-        == captured.definition
-    )
 
 
 class CalibrationSettings(BaseModel):
@@ -842,13 +804,13 @@ def test_operation_rejects_fixed_configuration_outside_its_schema(
 
 
 @pytest.mark.parametrize("extra", ["hydrology", "arbitrary"])
-def test_saved_invocation_rejects_extras_without_an_operation_contract(
+def test_saved_invocation_rejects_extra_fields(
     extra: str,
 ) -> None:
-    """An operation with no metadata contract cannot accept unknown persisted fields.
+    """Saved model inputs reject fields outside the invocation schema.
 
     Args:
-        extra: Undeclared metadata field, including another operation's historical field.
+        extra: Undeclared metadata field.
     """
     _, invocation = build_model_calculation_request(
         ModelRunRequest.model_validate(summary_request()),

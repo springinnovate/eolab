@@ -3,7 +3,6 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { renderModelResult, renderModelFiles, updateModelFileActions } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
-import { hydrologyDetails } from "./hydrology-view.js";
 
 /** Show the creation time in the timezone captured when this run was started.
  * @param {Object} job Model run with its fixed naming timestamp.
@@ -440,18 +439,10 @@ export class ModelsView {
             for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
                 const value = invocation.inputs[name];
                 const sourceLabel = value.kind === "runArtifact" ? `${state.runs.find(run => run.jobId === value.jobId)?.label ?? "Previous run"} · Raster result` : `${value.collectionId} / ${value.itemId}`;
-                if (input.type === "prepared_hydrology") {
-                    const details = this.element("details", "", "models-details"); details.append(this.element("summary", input.label));
-                    const entries = this.element("dl");
-                    for (const [caption, text] of hydrologyDetails(invocation.hydrology[name])) entries.append(this.element("dt", caption), this.element("dd", text));
-                    details.append(entries); const item = this.element("dd"); item.append(details);
-                    list.append(this.element("dt", "Prepared dataset"), item);
-                } else {
-                    const description = input.type === "mask_source" && value.kind === "catalogRaster" ?
-                        `${value.source.collectionId} / ${value.source.itemId} · valid cells greater than zero` :
-                        ["raster", "catalog_raster"].includes(input.type) ? sourceLabel : describeModelArea(value);
-                    list.append(this.element("dt", input.label), this.element("dd", description));
-                }
+                const description = input.type === "mask_source" && value.kind === "catalogRaster" ?
+                    `${value.source.collectionId} / ${value.source.itemId} · valid cells greater than zero` :
+                    ["raster", "catalog_raster"].includes(input.type) ? sourceLabel : describeModelArea(value);
+                list.append(this.element("dt", input.label), this.element("dd", description));
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) list.append(this.element("dt", parameter.label),
                 this.element("dd", invocation.parameters[name] === null ? "Not set" : `${invocation.parameters[name]}${parameter.unit ? ` ${parameter.unit}` : ""}`));

@@ -20,9 +20,7 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
-from eolab_app.processing.prepared_hydrology import (
-    PreparedHydrologyDefinition,
-)
+from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.models import ProcessingError
@@ -45,7 +43,7 @@ def prepare_sources(
     crs: str | None = "EPSG:4326",
     definition_changes: dict[str, Any] | None = None,
 ) -> tuple[
-    PreparedHydrologyDefinition,
+    HydrologySources,
     AuthorizedRaster,
     ResolvedCatalogSelection,
     VectorSamplingService,
@@ -131,11 +129,6 @@ def prepare_sources(
         )
     )
     document = {
-        "schema": "eolab.hydrology/v1",
-        "id": "example-network",
-        "version": "1.0.0",
-        "title": "Small eastward drainage",
-        "description": "Three connected watersheds over a sloping DEM.",
         "dem": {
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-111111111111111111111111",
@@ -151,14 +144,8 @@ def prepare_sources(
             "terminal": {"field": "next", "value": 0},
             "terminalIdField": "sink",
         },
-        "terrain": {
-            "routing": "mfd",
-            "elevationUnit": "metre",
-            "conditioning": "Synthetic eastward slope without pits",
-            "datasetVersion": "fixture-v1",
-        },
     }
-    definition = PreparedHydrologyDefinition.model_validate(
+    definition = HydrologySources.model_validate(
         {**document, **(definition_changes or {})}
     )
     return (

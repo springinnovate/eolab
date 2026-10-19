@@ -720,8 +720,8 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     from eolab_app.processing.model_definitions import ModelDefinition
 
     document = registry.get("downstream-beneficiaries", "4.0.0").to_document()
-    document["steps"][0]["inputs"]["hydrology"]["value"] = (
-        request.hydrology_sources.model_dump(mode="json", by_alias=True)
+    document["steps"][0]["inputs"]["hydrology"]["value"] = request.hydrology.model_dump(
+        mode="json", by_alias=True
     )
     definition = ModelDefinition.model_validate(document)
     registry = ModelRegistry((definition,))
@@ -761,7 +761,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     )
     references = {
         request.values.item_id: sources.rasters["values"],
-        request.hydrology_sources.dem.item_id: sources.rasters["dem"],
+        request.hydrology.dem.item_id: sources.rasters["dem"],
         request.starting_mask.source.item_id: sources.rasters["starting_mask"],
     }
 
@@ -1221,12 +1221,12 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
         sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
     )
     resolved = asyncio.run(resolve_downstream_sources(context, request, values))
-    reader.resolve_source.assert_awaited_once_with(request.hydrology_sources.watersheds)
+    reader.resolve_source.assert_awaited_once_with(request.hydrology.watersheds)
     reader.resolve_for_sampling.assert_not_awaited()
     plan = plan_downstream(resolved, request, limits)
     assert plan.watershedSelection == sources.network.selection
     restored = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
-    assert restored.watershed_selection == sources.network.selection
+    assert restored.watershedSelection == sources.network.selection
     execution_sources, _ = asyncio.run(
         resolve_downstream_execution_inputs(context, restored, values)
     )

@@ -3,7 +3,6 @@ import { validateCalculationRows, validateModelResult } from "./model-results.js
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
-import { hydrologyKey, hydrologyReference, validateHydrologyReference, validatePreparedHydrology } from "./hydrology.js";
 
 /** Serialize one raster identity without carrying display state or file paths.
  * @param {Object} source Catalog item or owned run-file source.
@@ -469,12 +468,6 @@ export class ProcessingApiClient {
         validateAvailableModel({...invocation.model.definition, definitionSha256: invocation.model.definitionSha256});
         if (!invocation.inputs || !invocation.parameters || typeof invocation.label !== "string")
             throw new Error("Invalid saved model inputs.");
-        for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
-            if (input.type !== "prepared_hydrology") continue;
-            const reference = validateHydrologyReference(invocation.inputs[name]);
-            const snapshot = validatePreparedHydrology(invocation.hydrology?.[name]);
-            if (hydrologyKey(reference) !== hydrologyKey(hydrologyReference(snapshot))) throw new Error("Saved hydrology does not match the run's inputs.");
-        }
         return invocation;
     }
 

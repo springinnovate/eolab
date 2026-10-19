@@ -19,11 +19,6 @@ export const downstreamModel = {...model, id: "downstream-beneficiaries", title:
     parameters: {summary: model.parameters.summary, buffer: {type: "number", label: "Buffer radius", unit: "m", minimum: 0, default: 5000},
         cutoff: {type: "optional_number", label: "Maximum straight-line distance", unit: "m", exclusiveMinimum: 0, default: null}}};
 
-/** Path-free report retained by runs created before hydrology was model-configured. */
-export const hydrology = {definition: {id: "prepared-region", version: "1.0.0", title: "Prepared regional terrain", description: "Terrain and connected watersheds for the region.",
-    dem: {collectionId: raster.collectionId, itemId: "prepared-dem"}, watersheds: {collectionId: selection.collectionId, itemId: "watersheds"},
-    topology: {idField: "HYBAS_ID", downstreamField: "NEXT_DOWN", terminal: {field: "NEXT_SINK", equalsField: "HYBAS_ID"}},
-    terrain: {datasetVersion: "2026", conditioning: "Pits already filled for routing."}}, validation: {validatedAt: "2026-10-10T00:00:00Z"}, effectiveSha256: "f".repeat(64)};
 /** Create an independent run status.
  * @param {Object} [changes={}] Overridden state or identity.
  * @return {Object} Model run response.

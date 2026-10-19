@@ -84,7 +84,7 @@ def write_watershed_view(
         ProcessingError: If the configuration cannot represent HydroBASINS links.
         OSError: If the private view cannot be written.
     """
-    topology = spec.inputs.hydrology_sources.topology
+    topology = spec.inputs.hydrology.topology
     if topology.idType != "integer" or topology.terminalIdField is None:
         raise ProcessingError(
             "unsupported_hydrology",
@@ -458,7 +458,7 @@ def run_original_downstream(
                 "beneficiariesRevision": BENEFICIARIES_REVISION,
                 "ecoshardRevision": ECOSHARD_REVISION,
                 "inputs": model_inputs.model_dump(mode="json", by_alias=True),
-                "watershedSelection": spec.watershed_selection.model_dump(
+                "watershedSelection": spec.watershedSelection.model_dump(
                     mode="json", by_alias=True
                 ),
                 "numericalPolicy": {
