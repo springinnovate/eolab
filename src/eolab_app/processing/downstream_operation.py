@@ -86,7 +86,7 @@ def get_values_source(
 def get_additional_sources(
     value: DownstreamRequest | QueuedDownstream | DownstreamPlan,
 ) -> dict[str, CatalogRasterRequest]:
-    """Declare DEM and optional raster-mask inputs for admission and staleness checks.
+    """Declare DEM and optional raster-mask inputs for authorization and execution.
 
     Args:
         value: Request or stored downstream specification.
