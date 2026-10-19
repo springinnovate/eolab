@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Mapping
-from pathlib import Path
 from xml.etree import ElementTree
 
 import httpx2
@@ -12,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
 from eolab_app.rendering.composite import (
     AuthorizedCompositeMapPlan,
@@ -757,10 +755,7 @@ def test_composite_map_rejects_unapproved_layers_before_rendering() -> None:
 
 def test_raster_composite_sld_preserves_stop_and_layer_opacity() -> None:
     """Apply neutral opacity outside the raster's three stop opacities."""
-    authorization = PublishedRasterAuthorization(
-        Path("prepared.tif"),
-        RasterSourceIdentity(1, 2, 3, 4),
-    )
+    authorization = PublishedRasterAuthorization()
     document = authorization.build_composite_sld(
         "eolab:prepared",
         "dynamic-raster",

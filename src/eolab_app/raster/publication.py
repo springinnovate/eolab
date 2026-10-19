@@ -6,7 +6,6 @@ import re
 
 from rasterio.errors import RasterioError
 
-from eolab_app.raster.catalog_metadata import cataloged_source_signature
 from eolab_app.raster.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.raster.models import (
     CatalogRasterRequest,
@@ -18,7 +17,6 @@ from eolab_app.raster.sources import (
     PublishedRasterRegistry,
 )
 from eolab_app.raster.source_access import RasterSourceAccess, describe_raster_file
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.source_models import RasterSourceRequest, RunArtifactReference
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.source_files import SourceFileError
@@ -97,11 +95,10 @@ class RasterPublicationService:
                 request = request.source
             item = await self._catalog.get_item(request)
             source_path = self._source_resolver.resolve(item)
-            catalog_signature = cataloged_source_signature(item)
             resource_name = request.item_id
             await self._publisher.publish(resource_name, source_path)
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
-            self._raster_registry.authorize(layer_name, source_path, catalog_signature)
+            self._raster_registry.authorize(layer_name)
             return PublishedRaster(
                 layerName=layer_name,
                 bbox=tuple(item["bbox"]),
@@ -129,9 +126,6 @@ class RasterPublicationService:
         source = await self._source_access.resolve(reference, owner)
         try:
             metadata = await asyncio.to_thread(describe_raster_file, source.source_path)
-            signature = await asyncio.to_thread(
-                RasterSourceIdentity.read, source.source_path
-            )
         except (OSError, ValueError, RasterioError) as error:
             raise RasterConflictError(
                 "This raster could not be opened. Reopen the run and try again."
@@ -144,7 +138,7 @@ class RasterPublicationService:
         )
         await self._source_access.resolve(reference, owner)
         layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
-        self._raster_registry.authorize(layer_name, source.source_path, signature)
+        self._raster_registry.authorize(layer_name)
         return PublishedRaster(layerName=layer_name, bbox=metadata["bounds"])
 
     async def authorize_layers(

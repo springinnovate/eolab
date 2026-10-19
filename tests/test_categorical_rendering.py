@@ -1,7 +1,6 @@
 """Exercise categorical appearances through real authorization/HTTP boundaries."""
 
 import json
-from pathlib import Path
 from urllib.parse import parse_qs
 from xml.etree import ElementTree
 
@@ -11,7 +10,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
 from eolab_app.rendering.composite import CompositeMapRenderingService
 from eolab_app.rendering.errors import (
@@ -65,9 +63,7 @@ class RasterRegistry:
         """
         if layer_name not in {"eolab:landcover", "eolab:continuous"}:
             raise PublishedLayerNotAuthorizedError("Layer is not published")
-        return PublishedRasterAuthorization(
-            Path("immutable.tif"), RasterSourceIdentity(1, 2, 3, 4)
-        )
+        return PublishedRasterAuthorization()
 
 
 @pytest.fixture
