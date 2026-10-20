@@ -49,22 +49,6 @@ test("map-query recovery positions are isolated from fixed summary and raster st
     }
 });
 
-test("legacy summary and series records migrate only to their owner without changing the submission",()=>{
-    for(const client of [undefined,"summary","raster-series"]) {
-        const data=new Map(), saved=record(), {context,...execution}=saved;
-        data.set("eolab.processing.calculation.v1",JSON.stringify({...execution,automatic:context.automatic,...(client?{client}:{})}));
-        const root=new CalculationSessionStorage(storage(data));
-        const owner=client==="raster-series"?"raster-series:0":"summary";
-        assert.deepEqual(root.savedClientNames(),[owner]);
-        const scoped=root.forClient(owner), recovered=scoped.read();
-        assert.deepEqual(recovered.pending,saved.pending);
-        scoped.write(recovered);
-        assert.equal(data.has("eolab.processing.calculation.v1"),false);
-        assert.equal(data.has("eolab.processing.calculation.v2."+owner),true);
-        assert.deepEqual(scoped.read(),recovered);
-    }
-});
-
 for (const operation of ["clip", "calculation"]) {
     test(`${operation} recovery preserves its vector HTTP request`, async () => {
         const selection = {collectionId: "eolab-mounted-vectors", itemId: "countries", assetKey: "data", layerName: "countries",
@@ -93,17 +77,6 @@ for (const operation of ["clip", "calculation"]) {
             ...(operation === "clip" ? source : {sources: {a: source}, calculations: saved.intent.calculations})}]);
     });
 }
-
-test("failed migration preserves the legacy key and an independent peer record",()=>{
-    const data=new Map(), backing=storage(data), root=new CalculationSessionStorage(backing);
-    root.forClient("raster-series:1").write(record());
-    data.set("eolab.processing.calculation.v1",JSON.stringify({...record(),automatic:true,client:"raster-series"}));
-    const owner=root.forClient("raster-series:0"), original=owner.read();
-    backing.setItem=()=>{throw Error("Storage full");};
-    assert.throws(()=>owner.write(original),/Storage full/);
-    assert.deepEqual(owner.read(),original);
-    assert.deepEqual(root.savedClientNames(),["raster-series:0","raster-series:1"]);
-});
 
 test("malformed and oversized records do not affect valid peer recovery",()=>{
     const data=new Map(), root=new CalculationSessionStorage(storage(data));

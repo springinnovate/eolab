@@ -379,14 +379,14 @@ test("calculation API serializes identities, explicit scopes, and useful validat
 
 
 
-test("caller metadata survives the legacy storage format without choosing reload cancellation", async () => {
+test("caller metadata survives reload without requesting cancellation", async () => {
     const h = fixture();
     const context = { automatic: true };
     h.controller.submit(h.intent(), context); await flush();
     context.automatic = false;
     const stored = JSON.parse([...h.data.values()][0]);
     assert.equal(stored.automatic, true);
-    assert.equal(stored.context, undefined, "the v1 session format is unchanged");
+    assert.equal(stored.context, undefined, "caller metadata is stored as top-level fields");
     assert.equal(stored.cancelRequested, false);
     assert.equal(h.storage.read().cancelRequested, false, "reading storage makes no cancellation decision");
     h.controller.discardPendingCalculation(); await flush();
