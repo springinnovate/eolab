@@ -253,8 +253,8 @@ class AggregateArea(BaseModel):
                 raise ValueError("Resolved source does not match the catalog selection")
         elif self.catalogSelection is not None or self.resolved is not None:
             raise ValueError("Only catalog areas may carry a catalog source")
-        elif (self.kind == "polygons") != bool(self.geometries):
-            raise ValueError("Only polygon areas contain geometry")
+        elif self.kind == "bounds" and self.geometries:
+            raise ValueError("Box areas cannot contain polygon geometry")
         return self
 
     @model_serializer(mode="wrap")
