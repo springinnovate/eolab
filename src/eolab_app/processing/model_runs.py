@@ -480,8 +480,8 @@ def record_model_preparation(
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
         wrapper: Model specification already validated for this execution attempt.
-        prepared: The prepared summary or clip plan and required disk reservation.
-        limits: The worker's configured time, memory, disk and result-retention limits.
+        prepared: The prepared operation plan.
+        limits: Worker configuration including the result-retention period.
 
     Returns:
         The model job plan with preparation details ready to save. Raster result
@@ -508,9 +508,6 @@ def record_model_preparation(
         {
             "state": "prepared",
             "limits": {
-                "runtimeSeconds": None,
-                "processMemoryBytes": None,
-                "reservedBytes": prepared.reserved_bytes,
                 "resultTtlSeconds": limits.result_ttl_seconds,
             },
             "numericalPolicy": operation.policy(spec).model_dump(

@@ -225,6 +225,12 @@ def test_run_example_has_typed_path_free_execution_and_round_trips() -> None:
     assert normalized == reloaded.model_dump(
         mode="json", by_alias=True, exclude_unset=True
     )
+    assert normalized["execution"]["limits"] == {"resultTtlSeconds": 86_400}
+    for field in ("runtimeSeconds", "processMemoryBytes", "reservedBytes"):
+        retired = copy.deepcopy(normalized)
+        retired["execution"]["limits"][field] = 600
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            RunDocument.model_validate(retired)
     normalized["execution"]["source_path"] = "/private/raster.tif"
     with pytest.raises(ValidationError):
         RunDocument.model_validate(normalized)
