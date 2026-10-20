@@ -115,9 +115,7 @@ def owned_polygon_area(geometries: list[dict[str, Any]]) -> AggregateArea:
     )
 
 
-def write_aggregate_area(
-    path: Path, geometries: list[dict[str, Any]]
-) -> AggregateArea:
+def write_aggregate_area(path: Path, geometries: list[dict[str, Any]]) -> AggregateArea:
     """Create a calculation area backed by a real authorized vector fixture.
 
     Args:
