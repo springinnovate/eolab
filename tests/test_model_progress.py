@@ -12,11 +12,11 @@ from eolab_app.processing.model_run_contracts import ModelJobResponse, ModelProg
 from eolab_app.processing.model_runs import serialize_model_job
 
 
-def model_row(operation: str | None, progress: dict[str, Any]) -> dict[str, Any]:
+def model_row(operation: str, progress: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal owned running record without requiring result files.
 
     Args:
-        operation: Captured operation identity, or None for a historical summary.
+        operation: Captured operation identity.
         progress: Persisted native snapshot to serialize.
 
     Returns:
@@ -32,12 +32,12 @@ def model_row(operation: str | None, progress: dict[str, Any]) -> dict[str, Any]
             "title": "Habitat fixture",
         },
     }
-    if operation is not None:
-        summary["operationId"] = operation
+    summary["operationId"] = operation
     return {
         "id": "a" * 32,
         "status": "running",
         "summary": summary,
+        "presentation": {"utcOffsetMinutes": 0},
         "progress": progress,
         "created_at": now,
         "updated_at": now,
@@ -126,16 +126,6 @@ def test_installed_operation_descriptions_preserve_stage_meaning(
     response = ModelJobResponse.model_validate(serialize_model_job(row))
     assert response.progress.description == description
     assert response.progress.completed is None and response.progress.total is None
-
-
-def test_historical_summary_keeps_block_counts_and_receives_stage_description() -> None:
-    """Old records without an operation ID retain their supported summary semantics."""
-    row = model_row(
-        None, {"phase": "writing_results", "completedBlocks": 2, "totalBlocks": 4}
-    )
-    progress = ModelJobResponse.model_validate(serialize_model_job(row)).progress
-    assert (progress.completed, progress.total, progress.unit) == (2, 4, "blocks")
-    assert progress.description == "Writing results"
 
 
 @pytest.mark.parametrize(

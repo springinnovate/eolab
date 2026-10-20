@@ -50,7 +50,6 @@ from eolab_app.processing.model_runs import (
     encode_model_run_cursor,
     export_model_job_yaml,
     read_model_invocation,
-    read_model_job_operation_id,
     serialize_model_job,
     serialize_model_artifacts,
     build_model_download_filename,
@@ -226,9 +225,6 @@ class ProcessingService:
             RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
         request_data = request.model_dump(mode="json", exclude={"requestId"})
-        if request.utcOffsetMinutes == 0:
-            # Preserve retry identity for submissions accepted before local timestamps.
-            request_data.pop("utcOffsetMinutes")
         request_hash = hashlib.sha256(encode_canonical_json(request_data)).hexdigest()
         existing = await asyncio.to_thread(
             self.jobs.find_request, owner, request.requestId
@@ -985,9 +981,7 @@ class ProcessingService:
                     artifact["sha256"],
                     artifact["filename"],
                 )
-                # Results created before media types were recorded were all
-                # raster clips; preserve their existing download content type.
-                media_type = artifact.get("media_type", "image/tiff")
+                media_type = artifact["media_type"]
             content = None
             if row.get("presentation") and row["operation"] != MODEL_OPERATION:
                 rows = present_calculation_rows(artifact["rows"], row["presentation"])
@@ -1008,17 +1002,8 @@ class ProcessingService:
                 size = len(content)
                 sha256 = hashlib.sha256(content).hexdigest()
             if row["operation"] == MODEL_OPERATION:
-                output = (row.get("summary") or row["spec"]).get("output")
                 output_name = (
-                    "provenance"
-                    if provenance
-                    else (
-                        output["name"]
-                        if output
-                        else get_model_operation(
-                            read_model_job_operation_id(row)
-                        ).output.name
-                    )
+                    "provenance" if provenance else row["summary"]["output"]["name"]
                 )
                 filename = build_model_download_filename(
                     row, output_name, filename, media_type

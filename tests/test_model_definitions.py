@@ -170,6 +170,7 @@ def test_historical_catalog_recipe_still_executes_without_rewriting_identity() -
     request = ModelRunRequest.model_validate(
         {
             "requestId": "legacy-catalog-request",
+            "utcOffsetMinutes": 0,
             "model": {
                 name: saved["model"][name]
                 for name in ("id", "version", "definitionSha256")
@@ -380,6 +381,7 @@ def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
     owner = hashlib.sha256(b"a" * 64).hexdigest()
     row = {
         "operation": "model.run.v1",
+        "presentation": {"utcOffsetMinutes": 0},
         "status": "ready",
         "metadata_expires_at": None,
         "retained_metadata": {
@@ -577,6 +579,7 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     binding = definition.steps[0].inputs["hydrology"]
     assert isinstance(binding, FixedInputBinding)
     submitted = ModelRunRequest(
+        utcOffsetMinutes=0,
         requestId="a" * 32,
         label="Configured source run",
         model={

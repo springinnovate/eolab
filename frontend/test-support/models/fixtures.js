@@ -28,7 +28,10 @@ export function job(changes = {}) {
     const nameTimestamp = changes.nameTimestamp ?? "2026_10_08_00_00_00";
     return {jobId: "1".repeat(32), operation: "model.run.v1", model: {id: model.id, version: model.version, definitionSha256: model.definitionSha256, title: model.title},
         status: "queued", createdAt: "2026-10-08T00:00:00Z", updatedAt: "2026-10-08T00:00:00Z",
-        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null, ...changes,
+        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null,
+        artifacts: {jobId: changes.jobId ?? "1".repeat(32), expiresAt: changes.expiresAt ?? null,
+            availability: ["queued", "running", "cancelling"].includes(changes.status ?? "queued") ? "pending" : "unavailable",
+            files: [], totalBytes: 0}, ...changes,
         name, nameTimestamp, label: `${name} · ${nameTimestamp}`};
 }
 

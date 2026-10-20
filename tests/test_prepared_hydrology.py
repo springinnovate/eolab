@@ -244,6 +244,7 @@ def test_missing_configured_dem_names_the_unavailable_model_input(
     request = ModelRunRequest.model_validate(
         {
             "requestId": "b" * 32,
+            "utcOffsetMinutes": 0,
             "model": {
                 "id": model.id,
                 "version": model.version,

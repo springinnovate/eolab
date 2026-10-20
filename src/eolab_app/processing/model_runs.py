@@ -64,13 +64,12 @@ def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
 
     Returns:
         The editable name, a YYYY_MM_DD_HH_MM_SS timestamp, and their combined label.
-        Historical runs use their original label and a UTC creation timestamp.
 
     Raises:
         ValidationError: If persisted presentation settings are invalid.
     """
-    presentation = ModelRunPresentation.model_validate(row.get("presentation") or {})
-    summary = row.get("summary") or row["spec"]
+    presentation = ModelRunPresentation.model_validate(row["presentation"])
+    summary = row["summary"]
     name = presentation.label or summary["label"]
     created = row["created_at"].astimezone(
         timezone(timedelta(minutes=presentation.utcOffsetMinutes))
@@ -398,7 +397,7 @@ def declare_model_files(
             different from the registered operation contract.
         ValidationError: If native file metadata is invalid.
     """
-    operation = get_model_operation(read_model_job_operation_id(row))
+    operation = get_model_operation(row["summary"]["operationId"])
     contracts = {
         item.name: item for item in (operation.output, *operation.additional_outputs)
     }
@@ -433,8 +432,8 @@ def declare_model_files(
                 500,
             )
         by_output.setdefault(output_name, []).append(item)
-    summary = row.get("summary") or row["spec"]
-    outputs = summary.get("outputs") or {operation.output.name: summary["output"]}
+    summary = row["summary"]
+    outputs = summary["outputs"]
     declarations = []
     for name, output in outputs.items():
         if (
@@ -548,13 +547,13 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     Raises:
         ProcessingError: If a completed result's operation or format is unsupported.
     """
-    summary = row.get("summary") or row["spec"]
+    summary = row["summary"]
     status = row["status"]
     if status == "ready" and row["expires_at"] <= datetime.now(timezone.utc):
         status = "expired"
     artifact = row.get("artifact") if status == "ready" else None
     progress = row["progress"]
-    # Preserve both historical block counters and operation-supplied work units.
+    # Raster operations report blocks; other operations supply their own units.
     measured = {"phase": progress.get("phase")}
     if "completed" in progress and progress.get("total", 0) > 0:
         measured.update(
@@ -570,7 +569,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         )
     if status == "running" and isinstance(measured["phase"], str):
         try:
-            operation = get_model_operation(read_model_job_operation_id(row))
+            operation = get_model_operation(summary["operationId"])
         except ProcessingError as error:
             if error.code != "unsupported_model_operation":
                 raise
@@ -581,21 +580,14 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
     identifier = row["id"]
     result = None
     if artifact is not None:
-        operation = get_model_operation(read_model_job_operation_id(row))
+        operation = get_model_operation(summary["operationId"])
         if artifact["media_type"] != operation.output.media_type:
             raise ProcessingError(
                 "invalid_model_result",
                 "The result format does not match this model output.",
                 500,
             )
-        output = summary.get("output") or {
-            "name": operation.output.name,
-            "label": operation.output.label,
-            "kind": operation.output.kind,
-            "mediaType": operation.output.media_type,
-            "presentation": operation.output.presentation,
-            "role": "result",
-        }
+        output = summary["output"]
         result = {
             **output,
             "url": f"/api/processing/jobs/{row['id']}/result",
@@ -668,8 +660,7 @@ def serialize_model_artifacts(row: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         A path-free manifest with owner-checked download URLs, or an empty list
-        explaining that files are pending or unavailable. Historical runs without
-        inventories retain their original result/provenance URLs separately.
+        explaining that files are pending or unavailable.
 
     Raises:
         ValidationError: If the stored manifest is malformed.
@@ -681,13 +672,8 @@ def serialize_model_artifacts(row: dict[str, Any]) -> dict[str, Any]:
         if row["status"] in {"queued", "running", "cancelling"}
         else "unavailable"
     )
-    stored = (row.get("artifact") or {}).get("manifest")
-    if (
-        row["status"] == "ready"
-        and row["expires_at"] > datetime.now(timezone.utc)
-        and stored
-    ):
-        manifest = read_artifact_manifest(stored)
+    if row["status"] == "ready" and row["expires_at"] > datetime.now(timezone.utc):
+        manifest = read_artifact_manifest(row["artifact"]["manifest"])
         availability, total = "available", manifest.total_bytes
         files = [
             {
@@ -703,25 +689,6 @@ def serialize_model_artifacts(row: dict[str, Any]) -> dict[str, Any]:
         "files": files,
         "totalBytes": total,
     }
-
-
-def read_model_job_operation_id(row: dict[str, Any]) -> str:
-    """Read a model job's operation, including records written before adapters existed.
-
-    Earlier summary records contained neither an operation ID nor an output
-    descriptor. The original clip adapter alone stored a top-level grid. This
-    compatibility rule is limited to those two historical persisted schemas.
-
-    Args:
-        row: Owned job with its compact public summary.
-
-    Returns:
-        Operation ID captured at admission or identified from the historical schema.
-    """
-    summary = row.get("summary") or row["spec"]
-    if "operationId" in summary:
-        return summary["operationId"]
-    return "raster.clip.v1" if "grid" in summary else "raster.aggregate.v1"
 
 
 def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
@@ -755,7 +722,7 @@ def read_model_invocation(row: dict[str, Any]) -> ModelInvocation:
             410,
         )
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))
-    presentation = ModelRunPresentation.model_validate(row.get("presentation") or {})
+    presentation = ModelRunPresentation.model_validate(row["presentation"])
     if presentation.label is not None:
         metadata["invocation"]["label"] = presentation.label
     return ModelInvocation.model_validate(metadata["invocation"])
@@ -800,7 +767,7 @@ def export_model_job_yaml(row: dict[str, Any], *, run: bool) -> bytes:
                 else {"statistics": None}
             ),
         }
-        if artifact and artifact.get("manifest"):
+        if artifact:
             execution["outcome"]["artifacts"] = [
                 describe_artifact_file(file, row)
                 for file in read_artifact_manifest(artifact["manifest"]).files

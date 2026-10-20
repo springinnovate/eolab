@@ -190,6 +190,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
                 multiple_files_target,
             )
     request = ModelRunRequest(
+        utcOffsetMinutes=0,
         model={
             "id": definition.id,
             "version": "1.1.0",
@@ -230,6 +231,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         "expires_at": now + timedelta(hours=1),
         "status": "running",
         "operation": "model.run.v1",
+        "presentation": {"utcOffsetMinutes": 0},
         "progress": {},
         "error": None,
     }
@@ -313,16 +315,3 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         ModelJobResponse.model_validate(serialize_processing_job(ready)).result
         == response.result
     )
-    if not custom:
-        legacy = dict(row["summary"])
-        legacy.pop("output")
-        legacy.pop("operationId")
-        if model_id == "raster-summary":
-            legacy.pop("grid")
-        historical = {**ready, "summary": legacy, "spec": legacy}
-        assert (
-            ModelJobResponse.model_validate(
-                serialize_processing_job(historical)
-            ).result.kind
-            == response.result.kind
-        )

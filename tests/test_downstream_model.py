@@ -661,6 +661,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
+        utcOffsetMinutes=0,
         model={
             "id": definition.id,
             "version": definition.version,
@@ -718,6 +719,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         "spec": prepared.specification,
         "summary": prepared.summary,
         "retained_metadata": prepared.retained_metadata,
+        "presentation": {"utcOffsetMinutes": 0},
         "reserved_bytes": 0,
         "created_at": now,
         "updated_at": now,

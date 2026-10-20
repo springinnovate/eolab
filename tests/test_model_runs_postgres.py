@@ -632,6 +632,7 @@ def model_request(
         },
         "parameters": {},
         "label": "My model run",
+        "utcOffsetMinutes": 0,
         **changes,
     }
 

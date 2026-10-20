@@ -67,11 +67,10 @@ class ModelRunPresentation(ModelSchema):
     """Keep an owner's edited run name and the timezone offset chosen at submission.
 
     The offset is minutes east of UTC and remains fixed when the run is renamed.
-    Older runs have no presentation and use their original name and UTC.
     """
 
     label: RunName | None = None
-    utcOffsetMinutes: UtcOffsetMinutes = 0
+    utcOffsetMinutes: UtcOffsetMinutes
 
 
 class ModelReference(ModelSchema):
@@ -93,7 +92,7 @@ class ModelRunRequest(ModelSchema):
     the recipe version; ``inputs`` supplies datasets and an area. Omitted
     parameters use the recipe's defaults, and ``label`` names the run for the user.
     ``utcOffsetMinutes`` fixes its timestamp to the submitting browser's local
-    time, expressed as minutes east of UTC; older clients default to UTC.
+    time, expressed as minutes east of UTC.
     """
 
     requestId: Annotated[
@@ -104,7 +103,7 @@ class ModelRunRequest(ModelSchema):
     inputs: dict[Name, JsonValue] = Field(min_length=1, max_length=16)
     parameters: dict[Name, JsonValue] = Field(default_factory=dict, max_length=32)
     label: RunName
-    utcOffsetMinutes: UtcOffsetMinutes = 0
+    utcOffsetMinutes: UtcOffsetMinutes
 
     @model_validator(mode="after")
     def check_json_values(self) -> "ModelRunRequest":
@@ -382,6 +381,7 @@ class ModelJobResponse(JobResponse):
     ``deletionUndo`` identifies a deletion that this owner can still undo.
     ``name`` is editable; ``nameTimestamp`` is the fixed creation timestamp.
     ``label`` combines both for use outside this run's details.
+    ``artifacts`` is always present, with an empty list while files are unavailable.
     """
 
     operation: Literal["model.run.v1"]
@@ -392,7 +392,7 @@ class ModelJobResponse(JobResponse):
     metadataExpiresAt: datetime | None
     progress: ModelProgress
     result: ModelResult | None
-    artifacts: ModelArtifactManifest | None = None
+    artifacts: ModelArtifactManifest
     deletionUndo: ModelDeletionUndo | None = None
 
 

@@ -152,6 +152,17 @@ test("multiple run files require scoped URLs, unique IDs and valid availability"
     }
 });
 
+test("model responses require a file inventory even when files are pending or unavailable", async () => {
+    for (const status of ["queued", "running", "failed", "expired"]) {
+        const response = job({status}), h = fixture(() => response);
+        assert.deepEqual((await h.api.getJob(response.jobId)).artifacts, response.artifacts);
+    }
+    for (const artifacts of [undefined, null]) {
+        const h = fixture(() => job({artifacts}));
+        await assert.rejects(h.api.getJob(job().jobId), /invalid result file availability/);
+    }
+});
+
 test("more than 64 distinct run files are accepted and the last file is still validated", async () => {
     const artifacts = fileManifest(), source = artifacts.files[0];
     artifacts.files = Array.from({length: 65}, (_, index) => {

@@ -181,7 +181,7 @@ test("ready results show exact integer values and safe CSV/provenance/YAML links
     assert.equal(h.view.run.result.children.length, 0); assert.match(h.view.run.status.textContent, /expired/);
 });
 
-test("run files distinguish coverage from results and replace legacy duplicate links", () => {
+test("run files distinguish coverage from results and provide each download once", () => {
     const h = fixture(), artifacts = fileManifest();
     h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
     h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
@@ -446,13 +446,11 @@ test("clip results offer a GeoTIFF with dimensions and expire correctly", () => 
     const h = fixture(), id = job().jobId;
     h.state.page = "run"; h.state.selectedRun = id;
     h.state.invocation = {...invocation, model: {...clipModel, definition: clipModel}, parameters: {}};
-    h.state.runs = [job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: clipResult})];
+    h.state.runs = [job({model: clipModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: clipResult, artifacts: fileManifest()})];
     h.view.render(h.state);
     assert.equal(h.view.run.result.children[0].children[0].textContent, "Clipped raster");
     assert.equal(h.view.run.result.children[0].children[1].textContent, clipResult.filename);
     assert.equal(h.view.run.result.children[0].children[2].textContent, "10 × 10 pixels · 90 valid pixels");
-    const links = h.view.run.result.children[1].children;
-    assert.equal(links[0].textContent, "Download GeoTIFF"); assert.equal(links[0].href, clipResult.url);
     h.state.runs[0].status = "expired"; h.view.render(h.state); assert.equal(h.view.run.result.children.length, 0);
 });
 

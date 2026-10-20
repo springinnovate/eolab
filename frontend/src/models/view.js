@@ -423,7 +423,7 @@ export class ModelsView {
             r.fileActions = [];
             if (available && job.result) {
                 const filesAvailable = job.artifacts?.availability === "available";
-                renderModelResult(r.result, job.result, id, this.element.bind(this), !filesAvailable);
+                renderModelResult(r.result, job.result, this.element.bind(this));
                 if (filesAvailable) r.fileActions = renderModelFiles(r.result, job.artifacts, this.element.bind(this), this.handlers.onShowOutput);
             }
         }

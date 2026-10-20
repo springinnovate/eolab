@@ -124,7 +124,7 @@ function validateJob(job) {
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
-        if (job.artifacts != null) validateModelArtifacts(job.artifacts, job);
+        validateModelArtifacts(job.artifacts, job);
         if (job.deletionUndo != null) {
             validateProcessingId(job.deletionUndo.deletionId);
             if (job.status !== "deleted" || !Number.isFinite(Date.parse(job.deletionUndo.expiresAt)))
@@ -156,7 +156,7 @@ function validateJob(job) {
  * @throws {Error} If identities, availability, sizes or download URLs are invalid.
  */
 function validateModelArtifacts(manifest, job) {
-    if (manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
+    if (!manifest || manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
         !["pending", "available", "unavailable"].includes(manifest.availability) ||
         !Array.isArray(manifest.files) ||
         !Number.isSafeInteger(manifest.totalBytes) || manifest.totalBytes < 0 ||

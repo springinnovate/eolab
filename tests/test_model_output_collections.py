@@ -191,6 +191,7 @@ def test_many_drainage_files_publish_without_an_inventory_ceiling(
                 "id": "b" * 32,
                 "created_at": datetime.now(timezone.utc),
                 "summary": {"label": "Many drainage groups"},
+                "presentation": {"utcOffsetMinutes": 0},
                 "status": "ready",
                 "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
                 "artifact": {"manifest": asdict(manifest)},
