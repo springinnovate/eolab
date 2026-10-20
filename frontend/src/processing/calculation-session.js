@@ -1,7 +1,6 @@
 /** Save each raster calculation's inputs and retry state for recovery after a tab reload. */
 import { labeledRasterSource } from "../raster-source.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
-const LEGACY_KEY = "eolab.processing.calculation.v1";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
 const CLIENT = /^(summary|(?:raster-series|summary-query):(0|[1-9][0-9]{0,15}))$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
@@ -81,12 +80,12 @@ export class CalculationSessionStorage {
      */
     forClient(client) { return new CalculationSessionStorage(this.storage, client); }
     /** List saved unfinished calculations without assuming a maximum raster count.
-     * Only this component's keys are considered. Invalid records are ignored and
-     * the legacy single-record format remains recoverable by its original caller.
+     * Only this component's current per-caller keys are considered.
+     * Invalid records are ignored.
      * @return {string[]} Callers requiring startup recovery.
      */
     savedClientNames() {
-        const clients = new Set(["summary", "raster-series:0"]);
+        const clients = new Set();
         try {
             for (let index = 0; index < (this.storage?.length ?? 0); index++) {
                 const key = this.storage.key(index);
@@ -99,24 +98,12 @@ export class CalculationSessionStorage {
         return [...clients].filter(client => this.forClient(client).read())
             .sort((a, b) => a === b ? 0 : a === "summary" ? -1 : b === "summary" ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1]));
     }
-    /** Read the old single-record JSON only for the caller that originally owned it.
-     * @return {string|null} Matching legacy JSON text, or null if absent, unreadable or owned by another caller.
-     */
-    readLegacyRecord() {
-        try {
-            const text = this.storage?.getItem(LEGACY_KEY);
-            if (!text || text.length > 16384) return null;
-            const owner = JSON.parse(text).client;
-            return (owner === "raster-series" ? this.client === "raster-series:0" :
-                (!owner || owner === "summary") && this.client === "summary") ? text : null;
-        } catch { return null; }
-    }
     /** Read one calculation's saved inputs, job identifier and cancellation request.
      * @return {Object|null} Validated recovery record, or null if absent, invalid or unreadable.
      */
     read() {
         try {
-            const text = this.storage?.getItem(KEY_PREFIX + this.client) ?? this.readLegacyRecord();
+            const text = this.storage?.getItem(KEY_PREFIX + this.client);
             if (!text || text.length > 16384) return null;
             const value = JSON.parse(text);
             if (typeof value.automatic !== "boolean" || typeof value.cancelRequested !== "boolean" ||
@@ -129,8 +116,7 @@ export class CalculationSessionStorage {
         } catch { return null; }
     }
     /** Save only this caller's submission before transport; never overwrite a peer.
-     * Record contents preserve the old automatic/manual metadata. A successful write
-     * migrates this caller's legacy record to its own v2 key, keeping the request ID.
+     * Store the caller's automatic/manual context alongside its execution data.
      * @param {Object} record Execution data and optional caller context.
      * @return {void}
      * @throws {Error} If storage is unavailable, full, or the record exceeds its bound.
@@ -141,11 +127,9 @@ export class CalculationSessionStorage {
         const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}) });
         if (text.length > 16384) throw new Error("Calculation recovery information is too large.");
         this.storage.setItem(KEY_PREFIX + this.client, text);
-        if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);
     }
     /** Remove this caller's recovery record after its job has finished. @return {void} */
     clear() {
         this.storage?.removeItem(KEY_PREFIX + this.client);
-        if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);
     }
 }
