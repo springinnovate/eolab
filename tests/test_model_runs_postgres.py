@@ -1542,6 +1542,7 @@ def test_duplicate_saved_model_inputs_creates_an_independent_run(
             "inputs": saved["inputs"],
             "parameters": {"summary": "mean(a)"},
             "label": "Edited copy",
+            "utcOffsetMinutes": 0,
         },
     )
     assert copied["jobId"] != identifier

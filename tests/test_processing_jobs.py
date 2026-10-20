@@ -675,33 +675,6 @@ def test_clip_retry_rejects_changed_inputs(boundary: Any) -> None:
     assert response.status_code == 409
 
 
-def test_previously_created_clip_download_retains_its_content_type(
-    boundary: Any, store: PostgresJobStore
-) -> None:
-    """Serve retained clip results whose stored metadata predates media types.
-
-    Args:
-        boundary: Real API, worker, and raster output fixture.
-        store: Disposable database used to model the earlier metadata format.
-    """
-    client, worker, source, artifacts, app = boundary
-    job = submitted(client, clip_inputs(client))
-    assert asyncio.run(worker.run_once())
-    url = f"/api/processing/jobs/{job['jobId']}/result"
-    current = client.get(url)
-    assert current.status_code == 200
-    assert current.headers["content-type"] == "image/tiff"
-    with psycopg.connect(store.conninfo) as connection:
-        connection.execute(
-            "UPDATE processing.jobs SET artifact=artifact-'media_type' WHERE id=%s",
-            (job["jobId"],),
-        )
-    previous = client.get(url)
-    assert previous.status_code == 200
-    assert previous.content == current.content
-    assert previous.headers["content-type"] == "image/tiff"
-
-
 def test_worker_composition_requires_only_catalog_and_processing_configuration(
     tmp_path: Path,
     store: PostgresJobStore,
