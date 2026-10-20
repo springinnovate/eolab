@@ -9,26 +9,10 @@ from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
 )
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
 )
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
-
-
-def source_signature(source_path: Path) -> RasterSourceIdentity:
-    """Identify one mounted file by content-relevant filesystem metadata.
-
-    Args:
-        source_path: Mounted GeoTIFF to identify.
-
-    Returns:
-        Typed inode, size, modification-time, and metadata-change identity.
-
-    Raises:
-        OSError: If the source metadata cannot be read.
-    """
-    return RasterSourceIdentity.read(source_path)
 
 
 class MountedRasterResolver:
