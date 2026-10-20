@@ -7,7 +7,6 @@
   "basemap": "detailed",
   "layers": [{
     "catalogItem": {"collection": "rasters", "id": "landcover"},
-    "sourceRevision": null,
     "visible": true,
     "opacity": 0.75,
     "style": {

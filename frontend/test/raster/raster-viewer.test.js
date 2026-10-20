@@ -1464,7 +1464,7 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
         viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
         layers: [{
             catalogItem: { collection: source.collection, id: source.id },
-            sourceRevision: null, visible: true, opacity: 0.4, style: savedAppearance,
+            visible: true, opacity: 0.4, style: savedAppearance,
         }],
     });
     const restored = parseSavedMapView(serializeSavedMapView(saved));
@@ -1549,7 +1549,7 @@ test("CSV preview commits through the category editor and persists through the e
             createdAt: "2026-10-06T00:00:00Z",
             viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
             layers: [{ catalogItem: { collection: record.entry.item.collection, id: record.entry.item.id },
-                sourceRevision: null, visible: true, opacity: 1,
+                visible: true, opacity: 1,
                 style: record.adapter.exportSavedState(record) }],
         });
         const restored = parseSavedMapView(serializeSavedMapView(saved));

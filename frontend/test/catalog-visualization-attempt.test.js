@@ -16,9 +16,7 @@ function raster(id) {
   return {
     collection: "eolab-mounted-geotiffs", id,
     properties: { title: `Mounted/Model_outputs/${id}.tif` },
-    assets: { data: { "eolab:source": {
-      source_signature: [1, 2, 3, 4, 5],
-    } } },
+    assets: { data: {} },
   };
 }
 

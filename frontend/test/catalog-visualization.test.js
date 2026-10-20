@@ -70,17 +70,6 @@ test("catalog visualization routes explicit source kinds to owned adapters", asy
     ]);
 });
 
-test("raster source revisions come from neutral Catalog source metadata", () => {
-    const coordinator = new CatalogVisualizationCoordinator({}, {}, {});
-    const signature = { size: 42, mtime_ns: 99 };
-    const item = {
-        ...RASTER_ITEM,
-        assets: { data: { "eolab:source": { source_signature: signature } } },
-    };
-
-    assert.equal(coordinator.sourceRevision(item), signature);
-});
-
 test("remote collections are not reinterpreted as mounted vectors", () => {
     const coordinator = new CatalogVisualizationCoordinator({}, {}, {});
     const remoteItem = {

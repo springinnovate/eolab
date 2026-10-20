@@ -222,7 +222,6 @@ class MapLayer(MapDocumentPart):
 
     catalogItem: MapCatalogItem
     customName: Title | None = None
-    sourceRevision: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None
     visible: bool
     legendIncluded: bool = True
     opacity: Annotated[float, Field(ge=0, le=1)]

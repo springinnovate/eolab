@@ -7,14 +7,12 @@
   "layers": [
     {
       "catalogItem": {"collection": "rasters", "id": "human-impact"},
-      "sourceRevision": null,
       "visible": true,
       "opacity": 0.75,
       "style": {"kind": "raster", "definition": {"minimum": 0, "maximum": 1}, "paletteName": "viridis"}
     },
     {
       "catalogItem": {"collection": "vectors", "id": "countries"},
-      "sourceRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "visible": false,
       "opacity": 1,
       "style": {"kind": "vector", "definition": {"color": "#FF006E"}},

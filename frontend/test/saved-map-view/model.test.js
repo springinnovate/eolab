@@ -19,7 +19,6 @@ test("version two accepts only portable annotation references and version one st
 
 import {
   createSavedMapView,
-  hashSavedMapSourceRevision,
   MAX_SAVED_MAP_VIEW_BYTES,
   parseSavedMapView,
   serializeSavedMapView,
@@ -77,7 +76,6 @@ function savedMapCandidate() {
     },
     layers: [{
       catalogItem: { collection: "rasters", id: "rainfall" },
-      sourceRevision: null,
       visible: true,
       opacity: 0.65,
       style: {
@@ -129,19 +127,14 @@ test("saved map model rejects incompatible, duplicate, and unbounded input", () 
   extended.sourcePath = "file:///not-authority/data.tif";
   assert.throws(() => createSavedMapView(extended), /unsupported fields/);
 
+  const oldLayer = savedMapCandidate();
+  oldLayer.layers[0].sourceRevision = null;
+  assert.throws(() => createSavedMapView(oldLayer), /unsupported fields/);
+
   assert.throws(
     () => parseSavedMapView(" ".repeat(MAX_SAVED_MAP_VIEW_BYTES + 1)),
     /512 KiB/,
   );
-});
-
-test("source revisions are exported only as SHA-256 fingerprints", async () => {
-  const revision = [["secret/location/data.shp", 123, 456]];
-  const fingerprint = await hashSavedMapSourceRevision(revision);
-
-  assert.match(fingerprint, /^sha256:[0-9a-f]{64}$/);
-  assert.equal(fingerprint.includes("secret"), false);
-  assert.equal(await hashSavedMapSourceRevision(null), null);
 });
 
 test("map legend preferences round-trip for catalog and shared layers without changing older maps", () => {

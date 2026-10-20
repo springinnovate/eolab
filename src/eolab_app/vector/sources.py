@@ -31,7 +31,6 @@ from eolab_app.vector.models import (
     VECTOR_SOURCE_METADATA_KEY,
     VectorFormat,
     VectorSourceKind,
-    VectorSourceSignature,
 )
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 
@@ -43,38 +42,6 @@ _FORMAT_ASSET_CONTRACTS: dict[VectorFormat, tuple[str, str]] = {
     "zipped-shapefile": ("archive", ZIP_MEDIA_TYPE),
     "file-geodatabase": ("data", FILE_GEODATABASE_MEDIA_TYPE),
 }
-
-
-def vector_source_signature(source: ResolvedVectorSource) -> VectorSourceSignature:
-    """Identify the complete mounted source used by one vector assessment.
-
-    Args:
-        source: Resolved mounted source with exact Shapefile components when
-            applicable.
-
-    Returns:
-        Deterministically ordered relative names and filesystem identity fields.
-
-    Raises:
-        OSError: If a source path cannot be inspected.
-        ValueError: If a remote source is supplied.
-    """
-    if source.source_path is None:
-        raise ValueError("Remote vector sources have no mounted signature")
-    paths = source.component_paths or (source.source_path,)
-    signature_entries = []
-    base_path = source.source_path.parent
-    for path in sorted(paths, key=lambda candidate: candidate.name.lower()):
-        status = path.stat()
-        signature_entries.append((
-            path.relative_to(base_path).as_posix(),
-            status.st_dev,
-            status.st_ino,
-            status.st_size,
-            status.st_mtime_ns,
-            status.st_ctime_ns,
-        ))
-    return tuple(signature_entries)
 
 
 class MountedVectorResolver:

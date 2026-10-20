@@ -62,7 +62,6 @@ VectorLabelFontFamily = Literal["SansSerif", "Serif", "Monospaced"]
 VectorLabelFontWeight = Literal["normal", "bold"]
 VectorLabelPlacement = Literal["center", "above", "below", "follow-line"]
 VectorSourceKind = Literal["mounted", "remote"]
-VectorSourceSignature = tuple[tuple[str, int, int, int, int, int], ...]
 VectorCategoryScalar: TypeAlias = StrictBool | StrictInt | StrictFloat | StrictStr
 VectorClassificationMethod = Literal[
     "equal-interval", "quantile", "percentile-interval",
