@@ -193,9 +193,7 @@ class PublishedRasterAuthorization:
             PublishedLayerRequestError: If the appearance is not a complete
                 authorized dynamic raster style.
         """
-        if style_name != self.style_name or (style_environment is None) == (
-            style_definition is None
-        ):
+        if style_name != self.style_name:
             raise PublishedLayerRequestError(
                 "Composite raster rendering requires its dynamic raster style"
             )
