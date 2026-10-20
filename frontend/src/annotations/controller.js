@@ -364,8 +364,8 @@ export class AnnotationController {
             snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared layer" : "Local layer",
                 legend: this.layerLegend(layer),
                 canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
-                filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
-                filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.enabled && layer.filter.rules.length)
+                filterActive: layer.filter.enabled && !!layer.filter.rules.length,
+                filterStatus: (layer.filter.enabled && layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match` : null }),
             zoom: () => {
                 const bounds = rendering.getBounds();
@@ -611,7 +611,7 @@ export class AnnotationController {
         this.layers.get(id).refresh();
         if (rebuild) this.controls.get(id).refresh(focusPolygon);
         // Polygon text changes do not alter stack controls unless a filter is active.
-        if (rebuild || labelChanged || (typeof layer.filter === "string" ? layer.filter : layer.filter.enabled && layer.filter.rules.length)) this.mapLayers.render();
+        if (rebuild || labelChanged || (layer.filter.enabled && layer.filter.rules.length)) this.mapLayers.render();
         this.refreshInspection();
     }
 

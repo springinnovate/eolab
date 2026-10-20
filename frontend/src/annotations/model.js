@@ -1,12 +1,13 @@
 /** Browser-owned annotation data and isolated polygon editing drafts. */
 import { annotationFilterRules, filterAnnotationPolygons } from "./summary-area.js";
 import { polygonValidationMessage } from "./geometry.js";
+import { EMPTY_VECTOR_FILTER } from "../vector/filter.js";
 
 /**
  * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean}} AnnotationStyle
  * @typedef {{id:string,name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} AnnotationPolygon
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
- * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string|Object,polygons:AnnotationPolygon[]}} AnnotationLayer
+ * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:Object,polygons:AnnotationPolygon[]}} AnnotationLayer
  * @typedef {{version:1,layers:AnnotationLayer[]}} AnnotationDocument
  * @typedef {{layerId:string,polygon:AnnotationPolygon,isNew:boolean,outlineClosed:boolean}} PolygonDraft
  */
@@ -56,8 +57,7 @@ export function readAnnotationLayers(document) {
         if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved shared layer position is invalid.");
         requireIdentifier(layer.id, identifiers);
         requireText(layer.name, MAX_ANNOTATION_NAME_LENGTH, false);
-        if (typeof layer.filter === "string") requireText(layer.filter, 300, true);
-        else layer.filter = annotationFilterRules(layer.filter);
+        layer.filter = annotationFilterRules(layer.filter);
         if (typeof layer.visible !== "boolean" || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 ||
             !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved shared layer is invalid.");
         layer.style = validateAnnotationStyle(layer.style);
@@ -103,7 +103,7 @@ function requireText(text, maximum, allowEmpty) {
 }
 
 /**
- * Match field conditions; older saved text searches remain case-insensitive until edited.
+ * Match annotation field conditions with case-sensitive text comparisons.
  * @param {AnnotationLayer} layer Annotation layer.
  * @return {Object[]} Matching polygons in their original order.
  */
@@ -148,7 +148,7 @@ export class AnnotationModel {
     createLayer() {
         if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} shared layers.`);
         const layer = { id: this.newId(), name: `Shared layer ${this.layers.length + 1}`, position: 0, visible: true, opacity: 1,
-            style: { ...DEFAULT_ANNOTATION_STYLE }, filter: "", polygons: [] };
+            style: { ...DEFAULT_ANNOTATION_STYLE }, filter: structuredClone(EMPTY_VECTOR_FILTER), polygons: [] };
         this.layers.unshift(layer);
         return layer;
     }
@@ -164,7 +164,7 @@ export class AnnotationModel {
         if (this.draft) throw new Error("Save or cancel the current polygon before importing.");
         if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} shared layers.`);
         const layer = { id: this.newId(), name: imported.name, position: 0, visible: true, opacity: 1,
-            style: { ...DEFAULT_ANNOTATION_STYLE }, filter: "",
+            style: { ...DEFAULT_ANNOTATION_STYLE }, filter: structuredClone(EMPTY_VECTOR_FILTER),
             polygons: imported.polygons.map(polygon => ({ ...structuredClone(polygon), id: this.newId() })) };
         const document = { version: 1, layers: [layer, ...this.layers] };
         if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
