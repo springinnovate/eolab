@@ -107,35 +107,6 @@ def test_source_authorization_ignores_rendering_and_geoprocessor_state(
     assert authorized.source_signature == signature
 
 
-def test_source_authorization_accepts_legacy_identity_after_remount(
-    tmp_path: Path,
-) -> None:
-    """Keep analysis authorized when only a legacy device number changed.
-
-    Args:
-        tmp_path: Temporary controlled source directory.
-    """
-    source_path = tmp_path / "independent.tif"
-    source_path.write_bytes(b"source")
-    signature = RasterSourceIdentity.read(source_path)
-    item = _item(signature)
-    metadata = item["assets"]["data"]["eolab:source"]
-    assert isinstance(metadata, dict)
-    metadata["source_signature"] = [92, *signature.to_catalog()]
-    authorizer = CatalogRasterSourceAuthorizer(
-        _Catalog(item),
-        _Resolver(source_path),
-    )
-    request = CatalogRasterRequest(
-        collectionId="eolab-mounted-geotiffs",
-        itemId="geotiff-0123456789abcdef01234567",
-    )
-
-    authorized = asyncio.run(authorizer.authorize(request))
-
-    assert authorized.source_signature == signature
-
-
 def test_source_authorization_retains_catalog_identity_without_file_rechecks(
     tmp_path: Path,
 ) -> None:

@@ -226,8 +226,20 @@ same neutral readers with explicit unlimited-work settings. The general
 resource-limit instructions below apply to limits that remain part of the
 owning component's contract, not to reinstating removed Processing ceilings.
 
-Preserve programming by contract: validate once at the component that owns the
-boundary, then rely on the established contract below it.
+Program by contract to reduce complexity: establish invariants at the owning
+input boundary or producer, then trust them in internal consumers. Trace the
+producer and callers before adding validation. Passing EOlab-controlled data
+through an internal function or serialization step does not by itself create
+a new trust boundary.
+
+Use precise types and direct operations instead of repeating checks of those
+established invariants. Do not duplicate checks already performed by the language
+or library, such as sequence length before unpacking. Translate actual failures
+at the owning boundary when a useful application error is needed. Do not merely
+move redundant checks into another helper or schema. Test producer-to-consumer
+behavior; remove tests that exist only to preserve deleted defensive checks or
+retest language/library behavior. Preserve genuine external-input, authorization,
+lifecycle and resource-boundary validation.
 
 Validation is normally required at:
 
