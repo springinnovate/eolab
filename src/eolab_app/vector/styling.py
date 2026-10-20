@@ -330,9 +330,10 @@ class VectorStyleService:
         Raises:
             VectorFeatureError: If catalog, source, authorization, or GeoServer
                 boundaries cannot safely complete the operation.
-            VectorConflictError: If the layer is unpublished, its binding conflicts, or the
-                requested geometry disagrees with authoritative assessment.
+            VectorConflictError: If the layer is unpublished or its source binding,
+                geometry, or style fields disagree with the authoritative Catalog Item.
         """
+
         async with self._style_lock:
             item = await self._catalog.get_item(request)
             source = self._source_resolver.resolve(item)
@@ -404,13 +405,6 @@ class VectorStyleService:
                     )
             if request.style.graduated is not None:
                 graduated = request.style.graduated
-                field_type = fields.get(graduated.field)
-                if field_type is None or not _numeric_field_type(field_type):
-                    raise VectorConflictError(
-                        "Style unavailable: the selected graduated field is "
-                        "not a current numeric attribute of the authoritative "
-                        "vector Item."
-                    )
                 classification = await self._classify_current_numeric(
                     item,
                     source,
