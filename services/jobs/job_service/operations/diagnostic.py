@@ -4,7 +4,7 @@ import json
 import time
 from typing import Literal
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from job_service.models import Contract
 
@@ -39,7 +39,7 @@ class DiagnosticResult(Contract):
     value: JsonValue
 
 
-def diagnostic(inputs: BaseModel) -> BaseModel:
+def diagnostic(inputs: DiagnosticInput) -> DiagnosticResult:
     """Execute the diagnostic algorithm inside the supervised child process.
 
     Args:
@@ -51,9 +51,8 @@ def diagnostic(inputs: BaseModel) -> BaseModel:
     Raises:
         RuntimeError: Deliberately in exception mode.
     """
-    request = DiagnosticInput.model_validate(inputs)
-    if request.mode == "exception":
+    if inputs.mode == "exception":
         raise RuntimeError("Requested diagnostic exception")
-    if request.mode == "delay":
-        time.sleep(request.seconds)
-    return DiagnosticResult(value=request.value)
+    if inputs.mode == "delay":
+        time.sleep(inputs.seconds)
+    return DiagnosticResult(value=inputs.value)
