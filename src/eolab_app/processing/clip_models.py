@@ -28,10 +28,10 @@ OPERATION_VERSION = "raster.clip.v1"
 
 
 class ClipInputs(BaseModel):
-    """A raster and explicit clip area, accepting historical flat catalog requests.
+    """A catalog or private raster and an explicit geographic clip area.
 
-    New requests use ``source`` for either a catalog or owned run-file reference.
-    Historical collectionId/itemId requests retain their original serialized form.
+    Catalog requests use collectionId/itemId or a nested ``source`` reference.
+    Private run-file requests use ``source`` with the owned artifact identity.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -84,14 +84,11 @@ class UnpreparedClip(BaseModel):
 
 
 class ClipArea(BaseModel):
-    """Durable box or catalog descriptor, with a reader for historical polygon jobs."""
+    """Durable box or catalog selection describing the area to clip."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "catalogSelection", "aoi"]
+    kind: Literal["bounds", "catalogSelection"]
     bounds: tuple[float, float, float, float]
-    # Historical completed/pending jobs may contain v1 polygon snapshots.
-    # New requests cannot submit them; no live AOI service is retained.
-    geometries: tuple[dict[str, object], ...] = ()
     catalogSelection: CatalogSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
 
@@ -103,7 +100,7 @@ class ClipArea(BaseModel):
             The validated operation-owned area.
 
         Raises:
-            ValueError: For inconsistent catalog, box, or historical inputs.
+            ValueError: For inconsistent catalog or box inputs.
         """
         Wgs84Bounds(
             west=self.bounds[0],
@@ -112,7 +109,7 @@ class ClipArea(BaseModel):
             north=self.bounds[3],
         )
         if self.kind == "catalogSelection":
-            if self.catalogSelection is None or self.geometries:
+            if self.catalogSelection is None:
                 raise ValueError(
                     "Catalog areas require only a catalog selection descriptor"
                 )
@@ -123,15 +120,13 @@ class ClipArea(BaseModel):
                 raise ValueError("Resolved source does not match the catalog selection")
         elif self.catalogSelection is not None or self.resolved is not None:
             raise ValueError("Only catalog areas may carry a catalog source")
-        elif (self.kind == "aoi") != bool(self.geometries):
-            raise ValueError("Only historical polygon areas contain geometry")
         return self
 
     @model_serializer(mode="wrap")
     def serialize_area(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Preserve historical wire fields while new selections contain no geometry.
+        """Omit the catalog descriptor when serializing a box.
 
         Args:
             handler: Pydantic's serialization handler.
@@ -140,10 +135,8 @@ class ClipArea(BaseModel):
             Path-free area matching its versioned discriminator.
         """
         data = handler(self)
-        data.pop(
-            "geometries" if self.kind == "catalogSelection" else "catalogSelection",
-            None,
-        )
+        if self.kind == "bounds":
+            data.pop("catalogSelection", None)
         return data
 
 
@@ -200,7 +193,7 @@ class ClipSpec(BaseModel):
 class ClipAreaSummary(BaseModel):
     """Browser-safe area description without copying geometry into every poll."""
 
-    kind: Literal["bounds", "catalogSelection", "aoi"]
+    kind: Literal["bounds", "catalogSelection"]
     bounds: tuple[float, float, float, float] | None
 
 

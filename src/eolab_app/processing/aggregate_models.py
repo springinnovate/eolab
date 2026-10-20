@@ -113,25 +113,6 @@ class AggregatePlanRequest(BaseModel):
     targetChunkPixels: ChunkPixels | None = None
     pixelPoint: PixelPoint | None = None
 
-    @model_serializer(mode="wrap")
-    def serialize_request(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> dict[str, object]:
-        """Serialize a calculation request, omitting an absent sampled point.
-
-        Omitting the optional field preserves hashes for point-free requests.
-
-        Args:
-            handler: Pydantic's normal field serializer.
-
-        Returns:
-            Request fields, omitting the optional point when absent.
-        """
-        result = handler(self)
-        if self.pixelPoint is None:
-            result.pop("pixelPoint", None)
-        return result
-
     @model_validator(mode="wrap")
     @classmethod
     def validate_intent(
@@ -213,9 +194,8 @@ class AggregateArea(BaseModel):
     """Exact calculation area: a box, catalog selection, uploaded polygons or whole raster."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "catalogSelection", "aoi", "polygons", "wholeRaster"]
+    kind: Literal["bounds", "catalogSelection", "polygons", "wholeRaster"]
     bounds: tuple[float, float, float, float] | None = None
-    # Historical aoi jobs and new owned polygon inputs retain exact geometry.
     geometryHash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     geometries: tuple[dict[str, object], ...] = ()
     catalogSelection: CatalogSelection | None = None
@@ -273,7 +253,7 @@ class AggregateArea(BaseModel):
                 raise ValueError("Resolved source does not match the catalog selection")
         elif self.catalogSelection is not None or self.resolved is not None:
             raise ValueError("Only catalog areas may carry a catalog source")
-        elif (self.kind in {"aoi", "polygons"}) != bool(self.geometries):
+        elif (self.kind == "polygons") != bool(self.geometries):
             raise ValueError("Only polygon areas contain geometry")
         return self
 
@@ -454,23 +434,6 @@ class AggregateSpec(BaseModel):
     cachedRows: (
         Annotated[tuple[AggregateValue, ...], Field(min_length=1, max_length=5)] | None
     ) = None
-
-    @model_serializer(mode="wrap")
-    def serialize_spec(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> dict[str, object]:
-        """Retain the sampled point without changing historical point-free plans.
-
-        Args:
-            handler: Pydantic's normal field serializer.
-
-        Returns:
-            Durable calculation fields, with the point only when supplied.
-        """
-        result = handler(self)
-        if self.pixelPoint is None:
-            result.pop("pixelPoint", None)
-        return result
 
     @model_validator(mode="after")
     def validate_cached_result_formulas(self) -> "AggregateSpec":

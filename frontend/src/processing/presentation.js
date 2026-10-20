@@ -28,7 +28,7 @@ export function describeClipArea(area) {
     const values = area.selectedBounds
         ? [area.selectedBounds.west, area.selectedBounds.south, area.selectedBounds.east, area.selectedBounds.north]
         : area.bounds;
-    const label = area.kind === "polygons" ? "Shared layer polygons" : area.kind === "aoi" ? "Historical polygon selection" : area.kind === "catalogSelection" ? "Catalog vector selection" : "Box";
+    const label = area.kind === "polygons" ? "Shared layer polygons" : area.kind === "catalogSelection" ? "Catalog vector selection" : "Box";
     return `${label} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
 }
 

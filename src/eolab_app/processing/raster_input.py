@@ -75,7 +75,7 @@ def select_area(
 
     Args:
         dataset: Validated open native raster.
-        kind: Explicit box, catalog descriptor, or historical polygon variant.
+        kind: Explicit box, catalog descriptor, or owned polygon input.
         bounds: Canonical WGS84 rectangle.
         geometries: Immutable polygon selection polygons.
         max_coordinates: Transformation coordinate ceiling, or None for no ceiling.

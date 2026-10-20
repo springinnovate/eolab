@@ -26,6 +26,7 @@ from eolab_app.processing.raster_aggregate import calculate_raster_statistics_fo
 from test_ground_area import reference_area
 from test_raster_aggregates import LIMITS, make_spec
 from test_raster_clips import write_source
+from catalog_selection_support import write_aggregate_area
 
 
 @dataclass
@@ -38,6 +39,7 @@ class Case:
     transform: Affine
     crs: str
     area: AggregateArea | None = None
+    geometry: dict[str, object] | None = None
 
 
 def main() -> None:
@@ -70,14 +72,12 @@ def main() -> None:
             AggregateArea(kind="bounds", bounds=(west, south, east, north)),
         ),
         Case(
-            "uploaded-polygon-with-hole",
+            "catalog-polygon-with-hole",
             256,
             256,
             from_origin(10, 47.56, 0.01, 0.01),
             "EPSG:4326",
-            AggregateArea(
-                kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
-            ),
+            geometry=mapping(polygon),
         ),
         Case(
             "rotated-utm",
@@ -92,9 +92,7 @@ def main() -> None:
             2000,
             from_origin(-82, 0, 0.01, 0.02),
             "EPSG:4326",
-            AggregateArea(
-                kind="aoi", bounds=country.bounds, geometries=(mapping(country),)
-            ),
+            geometry=mapping(country),
         ),
     ]
     measurements = []
@@ -115,16 +113,23 @@ def main() -> None:
             path = write_source(
                 output / "source.tif", values, transform=case.transform, crs=case.crs
             )
+            area = (
+                write_aggregate_area(output / "selected.gpkg", [case.geometry])
+                if case.geometry
+                else case.area
+            )
             start = perf_counter()
             spec = make_spec(
-                path, ["areaha(a >= 0)", "areaha(a >= 2)", "count(a >= 2)"], case.area
+                path, ["areaha(a >= 0)", "areaha(a >= 2)", "count(a >= 2)"], area
             )
             planned = perf_counter()
             result = calculate_raster_statistics_for_area(path, spec, output, LIMITS)
             end = perf_counter()
             if case.name == "country-scale-polygon-with-hole":
                 assert math.isclose(
-                    float(result.rows[0]["value"]), reference_area(country), rel_tol=1e-6
+                    float(result.rows[0]["value"]),
+                    reference_area(country),
+                    rel_tol=1e-6,
                 ), "Country-scale area must match independent ellipsoidal integration"
             measurements.append(
                 {

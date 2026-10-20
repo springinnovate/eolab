@@ -109,7 +109,7 @@ def get_raster_window_and_mask_source(
 
     Args:
         dataset: Open raster with validated georeferencing.
-        area: Sampling box, filtered catalog features, historical polygon
+        area: Sampling box, filtered catalog features, owned polygon
             geometry, or the whole raster.
         limits: Shared lifecycle and ground-area accuracy settings.
         max_retained_polygon_bytes: Optional allowance to retain catalog polygons
@@ -319,7 +319,7 @@ def plan_aggregate(
 
     Args:
         path: Path to the input raster.
-        area: Selected box, filtered vector, historical polygons or whole raster.
+        area: Selected box, filtered vector, owned polygons or whole raster.
         calculations: Labeled formulas to evaluate, such as sum(a).
         alias: Variable representing the raster in those formulas, such as a.
         limits: Shared lifecycle and ground-area accuracy settings.

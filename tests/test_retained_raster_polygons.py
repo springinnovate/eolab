@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.features import geometry_mask
 from shapely.geometry import MultiPolygon, Polygon, box, mapping
 
 import eolab_app.bounded_vector as vector
@@ -108,19 +109,13 @@ def test_calculation_reuses_polygons_and_releases_them(
         result = kernel.calculate_raster_statistics_for_area(
             path, plan, tmp_path, limits
         )
-        reference_dir = tmp_path / "reference"
-        reference_dir.mkdir()
-        historical = AggregateArea(
-            kind="aoi", bounds=(0, 0, 8, 7), geometries=tuple(geometries)
+        expected = geometry_mask(
+            geometries,
+            (64, 64),
+            from_origin(0, 8, 0.125, 0.125),
+            invert=True,
         )
-        reference_plan = make_spec(
-            path, ["sum(a)"], historical, target_chunk_pixels=chunk_pixels
-        )
-        reference = kernel.calculate_raster_statistics_for_area(
-            path, reference_plan, reference_dir, limits
-        )
-        assert result.rows == reference.rows
-        assert result.sha256 == reference.sha256
+        assert float(result.rows[0]["value"]) == np.count_nonzero(expected)
     assert not (tmp_path / "polygon-mask.tif").exists()
     assert calls == len(geometries)
     assert len(prepared) == 1

@@ -21,6 +21,7 @@ from eolab_app.processing.raster_aggregate import calculate_raster_statistics_fo
 import eolab_app.processing.raster_aggregate as kernel
 from test_raster_aggregates import LIMITS, make_spec
 from test_raster_clips import write_source
+from catalog_selection_support import write_aggregate_area
 
 
 def reference_area(polygon: Polygon, crs: str = "EPSG:4326") -> float:
@@ -141,8 +142,8 @@ def test_partial_cell_sliver_is_area_even_when_center_is_outside(
     assert rows[0]["unit"] == "ha" and rows[2]["unit"] == ""
 
 
-def test_aoi_union_holes_and_fractional_edges(tmp_path: Path) -> None:
-    """Overlapping AOIs count once and holes retain fractional exclusions.
+def test_polygon_union_holes_and_fractional_edges(tmp_path: Path) -> None:
+    """Overlapping polygons count once and holes retain fractional exclusions.
 
     Args:
         tmp_path: Isolated source/results.
@@ -157,10 +158,9 @@ def test_aoi_union_holes_and_fractional_edges(tmp_path: Path) -> None:
         [box(1.1, 1.1, 2.3, 2.3).exterior.coords],
     )
     second = box(0.2, 0.2, 1, 2)
-    area = AggregateArea(
-        kind="aoi",
-        bounds=(0.2, 0.2, 3.8, 3.8),
-        geometries=(mapping(first), mapping(second)),
+    area = write_aggregate_area(
+        tmp_path / "selected.gpkg",
+        [mapping(first), mapping(second)],
     )
     artifact = calculate_raster_statistics_for_area(
         path, make_spec(path, ["areaha(a==4)", "count(a)"], area), tmp_path, LIMITS
@@ -348,11 +348,6 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
     spec = make_spec(path, ["areaha(a>0)"])
     assert spec.grid.groundArea.estimatedGeometryCells == 100
-    aoi = AggregateArea(
-        kind="aoi",
-        bounds=(10, 44.9, 10.1, 45),
-        geometries=(mapping(Polygon([(10, 44.9), (10.1, 45), (10, 45)])),),
-    )
 
 
 @pytest.mark.parametrize("rows", [1000, 1001])
@@ -367,9 +362,7 @@ def test_country_scale_mask_admission_is_independent_of_pixel_polygon_limit(
         rows: Raster height below or above the old two-million-pixel window cap.
     """
     polygon = Polygon([(0, 0), (20, 0), (20, 10), (0, 0)])
-    area = AggregateArea(
-        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
-    )
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [mapping(polygon)])
     path = write_source(
         tmp_path / "country.tif",
         np.ones((rows, 2000), dtype="uint8"),
@@ -448,9 +441,7 @@ def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
             ]
         ],
     )
-    area = AggregateArea(
-        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
-    )
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [mapping(polygon)])
     baseline = None
     baseline_counts = None
     for side, tile in [(32, 17), (128, 64), (512, 256), (512, 512)]:
@@ -495,9 +486,7 @@ def test_projected_polygon_masks_match_independent_ground_area(
         [(11.8, 64.9), (12.2, 64.92), (12.1, 65.1), (11.85, 65.05)],
         [[(11.95, 64.98), (12.02, 64.98), (12, 65.02)]],
     )
-    area = AggregateArea(
-        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
-    )
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [mapping(polygon)])
     # Separate mask accuracy from the existing 0.1 m boundary-refinement policy.
     limits = replace(LIMITS, area_edge_tolerance_metres=0.001)
     spec = make_spec(path, ["areaha(a>0)"], area, limits)

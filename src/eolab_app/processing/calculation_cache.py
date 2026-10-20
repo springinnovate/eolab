@@ -168,9 +168,6 @@ def prepare_calculation_values_for_cache(
         ValidationError: If a completed result violates the numerical result contract.
     """
 
-    if calculation_plan.area.kind == "aoi":
-        # Historical jobs contain geometry snapshots, which this cache must not retain.
-        return {}
     return {
         key: {
             "row": AggregateValue.model_validate(row).model_dump(
@@ -236,7 +233,9 @@ def restore_cached_calculation_plan(
                     "label": calculation.label,
                     "expression": calculation.expression,
                 }
-                for entry, calculation in zip(entries, request.calculations, strict=True)
+                for entry, calculation in zip(
+                    entries, request.calculations, strict=True
+                )
             ),
         )
         if calculation_result_cache_keys(plan) != keys:

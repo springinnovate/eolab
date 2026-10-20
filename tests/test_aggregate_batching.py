@@ -28,6 +28,7 @@ from eolab_app.processing.job_preparation import prepare_aggregate_job
 from eolab_app.raster.source_contract import source_block_indexes_for_window
 from test_raster_aggregates import make_spec, LIMITS
 from test_raster_clips import write_source, SOURCE
+from catalog_selection_support import write_aggregate_area
 
 
 @pytest.mark.parametrize(
@@ -194,9 +195,7 @@ def test_polygon_masks_weights_and_mixed_statistics_across_batch_sizes(
         [[transform * p for p in [(30.2, 30.7), (54.1, 30.7), (45.4, 60.3)]]],
     )
     geo = transform_geom(crs, "EPSG:4326", mapping(polygon))
-    from shapely.geometry import shape
-
-    area = AggregateArea(kind="aoi", bounds=shape(geo).bounds, geometries=(geo, geo))
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [geo, geo])
     expressions = ["areaha(a>0)", "count(a>0)", "sum(a)", "areaha(a==0)"]
     results = []
     for target in [None, 1024, 65536, 262144]:
@@ -299,9 +298,7 @@ def test_large_polygon_boundary_counts_do_not_depend_on_tile_width(
         [(-81.98, -19.9), (-63.1, -19.8), (-62.5, -1.4), (-70, -2), (-81.98, 0)],
         [[(-75, -15), (-72, -15), (-74, -11)]],
     )
-    area = AggregateArea(
-        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
-    )
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [mapping(polygon)])
     baseline = None
     for target in [None, 65536, 262144]:
         spec = make_spec(

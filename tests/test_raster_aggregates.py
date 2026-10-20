@@ -32,13 +32,16 @@ from eolab_app.bounded_vector import pixels_inside_area
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
+from catalog_selection_support import write_aggregate_area
 
 LIMITS = RasterAggregateLimits()
 
 
 @pytest.mark.parametrize("block_side", [16, 32, 64])
 @pytest.mark.parametrize("target_chunk_pixels", [None, 256, 4096])
-@pytest.mark.parametrize("area_kind", ["wholeRaster", "bounds", "polygons", "aoi"])
+@pytest.mark.parametrize(
+    "area_kind", ["wholeRaster", "bounds", "polygons", "catalogSelection"]
+)
 def test_stdev_native_masks_selections_blocks_csv_and_provenance(
     tmp_path: Path,
     block_side: int,
@@ -51,7 +54,7 @@ def test_stdev_native_masks_selections_blocks_csv_and_provenance(
         tmp_path: Private native source and artifacts.
         block_side: GeoTIFF block shape, independent of evaluation tiling.
         target_chunk_pixels: Optional Processing read/evaluation batch budget.
-        area_kind: Whole extent, map box, uploaded polygons or a historical AOI
+        area_kind: Whole extent, map box, uploaded polygons or a catalog selection
             containing a hole.
     """
     values = 1e12 + np.arange(65 * 73, dtype="float64").reshape(65, 73) % 29
@@ -83,7 +86,7 @@ def test_stdev_native_masks_selections_blocks_csv_and_provenance(
     if area_kind != "wholeRaster":
         inside[:] = False
         inside[10:60, 10:60] = True
-    if area_kind in {"polygons", "aoi"}:
+    if area_kind in {"polygons", "catalogSelection"}:
         geometry = {
             "type": "Polygon",
             "coordinates": [
@@ -103,9 +106,9 @@ def test_stdev_native_masks_selections_blocks_csv_and_provenance(
                 ],
             ],
         }
-        if area_kind == "aoi":
+        if area_kind == "catalogSelection":
             inside[20:30, 20:30] = False
-            area = AggregateArea(kind="aoi", bounds=bounds, geometries=(geometry,))
+            area = write_aggregate_area(tmp_path / "selected.gpkg", [geometry])
         else:
             geometry["coordinates"] = geometry["coordinates"][:1]
             polygons = PolygonSummaryInput(polygons=(geometry,))
@@ -163,7 +166,7 @@ def make_spec(
         pixel_point: Exact WGS84 map position for pixelValue formulas.
 
     Returns:
-        JSON-round-tripped specification ready for execution.
+        JSON-round-tripped specification with its authorized catalog source restored.
     """
     signature = tuple(RasterSourceIdentity.read(path).to_catalog())
     area = area or AggregateArea(kind="wholeRaster")
@@ -181,7 +184,10 @@ def make_spec(
             path, area, calculations, "a", limits, target_chunk_pixels, pixel_point
         ),
     )
-    return AggregateSpec.model_validate_json(spec.model_dump_json(by_alias=True))
+    restored = AggregateSpec.model_validate_json(spec.model_dump_json(by_alias=True))
+    return restored.model_copy(
+        update={"area": restored.area.model_copy(update={"resolved": area.resolved})}
+    )
 
 
 @pytest.mark.parametrize(
@@ -523,10 +529,10 @@ def test_native_values_not_overviews_scale_or_histogram_statistics(
         (Affine(0.01, 0.002, 0, 0.001, -0.01, 10), "EPSG:4326"),
     ],
 )
-def test_aoi_hole_center_inclusion_on_rotated_and_projected_grids(
+def test_catalog_hole_center_inclusion_on_rotated_and_projected_grids(
     tmp_path: Path, transform: Affine, crs: str
 ) -> None:
-    """Known pixel-center membership is preserved through AOI reprojection.
+    """Known pixel-center membership is preserved through polygon reprojection.
 
     Args:
         tmp_path: Isolated input/output directory.
@@ -549,14 +555,7 @@ def test_aoi_hole_center_inclusion_on_rotated_and_projected_grids(
     geometry = transform_geom(
         crs, "EPSG:4326", {"type": "Polygon", "coordinates": [outer, hole]}
     )
-    coords = geometry["coordinates"][0]
-    bounds = (
-        min(p[0] for p in coords),
-        min(p[1] for p in coords),
-        max(p[0] for p in coords),
-        max(p[1] for p in coords),
-    )
-    area = AggregateArea(kind="aoi", bounds=bounds, geometries=(geometry,))
+    area = write_aggregate_area(tmp_path / "selected.gpkg", [geometry])
     spec = make_spec(path, ["count(a)", "sum(a)"], area)
     artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
     assert artifact.rows[0]["value"] == "60"
