@@ -11,7 +11,6 @@ from eolab_app.processing.aggregate_models import (
     AggregateValue,
     AggregatePlanRequest,
     AggregateArea,
-    AggregateGrid,
 )
 from eolab_app.processing.raster_expression import compile_expression, walk
 
@@ -218,12 +217,6 @@ def restore_cached_calculation_plan(
     if any(entry is None for entry in entries):
         return None
     try:
-        area = (
-            polygon_area
-            if request.polygonArea
-            else AggregateArea.model_validate(entries[0]["area"])
-        )
-        grid = AggregateGrid.model_validate(entries[0]["grid"])
         if any(
             entry["area"] != entries[0]["area"] or entry["grid"] != entries[0]["grid"]
             for entry in entries[1:]
@@ -235,16 +228,19 @@ def restore_cached_calculation_plan(
             sourceChecksum=source_checksum,
             calculations=request.calculations,
             pixelPoint=request.pixelPoint,
-            area=area,
-            grid=grid,
+            area=polygon_area if request.polygonArea else entries[0]["area"],
+            grid=entries[0]["grid"],
+            cachedRows=tuple(
+                {
+                    **entry["row"],
+                    "label": calculation.label,
+                    "expression": calculation.expression,
+                }
+                for entry, calculation in zip(entries, request.calculations, strict=True)
+            ),
         )
         if calculation_result_cache_keys(plan) != keys:
             return None
-        rows = restore_cached_calculation_rows(plan, cached_results)
-        if rows is None:
-            return None
-        return AggregateSpec(
-            **{**plan.model_dump(mode="json", by_alias=True), "cachedRows": rows}
-        )
+        return plan
     except (ValidationError, TypeError, KeyError):
         return None

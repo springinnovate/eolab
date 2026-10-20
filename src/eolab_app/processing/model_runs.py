@@ -242,7 +242,7 @@ def build_model_calculation_request(
             {
                 "model": {
                     **request.model.model_dump(),
-                    "definition": definition.to_document(),
+                    "definition": definition,
                 },
                 "inputs": request.inputs,
                 "parameters": parameters,
@@ -472,6 +472,7 @@ def declare_model_files(
 
 def record_model_preparation(
     row: dict[str, Any],
+    wrapper: ModelRunSpec,
     prepared: PreparedJobPlan,
     limits: ProcessingLimits,
 ) -> PreparedJobPlan:
@@ -479,6 +480,7 @@ def record_model_preparation(
 
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
+        wrapper: Model specification already validated for this execution attempt.
         prepared: The prepared summary or clip plan and required disk reservation.
         limits: The worker's configured time, memory, disk and result-retention limits.
 
@@ -492,7 +494,6 @@ def record_model_preparation(
         ValidationError: If the stored model or prepared calculation is invalid.
         ValueError: If the prepared operation differs from the saved recipe.
     """
-    wrapper = ModelRunSpec.model_validate(row["spec"])
     operation = get_model_operation(prepared.operation)
     spec = operation.prepared_type.model_validate(prepared.specification)
     metadata = json.loads(encode_canonical_json(row["retained_metadata"]))

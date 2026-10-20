@@ -143,7 +143,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
     ) -> Queued | Prepared:
-        """Validate queued or prepared data against this operation's stored contract.
+        """Parse stored operation data or reuse its validated specification.
 
         Args:
             value: Persisted operation specification or its validated model instance.
@@ -154,14 +154,11 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         Raises:
             ValueError: If persisted fields or operation identity are invalid.
         """
-        data = (
-            value.model_dump(mode="json", by_alias=True)
-            if isinstance(value, BaseModel)
-            else value
-        )
+        if isinstance(value, (self.queued_type, self.prepared_type)):
+            return value
         return (
-            self.queued_type if "request" in data else self.prepared_type
-        ).model_validate(data)
+            self.queued_type if "request" in value else self.prepared_type
+        ).model_validate(value)
 
 
 OPERATIONS = MappingProxyType(

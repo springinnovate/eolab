@@ -16,12 +16,14 @@ import rasterio
 from eolab_app.processing.aggregate_models import (
     AggregateJobResponse,
     AggregatePlanRequest,
+    AggregateSpec,
     UnpreparedCalculation,
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker
+from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
@@ -56,13 +58,14 @@ def test_real_plan_worker_and_public_result(
         wholeRaster=True,
         calculations=[{"label": "Mean", "expression": "mean(a)"}],
     )
+    queued = UnpreparedCalculation(request=request)
+    operation = get_model_operation(queued.operation)
+    assert operation.parse_specification(queued) is queued
     claimed = datetime.now(timezone.utc)
     row = {
         "id": identifier,
         "attempt_id": "b" * 32,
-        "spec": UnpreparedCalculation(request=request).model_dump(
-            mode="json", by_alias=True
-        ),
+        "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,
         "created_at": claimed - timedelta(seconds=2),
         "updated_at": claimed,
@@ -78,6 +81,8 @@ def test_real_plan_worker_and_public_result(
     store.finish.return_value = True
     worker = ProcessingWorker(authorizer, store, artifacts, limits)
     assert asyncio.run(worker.run_once())
+    prepared = AggregateSpec.model_validate(row["spec"])
+    assert operation.parse_specification(prepared) is prepared
     authorizer.authorize.assert_awaited_once_with(request.sources["a"])
     artifact = store.finish.call_args.args[2]
     assert artifacts.result_path(row["attempt_id"], result_name="result.csv").exists()

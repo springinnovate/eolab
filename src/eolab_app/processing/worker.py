@@ -11,6 +11,7 @@ from pathlib import PurePath
 from threading import Event
 import logging
 from typing import Any
+from pydantic import BaseModel
 
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
@@ -175,12 +176,17 @@ class ProcessingWorker:
         return result
 
     async def _prepare_operation(
-        self, row: dict[str, Any]
+        self,
+        row: dict[str, Any],
+        calculation: BaseModel,
+        model: ModelRunSpec | None,
     ) -> tuple[AuthorizedRaster, str | None]:
         """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:
             row: Claimed job updated with its prepared specification.
+            calculation: Validated queued specification for its registered operation.
+            model: Validated recipe wrapper, or None for an ordinary raster job.
 
         Returns:
             Authorized source and published checksum reusable in this attempt.
@@ -188,15 +194,7 @@ class ProcessingWorker:
         Raises:
             ProcessingError: If authorization or planning fails, or the attempt is cancelled.
         """
-        model = (
-            ModelRunSpec.model_validate(row["spec"])
-            if row["spec"]["operation"] == MODEL_OPERATION
-            else None
-        )
-        data = model.calculation if model else row["spec"]
-        identifier = data.operation if model else data["operation"]
-        operation = get_model_operation(identifier)
-        queued = operation.parse_specification(data)
+        operation = get_model_operation(calculation.operation)
         if not await asyncio.to_thread(
             self.jobs.heartbeat,
             row["id"],
@@ -206,14 +204,16 @@ class ProcessingWorker:
             raise ProcessingError(
                 "job_cancelled", "Calculation stopped before preparation.", 409
             )
-        authorized, checksum = await self._resolve_source(row, operation.source(queued))
+        authorized, checksum = await self._resolve_source(
+            row, operation.source(calculation)
+        )
         context = self._operation_context(model is None, checksum)
         context.rasters.update(
-            await self._resolve_additional_sources(queued, operation)
+            await self._resolve_additional_sources(calculation, operation)
         )
-        prepared = await operation.prepare(context, queued, authorized)
+        prepared = await operation.prepare(context, calculation, authorized)
         if model is not None:
-            prepared = record_model_preparation(row, prepared, self.limits)
+            prepared = record_model_preparation(row, model, prepared, self.limits)
         row.update(
             await asyncio.to_thread(
                 self.jobs.save_prepared_job, row["id"], row["attempt_id"], prepared
@@ -256,13 +256,15 @@ class ProcessingWorker:
         authorized = None
         checksum = None
         if isinstance(calculation, handler.queued_type):
-            authorized, checksum = await self._prepare_operation(row)
-        calculation_spec = (
-            ModelRunSpec.model_validate(row["spec"]).calculation
-            if model
-            else row["spec"]
-        )
-        spec = handler.prepared_type.model_validate(calculation_spec)
+            authorized, checksum = await self._prepare_operation(
+                row, calculation, model
+            )
+            calculation = (
+                ModelRunSpec.model_validate(row["spec"]).calculation
+                if model
+                else handler.prepared_type.model_validate(row["spec"])
+            )
+        spec = calculation
         source = handler.source(spec)
         target, action, limits = handler.execution(
             spec, self._operation_context(model is None)
