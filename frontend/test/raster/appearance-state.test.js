@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { normalizeRasterAppearanceState } from "../../src/raster/appearance-state.js";
-import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
 /**
  * Read an independent portable appearance from the browser/server fixture.
@@ -30,25 +29,10 @@ test("portable appearance preserves both styles and remains independent of its c
     assert.equal(switched.continuous.styleWasEdited, false);
 });
 
-test("legacy six-field and nine-field ramps migrate without replacing saved ranges", () => {
-    for (const withOpacity of [false, true]) {
-        const definition = { ...DEFAULT_RASTER_STYLE, minimum: -10 };
-        if (!withOpacity) {
-            for (const stop of ["minimum", "midpoint", "maximum"]) delete definition[`${stop}Opacity`];
-        }
-        const normalized = normalizeRasterAppearanceState({
-            kind: "raster", definition, paletteName: "custom"
-        });
-        assert.equal(normalized.mode, "continuous");
-        assert.equal(normalized.categorical, null);
-        assert.equal(normalized.continuous.styleWasEdited, true);
-        assert.deepEqual(normalized.continuous.definition, { ...DEFAULT_RASTER_STYLE, minimum: -10 });
-    }
-});
-
 test("portable appearance rejects malformed modes, retained styles, and category tables", () => {
     const mutations = [
         candidate => { candidate.kind = "vector"; },
+        candidate => { delete candidate.appearanceVersion; },
         candidate => { candidate.appearanceVersion = 2; },
         candidate => { candidate.appearanceVersion = true; },
         candidate => { candidate.mode = "other"; },
@@ -59,6 +43,9 @@ test("portable appearance rejects malformed modes, retained styles, and category
         candidate => { candidate.continuous.paletteName = "unknown"; },
         candidate => { candidate.continuous.definition.extra = 0; },
         candidate => { delete candidate.continuous.definition.minimumOpacity; },
+        candidate => {
+            for (const stop of ["minimum", "midpoint", "maximum"]) delete candidate.continuous.definition[`${stop}Opacity`];
+        },
         candidate => { candidate.continuous.definition.minimumOpacity = undefined; },
         candidate => { candidate.continuous.definition.minimumColor = ["#000000"]; },
         candidate => { candidate.continuous.definition.minimum = 200; },
@@ -76,6 +63,9 @@ test("portable appearance rejects malformed modes, retained styles, and category
     }
     const unused = appearance(); unused.mode = "continuous"; unused.categorical = null;
     assert.equal(normalizeRasterAppearanceState(unused).categorical, null);
+    assert.throws(() => normalizeRasterAppearanceState({
+        kind: "raster", definition: unused.continuous.definition, paletteName: "custom"
+    }), /missing or unsupported fields/);
 });
 
 test("portable appearance keeps category resource limits at the raster boundary", () => {

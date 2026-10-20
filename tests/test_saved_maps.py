@@ -210,7 +210,9 @@ def test_layer_and_size_boundaries() -> None:
         candidate["view"]["layers"][0][key] = value
         mutations.append(candidate)
     huge = map_request()
-    huge["view"]["layers"][0]["style"]["definition"]["text"] = "a" * (512 * 1024)
+    huge["view"]["layers"][0]["style"]["continuous"]["definition"]["text"] = "a" * (
+        512 * 1024
+    )
     mutations.append(huge)
     for candidate in mutations:
         with pytest.raises(ValidationError):
@@ -312,7 +314,7 @@ def test_map_legend_preferences_round_trip() -> None:
 
 
 def test_versioned_raster_appearance_round_trip() -> None:
-    """Preserve both raster configurations and legacy wire documents unchanged."""
+    """Preserve both raster configurations and optional category state unchanged."""
     candidate = map_request()
     candidate["view"] = json.loads(
         (
@@ -368,7 +370,7 @@ def test_versioned_raster_appearance_boundaries(
 
 
 def test_versioned_raster_appearance_requires_all_envelope_fields() -> None:
-    """Do not silently default missing configuration fields in imported maps."""
+    """Reject incomplete and unversioned raster appearance in imported maps."""
     candidate = map_request()
     candidate["view"] = json.loads(
         (
@@ -380,3 +382,10 @@ def test_versioned_raster_appearance_requires_all_envelope_fields() -> None:
         del invalid["view"]["layers"][0]["style"][field]
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(invalid)
+    candidate["view"]["layers"][0]["style"] = {
+        "kind": "raster",
+        "definition": {"minimum": 0, "maximum": 1},
+        "paletteName": "viridis",
+    }
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(candidate)

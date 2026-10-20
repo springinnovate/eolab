@@ -274,8 +274,7 @@ function validateLayer(candidate) {
 /**
  * Check which style fields may be stored in a saved map.
  *
- * Versioned raster styles retain continuous and categorical settings. Older
- * styles remain unchanged for the raster adapter to migrate during restoration.
+ * Version-one raster styles retain continuous and categorical settings.
  * This checks structure and size; each raster or vector adapter validates the
  * actual colors, ranges and category rules before applying them.
  *
@@ -284,10 +283,8 @@ function validateLayer(candidate) {
  * @throws {SavedMapViewValidationError} If required fields, versions or size limits are invalid.
  */
 function validateSavedStyleStructure(style) {
-    if (style.kind !== "raster" || !Object.hasOwn(style, "appearanceVersion")) {
-        requireExactKeys(style, style.kind === "raster"
-            ? ["kind", "definition", "paletteName"] : ["kind", "definition"],
-        "Saved layer style");
+    if (style.kind !== "raster") {
+        requireExactKeys(style, ["kind", "definition"], "Saved layer style");
         requirePlainObject(style.definition, "Saved style definition");
         return;
     }

@@ -142,62 +142,36 @@ class MapRasterContinuousAppearance(MapDocumentPart):
 
 
 class MapRasterStyle(MapDocumentPart):
-    """Saved raster styling in either the legacy or version-one format.
+    """Saved raster styling in the version-one appearance format.
 
-    The legacy format contains only kind, definition, and paletteName. Version
-    one contains only kind, appearanceVersion, mode, continuous, and categorical.
     Both definitions survive a mode change; raster styling code validates the
-    settings when restoring a layer. Legacy content is preserved for migration.
+    settings when restoring a layer.
 
     Attributes:
         kind: Raster layer appearance discriminator.
-        definition: Legacy opaque continuous definition.
-        paletteName: Legacy opaque palette value.
         appearanceVersion: Version of the dual-configuration appearance.
         mode: Active retained configuration.
         continuous: Retained continuous definition and editing state.
-        categorical: Retained category definition, absent before configuration.
+        categorical: Retained category definition, null before configuration.
     """
 
     kind: Literal["raster"]
-    definition: dict[str, JsonValue] | None = None
-    paletteName: JsonValue = None
-    appearanceVersion: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
-    mode: Literal["continuous", "categorical"] | None = None
-    continuous: MapRasterContinuousAppearance | None = None
-    categorical: dict[str, JsonValue] | None = None
+    appearanceVersion: Annotated[int, Field(strict=True, ge=1, le=1)]
+    mode: Literal["continuous", "categorical"]
+    continuous: MapRasterContinuousAppearance
+    categorical: dict[str, JsonValue] | None
 
     @model_validator(mode="after")
     def validate_appearance_format(self) -> Self:
-        """Require the complete set of fields for the chosen raster style format.
+        """Check retained category size and require a table for categorical mode.
 
         Returns:
-            The unchanged legacy or version-one raster style.
+            The unchanged version-one raster style.
 
         Raises:
-            ValueError: If fields are missing, modes conflict, or a definition
-                exceeds the portable appearance limit.
+            ValueError: If categorical mode has no category table or its
+                definition exceeds the portable appearance limit.
         """
-        if "appearanceVersion" not in self.model_fields_set:
-            if self.model_fields_set != {"kind", "definition", "paletteName"}:
-                raise ValueError("Legacy raster appearance has unsupported fields.")
-            if self.definition is None:
-                raise ValueError("Legacy raster definition must be an object.")
-            return self
-        if self.model_fields_set != {
-            "kind",
-            "appearanceVersion",
-            "mode",
-            "continuous",
-            "categorical",
-        }:
-            raise ValueError(
-                "Raster appearance contains missing or unsupported fields."
-            )
-        if self.appearanceVersion != 1 or self.mode is None or self.continuous is None:
-            raise ValueError(
-                "Raster appearance version, mode, and continuous state are required."
-            )
         if self.categorical is not None:
             validate_appearance_definition_size(self.categorical)
         elif self.mode == "categorical":

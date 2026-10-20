@@ -9,7 +9,21 @@
       "catalogItem": {"collection": "rasters", "id": "human-impact"},
       "visible": true,
       "opacity": 0.75,
-      "style": {"kind": "raster", "definition": {"minimum": 0, "maximum": 1}, "paletteName": "viridis"}
+      "style": {
+        "kind": "raster",
+        "appearanceVersion": 1,
+        "mode": "continuous",
+        "continuous": {
+          "definition": {
+            "minimum": 0, "midpoint": 0.5, "maximum": 1,
+            "minimumColor": "#440154", "midpointColor": "#21918c", "maximumColor": "#fde725",
+            "minimumOpacity": 1, "midpointOpacity": 1, "maximumOpacity": 1
+          },
+          "paletteName": "viridis",
+          "styleWasEdited": true
+        },
+        "categorical": null
+      }
     },
     {
       "catalogItem": {"collection": "vectors", "id": "countries"},

@@ -8,6 +8,7 @@ import {
   encodeSavedMapViewFragment,
 } from "../../src/saved-map-view/fragment-codec.js";
 import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
+import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
 test("published drafts ignore personal autosave and only write on explicit save", async () => {
   const view = createView(), storage = createStorage("private"), submissions = [], headings = [];
@@ -478,9 +479,9 @@ test("saved map controller stages concurrently and commits final saved order", a
         visible: false,
         opacity: 0.8,
         style: {
-          kind: "raster",
-          definition: { minimum: 0 },
-          paletteName: "custom",
+          kind: "raster", appearanceVersion: 1, mode: "continuous",
+          continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
+          categorical: null,
         },
       },
     ],

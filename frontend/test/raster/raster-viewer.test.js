@@ -1108,11 +1108,11 @@ test("raster adapter exports and reapplies only validated portable appearance", 
         maximum: 20,
         minimumColor: "#000000",
     };
-    record.adapter.applySavedState(record, {
-        kind: "raster",
-        definition: restoredStyle,
-        paletteName: "custom",
-    });
+    const restoredAppearance = {
+        ...exported,
+        continuous: { definition: restoredStyle, paletteName: "custom", styleWasEdited: true },
+    };
+    record.adapter.applySavedState(record, restoredAppearance);
 
     assert.deepEqual(record.state.rasterStyle, restoredStyle);
     assert.equal(record.state.paletteName, "custom");
@@ -1120,9 +1120,9 @@ test("raster adapter exports and reapplies only validated portable appearance", 
     assert.match(h.wmsLayers[0].parameters.env, /min:-5/);
     assert.throws(
         () => record.adapter.applySavedState(record, {
-            kind: "raster",
-            definition: { ...restoredStyle, sourcePath: "file:///data.tif" },
-            paletteName: "custom",
+            ...restoredAppearance,
+            continuous: { ...restoredAppearance.continuous,
+                definition: { ...restoredStyle, sourcePath: "file:///data.tif" } },
         }),
         /unsupported fields/,
     );
@@ -1145,9 +1145,8 @@ test("saved style updates a staged raster before it is attached", async () => {
     assert.equal(h.mapLayers.retainedRecords.length, 0);
     assert.equal(h.leafletMap.layers.size, 0);
     staged.record.adapter.applySavedState(staged.record, {
-        kind: "raster",
-        definition: restoredStyle,
-        paletteName: "blue-yellow-red",
+        ...staged.record.adapter.exportSavedState(staged.record),
+        continuous: { definition: restoredStyle, paletteName: "blue-yellow-red", styleWasEdited: true },
     });
 
     assert.deepEqual(staged.record.state.rasterStyle, restoredStyle);
