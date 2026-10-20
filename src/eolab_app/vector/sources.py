@@ -4,17 +4,14 @@ from collections import OrderedDict
 from dataclasses import replace
 from hashlib import sha256
 from threading import Lock
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from eolab_app.catalog.filegeodatabase import FILE_GEODATABASE_MEDIA_TYPE
 from eolab_app.catalog.geojson import GEOJSON_MEDIA_TYPE
-from eolab_app.catalog.geopackage import (
-    GEOPACKAGE_LAYER_PROPERTY,
-    GEOPACKAGE_MEDIA_TYPE,
-)
+from eolab_app.catalog.geopackage import GEOPACKAGE_MEDIA_TYPE
 from eolab_app.catalog.shapefile import (
     REQUIRED_COMPONENT_EXTENSIONS,
     SHAPEFILE_COMPONENT_TYPES,
@@ -33,18 +30,12 @@ from eolab_app.vector.models import (
     ResolvedVectorSource,
     VECTOR_SOURCE_METADATA_KEY,
     VectorFormat,
+    VectorSourceKind,
     VectorSourceSignature,
 )
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 
 
-_FORMAT_ITEM_PREFIXES: dict[VectorFormat, str] = {
-    "shapefile": "shapefile-",
-    "geopackage": "geopackage-",
-    "geojson": "geojson-",
-    "zipped-shapefile": "zipped-shapefile-",
-    "file-geodatabase": "file-geodatabase-",
-}
 _FORMAT_ASSET_CONTRACTS: dict[VectorFormat, tuple[str, str]] = {
     "shapefile": ("shp", SHAPEFILE_COMPONENT_TYPES[".shp"]),
     "geopackage": ("data", GEOPACKAGE_MEDIA_TYPE),
@@ -100,9 +91,7 @@ class MountedVectorResolver:
     def resolve(self, item: dict[str, Any]) -> ResolvedVectorSource:
         """Resolve one authoritative vector Item to its explicit source identity.
 
-        Current Items use ``eolab:vector_source``. Legacy scanner Items are
-        upgraded only when their Item prefix, Asset key, media type, and exact
-        format-specific layer metadata agree. A non-file Asset is classified
+        Items must carry ``eolab:vector_source``. A non-file Asset is classified
         as remote and is never interpreted as a mounted path.
 
         Args:
@@ -183,18 +172,18 @@ class MountedVectorResolver:
     def _source_contract(
         self,
         item: dict[str, Any],
-    ) -> tuple[VectorFormat, str, str | None, str | None]:
-        """Read or narrowly derive an Item's exact format contract.
+    ) -> tuple[VectorFormat, str, str | None, VectorSourceKind]:
+        """Read an Item's explicit source format and layer contract.
 
         Args:
             item: Authoritative vector STAC Item.
 
         Returns:
             Format, primary Asset key, exact native layer name, and declared
-            source kind when the Item already carries the normalized contract.
+            source kind.
 
         Raises:
-            VectorAssetError: If the explicit or legacy identity is invalid.
+            VectorAssetError: If the explicit source identity is missing or invalid.
         """
         properties = item.get("properties")
         metadata = (
@@ -202,120 +191,33 @@ class MountedVectorResolver:
             if isinstance(properties, dict)
             else None
         )
-        if metadata is not None:
-            if not isinstance(metadata, dict) or set(metadata) != {
-                "kind", "format", "asset_key", "layer_name"
-            }:
-                raise VectorAssetError("The vector source contract is invalid")
-            source_format = metadata.get("format")
-            if (
-                metadata.get("kind") not in {"mounted", "remote"}
-                or source_format not in _FORMAT_ASSET_CONTRACTS
-            ):
-                raise VectorAssetError("The vector source contract is invalid")
-            expected_asset_key = _FORMAT_ASSET_CONTRACTS[source_format][0]
-            if metadata.get("asset_key") != expected_asset_key:
-                raise VectorAssetError("The vector source Asset identity conflicts")
-            layer_name = metadata.get("layer_name")
-            if layer_name is not None and (
-                not isinstance(layer_name, str) or not layer_name
-            ):
-                raise VectorAssetError("The vector layer identity is invalid")
-            return (
-                source_format,
-                expected_asset_key,
-                layer_name,
-                metadata["kind"],
-            )
-
-        item_id = item.get("id")
-        if not isinstance(item_id, str):
-            raise VectorAssetError("The vector Item identity is invalid")
-        matching_formats = [
-            source_format
-            for source_format, prefix in _FORMAT_ITEM_PREFIXES.items()
-            if item_id.startswith(prefix)
-        ]
-        if len(matching_formats) != 1:
-            raise VectorAssetError("The vector source format is not explicit")
-        source_format = matching_formats[0]
-        asset_key = _FORMAT_ASSET_CONTRACTS[source_format][0]
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "kind",
+            "format",
+            "asset_key",
+            "layer_name",
+        }:
+            raise VectorAssetError("The vector source contract is invalid")
+        source_format = metadata.get("format")
+        if (
+            metadata.get("kind") not in {"mounted", "remote"}
+            or source_format not in _FORMAT_ASSET_CONTRACTS
+        ):
+            raise VectorAssetError("The vector source contract is invalid")
+        expected_asset_key = _FORMAT_ASSET_CONTRACTS[source_format][0]
+        if metadata.get("asset_key") != expected_asset_key:
+            raise VectorAssetError("The vector source Asset identity conflicts")
+        layer_name = metadata.get("layer_name")
+        if layer_name is not None and (
+            not isinstance(layer_name, str) or not layer_name
+        ):
+            raise VectorAssetError("The vector layer identity is invalid")
         return (
             source_format,
-            asset_key,
-            self._legacy_layer_name(item, source_format, asset_key),
-            None,
+            expected_asset_key,
+            layer_name,
+            metadata["kind"],
         )
-
-    @staticmethod
-    def _legacy_layer_name(
-        item: dict[str, Any],
-        source_format: VectorFormat,
-        asset_key: str,
-    ) -> str | None:
-        """Recover only exact layer identities recorded by legacy handlers.
-
-        Args:
-            item: Legacy vector Item.
-            source_format: Format fixed by the Item namespace.
-            asset_key: Format-owned primary Asset key.
-
-        Returns:
-            Exact native layer name or ``None`` for a single-layer GeoJSON.
-
-        Raises:
-            VectorAssetError: If a multi-layer identity is absent or conflicts.
-        """
-        properties = item.get("properties")
-        assets = item.get("assets")
-        asset = assets.get(asset_key) if isinstance(assets, dict) else None
-        if not isinstance(properties, dict) or not isinstance(asset, dict):
-            raise VectorAssetError("The vector source identity is incomplete")
-        if source_format == "geopackage":
-            property_layer = properties.get(GEOPACKAGE_LAYER_PROPERTY)
-            asset_layer = asset.get(GEOPACKAGE_LAYER_PROPERTY)
-            if (
-                not isinstance(property_layer, str)
-                or not property_layer
-                or property_layer != asset_layer
-            ):
-                raise VectorAssetError("The GeoPackage layer identity is invalid")
-            return property_layer
-        if source_format == "file-geodatabase":
-            property_layer = properties.get("eolab:layer_name")
-            asset_layer = asset.get("eolab:layer_name")
-            if (
-                not isinstance(property_layer, str)
-                or not property_layer
-                or property_layer != asset_layer
-            ):
-                raise VectorAssetError(
-                    "The File Geodatabase layer identity is invalid"
-                )
-            return property_layer
-        if source_format == "zipped-shapefile":
-            explicit_layer = properties.get("eolab:archive_member")
-            if isinstance(explicit_layer, str) and explicit_layer:
-                return explicit_layer
-            title = properties.get("title")
-            archive_title = asset.get("title")
-            prefix = f"{archive_title}!/"
-            if (
-                isinstance(title, str)
-                and isinstance(archive_title, str)
-                and title.startswith(prefix)
-                and len(title) > len(prefix)
-            ):
-                return title[len(prefix):]
-            raise VectorAssetError(
-                "The zipped Shapefile member identity is missing"
-            )
-        if source_format == "shapefile":
-            href = asset.get("href")
-            if not isinstance(href, str):
-                raise VectorAssetError("The Shapefile layer identity is invalid")
-            return PurePosixPath(unquote(urlsplit(href).path)).stem
-        return None
 
     def _resolve_mounted_uri(self, asset_href: str) -> Path:
         """Resolve one file URI below the configured scan mount.

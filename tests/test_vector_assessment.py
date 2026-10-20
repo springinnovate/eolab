@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 
 import fiona
 import httpx2
+import pytest
 
 from eolab_app.catalog.geojson import build_stac_item as build_geojson_item
 from eolab_app.catalog.geopackage import build_stac_items as build_geopackage_items
@@ -16,6 +17,7 @@ from eolab_app.vector.assessment import (
     VectorAssessmentService,
 )
 from eolab_app.vector.geoserver import GeoServerVectorReaderAssessor
+from eolab_app.vector.errors import VectorAssetError
 from eolab_app.vector.models import (
     CatalogVectorRequest,
     VECTOR_READER_CONTRACT,
@@ -270,6 +272,28 @@ def test_geopackage_assessment_uses_the_selected_exact_layer(
     assert finalized["properties"][VECTOR_RENDERING_METADATA_KEY][
         "geometry_kind"
     ] == "polygon"
+
+
+@pytest.mark.parametrize("missing_contract", [True, False], ids=["missing", "null"])
+def test_resolver_requires_explicit_source_contract(
+    tmp_path: Path,
+    missing_contract: bool,
+) -> None:
+    """Reject Items without source metadata despite format-specific identities.
+
+    Args:
+        tmp_path: Isolated mounted scan source.
+        missing_contract: Whether the contract is absent rather than null.
+    """
+    geopackage_path = tmp_path / "habitats.gpkg"
+    write_geopackage(geopackage_path, "selected")
+    item = build_geopackage_items(tmp_path, geopackage_path)[0]
+    item["properties"][VECTOR_SOURCE_METADATA_KEY] = None
+    if missing_contract:
+        del item["properties"][VECTOR_SOURCE_METADATA_KEY]
+
+    with pytest.raises(VectorAssetError, match="source contract is invalid"):
+        MountedVectorResolver(tmp_path).resolve(item)
 
 
 def test_unsupported_and_remote_sources_return_precise_capabilities(

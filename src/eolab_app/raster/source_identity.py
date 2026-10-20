@@ -62,31 +62,22 @@ class RasterSourceIdentity:
     def from_catalog(cls, value: object) -> "RasterSourceIdentity":
         """Deserialize scanner-owned source identity metadata.
 
-        Four-field lists are the canonical representation. Five-field legacy
-        lists are accepted by deliberately discarding their leading device
-        number; this preserves valid source authorizations across remounts
-        without
-        rewriting catalog metadata.
-
         Args:
-            value: JSON-decoded catalog metadata value.
+            value: Four-field JSON list written by the current scanner.
 
         Returns:
             Canonical typed raster source identity.
 
         Raises:
-            ValueError: If the value is not a canonical or supported legacy
-                integer sequence.
+            ValueError: If the value is not a four-field integer list.
         """
-        if not isinstance(value, list) or len(value) not in {4, 5}:
+        if not isinstance(value, list) or len(value) != 4:
             raise ValueError("Raster source identity must contain four fields")
         if any(
-            isinstance(field, bool) or not isinstance(field, int)
-            for field in value
+            isinstance(field, bool) or not isinstance(field, int) for field in value
         ):
             raise ValueError("Raster source identity fields must be integers")
-        identity_fields = value[1:] if len(value) == 5 else value
-        inode, size_bytes, modified_ns, changed_ns = identity_fields
+        inode, size_bytes, modified_ns, changed_ns = value
         return cls(
             inode=inode,
             size_bytes=size_bytes,
