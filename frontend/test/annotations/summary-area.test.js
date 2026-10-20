@@ -1,28 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget, annotationSummaryPolygons } from "../../src/annotations/summary-area.js";
+import { ANNOTATION_FIELDS, annotationSummaryTarget, annotationSummaryPolygons } from "../../src/annotations/summary-area.js";
 import { AnnotationModel, matchingAnnotationPolygons, readAnnotationLayers } from "../../src/annotations/model.js";
 import { parseAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { VectorSamplingController } from "../../src/vector/sampling.js";
+import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /** @return {Object} Two overlapping committed polygons with different text attributes. */
 function layer() {
-    return { id: "layer", name: "Study areas", filter: annotationFilterRules(""), polygons: [
+    return { id: "layer", name: "Study areas", filter: structuredClone(EMPTY_VECTOR_FILTER), polygons: [
         { id: "one", name: "Forest", note: "Restore trees", vertices: [[0, 0], [3, 0], [3, 3], [0, 3]] },
         { id: "two", name: "Water", note: "Monitor flooding", vertices: [[2, 2], [5, 2], [5, 5], [2, 5]] },
     ] };
 }
 
-test("summary and map filters select the same annotation names and notes", () => {
+test("summary, map and selection identity use the same case-sensitive annotation rules", () => {
     const value = layer();
-    for (const rule of [{ field: "name", operator: "eq", value: "Forest" },
-        { field: "note", operator: "contains", value: "flood" }, { field: "name", operator: "ne", value: "Forest" },
-        { field: "note", operator: "missing", value: null }]) {
+    for (const [rule, ids] of [
+        [{ field: "name", operator: "eq", value: "Forest" }, ["one"]],
+        [{ field: "name", operator: "contains", value: "Forest" }, ["one"]],
+        [{ field: "name", operator: "contains", value: "FOREST" }, []],
+        [{ field: "note", operator: "contains", value: "flood" }, ["two"]],
+        [{ field: "name", operator: "ne", value: "Forest" }, ["two"]],
+        [{ field: "note", operator: "missing", value: null }, []],
+    ]) {
         value.filter = { enabled: true, match: "all", rules: [rule] };
         const expected = matchingAnnotationPolygons(value);
+        assert.deepEqual(expected.map(polygon => polygon.id), ids);
         const actual = annotationSummaryPolygons(value.polygons, value.filter);
         assert.equal(actual.length, expected.length);
         actual.forEach((polygon, i) => assert.deepEqual(polygon.coordinates[0], [...expected[i].vertices, expected[i].vertices[0]]));
+        const target = annotationSummaryTarget("layer", value);
+        assert.equal(target.selectionIdentity(target.filter), JSON.stringify(expected.map(polygon => polygon.vertices)));
     }
     value.filter.enabled = false;
     assert.equal(annotationSummaryPolygons(value.polygons, value.filter).length, 2);
@@ -56,7 +65,7 @@ test("obsolete polygon uploads are released, and presentation edits retain activ
     let value = layer(), targets = [annotationSummaryTarget("layer", value)], resolve;
     const released = [], invalidated = [], activated = [];
     const area = { polygonArea: { id: "a".repeat(32), sha256: "b".repeat(64) }, bbox: [0, 0, 5, 5],
-        matched: 2, total: 2, label: "Study areas", filter: annotationFilterRules("") };
+        matched: 2, total: 2, label: "Study areas", filter: structuredClone(EMPTY_VECTOR_FILTER) };
     const view = { bind() {}, render() {}, unbind() {} };
     const controller = new VectorSamplingController({ view, getTargets: () => targets,
         createArea: () => new Promise(done => { resolve = done; }), onEditFilter() {},
@@ -74,15 +83,4 @@ test("obsolete polygon uploads are released, and presentation edits retain activ
     value.polygons[0].vertices[0] = [-1, 0]; targets = [annotationSummaryTarget("layer", value)]; controller.refresh();
     assert.deepEqual(invalidated, [area]); assert.equal(released.length, 2);
     assert.equal(controller.state.area, null);
-});
-
-
-test("unchanged saved text searches retain the same case-insensitive map and summary selection", () => {
-    const value = layer(); value.filter = "FOREST";
-    const target = annotationSummaryTarget("layer", value);
-    const geometry = annotationSummaryPolygons(target.polygons, target.filter, target.savedFilter);
-    assert.equal(geometry.length, matchingAnnotationPolygons(value).length);
-    assert.equal(geometry.length, 1);
-    const different = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "Water" }] };
-    assert.equal(annotationSummaryPolygons(target.polygons, different, target.savedFilter).length, 1);
 });

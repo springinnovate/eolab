@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AnnotationController } from "../../src/annotations/controller.js";
 import { AnnotationModel } from "../../src/annotations/model.js";
 import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
+import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /**
  * Connect controller status behavior to a model and minimal browser/storage substitutes.
@@ -26,7 +27,7 @@ test("contributor zoom uses current saved geometry for that person and layer wit
     const annotations = controller();
     const layer = annotations.model.createLayer();
     layer.polygons = [{ id: "own-polygon", vertices: [[10, 20], [12, 20], [10, 22]] }];
-    layer.filter = "matches nothing";
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "matches nothing" }] };
     layer.visible = false;
     annotations.model.createLayer().polygons = [{ id: "unrelated", vertices: [[-100, -50]] }];
     const contributors = [{ id: "own", own: true }, { id: "peer", own: false }, { id: "empty", own: false }];
@@ -154,9 +155,11 @@ test("hiding, filtering, deleting, drawing and empty clicks cannot retain stale 
     click(); h.layer.visible = false; h.annotations.refreshInspection();
     assert.equal(h.controls.hit, null); assert.equal(h.rendering.highlight, null);
     assert.equal(click(), false);
-    h.layer.visible = true; click(); h.layer.filter = "no match"; h.annotations.refreshInspection();
+    h.layer.visible = true; click();
+    h.layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "no match" }] };
+    h.annotations.refreshInspection();
     assert.equal(h.controls.hit, null);
-    h.layer.filter = ""; click(); h.annotations.shared.get(h.layer.id).polygons = []; h.annotations.refreshInspection();
+    h.layer.filter = structuredClone(EMPTY_VECTOR_FILTER); click(); h.annotations.shared.get(h.layer.id).polygons = []; h.annotations.refreshInspection();
     assert.equal(h.controls.hit, null);
     click(); h.layer.polygons = []; h.annotations.refreshInspection();
     assert.equal(h.controls.hit, null);
@@ -384,7 +387,7 @@ test("combined shared polygons are filterable summary inputs but never become ed
     assert.throws(() => annotations.model.beginPolygon(layer.id, "peer-polygon"));
     await annotations.save();
     assert.equal(annotations.sharableLayers()[0].collection.features.length, 1);
-    layer.filter = "Maria";
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "contains", value: "Maria" }] };
     assert.match(annotations.filterTarget(`local:annotation:${layer.id}`).status, /1 of 2/);
 });
 

@@ -4,6 +4,7 @@ import { parseAnnotationGeoJSON, exportAnnotationGeoJSON, readAnnotationGeoJSONF
 import { AnnotationModel, readAnnotationLayers, MAX_ANNOTATION_LAYERS, MAX_ANNOTATION_DOCUMENT_BYTES,
     MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER } from "../../src/annotations/model.js";
 import { AnnotationController } from "../../src/annotations/controller.js";
+import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /** @return {Object} A closed counterclockwise Polygon with optional feature text. */
 function feature() {
@@ -43,7 +44,7 @@ test("EOLab GeoJSON preserves names, notes and shapes across import, export and 
     const annotations = model();
     const imported = parseAnnotationGeoJSON(JSON.stringify(collection()));
     const layer = annotations.importLayer(imported);
-    layer.filter = "does not match";
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "does not match" }] };
     layer.visible = false;
     annotations.beginPolygon(layer.id);
     annotations.addVertex([40, 40]);
@@ -98,13 +99,13 @@ test("export closes and orients clockwise rings without changing local geometry"
 test("reimport generates independent layer and feature IDs and resets presentation", () => {
     const annotations = model();
     const first = annotations.importLayer(parseAnnotationGeoJSON(JSON.stringify(collection())));
-    first.filter = "forest";
+    first.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "Forest" }] };
     first.visible = false;
     const second = annotations.importLayer(parseAnnotationGeoJSON(JSON.stringify(exportAnnotationGeoJSON(first))));
     assert.notEqual(first.id, second.id);
     assert.notEqual(first.polygons[0].id, second.polygons[0].id);
     assert.equal(second.visible, true);
-    assert.equal(second.filter, "");
+    assert.deepEqual(second.filter, EMPTY_VECTOR_FILTER);
     second.polygons[0].vertices[0][0] = -3;
     assert.equal(first.polygons[0].vertices[0][0], 0);
 });

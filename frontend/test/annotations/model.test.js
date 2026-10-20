@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AnnotationModel, readAnnotationLayers, matchingAnnotationPolygons, MAX_ANNOTATION_LAYERS, MAX_POLYGON_VERTICES } from "../../src/annotations/model.js";
 import { polygonValidationMessage } from "../../src/annotations/geometry.js";
+import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /** @return {AnnotationModel} Model with deterministic local identifiers. */
 function model() {
@@ -92,12 +93,13 @@ test("invalid polygons explain too few vertices, crossings, duplicate and empty 
     assert.equal(polygonValidationMessage([[0,0],[2,0],[2,2],[1,1],[0,2]]), null);
 });
 
-test("storage round trip preserves layer appearance, text filter and notes", () => {
+test("storage round trip preserves layer appearance, filter rules and notes", () => {
     const annotations = model();
     const layer = annotations.createLayer();
+    assert.deepEqual(layer.filter, EMPTY_VECTOR_FILTER);
     const polygon = triangle(annotations, layer.id);
     polygon.note = "Workshop priority";
-    layer.filter = "PRIORITY";
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "note", operator: "contains", value: "priority" }] };
     layer.opacity = 0.6;
     layer.visible = false;
     layer.style.color = "#123456";
@@ -105,15 +107,20 @@ test("storage round trip preserves layer appearance, text filter and notes", () 
     const restored = readAnnotationLayers(annotations.document());
     assert.deepEqual(restored, annotations.layers);
     assert.deepEqual(matchingAnnotationPolygons(restored[0]), [polygon]);
-    restored[0].filter = "absent";
+    restored[0].filter.rules[0].value = "absent";
     assert.deepEqual(matchingAnnotationPolygons(restored[0]), []);
-    assert.equal(layer.filter, "PRIORITY");
+    assert.equal(layer.filter.rules[0].value, "priority");
 });
 
-test("stored identities, appearance and drawing limits are validated", () => {
+test("stored identities, filters, appearance and drawing limits are validated", () => {
     const annotations = model();
     const layer = annotations.createLayer();
     triangle(annotations, layer.id);
+    for (const filter of ["", " ", "Forest"]) {
+        const saved = annotations.document();
+        saved.layers[0].filter = filter;
+        assert.throws(() => readAnnotationLayers(saved), TypeError);
+    }
     const invalid = annotations.document();
     invalid.layers[0].polygons[0].id = layer.id;
     assert.throws(() => readAnnotationLayers(invalid), /identifiers/);
@@ -260,7 +267,9 @@ test("creating and loading annotations enforce the same layer limit", () => {
 test("layer restoration keeps committed geometry, notes, names, filter and appearance with original IDs", () => {
     const model = new AnnotationModel();
     const layer = model.createLayer();
-    layer.name = "Workshop"; layer.filter = "river"; layer.position = 3; layer.visible = false; layer.opacity = 0.4;
+    layer.name = "Workshop";
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "contains", value: "river" }] };
+    layer.position = 3; layer.visible = false; layer.opacity = 0.4;
     model.beginPolygon(layer.id);
     [[0, 0], [2, 0], [1, 2]].forEach(point => model.addVertex(point));
     const polygon = model.savePolygon(); polygon.name = "River"; polygon.note = "Flooding";

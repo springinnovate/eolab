@@ -94,14 +94,6 @@ export class AnnotationLayerControls {
         this.localAppearance.append(opacity);
         this.filter = this.details("Filter polygons");
         this.filter.append(this.button("Edit filter", actions.filter));
-        if (typeof layer.filter === "string" && layer.filter) {
-            const legacy = this.createLabeledInput("Saved text search (clear before using field conditions)", "search", layer.filter, value => {
-                layer.filter = value;
-                actions.change();
-            }, 300);
-            this.legacySearch = legacy;
-            this.filter.append(legacy);
-        }
         this.polygons = this.details("Polygons");
         this.polygons.open = true;
         this.polygonList = document.createElement("ul");
@@ -244,9 +236,8 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
-        if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
-        const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
+        const filtered = this.layer.filter.enabled && !!this.layer.filter.rules.length;
         this.polygons.querySelector("summary").textContent = (this.collaborating ? "Your polygons · " : "") + (filtered
             ? `${polygons.length} of ${this.layer.polygons.length} polygons` : `${polygons.length} ${polygons.length === 1 ? "polygon" : "polygons"}`);
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAnnotationLeafletLayer } from "../../src/annotations/leaflet-layer.js";
 import { DEFAULT_ANNOTATION_STYLE } from "../../src/annotations/model.js";
+import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
 /** @return {Object} Plain-text element double for the label content contract. */
 function element() {
@@ -13,7 +14,7 @@ function element() {
 
 /** @return {Object} Local annotation renderer with doubles for Leaflet's public layer methods. */
 function setup() {
-    const annotation = { filter: "", style: { ...DEFAULT_ANNOTATION_STYLE },
+    const annotation = { filter: structuredClone(EMPTY_VECTOR_FILTER), style: { ...DEFAULT_ANNOTATION_STYLE },
         polygons: [{ id: "polygon", name: "Riverbank", note: "Restore habitat", vertices: [[0, 0], [1, 0], [0, 1]] }] };
     const members = new Set();
     const panes = { tilePane: element(), tooltipPane: element() };
@@ -53,7 +54,7 @@ test("label layout sees filtered, visible saved polygons and releases removed re
     assert.equal(polygonPane.style.opacity, "0.5");
     assert.equal(labelPane.style.opacity, "0.5");
     assert.deepEqual(labelLayout.polygons(), [...members]);
-    annotation.filter = "absent";
+    annotation.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "absent" }] };
     rendering.refresh();
     assert.deepEqual(labelLayout.polygons(), []);
     rendering.release();
@@ -84,10 +85,10 @@ test("text edits retain the same polygon and label instead of restarting tooltip
     assert.equal([...members][0], shape);
     assert.equal(shape.getTooltip(), tooltip);
     assert.equal(tooltip.getContent().querySelector(".annotation-polygon-name").textContent, "Priority riverbank");
-    annotation.filter = "absent";
+    annotation.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "absent" }] };
     rendering.refresh();
     assert.equal(members.size, 0);
-    annotation.filter = "";
+    annotation.filter = structuredClone(EMPTY_VECTOR_FILTER);
     rendering.refresh();
     assert.equal(members.size, 1);
     rendering.release();
@@ -160,9 +161,10 @@ test("hit order matches shape drawing order and excludes filtered, hidden, zero-
     assert.deepEqual(rendering.polygonsAt(point).map(p => p.id), ["top", "polygon"], "highlight does not change hit order");
     rendering.setEditingPolygon("top");
     assert.deepEqual(rendering.polygonsAt(point).map(p => p.id), ["polygon"]);
-    annotation.filter = "absent"; rendering.refresh();
+    annotation.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "absent" }] };
+    rendering.refresh();
     assert.deepEqual(rendering.polygonsAt(point), []);
-    annotation.filter = ""; rendering.refresh();
+    annotation.filter = structuredClone(EMPTY_VECTOR_FILTER); rendering.refresh();
     rendering.setOpacity(0);
     assert.deepEqual(rendering.polygonsAt(point), []);
     rendering.setOpacity(1); map.attached = false;

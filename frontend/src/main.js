@@ -1106,7 +1106,7 @@ async function initializeCatalog(
          */
         createArea: async (item, filter, signal, target) => {
             if (item) return createVectorSamplingArea(item, filter, signal);
-            const polygons = annotationSummaryPolygons(target.polygons, filter, target.savedFilter);
+            const polygons = annotationSummaryPolygons(target.polygons, filter);
             if (!polygons.length) throw new Error("No polygons match this filter. Add a polygon or change the conditions.");
             // Let an accepted upload reply settle so an obsolete input can be released.
             const area = await processingApi.uploadPolygonArea(polygons);
