@@ -9,7 +9,7 @@ import { ProcessingApiClient, ProcessingRequestError } from "../../src/processin
 
 const source = { collectionId: "rasters", itemId: "hfp", label: "Human footprint" };
 const box = west => ({ kind: "selectedArea", selectedBounds: { west, south: 22, east: west + 1, north: 23 } });
-const grid = { width: 100, height: 100, crs: "EPSG:3857", dtype: "float32", transform: [1,0,0,0,-1,0], nativeBlocks: 4, decodedBytes: 10000 };
+const grid = { width: 100, height: 100, crs: "EPSG:3857", dtype: "float32", transform: [1,0,0,0,-1,0], nativeBlocks: 4 };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i=0;i<30;i++) await Promise.resolve(); };
 

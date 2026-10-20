@@ -354,8 +354,6 @@ class AggregateGrid(BaseModel):
     dtype: str
     nodata: str | None
     nativeBlocks: int
-    decodedBytes: int
-    estimatedMemoryBytes: int
     scale: str
     offset: str
     storedUnit: str | None

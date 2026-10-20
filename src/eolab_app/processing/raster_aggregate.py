@@ -234,7 +234,7 @@ def plan_statistics_grid(
             and area calculation, conservatively charged as another native block.
 
     Returns:
-        Source grid metadata and read-window sizes; legacy byte estimates are zero.
+        Source grid metadata and read-window sizes.
 
     Raises:
         ProcessingError: If grid metadata cannot describe valid execution windows.
@@ -289,8 +289,6 @@ def plan_statistics_grid(
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
         nativeBlocks=blocks,
-        decodedBytes=0,
-        estimatedMemoryBytes=0,
         scale=str(dataset.scales[0]),
         offset=str(dataset.offsets[0]),
         storedUnit=dataset.units[0],

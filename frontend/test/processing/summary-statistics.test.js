@@ -15,7 +15,7 @@ import { SummaryControlDocument, SUMMARY_MARKUP } from "../../test-support/proce
 const source = { collectionId: "rasters", itemId: "hfp", label: "Human footprint" };
 const resistance = { collectionId: "rasters", itemId: "resistance", label: "Resistance" };
 const box = west => ({ kind: "selectedArea", selectedBounds: { west, south: 22, east: west + 1, north: 23 } });
-const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4, decodedBytes: 10000 };
+const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4 };
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 

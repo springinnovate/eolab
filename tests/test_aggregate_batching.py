@@ -237,8 +237,7 @@ def test_metadata_planning_and_execution_without_grid_recheck(
     with monkeypatch.context() as patch:
         patch.setattr(kernel, "read_native_raster_window", forbidden)
         patch.setattr(kernel, "read_native_raster_block", forbidden)
-        large_plan = make_spec(path, ["sum(a)"], target_chunk_pixels=4194304)
-        assert large_plan.grid.estimatedMemoryBytes == 0
+        make_spec(path, ["sum(a)"], target_chunk_pixels=4194304)
         spec = make_spec(path, ["sum(a)"], target_chunk_pixels=65536)
     assert prepare_aggregate_job(spec, LIMITS).specification == spec.model_dump(
         mode="json", by_alias=True
