@@ -16,25 +16,35 @@ import rasterio
 from eolab_app.processing.aggregate_models import (
     AggregateJobResponse,
     AggregatePlanRequest,
+    AggregateSpec,
     UnpreparedCalculation,
 )
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import serialize_processing_job
 from eolab_app.processing.worker import ProcessingWorker
+from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
 
-def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
-    """Native execution returns durable results without publishing private paths.
+def test_real_plan_worker_and_public_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native execution trusts catalog metadata and returns path-free durable results.
 
     Args:
         tmp_path: Isolated source and artifact directories.
+        monkeypatch: Reject runtime attempts to recapture catalog file identity.
     """
     path = write_source(tmp_path / "source.tif", np.ones((32, 32), dtype="uint16"))
     authorized = SimpleNamespace(
         source_path=path, source_signature=RasterSourceIdentity.read(path)
+    )
+    monkeypatch.setattr(
+        RasterSourceIdentity,
+        "read",
+        Mock(side_effect=AssertionError("Catalog files are immutable")),
     )
     authorizer = SimpleNamespace(authorize=AsyncMock(return_value=authorized))
     store = Mock()
@@ -48,13 +58,14 @@ def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
         wholeRaster=True,
         calculations=[{"label": "Mean", "expression": "mean(a)"}],
     )
+    queued = UnpreparedCalculation(request=request)
+    operation = get_model_operation(queued.operation)
+    assert operation.parse_specification(queued) is queued
     claimed = datetime.now(timezone.utc)
     row = {
         "id": identifier,
         "attempt_id": "b" * 32,
-        "spec": UnpreparedCalculation(request=request).model_dump(
-            mode="json", by_alias=True
-        ),
+        "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,
         "created_at": claimed - timedelta(seconds=2),
         "updated_at": claimed,
@@ -70,6 +81,8 @@ def test_real_plan_worker_and_public_result(tmp_path: Path) -> None:
     store.finish.return_value = True
     worker = ProcessingWorker(authorizer, store, artifacts, limits)
     assert asyncio.run(worker.run_once())
+    prepared = AggregateSpec.model_validate(row["spec"])
+    assert operation.parse_specification(prepared) is prepared
     authorizer.authorize.assert_awaited_once_with(request.sources["a"])
     artifact = store.finish.call_args.args[2]
     assert artifacts.result_path(row["attempt_id"], result_name="result.csv").exists()
@@ -177,6 +190,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
                 multiple_files_target,
             )
     request = ModelRunRequest(
+        utcOffsetMinutes=0,
         model={
             "id": definition.id,
             "version": "1.1.0",
@@ -217,6 +231,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         "expires_at": now + timedelta(hours=1),
         "status": "running",
         "operation": "model.run.v1",
+        "presentation": {"utcOffsetMinutes": 0},
         "progress": {},
         "error": None,
     }
@@ -300,16 +315,3 @@ def test_model_worker_executes_native_results_and_exports_yaml(
         ModelJobResponse.model_validate(serialize_processing_job(ready)).result
         == response.result
     )
-    if not custom:
-        legacy = dict(row["summary"])
-        legacy.pop("output")
-        legacy.pop("operationId")
-        if model_id == "raster-summary":
-            legacy.pop("grid")
-        historical = {**ready, "summary": legacy, "spec": legacy}
-        assert (
-            ModelJobResponse.model_validate(
-                serialize_processing_job(historical)
-            ).result.kind
-            == response.result.kind
-        )

@@ -11,7 +11,6 @@ from eolab_app.rendering.errors import (
 from eolab_app.raster.sources import (
     MountedRasterResolver,
     PublishedRasterRegistry,
-    source_signature,
 )
 
 
@@ -51,21 +50,17 @@ def test_mounted_raster_resolver_confines_assets_to_the_scan_mount(
             resolver.resolve(_item(unsafe_href))
 
 
-def test_registry_requires_an_approved_layer(tmp_path: Path) -> None:
-    """Reject unknown layers and retain the recorded catalog identity."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"first")
+def test_registry_requires_an_approved_layer() -> None:
+    """Authorize published layers until their registration is revoked."""
     layer_name = "eolab:geotiff-0123456789abcdef01234567"
     registry = PublishedRasterRegistry()
 
     with pytest.raises(PublishedLayerNotAuthorizedError):
         registry.require_current(layer_name)
 
-    approved_signature = source_signature(source_path)
-    registry.authorize(layer_name, source_path, approved_signature)
-    assert registry.require_current(layer_name).source_signature == (
-        approved_signature
-    )
+    registry.authorize(layer_name)
+    assert registry.require_current(layer_name).style_name == "dynamic-raster"
 
-    source_path.write_bytes(b"replacement source")
-    assert registry.require_current(layer_name).source_signature == approved_signature
+    registry.revoke(layer_name)
+    with pytest.raises(PublishedLayerNotAuthorizedError):
+        registry.require_current(layer_name)

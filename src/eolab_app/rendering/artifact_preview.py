@@ -37,7 +37,7 @@ def read_vector_preview(path: Path) -> dict[str, Any]:
     """Validate a small WGS84 GeoJSON file for display without creating an analysis source.
 
     Args:
-        path: Checksum-verified file of at most 8 MiB, held under a delivery lease.
+        path: Published immutable file held under a delivery lease.
 
     Returns:
         A feature collection, its bounds and common point, line or polygon symbol kind.

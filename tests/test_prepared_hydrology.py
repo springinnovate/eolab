@@ -1,8 +1,6 @@
-"""Current catalog hydrology sources and immutable historical Run YAML records."""
+"""Resolve configured hydrology sources without registration reports."""
 
 import asyncio
-import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from types import SimpleNamespace
@@ -14,7 +12,6 @@ import pytest
 import rasterio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 
@@ -23,17 +20,7 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
-from eolab_app.processing.prepared_hydrology import (
-    HydrologyGrid,
-    HydrologyRegistration,
-    PreparedHydrologyDefinition,
-    PreparedHydrologySnapshot,
-)
-from eolab_app.processing.model_yaml import (
-    compute_document_checksum,
-    export_yaml,
-    parse_yaml,
-)
+from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import ModelRunRequest
 from eolab_app.processing.models import ProcessingError
@@ -56,7 +43,7 @@ def prepare_sources(
     crs: str | None = "EPSG:4326",
     definition_changes: dict[str, Any] | None = None,
 ) -> tuple[
-    PreparedHydrologyDefinition,
+    HydrologySources,
     AuthorizedRaster,
     ResolvedCatalogSelection,
     VectorSamplingService,
@@ -142,11 +129,6 @@ def prepare_sources(
         )
     )
     document = {
-        "schema": "eolab.hydrology/v1",
-        "id": "example-network",
-        "version": "1.0.0",
-        "title": "Small eastward drainage",
-        "description": "Three connected watersheds over a sloping DEM.",
         "dem": {
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-111111111111111111111111",
@@ -162,14 +144,8 @@ def prepare_sources(
             "terminal": {"field": "next", "value": 0},
             "terminalIdField": "sink",
         },
-        "terrain": {
-            "routing": "mfd",
-            "elevationUnit": "metre",
-            "conditioning": "Synthetic eastward slope without pits",
-            "datasetVersion": "fixture-v1",
-        },
     }
-    definition = PreparedHydrologyDefinition.model_validate(
+    definition = HydrologySources.model_validate(
         {**document, **(definition_changes or {})}
     )
     return (
@@ -180,112 +156,25 @@ def prepare_sources(
     )
 
 
-def legacy_snapshot(
-    definition: PreparedHydrologyDefinition,
-    dem: AuthorizedRaster,
-    watersheds: ResolvedCatalogSelection,
-) -> PreparedHydrologySnapshot:
-    """Construct a historical report fixture without production registration code.
-
-    Args:
-        definition: Old configuration document retained in a saved run.
-        dem: Fixture elevation source.
-        watersheds: Fixture catalog vector source.
-
-    Returns:
-        Historical report with its original checksum contract.
-    """
-    with rasterio.open(dem.source_path) as dataset:
-        grid = HydrologyGrid(
-            crs=dataset.crs.to_string(),
-            transform=tuple(dataset.transform)[:6],
-            width=dataset.width,
-            height=dataset.height,
-            dtype=dataset.dtypes[0],
-        )
-    report = PreparedHydrologySnapshot.model_construct(
-        definition=definition,
-        demSignature=compute_document_checksum(dem.source_signature.to_catalog()),
-        watershedSelection=watersheds.selection,
-        validation=HydrologyRegistration(
-            validator="eolab.hydrology-registration/v1",
-            validatedAt=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            grid=grid,
-        ),
-        effectiveSha256="0" * 64,
-    )
-    return PreparedHydrologySnapshot.model_validate(
-        {
-            **report.model_dump(mode="json", by_alias=True),
-            "effectiveSha256": report.compute_effective_checksum(),
-        }
-    )
-
-
-@pytest.mark.parametrize(
-    "validator",
-    [
-        "eolab.hydrology-registration/v1",
-        "eolab.hydrology-validation/v1",
-        "eolab.hydrology-validation/v2",
-    ],
-)
-def test_historical_reports_keep_their_wire_checksum(
-    tmp_path: Path, validator: str
-) -> None:
-    """Read saved registration and validation records without migrating their bytes.
-
-    Args:
-        tmp_path: Isolated original source fixtures.
-        validator: Historical report schema retained in a saved Run YAML.
-    """
-    definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    report = legacy_snapshot(definition, dem, watersheds)
-    document = report.model_dump(mode="json", by_alias=True)
-    if "validation" in validator:
-        document["validation"].update(
-            validator=validator,
-            watershedCount=3,
-            terminalCount=1,
-            demCellsChecked=24 if validator.endswith("v1") else 0,
-            bounds={"west": 0.0, "south": 0.0, "east": 6.0, "north": 4.0},
-        )
-    payload = {
-        key: value for key, value in document.items() if key != "effectiveSha256"
-    }
-    payload["validation"] = {
-        key: value
-        for key, value in payload["validation"].items()
-        if key != "validatedAt"
-    }
-    document["effectiveSha256"] = compute_document_checksum(payload)
-    restored = PreparedHydrologySnapshot.model_validate(
-        parse_yaml(export_yaml(document, run=True), run=True)
-    )
-    assert restored.model_dump(mode="json", by_alias=True) == document
-    document["demSignature"] = "f" * 64
-    with pytest.raises(ValidationError, match="checksum"):
-        PreparedHydrologySnapshot.model_validate(document)
-
-
-def test_current_watershed_resolution_does_not_use_historical_signature(
+def test_current_watershed_resolution_preserves_catalog_binding(
     tmp_path: Path,
 ) -> None:
-    """A new run accepts current sources while an active run keeps its own identity.
+    """Resolve the configured watershed layer and reject substituted source bindings.
 
     Args:
         tmp_path: Isolated catalog vector and elevation fixtures.
     """
-    definition, dem, watersheds, reader = prepare_sources(tmp_path)
-    old_report = legacy_snapshot(definition, dem, watersheds)
-    path = tmp_path / "watersheds.gpkg"
-    stat = path.stat()
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    definition, _, watersheds, reader = prepare_sources(tmp_path)
     current = asyncio.run(reader.resolve_source(definition.watersheds))
-    assert current.selection != old_report.watershedSelection
+    assert current.selection == watersheds.selection
     assert not current.selection.filter.active
-    with pytest.raises(SelectionUnavailableError):
-        asyncio.run(reader.resolve_for_sampling(old_report.watershedSelection))
+    for field in ("assetKey", "layerName"):
+        with pytest.raises(SelectionUnavailableError, match="identity changed"):
+            asyncio.run(
+                reader.resolve_for_sampling(
+                    current.selection.model_copy(update={field: "other"})
+                )
+            )
     assert asyncio.run(reader.resolve_for_sampling(current.selection)) == current
 
 
@@ -355,6 +244,7 @@ def test_missing_configured_dem_names_the_unavailable_model_input(
     request = ModelRunRequest.model_validate(
         {
             "requestId": "b" * 32,
+            "utcOffsetMinutes": 0,
             "model": {
                 "id": model.id,
                 "version": model.version,

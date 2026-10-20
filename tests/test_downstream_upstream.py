@@ -176,7 +176,7 @@ def test_wrapper_matches_original_command_line(tmp_path: Path, case: str) -> Non
             }
             for i in range(1, 4)
         ]
-        topology = request.hydrology_sources.topology.model_dump(
+        topology = request.hydrology.topology.model_dump(
             by_alias=True, exclude_none=True
         )
         topology["terminal"] = {"field": "sink", "equalsField": "id"}

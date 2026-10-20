@@ -9,26 +9,10 @@ from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
 )
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
 )
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
-
-
-def source_signature(source_path: Path) -> RasterSourceIdentity:
-    """Identify one mounted file by content-relevant filesystem metadata.
-
-    Args:
-        source_path: Mounted GeoTIFF to identify.
-
-    Returns:
-        Typed inode, size, modification-time, and metadata-change identity.
-
-    Raises:
-        OSError: If the source metadata cannot be read.
-    """
-    return RasterSourceIdentity.read(source_path)
 
 
 class MountedRasterResolver:
@@ -107,22 +91,18 @@ class PublishedRasterRegistry:
 
     def __init__(self) -> None:
         """Create an empty process-local raster authorization registry."""
-        self._sources: dict[str, tuple[Path, RasterSourceIdentity]] = {}
+        self._layers: set[str] = set()
 
     def authorize(
         self,
         layer_name: str,
-        source_path: Path,
-        inspected_signature: RasterSourceIdentity,
     ) -> None:
         """Record authorization for a published immutable raster.
 
         Args:
             layer_name: Workspace-qualified GeoServer layer name.
-            source_path: Mounted GeoTIFF backing the layer.
-            inspected_signature: Source identity recorded in the catalog.
         """
-        self._sources[layer_name] = (source_path, inspected_signature)
+        self._layers.add(layer_name)
 
     def require_current(self, layer_name: str) -> PublishedRasterAuthorization:
         """Look up an authorized raster layer.
@@ -131,18 +111,16 @@ class PublishedRasterRegistry:
             layer_name: Workspace-qualified GeoServer layer name.
 
         Returns:
-            Canonical path and approved signature for the mounted GeoTIFF.
+            Raster-owned WMS request policy for the approved layer.
 
         Raises:
             PublishedLayerNotAuthorizedError: If the layer is not authorized.
         """
-        authorization = self._sources.get(layer_name)
-        if authorization is None:
+        if layer_name not in self._layers:
             raise PublishedLayerNotAuthorizedError(
                 "The WMS layer has not been approved for visualization"
             )
-        source_path, approved_signature = authorization
-        return PublishedRasterAuthorization(source_path, approved_signature)
+        return PublishedRasterAuthorization()
 
     def revoke(self, layer_name: str) -> None:
         """Forget one expired publication after its GeoServer cleanup completes.
@@ -150,4 +128,4 @@ class PublishedRasterRegistry:
         Args:
             layer_name: Exact workspace-qualified raster publication.
         """
-        self._sources.pop(layer_name, None)
+        self._layers.discard(layer_name)

@@ -80,14 +80,8 @@ async def prepare_raster_execution(
         Native source path and plan with an ephemeral resolved vector selection.
 
     Raises:
-        ProcessingError: If the source checksum or selection is unavailable.
+        ProcessingError: If the catalog selection is unavailable.
     """
-    if spec.sourceChecksum != context.source_checksum:
-        raise ProcessingError(
-            "source_changed",
-            "The prepared input does not match the accepted raster file.",
-            409,
-        )
     if spec.area.kind == "catalogSelection":
         if context.areas is None:
             raise ProcessingError(
@@ -100,27 +94,10 @@ async def prepare_raster_execution(
     return authorized.source_path, spec
 
 
-async def check_raster_execution(
-    context: OperationContext, spec: AggregateSpec | ClipSpec
-) -> None:
-    """Recheck vector selection identity after a summary or clip finishes.
-
-    Args:
-        context: Worker capabilities used to resolve the selection.
-        spec: Executed plan with its ephemeral resolved selection.
-
-    Raises:
-        SelectionUnavailableError: If the selected source changed or lost access.
-    """
-    if spec.area.kind == "catalogSelection":
-        await context.areas.resolve_for_sampling(spec.area.catalogSelection)
-
-
 class SummaryNumericalPolicy(BaseModel):
     """Numerical rules actually used by the native raster-summary operation.
 
     ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
-    None preserves historical run documents written before that declaration.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -133,14 +110,13 @@ class SummaryNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     groundArea: GroundAreaPlan | None = None
-    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"]
 
 
 class ClipNumericalPolicy(BaseModel):
     """Numerical rules actually used by the native raster-clip operation.
 
     ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
-    None preserves historical run documents written before that declaration.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -153,7 +129,7 @@ class ClipNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     overviewResampling: Literal["nearest"]
-    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"]
 
 
 async def prepare_summary(
@@ -166,7 +142,7 @@ async def prepare_summary(
     Args:
         context: Worker capabilities and resource limits for this attempt.
         queued: Validated summary inputs, including any owned polygon copy.
-        authorized: Source already authorized and signature-checked by the worker.
+        authorized: Source already authorized by the worker.
 
     Returns:
         Prepared summary plan and its disk reservation.
@@ -176,7 +152,11 @@ async def prepare_summary(
     """
     request = queued.request
     alias = next(iter(request.sources))
-    signature = tuple(authorized.source_signature.to_catalog())
+    signature = (
+        tuple(authorized.source_signature.to_catalog())
+        if authorized.source_signature is not None
+        else None
+    )
     resolved = None
     if request.catalogSelection:
         if context.areas is None:
@@ -242,8 +222,6 @@ async def prepare_summary(
         )
         if status != "ok":
             raise ProcessingError(*grid)
-        if resolved is not None:
-            await context.areas.resolve_for_sampling(request.catalogSelection)
         spec = AggregateSpec(
             sources=request.sources,
             sourceSignature=signature,
@@ -267,7 +245,7 @@ async def prepare_clip(
     Args:
         context: Worker capabilities and resource limits for this attempt.
         queued: Validated explicit clip inputs.
-        authorized: Source already authorized and signature-checked by the worker.
+        authorized: Source already authorized by the worker.
 
     Returns:
         Prepared clip plan and its disk reservation.
@@ -277,7 +255,11 @@ async def prepare_clip(
     """
     request = queued.request
     source = get_clip_source(queued)
-    signature = tuple(authorized.source_signature.to_catalog())
+    signature = (
+        tuple(authorized.source_signature.to_catalog())
+        if authorized.source_signature is not None
+        else None
+    )
     if request.selectedBounds:
         area = ClipArea(kind="bounds", bounds=request.selectedBounds.canonical_tuple())
     else:
@@ -307,8 +289,6 @@ async def prepare_clip(
     )
     if status != "ok":
         raise ProcessingError(*grid)
-    if request.catalogSelection:
-        await context.areas.resolve_for_sampling(request.catalogSelection)
     spec = ClipSpec(
         source=source,
         sourceSignature=signature,

@@ -48,9 +48,7 @@ from eolab_app.processing.raster_aggregate import (
 )
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_identity import RasterSourceIdentity
-from eolab_app.vector.models import ResolvedVectorSource
 from eolab_app.vector.selection_source import ogr_predicate
-from eolab_app.vector.sources import vector_source_signature
 
 _IMPORT_SECONDS = time.perf_counter() - _STARTED
 DEFAULT_RASTER = Path(
@@ -70,21 +68,13 @@ def prepare_selection(path: Path, layer: str) -> ResolvedCatalogSelection:
         layer: Native polygon layer containing a string iso3 field.
 
     Returns:
-        File-signature-fenced selection using the production predicate compiler.
+        Immutable selection using the production predicate compiler.
 
     Raises:
         OSError: If the source cannot be inspected.
         ValueError: If the source or predicate is incompatible.
         fiona.errors.FionaError: If the native layer cannot be opened.
     """
-    source = ResolvedVectorSource(
-        source_kind="mounted",
-        source_format="geopackage",
-        source_path=path,
-        asset_key="data",
-        layer_name=layer,
-    )
-    signature = vector_source_signature(source)
     candidate = VectorFilter(
         match="any",
         rules=tuple(
@@ -99,14 +89,12 @@ def prepare_selection(path: Path, layer: str) -> ResolvedCatalogSelection:
         itemId="benchmark-countries",
         assetKey="data",
         layerName=layer,
-        sourceSignature=hashlib.sha256(json.dumps(signature).encode()).hexdigest(),
         filter=candidate,
     )
     return ResolvedCatalogSelection(
         selection=selection,
         path=path,
         driver="GPKG",
-        components=tuple((path, tuple(values)) for _, *values in signature),
         where=ogr_predicate(candidate),
     )
 
@@ -186,10 +174,6 @@ def run_benchmark(raster: Path, vector: Path, layer: str) -> dict[str, Any]:
             "raster": str(raster),
             "rasterSignature": signature,
             "vector": str(vector),
-            "vectorComponents": [
-                {"path": str(path), "signature": values}
-                for path, values in resolved.components
-            ],
             "selection": resolved.selection.model_dump(by_alias=True),
         },
         "selectionSummary": summary,

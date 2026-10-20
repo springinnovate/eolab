@@ -121,11 +121,11 @@ def outline_case(tmp_path: Path) -> tuple[CatalogSelection, dict[str, Any], str]
         thread.join()
 
 
-@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("case", ["valid", "wrong-layer"])
 def test_registered_native_outline_preserves_algorithm_result(
     outline_case: tuple[CatalogSelection, dict[str, Any], str],
     tmp_path: Path,
-    stale: bool,
+    case: str,
 ) -> None:
     """Run the real registered operation/runner against HTTP Catalog and Fiona.
 
@@ -135,11 +135,12 @@ def test_registered_native_outline_preserves_algorithm_result(
     Args:
         outline_case: Real source, authorized descriptor and algorithm output.
         tmp_path: Source mount supplied to the native child.
-        stale: Submit an obsolete source signature instead of the current one.
+        case: Valid selection or a conflicting native layer.
     """
     selection, expected, url = outline_case
-    if stale:
-        selection = selection.model_copy(update={"sourceSignature": "f" * 64})
+    descriptor = selection.model_dump(mode="json", by_alias=True)
+    if case == "wrong-layer":
+        descriptor["layerName"] = "other"
     command = (
         "from pathlib import Path; "
         "from eolab_app.vector import outline_operation as op; "
@@ -153,7 +154,7 @@ def test_registered_native_outline_preserves_algorithm_result(
             {
                 "operation": "vector.outline.v1",
                 "inputs": {
-                    "selection": selection.model_dump(mode="json", by_alias=True),
+                    "selection": descriptor,
                 },
             }
         ).encode(),
@@ -162,7 +163,7 @@ def test_registered_native_outline_preserves_algorithm_result(
     )
     assert result.returncode == 0, result.stderr.decode()
     reply = json.loads(result.stdout)
-    if stale:
+    if case == "wrong-layer":
         assert reply == {"ok": False}
     else:
         assert reply == {
@@ -295,7 +296,7 @@ def test_explicit_configuration(
     assert token not in json.dumps(settings.as_public_dict())
 
 
-@pytest.mark.parametrize("outcome", ["success", "offline", "unauthorized", "stale"])
+@pytest.mark.parametrize("outcome", ["success", "offline", "unauthorized"])
 def test_application_routes_outlines_only_through_jobs(
     outline_case: tuple[CatalogSelection, dict[str, Any], str],
     tmp_path: Path,
@@ -312,7 +313,7 @@ def test_application_routes_outlines_only_through_jobs(
         monkeypatch: Sets deployment configuration and guards local execution.
         configured_environment: Complete app settings including private token.
         version_file_path: Application version file.
-        outcome: Successful reply, outage, rejected credential or changed source.
+        outcome: Successful reply, outage, or rejected credential.
     """
     selection, expected, catalog_url = outline_case
     monkeypatch.setenv("CATALOG_INTERNAL_URL", catalog_url)
@@ -334,11 +335,6 @@ def test_application_routes_outlines_only_through_jobs(
         if outcome in {"offline", "unauthorized"}:
             return httpx2.Response(503 if outcome == "offline" else 401)
         if request.url.path.endswith("/result"):
-            if outcome == "stale":
-                source = tmp_path / "polygons.gpkg"
-                # Appending changes its signature without replacing the source.
-                with source.open("ab") as stream:
-                    stream.write(b"changed")
             return httpx2.Response(200, json={"jobId": job_id, "value": expected})
         if request.method == "DELETE":
             return httpx2.Response(204)

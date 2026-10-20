@@ -6,7 +6,7 @@ export const model = {schema: "eolab.model/v1", id: "raster-summary", version: "
 export const raster = {collectionId: "eolab-mounted-geotiffs", itemId: "population", label: "Population", visible: true};
 export const area = {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}};
 export const invocation = {model: {...model, definition: model}, inputs: {raster: {collectionId: raster.collectionId, itemId: raster.itemId}, area}, parameters: {summary: "sum(a)"}, label: "Population total"};
-export const selection = {collectionId: "eolab-mounted-vectors", itemId: "watersheds", assetKey: "data", layerName: "basins", sourceSignature: "b".repeat(64),
+export const selection = {collectionId: "eolab-mounted-vectors", itemId: "watersheds", assetKey: "data", layerName: "basins",
     filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
 
 /** A recipe using downstream capabilities with input names chosen by YAML. */
@@ -19,11 +19,6 @@ export const downstreamModel = {...model, id: "downstream-beneficiaries", title:
     parameters: {summary: model.parameters.summary, buffer: {type: "number", label: "Buffer radius", unit: "m", minimum: 0, default: 5000},
         cutoff: {type: "optional_number", label: "Maximum straight-line distance", unit: "m", exclusiveMinimum: 0, default: null}}};
 
-/** Path-free report retained by runs created before hydrology was model-configured. */
-export const hydrology = {definition: {id: "prepared-region", version: "1.0.0", title: "Prepared regional terrain", description: "Terrain and connected watersheds for the region.",
-    dem: {collectionId: raster.collectionId, itemId: "prepared-dem"}, watersheds: {collectionId: selection.collectionId, itemId: "watersheds"},
-    topology: {idField: "HYBAS_ID", downstreamField: "NEXT_DOWN", terminal: {field: "NEXT_SINK", equalsField: "HYBAS_ID"}},
-    terrain: {datasetVersion: "2026", conditioning: "Pits already filled for routing."}}, validation: {validatedAt: "2026-10-10T00:00:00Z"}, effectiveSha256: "f".repeat(64)};
 /** Create an independent run status.
  * @param {Object} [changes={}] Overridden state or identity.
  * @return {Object} Model run response.
@@ -33,7 +28,10 @@ export function job(changes = {}) {
     const nameTimestamp = changes.nameTimestamp ?? "2026_10_08_00_00_00";
     return {jobId: "1".repeat(32), operation: "model.run.v1", model: {id: model.id, version: model.version, definitionSha256: model.definitionSha256, title: model.title},
         status: "queued", createdAt: "2026-10-08T00:00:00Z", updatedAt: "2026-10-08T00:00:00Z",
-        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null, ...changes,
+        expiresAt: null, metadataExpiresAt: null, progress: {phase: "preparing"}, result: null, error: null,
+        artifacts: {jobId: changes.jobId ?? "1".repeat(32), expiresAt: changes.expiresAt ?? null,
+            availability: ["queued", "running", "cancelling"].includes(changes.status ?? "queued") ? "pending" : "unavailable",
+            files: [], totalBytes: 0}, ...changes,
         name, nameTimestamp, label: `${name} · ${nameTimestamp}`};
 }
 

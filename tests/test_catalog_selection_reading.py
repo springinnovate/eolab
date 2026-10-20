@@ -14,6 +14,8 @@ from rasterio.features import geometry_mask
 from rasterio.transform import from_origin
 from rasterio.windows import Window, transform as window_transform
 from shapely.geometry import Polygon, box, mapping
+from shapely import constrained_delaunay_triangles, get_parts, union_all
+from shapely.geometry import shape
 
 from eolab_app.bounded_vector import (
     PolygonRasterizer,
@@ -27,7 +29,7 @@ from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregate
 from eolab_app.processing.ground_area import PixelAreaCalculator
 from eolab_app.raster.bounded_window import selected_raster_area_for_wgs84_polygons
 from eolab_app.vector.filters import VectorFilter
-from catalog_selection_support import write_selection
+from catalog_selection_support import owned_polygon_area, write_selection
 from test_raster_clips import write_source
 
 
@@ -64,7 +66,7 @@ def test_large_selection_reaches_all_numeric_consumers(
 ) -> None:
     """Compare 850 polygons in isolation from subsequent process-memory tests.
 
-    The complete historical geometry oracle intentionally allocates what the
+    The complete geometry oracle intentionally allocates what the
     streaming implementation avoids. Native allocators can retain that memory,
     affecting Linux child high-water RSS and legitimate worker recycling later.
 
@@ -87,7 +89,7 @@ def test_large_selection_reaches_all_numeric_consumers(
 
 
 def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
-    """Exercise every numeric consumer against complete historical geometry.
+    """Exercise every numeric consumer against complete fixture geometry.
 
     Args:
         tmp_path: Isolated mounted vectors, rasters, and operation outputs.
@@ -154,8 +156,10 @@ def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
     paired = read_raster_paired_statistics(path, path, None, catalog_selection=area)
     import eolab_app.raster.paired_statistics as paired_reader
 
-    def historical_mask(dataset: rasterio.io.DatasetReader, *unused: object) -> object:
-        """Return the old complete-geometry mask on the same paired reference grid.
+    def complete_geometry_mask(
+        dataset: rasterio.io.DatasetReader, *unused: object
+    ) -> object:
+        """Return the complete-geometry mask on the same paired reference grid.
 
         Args:
             dataset: The existing paired reader's open reference source.
@@ -170,7 +174,9 @@ def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
-            paired_reader, "selected_raster_area_for_catalog_selection", historical_mask
+            paired_reader,
+            "selected_raster_area_for_catalog_selection",
+            complete_geometry_mask,
         )
         baseline_paired = read_raster_paired_statistics(
             path, path, None, catalog_selection=area
@@ -217,16 +223,22 @@ def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
         assert np.array_equal(result.read_masks(1) > 0, masks[True])
         assert np.array_equal(result.read(1)[masks[True]], values[masks[True]])
 
-    historical = AggregateArea(
-        kind="aoi", bounds=summary["bbox"], geometries=tuple(geometries)
-    )
     with rasterio.open(path) as dataset:
-        baseline = PixelAreaCalculator(dataset, historical, RasterAggregateLimits())
         direct = PixelAreaCalculator(dataset, native_area, RasterAggregateLimits())
-        assert direct.window == baseline.window
+        expected = np.zeros(values.shape)
+        # Disjoint input polygons can be summed in upload-sized groups.
+        for start in range(0, len(geometries), 250):
+            baseline = PixelAreaCalculator(
+                dataset,
+                owned_polygon_area(geometries[start : start + 250]),
+                RasterAggregateLimits(),
+            )
+            expected[baseline.window.toslices()] += baseline.calculate_hectares(
+                baseline.window
+            )
         np.testing.assert_allclose(
             direct.calculate_hectares(direct.window),
-            baseline.calculate_hectares(baseline.window),
+            expected[direct.window.toslices()],
             rtol=1e-11,
             atol=1e-7,
         )
@@ -376,7 +388,7 @@ def test_streamed_masks_match_complete_exact_geometry(
         ("EPSG:4326", Affine(0.5, 0.02, 0, 0.02, -0.5, 8)),
     ],
 )
-def test_fractional_union_matches_historical_exact_area(
+def test_fractional_union_matches_owned_polygon_area(
     tmp_path: Path,
     crs: str,
     affine: Affine,
@@ -399,7 +411,17 @@ def test_fractional_union_matches_historical_exact_area(
         transform=affine,
         crs=crs,
     )
-    old = AggregateArea(kind="aoi", bounds=bounds, geometries=tuple(geometries))
+    # Triangulation represents the same union and holes with supported simple polygons.
+    reference = owned_polygon_area(
+        [
+            mapping(part)
+            for part in get_parts(
+                constrained_delaunay_triangles(
+                    union_all([shape(geometry) for geometry in geometries])
+                )
+            )
+        ]
+    )
     new = AggregateArea(
         kind="catalogSelection",
         bounds=bounds,
@@ -407,7 +429,7 @@ def test_fractional_union_matches_historical_exact_area(
         resolved=resolved,
     )
     with rasterio.open(path) as dataset:
-        baseline = PixelAreaCalculator(dataset, old, RasterAggregateLimits())
+        baseline = PixelAreaCalculator(dataset, reference, RasterAggregateLimits())
         direct = PixelAreaCalculator(dataset, new, RasterAggregateLimits())
         assert direct.window == baseline.window
         for y in range(
@@ -434,8 +456,12 @@ def test_fractional_union_matches_historical_exact_area(
                 )
 
 
-def test_predicate_source_signature_and_spatial_candidates(tmp_path: Path) -> None:
-    """Native pruning keeps exact selected values and rejects changed source files."""
+def test_predicate_and_spatial_candidates(tmp_path: Path) -> None:
+    """Native pruning keeps exact selected values without file-mutation checks.
+
+    Args:
+        tmp_path: Isolated source directory.
+    """
     candidate = VectorFilter(
         rules=[{"field": "selected", "operator": "eq", "value": 6060007000}]
     )
@@ -448,7 +474,6 @@ def test_predicate_source_signature_and_spatial_candidates(tmp_path: Path) -> No
     assert selection_summary(resolved)["matched"] == 2
     with polygon_features(resolved, (1.9, -1, 2.9, 1)) as features:
         assert len(list(features)) == 1
-    with resolved.path.open("ab") as source:
-        source.write(b"changed")
-    with pytest.raises(SelectionUnavailableError, match="changed"):
+    resolved.path.unlink()
+    with pytest.raises(SelectionUnavailableError, match="could not be read"):
         selection_summary(resolved)

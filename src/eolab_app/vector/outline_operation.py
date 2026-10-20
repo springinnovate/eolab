@@ -73,23 +73,23 @@ def calculate_outline(inputs: OutlineInput) -> OutlineResult:
         A simplified GeoJSON FeatureCollection and its bounding box.
 
     Raises:
-        SelectionUnavailableError: If Catalog/source identity changed.
+        SelectionUnavailableError: If the Catalog binding or source is unavailable.
         ValueError: If source reading or display validation fails.
     """
     return asyncio.run(_calculate_outline(inputs))
 
 
 async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
-    """Resolve before and after native work using the authoritative Catalog.
+    """Authorize the Catalog selection and read its immutable native source.
 
     Args:
         inputs: Validated operation inputs.
 
     Returns:
-        Source-rechecked display result.
+        Validated display result.
 
     Raises:
-        SelectionUnavailableError: For a changed identity or source.
+        SelectionUnavailableError: For an unavailable Catalog binding or source.
         ValueError: For invalid polygons or exceeded work budgets.
     """
     # The registry imports this module to list operations and validate requests.
@@ -115,9 +115,4 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
         result = OutlineResult.model_validate_json(
             json.dumps(build_outline(resolved), allow_nan=False)
         )
-        current = await resolve_selection(catalog, resolver, inputs.selection)
-        if current.selection != inputs.selection:
-            raise SelectionUnavailableError(
-                "The catalog vector identity changed; select it again."
-            )
         return result

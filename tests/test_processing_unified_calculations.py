@@ -27,6 +27,7 @@ from eolab_app.processing.service import ProcessingService
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import request_body, ENDPOINT
 from test_processing_jobs import write_geopackage_layer, register_selection
+from test_raster_clips import SOURCE
 import eolab_app.processing.worker as worker_module
 
 

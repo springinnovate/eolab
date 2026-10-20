@@ -5,7 +5,7 @@ import { catalogSelectionsEqual, validateCatalogSelection } from "../../src/sele
 
 const selection = {
     collectionId: "eolab-mounted-vectors", itemId: "source", assetKey: "data",
-    layerName: "polygons", sourceSignature: "a".repeat(64),
+    layerName: "polygons",
     filter: { enabled: true, match: "all", rules: [{ field: "NEXT_SINK", operator: "eq", value: 6060007000 }] },
 };
 
@@ -18,6 +18,13 @@ test("selection identity ignores object property order and copies immutable rule
     assert.equal(normalized.filter.rules[0].value, 6060007000);
     assert.equal(catalogSelectionsEqual(selection, reordered), false);
     assert.equal(Object.isFrozen(normalized.filter.rules[0]), true);
+});
+
+test("selection identity accepts only catalog identifiers and a filter", () => {
+    assert.deepEqual(validateCatalogSelection(selection), selection);
+    assert.equal(catalogSelectionsEqual(selection, { ...selection, layerName: "other" }), false);
+    assert.throws(() => validateCatalogSelection({ ...selection, path: "/private/source" }), TypeError);
+    assert.throws(() => validateCatalogSelection({ ...selection, sourceSignature: "a".repeat(64) }), TypeError);
 });
 
 test("a failed optional outline neither mutates nor invalidates the analysis descriptor", async (t) => {

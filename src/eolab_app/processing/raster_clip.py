@@ -55,9 +55,9 @@ def _select_clip_area(
         dataset,
         area.kind,
         area.bounds,
-        area.geometries,
-        None,
-        area.resolved,
+        geometries=(),
+        max_coordinates=None,
+        resolved=area.resolved,
     )
 
 
@@ -192,6 +192,7 @@ def create_clip(
                         {
                             "EOLAB_ITEM": spec.source.item_id,
                             "EOLAB_COLLECTION": spec.source.collection_id,
+                            "EOLAB_SOURCE_SIGNATURE": json.dumps(spec.sourceSignature),
                         }
                         if isinstance(spec.source, CatalogRasterRequest)
                         else {
@@ -202,7 +203,6 @@ def create_clip(
                         }
                     ),
                     EOLAB_MASK_RULE="all_touched",
-                    EOLAB_SOURCE_SIGNATURE=json.dumps(spec.sourceSignature),
                     EOLAB_AREA_BOUNDS=json.dumps(spec.area.bounds),
                     EOLAB_AREA_KIND=spec.area.kind,
                 )
@@ -306,7 +306,11 @@ def create_clip(
     provenance = {
         "operation": spec.operation,
         "source": spec.source.model_dump(by_alias=True),
-        "sourceSignature": spec.sourceSignature,
+        **(
+            {"sourceSignature": spec.sourceSignature}
+            if spec.sourceSignature is not None
+            else {}
+        ),
         **({"sourceChecksum": spec.sourceChecksum} if spec.sourceChecksum else {}),
         "area": spec.area.model_dump(),
         "grid": spec.grid.model_dump(),

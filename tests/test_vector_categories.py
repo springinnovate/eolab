@@ -171,15 +171,15 @@ def test_fiona_reader_is_feature_bounded_and_cooperatively_cancelled(
     assert empty.complete is False
 
 
-def test_category_service_rejects_stale_sources_and_non_scalar_fields(
+def test_category_service_rejects_non_scalar_fields_and_incorrect_row_counts(
     tmp_path: Path,
 ) -> None:
-    """Recheck assessment signatures and reject date fields at the owner.
+    """Validate field types and external reader counts against Catalog metadata.
 
     Args:
         tmp_path: Isolated mounted source root.
     """
-    item, source_path = assessed_category_item(tmp_path)
+    item, _ = assessed_category_item(tmp_path)
     service = category_service(item, tmp_path)
     date_request = CatalogVectorCategoryRequest(
         collectionId=item["collection"],
@@ -189,19 +189,7 @@ def test_category_service_rejects_stale_sources_and_non_scalar_fields(
     with pytest.raises(VectorConflictError, match="text, integer, number"):
         asyncio.run(service.summarize_categories(date_request))
 
-    with fiona.open(source_path, mode="a", layer="categories") as dataset:
-        dataset.write({
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[(0, 0), (1, 0), (1, 1), (0, 0)]],
-            },
-            "properties": {
-                "category": "changed",
-                "rank": 1,
-                "score": 1.0,
-                "observed": "2026-09-01",
-            },
-        })
+    item["properties"]["table:row_count"] += 1
     category_request = CatalogVectorCategoryRequest(
         collectionId=item["collection"],
         itemId=item["id"],

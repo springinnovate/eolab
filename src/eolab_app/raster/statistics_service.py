@@ -294,10 +294,6 @@ class RasterStatisticsService:
                 )
 
         if cached is not None:
-            try:
-                await self._require_current_sampling_area(sampling_area)
-            except SelectionUnavailableError as error:
-                raise RasterConflictError(error.detail) from error
             return cast(RasterStatistics, cached)
 
         if work is None:
@@ -431,10 +427,6 @@ class RasterStatisticsService:
                 )
 
         if cached is not None:
-            try:
-                await self._require_current_sampling_area(sampling_area)
-            except SelectionUnavailableError as error:
-                raise RasterConflictError(error.detail) from error
             return cast(RasterPairedStatistics, cached)
         if work is None:
             raise RuntimeError("Paired raster statistics work was not established")
@@ -571,13 +563,14 @@ class RasterStatisticsService:
             selected_bounds: Optional canonical WGS 84 sampling rectangle.
             cache_key: Ordered identities, signatures, bounds, and policy.
             cancellation_requested: Thread-safe last-waiter signal.
-            sampling_area: Resolved lifecycle identity rechecked around reads.
+            sampling_area: Authorized immutable selection or rectangular sampling area.
 
         Returns:
             Newly computed bounded paired statistics.
 
         Raises:
-            RasterConflictError: If either source changes around the read.
+            RasterConflictError: If a private native reader fails or times out.
+            SelectionUnavailableError: If the selected vector cannot be read.
             NoRasterBoundsOverlapError: If pair/bounds do not overlap.
             NoValidRasterSamplesError: If no paired finite cells exist.
             RasterReadCancelled: If every request waiter disconnects.
@@ -588,7 +581,6 @@ class RasterStatisticsService:
         try:
             async with self._wait_for_read_capacity(cache_key):
                 require_active_raster_read(cancellation_requested.is_set)
-                await self._require_current_sampling_area(sampling_area)
                 options = (
                     {"catalog_selection": sampling_area}
                     if isinstance(sampling_area, CatalogSelectionSamplingArea)
@@ -604,7 +596,6 @@ class RasterStatisticsService:
                     None if private else cancellation_requested.is_set,
                 )
                 require_active_raster_read(cancellation_requested.is_set)
-                await self._require_current_sampling_area(sampling_area)
                 async with self._state_lock:
                     work = self._inflight.get(cache_key)
                     if (
@@ -680,19 +671,18 @@ class RasterStatisticsService:
             Newly computed bounded raster statistics.
 
         Raises:
-            RasterConflictError: If the source changes around the read.
-            SelectionUnavailableError: If the Catalog source identity changes.
+            RasterConflictError: If a private native reader fails or times out.
+            SelectionUnavailableError: If the selected vector cannot be read.
             NoRasterBoundsOverlapError: If selected geometry misses the raster.
             NoValidRasterSamplesError: If no finite sample values exist.
             RasterReadCancelled: If every request waiter disconnects.
-            OSError: If source identity or pixels cannot be read.
+            OSError: If source pixels cannot be read.
             rasterio.errors.RasterioError: If GDAL cannot read the source.
             ValueError: If source or sampling contracts are invalid.
         """
         try:
             async with self._wait_for_read_capacity(cache_key):
                 require_active_raster_read(cancellation_requested.is_set)
-                await self._require_current_sampling_area(sampling_area)
                 execute = (
                     read_private_raster
                     if authorized_raster.private
@@ -716,7 +706,6 @@ class RasterStatisticsService:
                     ),
                 )
                 require_active_raster_read(cancellation_requested.is_set)
-                await self._require_current_sampling_area(sampling_area)
                 async with self._state_lock:
                     work = self._inflight.get(cache_key)
                     if (
@@ -791,35 +780,6 @@ class RasterStatisticsService:
             request.catalog_selection
         )
         return CatalogSelectionSamplingArea(resolved)
-
-    async def _require_current_sampling_area(
-        self,
-        sampling_area: RasterSamplingArea,
-    ) -> None:
-        """Recheck catalog-vector source identity around a raster read.
-
-        Args:
-            sampling_area: Sampling area resolved at request start.
-
-        Returns:
-            None after confirming the current catalog source, or for a box/whole area.
-
-        Raises:
-            SelectionUnavailableError: If the Catalog source is unavailable or its immutable identity changed.
-        """
-        if not isinstance(sampling_area, CatalogSelectionSamplingArea):
-            return
-        if self._catalog_selection_reader is None:
-            raise SelectionUnavailableError(
-                "Catalog vector sampling is not available. Use the whole raster."
-            )
-        current = await self._catalog_selection_reader.resolve_for_sampling(
-            sampling_area.resolved.selection
-        )
-        if current.selection != sampling_area.resolved.selection:
-            raise SelectionUnavailableError(
-                "The catalog vector changed while it was being sampled. Try again."
-            )
 
     def _retrieve_task_exception(
         self,

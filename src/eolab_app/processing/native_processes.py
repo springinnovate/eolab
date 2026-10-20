@@ -6,11 +6,10 @@ from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.raster_aggregate import aggregate_process_target
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.downstream_calculation import downstream_process_target
-from eolab_app.source_files import verify_source_file
 
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
-    """Configure a reusable native process for calculations and source checks.
+    """Configure a reusable native process for Processing calculations.
 
     Args:
         limits: Shared Processing policy; native calculations have no memory or
@@ -28,7 +27,6 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
             aggregate_process_target,
             downstream_process_target,
             summary_process,
-            verify_source_file,
         ),
         recycle_bytes=1024**3,
     )

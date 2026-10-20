@@ -4,10 +4,8 @@ import { ModelsController } from "../../src/models/controller.js";
 import { ModelsView } from "../../src/models/view.js";
 import { captureModelSubmission, modelSourceKey } from "../../src/models/inputs.js";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { hydrologyReference } from "../../src/processing/hydrology.js";
-import { hydrologyDetails } from "../../src/models/hydrology-view.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { downstreamModel, hydrology, raster, selection, job, fileManifest } from "../../test-support/models/fixtures.js";
+import { downstreamModel, raster, selection, job, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Flush asynchronous discovery and selection callbacks.
  * @return {Promise<void>} Resolves after pending promise reactions.
@@ -159,25 +157,4 @@ test("saved model-configured runs need only their captured recipe and user input
     }, null);
     assert.deepEqual(await api.readModelInvocation(job().jobId), saved);
     assert.deepEqual(calls, ["/api/processing/jobs", `/api/processing/jobs/${job().jobId}/invocation`]);
-});
-
-test("historical hydrology reports remain readable and must match their saved input revision", async () => {
-    const historicalModel = {...downstreamModel, inputs: {...downstreamModel.inputs, terrain: {type: "prepared_hydrology", label: "Prepared hydrology"}}};
-    const saved = {model: {...historicalModel, definition: historicalModel}, label: "Original run", parameters: {},
-        inputs: {terrain: hydrologyReference(hydrology)}, hydrology: {terrain: structuredClone(hydrology)}};
-    const api = new ProcessingApiClient(async url => new Response(JSON.stringify(url.endsWith("/jobs") ? {jobs: []} : saved)), null);
-    assert.deepEqual((await api.readModelInvocation(job().jobId)).hydrology.terrain, hydrology);
-    saved.hydrology.terrain.effectiveSha256 = "e".repeat(64);
-    await assert.rejects(api.readModelInvocation(job().jobId), /does not match/);
-    delete saved.hydrology.terrain;
-    await assert.rejects(api.readModelInvocation(job().jobId), /Invalid prepared hydrology details/);
-});
-
-test("historical hydrology details stay read-only", () => {
-    const registered = structuredClone(hydrology);
-    registered.validation.validator = "eolab.hydrology-registration/v1";
-    const rows = hydrologyDetails(registered);
-    assert.ok(rows.some(([label]) => label === "Registered"));
-    assert.ok(!rows.some(([label]) => label === "Validated"));
-    assert.ok(rows.some(([, value]) => /NEXT_SINK equals HYBAS_ID/.test(value)));
 });

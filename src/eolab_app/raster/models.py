@@ -48,19 +48,19 @@ def _exclude_none_from_response(value: object) -> bool:
 
 @dataclass(frozen=True)
 class AuthorizedRaster:
-    """Current mounted source approved for one public raster operation.
+    """Immutable raster source approved for reading.
 
-    Authorization establishes scanner-owned catalog identity and a path
-    confined to the raster mount. Raster inputs are immutable. It
-    does not select or approve WMS, sample-grid, statistics, or pixel rendering.
+    Authorization establishes a confined path and either catalog identity or
+    access to a published file. It does not select or approve WMS, sample-grid,
+    statistics, or pixel rendering.
 
     Attributes:
-        source_path: Canonical mounted GeoTIFF path.
-        source_signature: Filesystem identity approved at the source boundary.
+        source_path: Canonical authorized GeoTIFF path.
+        source_signature: Captured catalog identity, or None for a published file.
     """
 
     source_path: Path
-    source_signature: RasterSourceIdentity
+    source_signature: RasterSourceIdentity | None
 
 
 @dataclass(frozen=True)

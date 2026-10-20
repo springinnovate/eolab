@@ -15,8 +15,7 @@ from eolab_app.raster.geoserver import (
 )
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.publication import RasterPublicationService
-from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
-
+from eolab_app.raster.sources import PublishedRasterRegistry
 
 RESOURCE_NAME = "geotiff-0123456789abcdef01234567"
 
@@ -228,11 +227,6 @@ def _catalog_item(source_path: Path) -> dict[str, object]:
         "assets": {
             "data": {
                 "href": source_path.as_uri(),
-                "eolab:source": {
-                    "source_signature": source_signature(
-                        source_path
-                    ).to_catalog(),
-                },
             }
         },
     }
@@ -282,7 +276,7 @@ async def _publish_adapter(
 def test_publication_coordinates_upstream_contract_and_authorization(
     tmp_path: Path,
 ) -> None:
-    """Authorize exactly the source inspected before publication.
+    """Publish the resolved source without requiring a catalog fingerprint.
 
     Args:
         tmp_path: Temporary directory containing the controlled source.
@@ -305,7 +299,7 @@ def test_publication_coordinates_upstream_contract_and_authorization(
 
     assert result.layer_name == f"eolab:{RESOURCE_NAME}"
     assert publisher.calls == [(RESOURCE_NAME, source_path)]
-    assert registry.require_current(result.layer_name).source_path == source_path
+    assert registry.require_current(result.layer_name).style_name == "dynamic-raster"
 
 
 def test_clean_publication_creates_verifies_and_styles_exactly_once(
@@ -577,7 +571,7 @@ def test_app_restart_reauthorizes_existing_complete_publication(
 
     result = asyncio.run(publish())
 
-    assert registry.require_current(result.layer_name).source_path == source_path
+    assert registry.require_current(result.layer_name).style_name == "dynamic-raster"
     assert not any(
         request.url.path.endswith("/external.geotiff")
         for request in scenario.requests

@@ -8,7 +8,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
 from eolab_app.processing.polygon_areas import PolygonAreaReference
@@ -28,10 +28,10 @@ from eolab_app.processing.downstream_models import (
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
-    DownstreamPolicy,
+    ClosedEdgeDownstreamNumericalPolicy,
     StartingMask,
 )
-from eolab_app.processing.prepared_hydrology import HydrologyReference, HydrologySources
+from eolab_app.processing.prepared_hydrology import HydrologySources
 
 Request = TypeVar("Request", bound=BaseModel)
 Queued = TypeVar("Queued", bound=BaseModel)
@@ -74,7 +74,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         output: Primary result contract, required by every recipe using this operation.
         additional_outputs: Other complete files recipes may explicitly retain.
         execution_profile: Server resource policy required by compatible recipes.
-        reuse_prepared_source: Whether immediate execution reuses preparation authorization.
         queued_type: Persisted input schema before preparation.
         prepared_type: Persisted execution schema after preparation.
         policy_type: Schema validating recorded numerical implementation facts.
@@ -92,12 +91,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         primary_input: Argument bound to the main raster source and its grid metadata.
         extra_sources: Additional catalog rasters to capture and check with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
-        check_execution: Recheck vector access and identity before result publication.
         fixed_input_models: Argument names and schemas for values fixed in Model YAML.
         input_adapters: Additional operation-owned types accepted by selected inputs.
-        validate_invocation: Validate captured operation metadata using input role
-            types, selected values and extra fields; return canonical JSON fields.
-            Operations without this callback accept no extra invocation fields.
         progress_descriptions: Native phase names and their plain user-facing
             descriptions, each containing non-whitespace text up to 200 characters.
             Missing phases use the client's generic running-state description.
@@ -109,7 +104,6 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     parameters: tuple[tuple[str, str], ...]
     output: OperationOutput
     execution_profile: str
-    reuse_prepared_source: bool
     queued_type: type[Queued]
     prepared_type: type[Prepared]
     policy_type: type[BaseModel]
@@ -142,25 +136,14 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     execution_inputs: Callable[
         [OperationContext, Prepared, AuthorizedRaster], Awaitable[tuple[Any, Prepared]]
     ] = raster.prepare_raster_execution
-    check_execution: Callable[[OperationContext, Prepared], Awaitable[None]] = (
-        raster.check_raster_execution
-    )
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
-    validate_invocation: (
-        Callable[
-            [dict[str, str], dict[str, JsonValue], dict[str, JsonValue]],
-            dict[str, JsonValue],
-        ]
-        | None
-    ) = None
-
     progress_descriptions: tuple[tuple[str, str], ...] = ()
 
     def parse_specification(
         self, value: BaseModel | dict[str, Any]
     ) -> Queued | Prepared:
-        """Validate queued or prepared data against this operation's stored contract.
+        """Parse stored operation data or reuse its validated specification.
 
         Args:
             value: Persisted operation specification or its validated model instance.
@@ -171,14 +154,11 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         Raises:
             ValueError: If persisted fields or operation identity are invalid.
         """
-        data = (
-            value.model_dump(mode="json", by_alias=True)
-            if isinstance(value, BaseModel)
-            else value
-        )
+        if isinstance(value, (self.queued_type, self.prepared_type)):
+            return value
         return (
-            self.queued_type if "request" in data else self.prepared_type
-        ).model_validate(data)
+            self.queued_type if "request" in value else self.prepared_type
+        ).model_validate(value)
 
 
 OPERATIONS = MappingProxyType(
@@ -189,7 +169,7 @@ OPERATIONS = MappingProxyType(
                 id="hydrology.downstream_beneficiaries.v1",
                 inputs=(
                     ("starting_mask", "mask_source"),
-                    ("hydrology", "prepared_hydrology"),
+                    ("hydrology", "hydrology_sources"),
                     ("values", "raster"),
                 ),
                 parameters=(
@@ -236,10 +216,9 @@ OPERATIONS = MappingProxyType(
                     ),
                 ),
                 execution_profile="downstream-small-region",
-                reuse_prepared_source=False,
                 queued_type=QueuedDownstream,
                 prepared_type=DownstreamPlan,
-                policy_type=DownstreamPolicy,
+                policy_type=ClosedEdgeDownstreamNumericalPolicy,
                 bind=downstream.bind_downstream,
                 source=downstream.get_values_source,
                 polygon=downstream.get_uploaded_polygon,
@@ -252,13 +231,8 @@ OPERATIONS = MappingProxyType(
                 primary_input="values",
                 extra_sources=downstream.get_additional_sources,
                 execution_inputs=downstream.resolve_downstream_execution_inputs,
-                check_execution=downstream.check_downstream_execution,
                 fixed_input_models=(("hydrology", HydrologySources),),
-                input_adapters=(
-                    ("mask_source", TypeAdapter(StartingMask)),
-                    ("prepared_hydrology", TypeAdapter(HydrologyReference)),
-                ),
-                validate_invocation=downstream.validate_downstream_invocation,
+                input_adapters=(("mask_source", TypeAdapter(StartingMask)),),
                 progress_descriptions=downstream.DOWNSTREAM_PROGRESS_DESCRIPTIONS,
             ),
             ModelOperation[AggregateJobRequest, UnpreparedCalculation, AggregateSpec](
@@ -269,7 +243,6 @@ OPERATIONS = MappingProxyType(
                     "statistics", "statistics", "table", "text/csv", "Statistics"
                 ),
                 execution_profile="raster-summary",
-                reuse_prepared_source=True,
                 queued_type=UnpreparedCalculation,
                 prepared_type=AggregateSpec,
                 policy_type=raster.SummaryNumericalPolicy,
@@ -294,7 +267,6 @@ OPERATIONS = MappingProxyType(
                     "raster", "raster", "map", "image/tiff", "Raster"
                 ),
                 execution_profile="raster-clip",
-                reuse_prepared_source=False,
                 queued_type=UnpreparedClip,
                 prepared_type=ClipSpec,
                 policy_type=raster.ClipNumericalPolicy,

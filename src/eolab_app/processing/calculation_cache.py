@@ -11,7 +11,6 @@ from eolab_app.processing.aggregate_models import (
     AggregateValue,
     AggregatePlanRequest,
     AggregateArea,
-    AggregateGrid,
 )
 from eolab_app.processing.raster_expression import compile_expression, walk
 
@@ -28,9 +27,10 @@ def calculation_result_cache_keys(
 
     Args:
         calculation: Validated request before planning, or a completed job plan.
-        source_signature: Authorized raster metadata, required for a request.
-            Stored plans already contain this metadata.
-        source_checksum: Verified published checksum when the input is a private file.
+        source_signature: Captured metadata for a catalog raster request.
+            Private files use their published checksum; stored plans carry the
+            identity appropriate to their source.
+        source_checksum: Published checksum when the input is a private file.
 
     Returns:
         One hash per formula. Identity includes the immutable raster, exact
@@ -39,7 +39,7 @@ def calculation_result_cache_keys(
         formula whitespace and resource estimates do not affect matching.
 
     Raises:
-        ValueError: If a request has no authorized source metadata.
+        ValueError: If a request has neither catalog identity nor a published checksum.
         ProcessingError: If a stored expression is invalid.
     """
     alias, source = next(iter(calculation.sources.items()))
@@ -58,8 +58,8 @@ def calculation_result_cache_keys(
             else None
         )
     else:
-        if source_signature is None:
-            raise ValueError("Authorized raster metadata is required")
+        if source_signature is None and source_checksum is None:
+            raise ValueError("Catalog identity or a published checksum is required")
         if calculation.polygonArea is not None:
             area = {"kind": "polygons", "geometryHash": calculation.polygonArea.sha256}
         elif calculation.catalogSelection is not None:
@@ -85,13 +85,14 @@ def calculation_result_cache_keys(
     common = {
         "version": CALCULATION_CACHE_VERSION,
         "source": source.model_dump(mode="json", by_alias=True),
-        "sourceSignature": source_signature,
         "area": area,
         "targetChunkPixels": target_chunk_pixels,
         "usesAreaWeights": any(
             node.op == "areaha" for root in roots for node in walk(root)
         ),
     }
+    if source_signature is not None:
+        common["sourceSignature"] = source_signature
     if source_checksum is not None:
         common["sourceChecksum"] = source_checksum
     if calculation.pixelPoint is not None and any(
@@ -167,9 +168,6 @@ def prepare_calculation_values_for_cache(
         ValidationError: If a completed result violates the numerical result contract.
     """
 
-    if calculation_plan.area.kind == "aoi":
-        # Historical jobs contain geometry snapshots, which this cache must not retain.
-        return {}
     return {
         key: {
             "row": AggregateValue.model_validate(row).model_dump(
@@ -192,7 +190,7 @@ def prepare_calculation_values_for_cache(
 
 def restore_cached_calculation_plan(
     request: AggregatePlanRequest,
-    source_signature: tuple[int, int, int, int],
+    source_signature: tuple[int, int, int, int] | None,
     cached_results: dict[str, dict[str, object]],
     polygon_area: AggregateArea | None = None,
     source_checksum: str | None = None,
@@ -201,10 +199,10 @@ def restore_cached_calculation_plan(
 
     Args:
         request: Validated formulas and area whose sources are authorized.
-        source_signature: Current authorized raster metadata.
+        source_signature: Captured catalog metadata, or None for a private file.
         cached_results: Unexpired cache entries indexed by requested input hash.
         polygon_area: Authorized polygon input, kept out of shared result-cache records.
-        source_checksum: Verified published identity for a private raster input.
+        source_checksum: Published identity for a private raster input.
 
     Returns:
         A plan retaining all requested values, or None for a missing, malformed
@@ -216,12 +214,6 @@ def restore_cached_calculation_plan(
     if any(entry is None for entry in entries):
         return None
     try:
-        area = (
-            polygon_area
-            if request.polygonArea
-            else AggregateArea.model_validate(entries[0]["area"])
-        )
-        grid = AggregateGrid.model_validate(entries[0]["grid"])
         if any(
             entry["area"] != entries[0]["area"] or entry["grid"] != entries[0]["grid"]
             for entry in entries[1:]
@@ -233,16 +225,21 @@ def restore_cached_calculation_plan(
             sourceChecksum=source_checksum,
             calculations=request.calculations,
             pixelPoint=request.pixelPoint,
-            area=area,
-            grid=grid,
+            area=polygon_area if request.polygonArea else entries[0]["area"],
+            grid=entries[0]["grid"],
+            cachedRows=tuple(
+                {
+                    **entry["row"],
+                    "label": calculation.label,
+                    "expression": calculation.expression,
+                }
+                for entry, calculation in zip(
+                    entries, request.calculations, strict=True
+                )
+            ),
         )
         if calculation_result_cache_keys(plan) != keys:
             return None
-        rows = restore_cached_calculation_rows(plan, cached_results)
-        if rows is None:
-            return None
-        return AggregateSpec(
-            **{**plan.model_dump(mode="json", by_alias=True), "cachedRows": rows}
-        )
+        return plan
     except (ValidationError, TypeError, KeyError):
         return None

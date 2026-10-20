@@ -124,8 +124,8 @@ test("RasterStatisticsController retains its Item for a recoverable retry", asyn
   assert.deepEqual(results, [RASTER_STATISTICS]);
 });
 
-test("RasterStatisticsController aborts and ignores a superseded catalog predicate", async () => {
-  const replacementId = { ...CATALOG_SELECTION, sourceSignature: "b".repeat(64) };
+test("RasterStatisticsController aborts and ignores a superseded catalog selection", async () => {
+  const replacementId = { ...CATALOG_SELECTION, itemId: "other-countries" };
   const requests = [];
   const results = [];
   const controller = new RasterStatisticsController(

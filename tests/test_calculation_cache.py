@@ -134,6 +134,67 @@ def test_cache_ignores_titles_whitespace_and_formula_order(
     assert cache.calculation_result_cache_keys(single) == keys[:1]
 
 
+def test_private_cache_uses_published_identity_without_filesystem_signature(
+    calculation_plan: AggregateSpec, tmp_path: Path
+) -> None:
+    """Restore private results by their published file and checksum alone.
+
+    Args:
+        calculation_plan: Native plan supplying the grid and formulas.
+        tmp_path: Source raster and calculation output directory.
+    """
+    source = {"kind": "runArtifact", "jobId": "a" * 32, "artifactId": "b" * 32}
+    checksum = "c" * 64
+    document = calculation_plan.model_dump(mode="json", by_alias=True)
+    document.pop("sourceSignature")
+    plan = AggregateSpec.model_validate(
+        {**document, "sources": {"a": source}, "sourceChecksum": checksum}
+    )
+    request = AggregatePlanRequest(
+        sources=plan.sources, calculations=plan.calculations, wholeRaster=True
+    )
+    keys = cache.calculation_result_cache_keys(request, None, checksum)
+    assert keys == cache.calculation_result_cache_keys(plan)
+    assert "sourceSignature" not in plan.model_dump(mode="json", by_alias=True)
+    artifact = calculate_raster_statistics_for_area(
+        tmp_path / "source.tif", plan, tmp_path, LIMITS
+    )
+    saved = cache.prepare_calculation_values_for_cache(plan, artifact.rows)
+    restored = cache.restore_cached_calculation_plan(
+        request, None, saved, source_checksum=checksum
+    )
+    assert restored is not None
+    assert restored.sources == plan.sources
+    assert restored.sourceChecksum == checksum
+    assert restored.sourceSignature is None
+    assert [row.value for row in restored.cachedRows] == [
+        row["value"] for row in artifact.rows
+    ]
+    assert cache.calculation_result_cache_keys(restored) == keys
+    provenance = json.loads((tmp_path / "provenance.json").read_text())
+    assert "sourceSignature" not in provenance
+    assert provenance["sourceChecksum"] == checksum
+    for changed_source, changed_checksum in (
+        ({**source, "jobId": "d" * 32}, checksum),
+        ({**source, "artifactId": "e" * 32}, checksum),
+        (source, "f" * 64),
+    ):
+        changed = AggregatePlanRequest(
+            sources={"a": changed_source},
+            calculations=plan.calculations,
+            wholeRaster=True,
+        )
+        assert (
+            cache.calculation_result_cache_keys(changed, None, changed_checksum) != keys
+        )
+        assert (
+            cache.restore_cached_calculation_plan(
+                changed, None, saved, source_checksum=changed_checksum
+            )
+            is None
+        )
+
+
 @pytest.mark.parametrize("mixed", [False, True])
 def test_pixel_cache_and_shared_work_retain_exact_location(
     tmp_path: Path, mixed: bool
@@ -310,7 +371,6 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
         itemId="countries",
         assetKey="data",
         layerName="countries",
-        sourceSignature="a" * 64,
         filter=VectorFilter(
             enabled=True,
             match="all",
@@ -322,9 +382,16 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
     )
     plan = calculation_plan.model_copy(update={"area": area})
     expected = cache.calculation_result_cache_keys(plan)
+    request = AggregatePlanRequest(
+        sources=plan.sources, calculations=plan.calculations, catalogSelection=selection
+    )
+    assert (
+        cache.calculation_result_cache_keys(request, plan.sourceSignature) == expected
+    )
+    expected_work = identify_shared_calculation(UnpreparedCalculation(request=request))
     for update in (
         {"item_id": "different-vector"},
-        {"sourceSignature": "b" * 64},
+        {"assetKey": "other-data"},
         {"layerName": "other"},
         {
             "filter": VectorFilter(
@@ -342,6 +409,16 @@ def test_vector_filter_source_and_layer_are_part_of_cache_identity(
                 plan.model_copy(update={"area": changed_area})
             )
             != expected
+        )
+        assert (
+            identify_shared_calculation(
+                UnpreparedCalculation(
+                    request=request.model_copy(
+                        update={"catalogSelection": changed_area.catalogSelection}
+                    )
+                )
+            )
+            != expected_work
         )
 
 
@@ -473,7 +550,6 @@ def test_cache_hit_skips_planning_and_pins_values(
                 itemId="countries",
                 assetKey="data",
                 layerName="countries",
-                sourceSignature="a" * 64,
                 filter={"enabled": False, "match": "all", "rules": []},
             ),
         )
@@ -541,7 +617,11 @@ def test_cache_hit_skips_planning_and_pins_values(
         side_effect=AssertionError("Cache reuse must not inspect raster metadata")
     )
     monkeypatch.setattr(worker_module, "run_process", forbidden)
-    asyncio.run(worker._prepare_operation(row))
+    asyncio.run(
+        worker._prepare_operation(
+            row, UnpreparedCalculation.model_validate(row["spec"]), None
+        )
+    )
     forbidden.assert_not_called()
     retained = AggregateSpec.model_validate(row["spec"])
     assert retained.cachedRows[0].value == "42"
@@ -561,7 +641,11 @@ def test_cache_hit_skips_planning_and_pins_values(
         mode="json", by_alias=True
     )
     with pytest.raises(ProcessingError):
-        asyncio.run(worker._prepare_operation(row))
+        asyncio.run(
+            worker._prepare_operation(
+                row, UnpreparedCalculation.model_validate(row["spec"]), None
+            )
+        )
 
 
 def test_partial_or_malformed_cache_still_requires_normal_planning(

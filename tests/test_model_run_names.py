@@ -31,12 +31,12 @@ def named_run(**presentation: Any) -> dict[str, Any]:
         "id": "0123456789abcdef" * 2,
         "created_at": datetime(2026, 10, 13, 1, 2, 3, tzinfo=timezone.utc),
         "summary": {"label": "Downstream ecosystem beneficiaries"},
-        "presentation": presentation or None,
+        "presentation": {"utcOffsetMinutes": 0, **presentation},
     }
 
 
-def test_run_name_uses_fixed_local_creation_time_and_historical_utc() -> None:
-    """Renaming preserves the original local timestamp; older runs retain a UTC fallback."""
+def test_run_name_uses_fixed_local_creation_time() -> None:
+    """Renaming preserves the original local timestamp, including explicit UTC."""
     row = named_run(utcOffsetMinutes=-420)
     first = describe_model_run_name(row)
     assert first == {

@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 import time
 from typing import Any
+from unittest.mock import Mock
 from uuid import uuid4
 
 import numpy
@@ -21,6 +22,7 @@ from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.models import ProcessingError, PreparedJobPlan
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.routes.processing import COOKIE
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_model_runs_postgres import model_boundary, model_request, submit
 from test_model_artifacts_postgres import multiple_boundary
 from test_processing_jobs import boundary, store, HEADERS, AREA
@@ -197,7 +199,7 @@ def test_native_result_input_survives_parent_expiry_or_deletion(
 
 @pytest.mark.parametrize("operation", ["raster-clips", "raster-calculations"])
 def test_existing_calculations_accept_private_sources_with_cache_authorization(
-    model_boundary: Any, store: Any, operation: str
+    model_boundary: Any, store: Any, operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Ordinary operations use the same retained input and cannot serve it to strangers.
 
@@ -205,9 +207,14 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
         model_boundary: Actual model/ordinary HTTP routes and native worker.
         store: Disposable PostgreSQL store.
         operation: Existing clip or scalar calculation endpoint.
+        monkeypatch: Forbid filesystem fingerprints for published inputs.
     """
     client, worker, _ = model_boundary
     parent, source, path = publish_input(model_boundary)
+    identity_reads = Mock(
+        side_effect=AssertionError("Published inputs must not be fingerprinted")
+    )
+    monkeypatch.setattr(RasterSourceIdentity, "read", identity_reads)
     inputs = (
         {"source": source, "selectedBounds": AREA}
         if operation == "raster-clips"
@@ -224,18 +231,31 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
     job = response.json()
     assert input_counts(store) == (1, 0)
     assert client.portal.call(worker.run_once)
+    identity_reads.assert_not_called()
     result = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert result["status"] == "ready", result
+    provenance = client.get(result["result"]["provenanceUrl"]).json()
+    assert "sourceSignature" not in provenance
+    assert provenance["sourceChecksum"] == parent["result"]["sha256"]
     if operation == "raster-calculations":
         assert (
             int(result["result"]["rows"][0]["value"]) == parent["result"]["validPixels"]
         )
+        path.touch()
         second = client.post(
             route, json={**body, "requestId": uuid4().hex}, headers=HEADERS
         ).json()
         assert client.portal.call(worker.run_once)
+        identity_reads.assert_not_called()
         reused = client.get(f"/api/processing/jobs/{second['jobId']}").json()
         assert reused["result"]["cacheHit"]
+    else:
+        with (
+            rasterio.MemoryFile(client.get(result["result"]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            assert "EOLAB_SOURCE_SIGNATURE" not in raster.tags()
+            assert raster.tags()["EOLAB_SOURCE_SHA256"] == parent["result"]["sha256"]
     with TestClient(client.app, base_url="https://testserver") as foreign:
         denied = foreign.post(
             route, json={**body, "requestId": uuid4().hex}, headers=HEADERS
@@ -260,7 +280,7 @@ def test_existing_calculations_accept_private_sources_with_cache_authorization(
 
 
 @pytest.mark.parametrize(
-    "finish", ["cancel", "failure", "deadline", "restart", "changed"]
+    "finish", ["cancel", "failure", "deadline", "restart", "missing"]
 )
 def test_input_retention_releases_after_every_terminal_path(
     model_boundary: Any, store: Any, finish: str
@@ -270,7 +290,7 @@ def test_input_retention_releases_after_every_terminal_path(
     Args:
         model_boundary: Actual model routes and native worker.
         store: Disposable PostgreSQL store.
-        finish: Queued cancellation, worker failure/loss/restart, or altered input bytes.
+        finish: Queued cancellation, worker failure/loss/restart, or a missing input.
     """
     client, worker, _ = model_boundary
     parent, source, path = publish_input(model_boundary)
@@ -296,14 +316,12 @@ def test_input_retention_releases_after_every_terminal_path(
         )
     elif finish == "restart":
         assert store.interrupt_unfinished_jobs_on_restart() == 1
-    elif finish == "changed":
-        data = bytearray(path.read_bytes())
-        data[-1] ^= 1
-        path.write_bytes(data)
+    elif finish == "missing":
+        path.unlink()
         assert client.portal.call(worker.run_once)
         assert (
             client.get(f"/api/processing/jobs/{child['jobId']}").json()["error"]["code"]
-            == "source_changed"
+            == "result_missing"
         )
     else:
         claimed = store.claim_next_job()
@@ -788,57 +806,4 @@ def test_published_scientific_intermediate_is_a_reusable_raster(
     assert (
         Decimal(result["result"]["rows"][0]["value"]) == parent["result"]["validPixels"]
     )
-    assert input_counts(store) == (0, 0)
-
-
-def test_prepared_checksum_must_match_the_accepted_input(
-    model_boundary: Any, store: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A mismatched persisted checksum fails without publishing a misleading result.
-
-    Args:
-        model_boundary: Actual model HTTP and native worker.
-        store: Disposable PostgreSQL store.
-        monkeypatch: Alter the prepared specification at its persistence boundary.
-    """
-    client, worker, _ = model_boundary
-    _, source, _ = publish_input(model_boundary)
-    child = submit(
-        client,
-        model_request(
-            client, inputs={"raster": source, "area": {"kind": "wholeRaster"}}
-        ),
-    )
-    save_prepared_job = store.save_prepared_job
-
-    def save_changed_checksum(
-        identifier: str, attempt: str, prepared: PreparedJobPlan
-    ) -> dict[str, Any]:
-        """Persist a specification whose input checksum differs from its grant.
-
-        Args:
-            identifier: Claimed computation ID.
-            attempt: Current execution fencing token.
-            prepared: Validated calculation and reservation to persist.
-
-        Returns:
-            Updated job row containing the altered specification.
-        """
-        specification = {
-            **prepared.specification,
-            "calculation": {
-                **prepared.specification["calculation"],
-                "sourceChecksum": "0" * 64,
-            },
-        }
-        return save_prepared_job(
-            identifier, attempt, replace(prepared, specification=specification)
-        )
-
-    monkeypatch.setattr(store, "save_prepared_job", save_changed_checksum)
-    assert client.portal.call(worker.run_once)
-    result = client.get(f"/api/processing/jobs/{child['jobId']}").json()
-    assert result["status"] == "failed", result
-    assert result["error"]["code"] == "source_changed"
-    assert result["result"] is None
     assert input_counts(store) == (0, 0)

@@ -4,10 +4,8 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from eolab_app.raster.categorical_sld import build_categorical_raster_sld
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.styles import (
     parse_categorical_raster_style,
     parse_categorical_raster_style_json,
@@ -92,16 +90,12 @@ def validate_raster_style_environment(environment: str) -> None:
 
 @dataclass(frozen=True)
 class PublishedRasterAuthorization:
-    """Current raster source plus its feature-owned WMS request policy.
+    """Raster-owned WMS request policy for an authorized published layer.
 
     Attributes:
-        source_path: Canonical mounted GeoTIFF path.
-        source_signature: Filesystem identity approved at publication.
         style_name: Only public WMS style authorized for this raster.
     """
 
-    source_path: Path
-    source_signature: RasterSourceIdentity
     style_name: str = RASTER_WMS_STYLE_NAME
 
     def validate_parameters(

@@ -16,5 +16,6 @@
     }
   },
   "parameters": {"summary": "sum(a)"},
-  "label": "Example raster summary"
+  "label": "Example raster summary",
+  "utcOffsetMinutes": 0
 }

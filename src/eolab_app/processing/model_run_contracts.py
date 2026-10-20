@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AwareDatetime,
     BaseModel,
-    ConfigDict,
     Field,
     JsonValue,
     SerializeAsAny,
@@ -38,7 +37,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_result_contracts import ModelResult
@@ -68,11 +67,10 @@ class ModelRunPresentation(ModelSchema):
     """Keep an owner's edited run name and the timezone offset chosen at submission.
 
     The offset is minutes east of UTC and remains fixed when the run is renamed.
-    Older runs have no presentation and use their original name and UTC.
     """
 
     label: RunName | None = None
-    utcOffsetMinutes: UtcOffsetMinutes = 0
+    utcOffsetMinutes: UtcOffsetMinutes
 
 
 class ModelReference(ModelSchema):
@@ -94,7 +92,7 @@ class ModelRunRequest(ModelSchema):
     the recipe version; ``inputs`` supplies datasets and an area. Omitted
     parameters use the recipe's defaults, and ``label`` names the run for the user.
     ``utcOffsetMinutes`` fixes its timestamp to the submitting browser's local
-    time, expressed as minutes east of UTC; older clients default to UTC.
+    time, expressed as minutes east of UTC.
     """
 
     requestId: Annotated[
@@ -105,7 +103,7 @@ class ModelRunRequest(ModelSchema):
     inputs: dict[Name, JsonValue] = Field(min_length=1, max_length=16)
     parameters: dict[Name, JsonValue] = Field(default_factory=dict, max_length=32)
     label: RunName
-    utcOffsetMinutes: UtcOffsetMinutes = 0
+    utcOffsetMinutes: UtcOffsetMinutes
 
     @model_validator(mode="after")
     def check_json_values(self) -> "ModelRunRequest":
@@ -195,11 +193,8 @@ class ModelInvocation(ModelSchema):
 
     Unlike a submission request, this includes the complete recipe and the
     default values filled in when the run was accepted. Registered operations
-    validate their own additional input types and saved metadata fields.
+    validate their own additional input types.
     """
-
-    model_config = ConfigDict(extra="allow")
-    __pydantic_extra__: dict[str, JsonValue] = Field(init=False)
 
     model: CapturedModel
     inputs: dict[Name, JsonValue]
@@ -211,10 +206,10 @@ class ModelInvocation(ModelSchema):
         """Check the saved inputs and parameters against the saved model definition.
 
         Returns:
-            This invocation after validating its inputs, formulas and operation metadata.
+            This invocation after validating its inputs and formulas.
 
         Raises:
-            ValueError: If a saved input, parameter or metadata field is missing,
+            ValueError: If a saved input or parameter is missing,
                 unknown or invalid.
             ProcessingError: If the recorded operation is unavailable.
         """
@@ -239,16 +234,6 @@ class ModelInvocation(ModelSchema):
             type(parameter).model_validate(
                 {**parameter.model_dump(), "default": self.parameters[name]}
             )
-        extra = self.__pydantic_extra__ or {}
-        if operation.validate_invocation is not None:
-            extra = operation.validate_invocation(
-                {name: role.type for name, role in definition.inputs.items()},
-                self.inputs,
-                extra,
-            )
-        elif extra:
-            raise ValueError("The operation does not support extra invocation fields")
-        object.__setattr__(self, "__pydantic_extra__", extra)
         return self
 
 
@@ -256,17 +241,12 @@ class ModelRunSpec(ModelSchema):
     """The saved calculation instructions used by the model worker.
 
     The calculation starts as submitted inputs and becomes the registered
-    operation's prepared plan. Primary and additional raster signatures let the
-    worker reject source changes between submission and execution; the
-    implementation checksum detects changes to the numerical code and packages.
+    operation's prepared plan. The implementation checksum detects changes to
+    the numerical code and packages.
     """
 
     operation: Literal["model.run.v1"] = MODEL_OPERATION
     calculation: SerializeAsAny[BaseModel]
-    sourceSignature: tuple[int, int, int, int] | None
-    additionalSourceSignatures: dict[Name, tuple[int, int, int, int]] = Field(
-        default_factory=dict, max_length=16, exclude_if=lambda value: not value
-    )
     implementationRevision: Digest
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
 
@@ -295,29 +275,6 @@ class ModelRunSpec(ModelSchema):
         if not isinstance(identifier, str):
             raise ValueError("Stored calculation requires an operation ID")
         return get_model_operation(identifier).parse_specification(value)
-
-    @model_validator(mode="after")
-    def check_source_identity(self) -> "ModelRunSpec":
-        """Require catalog signatures while private inputs use accepted file grants.
-
-        Returns:
-            The stored run with the identity contract appropriate to its source.
-
-        Raises:
-            ValueError: If the signature is absent for catalog data or supplied for a run file.
-        """
-        source = get_model_operation(self.calculation.operation).source(
-            self.calculation
-        )
-        if isinstance(source, RunArtifactReference) != (self.sourceSignature is None):
-            raise ValueError("Source identity does not match the raster reference")
-        operation = get_model_operation(self.calculation.operation)
-        additional = (
-            operation.extra_sources(self.calculation) if operation.extra_sources else {}
-        )
-        if set(additional) != set(self.additionalSourceSignatures):
-            raise ValueError("Capture every additional raster source identity")
-        return self
 
 
 class ModelDeletionAction(ModelSchema):
@@ -424,6 +381,7 @@ class ModelJobResponse(JobResponse):
     ``deletionUndo`` identifies a deletion that this owner can still undo.
     ``name`` is editable; ``nameTimestamp`` is the fixed creation timestamp.
     ``label`` combines both for use outside this run's details.
+    ``artifacts`` is always present, with an empty list while files are unavailable.
     """
 
     operation: Literal["model.run.v1"]
@@ -434,7 +392,7 @@ class ModelJobResponse(JobResponse):
     metadataExpiresAt: datetime | None
     progress: ModelProgress
     result: ModelResult | None
-    artifacts: ModelArtifactManifest | None = None
+    artifacts: ModelArtifactManifest
     deletionUndo: ModelDeletionUndo | None = None
 
 

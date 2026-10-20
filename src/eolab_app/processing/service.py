@@ -50,7 +50,6 @@ from eolab_app.processing.model_runs import (
     encode_model_run_cursor,
     export_model_job_yaml,
     read_model_invocation,
-    read_model_job_operation_id,
     serialize_model_job,
     serialize_model_artifacts,
     build_model_download_filename,
@@ -226,9 +225,6 @@ class ProcessingService:
             RasterFeatureError: If the catalog cannot authorize the selected raster.
         """
         request_data = request.model_dump(mode="json", exclude={"requestId"})
-        if request.utcOffsetMinutes == 0:
-            # Preserve retry identity for submissions accepted before local timestamps.
-            request_data.pop("utcOffsetMinutes")
         request_hash = hashlib.sha256(encode_canonical_json(request_data)).hexdigest()
         existing = await asyncio.to_thread(
             self.jobs.find_request, owner, request.requestId
@@ -985,15 +981,7 @@ class ProcessingService:
                     artifact["sha256"],
                     artifact["filename"],
                 )
-                # Results created before media types were recorded were all
-                # raster clips; preserve their existing download content type.
-                media_type = artifact.get("media_type", "image/tiff")
-                if path.stat().st_size != size:
-                    raise ProcessingError(
-                        "result_changed",
-                        "This result file is no longer intact. Submit a new job.",
-                        410,
-                    )
+                media_type = artifact["media_type"]
             content = None
             if row.get("presentation") and row["operation"] != MODEL_OPERATION:
                 rows = present_calculation_rows(artifact["rows"], row["presentation"])
@@ -1014,17 +1002,8 @@ class ProcessingService:
                 size = len(content)
                 sha256 = hashlib.sha256(content).hexdigest()
             if row["operation"] == MODEL_OPERATION:
-                output = (row.get("summary") or row["spec"]).get("output")
                 output_name = (
-                    "provenance"
-                    if provenance
-                    else (
-                        output["name"]
-                        if output
-                        else get_model_operation(
-                            read_model_job_operation_id(row)
-                        ).output.name
-                    )
+                    "provenance" if provenance else row["summary"]["output"]["name"]
                 )
                 filename = build_model_download_filename(
                     row, output_name, filename, media_type
@@ -1068,7 +1047,7 @@ class ProcessingService:
             Confined file and renewable transfer lease for the existing response.
 
         Raises:
-            ProcessingError: If ownership, expiry, file identity or integrity checks fail.
+            ProcessingError: If ownership, expiry, file identity or availability checks fail.
             ValidationError: If the persisted manifest is malformed.
         """
         row, lease = await asyncio.to_thread(
@@ -1090,12 +1069,6 @@ class ProcessingService:
             path = await asyncio.to_thread(
                 self.artifacts.artifact_path, row["attempt_id"], file.storage_name
             )
-            if path.stat().st_size != file.size:
-                raise ProcessingError(
-                    "result_changed",
-                    "This result file is no longer intact. Run the model again.",
-                    410,
-                )
             return ArtifactDownload(
                 path,
                 build_model_download_filename(
@@ -1174,23 +1147,12 @@ class ProcessingService:
         path = await asyncio.to_thread(
             self.artifacts.artifact_path, row["attempt_id"], file.storage_name
         )
-        try:
-            if path.stat().st_size != file.size:
-                raise ProcessingError(
-                    "result_changed",
-                    "This result file changed. Run the model again.",
-                    410,
-                )
-        except OSError as error:
-            raise ProcessingError(
-                "result_missing", "This result file is no longer available.", 410
-            ) from error
         return ResolvedSourceFile(path, file.size, file.sha256, file.media_type)
 
     async def check_model_artifact(
         self, owner: str, identifier: str, artifact_id: str
-    ) -> tuple[int, str, str]:
-        """Recheck a retained file's ownership, availability and immutable metadata.
+    ) -> None:
+        """Recheck a retained file's ownership and availability before delivery.
 
         This does not acquire another transfer slot or authorize a new filesystem
         read. Callers already holding a lease use it before delivering a result.
@@ -1199,9 +1161,6 @@ class ProcessingService:
             owner: Server-derived session hash.
             identifier: Opaque run identity.
             artifact_id: Opaque published file identity.
-
-        Returns:
-            Current byte count, checksum and media type.
 
         Raises:
             ProcessingError: If the session, run or file is no longer available.
@@ -1220,7 +1179,6 @@ class ProcessingService:
             raise ProcessingError(
                 "artifact_not_found", "This result file is unavailable.", 404
             )
-        return file["bytes"], file["sha256"], file["mediaType"]
 
     async def transfer_heartbeat(self, lease: str, release: bool = False) -> bool:
         """Renew or release a response-owned download lease.

@@ -21,10 +21,10 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
 from test_raster_aggregates import make_spec, LIMITS
+from catalog_selection_support import write_aggregate_area
 
 
 def peak_memory() -> int | None:
@@ -111,9 +111,7 @@ def measure(path: Path, output: Path, case: str, target: int | None) -> dict:
                 [[-75, -15], [-72, -15], [-74, -11], [-75, -15]],
             ],
         }
-        area = AggregateArea(
-            kind="aoi", bounds=(-81.98, -19.9, -62.5, 0), geometries=(geometry,)
-        )
+        area = write_aggregate_area(output / "selected.gpkg", [geometry])
         expressions = ["areaha(a>10)", "count(a>10)"]
     start = time.perf_counter()
     try:

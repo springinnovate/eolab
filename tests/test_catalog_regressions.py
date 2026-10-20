@@ -62,8 +62,7 @@ from eolab_app.raster.catalog_contract import (
     COG_MEDIA_TYPE,
     GEOTIFF_MEDIA_TYPE,
 )
-from eolab_app.raster.sources import source_signature
-
+from eolab_app.raster.source_identity import RasterSourceIdentity
 
 DATASET_ITEM_BUILDERS = {
     ".tif": build_geotiff_stac_item,
@@ -219,7 +218,7 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
     assert FILE_EXTENSION in item["stac_extensions"]
     assert item["assets"]["data"]["file:size"] > 0
     assert item["assets"]["data"]["eolab:source"] == {
-        "source_signature": source_signature(geotiff_path).to_catalog(),
+        "source_signature": RasterSourceIdentity.read(geotiff_path).to_catalog(),
     }
     assert "eolab:rendering" not in item["assets"]["data"]
     json.dumps(item)
@@ -238,7 +237,7 @@ def test_cog_profile_is_recorded_from_gdal_layout_metadata(
 
     assert item["assets"]["data"]["type"] == COG_MEDIA_TYPE
     assert item["assets"]["data"]["eolab:source"]["source_signature"] == (
-        source_signature(cog_path).to_catalog()
+        RasterSourceIdentity.read(cog_path).to_catalog()
     )
 
 

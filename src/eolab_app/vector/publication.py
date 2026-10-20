@@ -2,7 +2,6 @@
 
 import asyncio
 import math
-from collections.abc import Callable
 from collections import OrderedDict
 from threading import Event
 from typing import Any
@@ -30,13 +29,11 @@ from eolab_app.vector.models import (
     VECTOR_READER_CONTRACT,
     VECTOR_RENDERING_METADATA_KEY,
     VECTOR_RENDERING_POLICY,
-    VectorSourceSignature,
 )
 from eolab_app.vector.ports import VectorCatalog, VectorPublisher, VectorFieldReader
 from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
-    vector_source_signature,
 )
 from eolab_app.vector.styles import default_vector_style
 
@@ -50,9 +47,6 @@ class VectorPublicationService:
         source_resolver: MountedVectorResolver,
         publisher: VectorPublisher,
         vector_registry: PublishedVectorRegistry,
-        signature_reader: Callable[
-            [ResolvedVectorSource], VectorSourceSignature
-        ] = vector_source_signature,
         field_reader: VectorFieldReader | None = None,
         *,
         filter_count_queue_capacity: int = 32,
@@ -65,7 +59,6 @@ class VectorPublicationService:
             source_resolver: Exact source and layer resolver.
             publisher: Convergent GeoServer vector adapter.
             vector_registry: Process-local public-WMS authorization registry.
-            signature_reader: Complete mounted source identity boundary.
             field_reader: Existing bounded geometry-free scalar reader for counts.
             filter_count_queue_capacity: Maximum count requests waiting behind
                 the two active readers. Cached counts do not wait.
@@ -87,7 +80,6 @@ class VectorPublicationService:
         self._source_resolver = source_resolver
         self._publisher = publisher
         self._vector_registry = vector_registry
-        self._signature_reader = signature_reader
         self._publish_lock = asyncio.Lock()
         self._field_reader = field_reader
         self._filter_slots = asyncio.Semaphore(2)
@@ -107,8 +99,8 @@ class VectorPublicationService:
 
         Raises:
             VectorFeatureError: If catalog, source, or GeoServer boundaries fail.
-            VectorConflictError: If assessment is absent, stale, unsupported, or
-                the mounted source changes.
+            VectorConflictError: If assessment is absent, unsupported, or
+                the Catalog source binding is invalid.
         """
         async with self._publish_lock:
             item = await self._catalog.get_item(request)
@@ -147,22 +139,6 @@ class VectorPublicationService:
                     "Visualization unavailable: the assessed mounted vector "
                     "source contract is no longer valid."
                 )
-            try:
-                inspected_signature = await asyncio.to_thread(
-                    self._signature_reader,
-                    source,
-                )
-            except OSError as error:
-                raise VectorConflictError(
-                    "Visualization unavailable: the vector source cannot be read."
-                ) from error
-            if [list(entry) for entry in inspected_signature] != metadata.get(
-                "source_signature"
-            ):
-                raise VectorConflictError(
-                    "Visualization unavailable: the vector source changed; "
-                    "reassess it before publication."
-                )
             geometry_kind = metadata.get("geometry_kind")
             if geometry_kind not in {"point", "line", "polygon"}:
                 raise VectorConflictError(
@@ -176,16 +152,7 @@ class VectorPublicationService:
                 geometry_kind,
             )
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
-            try:
-                await asyncio.to_thread(
-                    self._vector_registry.authorize,
-                    layer_name,
-                    source,
-                    inspected_signature,
-                    style_name,
-                )
-            except PublishedLayerChangedError as error:
-                raise VectorConflictError(str(error)) from error
+            self._vector_registry.authorize(layer_name, source, style_name)
             return PublishedVector(
                 layerName=layer_name,
                 bbox=tuple(item["bbox"]),
@@ -196,33 +163,30 @@ class VectorPublicationService:
 
     async def _prepare_published_filter(
         self, request: CatalogVectorFilterRequest
-    ) -> tuple[
-        dict[str, Any], ResolvedVectorSource, VectorSourceSignature, VectorFilter, str
-    ]:
+    ) -> tuple[dict[str, Any], ResolvedVectorSource, VectorFilter, str]:
         """Resolve the published vector source and validate its requested feature filter.
 
         Args:
             request: Catalog identity and bounded filter rules.
 
         Returns:
-            Item, source, signature, validated rules, and original layer name.
+            Item, source, validated rules, and original layer name.
 
         Raises:
-            VectorConflictError: If assessment, fields, or publication is stale.
+            VectorConflictError: If assessment, fields, or publication is unavailable.
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
         try:
-            signature = await asyncio.to_thread(self._signature_reader, source)
-            require_assessed_metadata(item, signature, "Filtering")
+            require_assessed_metadata(item, "Filtering")
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
-            authorization = await asyncio.to_thread(self._vector_registry.require_current, layer_name)
-            if authorization.source != source or authorization.source_signature != signature:
-                raise VectorConflictError("The published vector source changed; reload the layer")
-        except (OSError, PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
+            authorization = self._vector_registry.require_current(layer_name)
+            if authorization.source != source:
+                raise VectorConflictError("The published vector binding changed; reload the layer")
+        except (PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise VectorConflictError("The vector publication is unavailable; reload the layer") from error
         validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
-        return item, source, signature, validated_filter, layer_name
+        return item, source, validated_filter, layer_name
 
     async def apply_filter(self, request: CatalogVectorFilterRequest) -> AppliedVectorFilter:
         """Authorize a per-map predicate without changing GeoServer layer state.
@@ -234,14 +198,13 @@ class VectorPublicationService:
             Validated rules and their immutable rendering identity.
 
         Raises:
-            VectorConflictError: If the fields, source, or publication is stale.
+            VectorConflictError: If the fields, source binding, or publication is invalid.
         """
-        _, _, _, validated_filter, published_layer_name = (
+        _, _, validated_filter, published_layer_name = (
             await self._prepare_published_filter(request)
         )
         try:
-            layer_name = await asyncio.to_thread(
-                self._vector_registry.authorize_filter,
+            layer_name = self._vector_registry.authorize_filter(
                 published_layer_name,
                 validated_filter,
             )
@@ -263,20 +226,20 @@ class VectorPublicationService:
             is configured; a busy queue raises a separate error.
 
         Raises:
-            VectorConflictError: If authoritative metadata or source changes.
+            VectorConflictError: If authoritative metadata or source binding is invalid.
             VectorFilterCountCapacityError: If the waiting queue is full.
             VectorFilterCountQueueTimeoutError: If no reader becomes available
                 within the queue wait deadline.
             asyncio.CancelledError: If the requesting browser disconnects.
         """
-        item, source, signature, validated_filter, published_layer_name = (
+        item, source, validated_filter, published_layer_name = (
             await self._prepare_published_filter(request)
         )
         total = catalog_vector_feature_count(item, "Filter count")
         if not validated_filter.active:
             return VectorFilterCount(matched=total, total=total, complete=True)
         key = (
-            repr((published_layer_name, signature)) + validated_filter.model_dump_json()
+            repr((published_layer_name, source)) + validated_filter.model_dump_json()
         )
         if key in self._filter_counts:
             self._filter_counts.move_to_end(key)
@@ -315,15 +278,9 @@ class VectorPublicationService:
             return VectorFilterCount()
         finally:
             cancel_event.set()
-        try:
-            after = await asyncio.to_thread(self._signature_reader, source)
-        except OSError as error:
+        if result.complete and result.total != total:
             raise VectorConflictError(
-                "The counted vector source disappeared"
-            ) from error
-        if after != signature or (result.complete and result.total != total):
-            raise VectorConflictError(
-                "The vector source changed; reassess it before counting"
+                "The feature count disagrees with Catalog metadata; reassess the layer"
             )
         if result.complete:
             self._filter_counts[key] = result

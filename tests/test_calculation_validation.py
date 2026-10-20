@@ -13,8 +13,6 @@ from eolab_app.routes.processing import create_processing_router
 from test_raster_clips import SOURCE
 from pathlib import Path
 from html import unescape
-import hashlib
-import json
 import re
 from typing import Any
 from unittest.mock import patch
@@ -146,38 +144,6 @@ def test_reused_submission_keeps_the_same_shared_work_identity() -> None:
         )
         assert identify_shared_calculation(queued) == original_key
         assert queued.model_dump(mode="json", by_alias=True) == original_spec
-
-
-def test_absent_pixel_point_preserves_legacy_request_dict_and_hash() -> None:
-    """Old uncertain submissions retain the exact input identity after deployment."""
-    legacy = {
-        "sources": {"a": SOURCE},
-        "calculations": [{"label": "Mean", "expression": "mean(a)"}],
-        "selectedBounds": None,
-        "catalogSelection": None,
-        "polygonArea": None,
-        "wholeRaster": True,
-        "targetChunkPixels": None,
-    }
-    expected_hash = hashlib.sha256(
-        json.dumps(legacy, sort_keys=True).encode()
-    ).hexdigest()
-    for optional in ({}, {"pixelPoint": None}):
-        request = AggregateJobRequest(
-            **legacy, **optional, requestId="legacy-request-639"
-        )
-        stored = request.model_dump(mode="json", by_alias=True, exclude={"requestId"})
-        assert stored == legacy
-        assert (
-            hashlib.sha256(json.dumps(stored, sort_keys=True).encode()).hexdigest()
-            == expected_hash
-        )
-        assert (
-            UnpreparedCalculation(request=request).model_dump(
-                mode="json", by_alias=True
-            )["request"]
-            == legacy
-        )
 
 
 @pytest.mark.parametrize(

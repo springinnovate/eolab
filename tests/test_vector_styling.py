@@ -23,7 +23,6 @@ from eolab_app.vector.models import (
 from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
-    vector_source_signature,
 )
 from eolab_app.vector.styles import (
     OGC_NAMESPACE,
@@ -570,12 +569,10 @@ def test_style_service_uses_catalog_identity_and_current_publication(
     item, _ = assessed_geopackage_item(tmp_path)
     resolver = MountedVectorResolver(tmp_path)
     source = resolver.resolve(item)
-    signature = vector_source_signature(source)
     registry = PublishedVectorRegistry()
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        signature,
         "vector-polygon",
     )
     styler = RecordingStyler()
@@ -633,7 +630,6 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        vector_source_signature(source),
         "vector-polygon",
     )
     with pytest.raises(VectorConflictError, match="does not match"):
@@ -655,7 +651,6 @@ def test_style_service_rejects_label_fields_outside_authoritative_table(
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        vector_source_signature(source),
         "vector-polygon",
     )
     service = VectorStyleService(
@@ -688,7 +683,6 @@ def test_style_service_revalidates_categorical_field_and_value_types(
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        vector_source_signature(source),
         "vector-polygon",
     )
     service = VectorStyleService(
@@ -736,7 +730,6 @@ def test_style_service_accepts_explicit_csv_appearance_without_count_reads(
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        vector_source_signature(source),
         "vector-polygon",
     )
     styler = RecordingStyler()
@@ -792,7 +785,6 @@ def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
     registry.authorize(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
         source,
-        vector_source_signature(source),
         "vector-polygon",
     )
     styler = RecordingStyler()

@@ -2,12 +2,9 @@
 
 from typing import Any, Callable
 
-from pydantic import JsonValue
-
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.downstream_models import (
     DownstreamLimits,
-    DownstreamInvocationMetadata,
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
@@ -34,44 +31,6 @@ DOWNSTREAM_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
     ("summarizing_values", "Summarizing raster values"),
     ("writing_results", "Writing results"),
 )
-
-
-def validate_downstream_invocation(
-    input_types: dict[str, str],
-    inputs: dict[str, JsonValue],
-    extra: dict[str, JsonValue],
-) -> dict[str, JsonValue]:
-    """Check saved downstream registration snapshots against their selected references.
-
-    Args:
-        input_types: Model input names and their validated declared types.
-        inputs: Captured input values already checked by their registered adapters.
-        extra: Additional fields saved alongside the generic model invocation.
-
-    Returns:
-        Validated metadata in its historical JSON form, omitting an empty snapshot map.
-
-    Raises:
-        ValueError: If snapshots are missing, extra or different from selected references.
-        ValidationError: If saved metadata contains unknown fields or invalid snapshots.
-    """
-    metadata = DownstreamInvocationMetadata.model_validate(extra)
-    roles = {
-        name
-        for name, input_type in input_types.items()
-        if input_type == "prepared_hydrology"
-    }
-    if set(metadata.hydrology) != roles:
-        raise ValueError(
-            "Capture every selected hydrology configuration with its source identities"
-        )
-    for name in roles:
-        reference = metadata.hydrology[name].reference.model_dump(mode="json")
-        if reference != inputs[name]:
-            raise ValueError(
-                "Captured hydrology does not match the selected configuration"
-            )
-    return metadata.model_dump(mode="json", by_alias=True)
 
 
 def bind_downstream(
@@ -127,7 +86,7 @@ def get_values_source(
 def get_additional_sources(
     value: DownstreamRequest | QueuedDownstream | DownstreamPlan,
 ) -> dict[str, CatalogRasterRequest]:
-    """Declare DEM and optional raster-mask inputs for admission and staleness checks.
+    """Declare DEM and optional raster-mask inputs for authorization and execution.
 
     Args:
         value: Request or stored downstream specification.
@@ -136,7 +95,7 @@ def get_additional_sources(
         Additional catalog rasters keyed by stable operation argument names.
     """
     request = downstream_inputs(value)
-    result = {"dem": request.hydrology_sources.dem}
+    result = {"dem": request.hydrology.dem}
     if isinstance(request.starting_mask, RasterStartingMask):
         result["starting_mask"] = request.starting_mask.source
     return result
@@ -181,7 +140,7 @@ async def resolve_downstream_sources(
     values: AuthorizedRaster,
     watershed_selection: CatalogSelection | None = None,
 ) -> DownstreamSources:
-    """Resolve configured source files and preserve identities within one calculation.
+    """Resolve configured source files and selected catalog vectors for a calculation.
 
     Args:
         context: Worker capabilities with captured additional raster identities.
@@ -194,8 +153,8 @@ async def resolve_downstream_sources(
         Ephemeral native paths and exact selection readers.
 
     Raises:
-        ProcessingError: If the configured watershed is missing, unreadable or changed.
-        SelectionUnavailableError: If the user-selected starting vector changed.
+        ProcessingError: If the configured watershed is missing or unreadable.
+        SelectionUnavailableError: If the user-selected starting vector is unavailable.
     """
     if context.areas is None:
         raise ProcessingError(
@@ -203,14 +162,14 @@ async def resolve_downstream_sources(
         )
     try:
         network = (
-            await context.areas.resolve_source(request.hydrology_sources.watersheds)
+            await context.areas.resolve_source(request.hydrology.watersheds)
             if watershed_selection is None
             else await context.areas.resolve_for_sampling(watershed_selection)
         )
     except SelectionUnavailableError as error:
         raise ProcessingError(
             "watershed_unavailable",
-            "The model's configured watershed layer is missing, unreadable or changed during this run. Check the configured source and try again.",
+            "The model's configured watershed layer is missing or unreadable. Check the configured source and try again.",
             409,
         ) from error
     starting = (
@@ -242,7 +201,7 @@ async def prepare_downstream(
         Values grid metadata and the watershed identity captured for this run.
 
     Raises:
-        ProcessingError: If preparation or source verification fails.
+        ProcessingError: If preparation or source access fails.
         ProcessDeadlineError: If the supervised process exits without a result.
     """
     sources = await resolve_downstream_sources(context, queued.request, authorized)
@@ -254,13 +213,11 @@ async def prepare_downstream(
     )
     if status != "ok":
         raise ProcessingError(*result)
-    spec = result.model_copy(update={"sourceChecksum": context.source_checksum})
-    await check_downstream_execution(context, spec)
     return PreparedJobPlan(
-        operation=spec.operation,
-        specification=spec.model_dump(mode="json", by_alias=True),
+        operation=result.operation,
+        specification=result.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=spec.reservedBytes,
+        reserved_bytes=result.reservedBytes,
     )
 
 
@@ -271,9 +228,8 @@ async def resolve_downstream_execution_inputs(
 
     A queued plan contains catalog/owned-output identities, never live file
     handles. This adapter resolves its vector inputs and binds its native
-    arguments at execution. The checksum comparison concerns a retained values
-    raster from a previous model run, not routine edits to the prepared DEM.
-    That persisted-file identity must agree with the source verified by the worker.
+    arguments at execution. The worker supplies the values raster after
+    authorizing its catalog source or accepted input grant.
 
     Args:
         context: Worker capabilities and additional authorized rasters.
@@ -284,43 +240,14 @@ async def resolve_downstream_execution_inputs(
         Ephemeral native sources and the unchanged numerical plan.
 
     Raises:
-        ProcessingError: If a private values checksum changed or source access fails.
+        ProcessingError: If source access fails.
     """
-    if spec.sourceChecksum != context.source_checksum:
-        raise ProcessingError(
-            "source_changed", "The values raster changed after preparation.", 409
-        )
     return (
         await resolve_downstream_sources(
-            context, spec.inputs, authorized, spec.watershed_selection
+            context, spec.inputs, authorized, spec.watershedSelection
         ),
         spec,
     )
-
-
-async def check_downstream_execution(
-    context: OperationContext, spec: DownstreamPlan
-) -> None:
-    """Recheck the run's watershed and starting-vector identities before publication.
-
-    Args:
-        context: Existing catalog selection reader.
-        spec: Executed inputs and their immutable source predicates.
-
-    Raises:
-        ProcessingError: If the configured watershed changed or lost access.
-        SelectionUnavailableError: If the user-selected starting vector changed.
-    """
-    try:
-        await context.areas.resolve_for_sampling(spec.watershed_selection)
-    except SelectionUnavailableError as error:
-        raise ProcessingError(
-            "watershed_changed",
-            "The model's configured watershed layer changed or became unreadable during this run. Check the source and try again.",
-            409,
-        ) from error
-    if isinstance(spec.inputs.starting_mask, VectorStartingMask):
-        await context.areas.resolve_for_sampling(spec.inputs.starting_mask.selection)
 
 
 def select_downstream_execution(
@@ -350,6 +277,7 @@ def describe_downstream_policy(
         Versioned numerical rules for Run YAML and provenance.
     """
     return ClosedEdgeDownstreamNumericalPolicy(
+        version="hydrology.downstream_beneficiaries.v3",
         pitFillSearchLimit=spec.pit_fill_search_limit,
         bufferMetres=spec.inputs.buffer_m,
         cutoffMetres=spec.inputs.cutoff_m,

@@ -29,6 +29,7 @@ from eolab_app.processing.clip_models import (
 from eolab_app.processing.raster_clip import create_clip, plan_clip
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from catalog_selection_support import write_selection
 
 SOURCE = {
     "collectionId": "eolab-mounted-geotiffs",
@@ -176,7 +177,7 @@ def test_clip_preserves_native_grid_values_zero_metadata_and_cog(
 def test_polygon_union_holes_and_nodata_free_zero_are_masked_exactly(
     tmp_path: Path,
 ) -> None:
-    """Mask AOI exteriors/holes while retaining valid zeros without a sentinel.
+    """Mask polygon exteriors/holes while retaining valid zeros without a sentinel.
 
     Args:
         tmp_path: Isolated test storage.
@@ -194,8 +195,12 @@ def test_polygon_union_holes_and_nodata_free_zero_are_masked_exactly(
         "type": "MultiPolygon",
         "coordinates": [[[[0.5, 9.5], [0.8, 9.5], [0.8, 9.8], [0.5, 9.8], [0.5, 9.5]]]],
     }
+    selected = write_selection(tmp_path / "selected.gpkg", [polygon, overlap])
     area = ClipArea(
-        kind="aoi", bounds=(0.1, 9.1, 0.9, 9.9), geometries=(polygon, overlap)
+        kind="catalogSelection",
+        bounds=(0.1, 9.1, 0.9, 9.9),
+        catalogSelection=selected.selection,
+        resolved=selected,
     )
     spec = make_spec(path, area)
     attempt = tmp_path / "attempt"

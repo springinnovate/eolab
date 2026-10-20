@@ -5,7 +5,6 @@ from xml.etree import ElementTree
 
 import pytest
 
-from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.wms_authorization import (
     PublishedRasterAuthorization,
     validate_raster_style_environment,
@@ -51,10 +50,7 @@ def test_raster_style_environment_accepts_bounded_thresholds_and_colors() -> Non
 
 def test_raster_authorization_rejects_vector_feature_filter() -> None:
     """Keep selected-feature rendering confined to authorized vector layers."""
-    authorization = PublishedRasterAuthorization(
-        Path("raster.tif"),
-        RasterSourceIdentity(1, 2, 3, 4),
-    )
+    authorization = PublishedRasterAuthorization()
 
     with pytest.raises(
         PublishedLayerRequestError,

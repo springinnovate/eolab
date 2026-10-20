@@ -10,7 +10,6 @@ from eolab_app.vector.models import VectorStyle
 from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
-    vector_source_signature,
 )
 from eolab_app.vector.styles import (
     OGC_NAMESPACE,
@@ -145,7 +144,7 @@ def test_filtered_composite_retains_fallback_and_label_selection(
     style_name = vector_style_name(item["id"], style, geometry_name="shape")
     layer_name = f"eolab:{item['id']}"
     registry.authorize(
-        layer_name, source, vector_source_signature(source), style_name, "shape"
+        layer_name, source, style_name, "shape"
     )
     selection = VectorFilter(
         enabled=True,

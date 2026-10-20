@@ -1,4 +1,4 @@
-"""Real catalog-vector fixtures shared by numeric and HTTP boundary tests."""
+"""Catalog-vector and owned-polygon fixtures for numeric and HTTP boundary tests."""
 
 import asyncio
 from pathlib import Path
@@ -7,6 +7,9 @@ from typing import Any
 import fiona
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection
+from eolab_app.bounded_vector import selection_summary
+from eolab_app.processing.aggregate_models import AggregateArea
+from eolab_app.processing.polygon_areas import PolygonSummaryInput
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.models import ResolvedVectorSource
 from eolab_app.vector.sampling import VectorSamplingService
@@ -92,6 +95,43 @@ def write_selection(
         return await VectorSamplingService(catalog, catalog).resolve_for_sampling(resolved.selection)
 
     return asyncio.run(authorize())
+
+
+def owned_polygon_area(geometries: list[dict[str, Any]]) -> AggregateArea:
+    """Build a current owned-polygon calculation area for a numerical fixture.
+
+    Args:
+        geometries: Simple WGS84 polygons accepted by the upload contract.
+
+    Returns:
+        The validated polygons with their exact bounds and geometry identity.
+    """
+    polygons = PolygonSummaryInput(polygons=geometries)
+    return AggregateArea(
+        kind="polygons",
+        bounds=polygons.bounds(),
+        geometryHash=polygons.geometry_hash(),
+        geometries=tuple(geometries),
+    )
+
+
+def write_aggregate_area(path: Path, geometries: list[dict[str, Any]]) -> AggregateArea:
+    """Create a calculation area backed by a real authorized vector fixture.
+
+    Args:
+        path: New GeoPackage fixture path.
+        geometries: WGS84 polygons, including holes and multipart geometries.
+
+    Returns:
+        A current catalog selection with its resolved native source and bounds.
+    """
+    resolved = write_selection(path, geometries)
+    return AggregateArea(
+        kind="catalogSelection",
+        bounds=selection_summary(resolved)["bbox"],
+        catalogSelection=resolved.selection,
+        resolved=resolved,
+    )
 
 
 def write_geopackage_layer(

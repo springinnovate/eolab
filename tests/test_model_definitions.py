@@ -170,6 +170,7 @@ def test_historical_catalog_recipe_still_executes_without_rewriting_identity() -
     request = ModelRunRequest.model_validate(
         {
             "requestId": "legacy-catalog-request",
+            "utcOffsetMinutes": 0,
             "model": {
                 name: saved["model"][name]
                 for name in ("id", "version", "definitionSha256")
@@ -380,6 +381,7 @@ def test_saved_model_input_endpoint_preserves_ownership_and_expiry() -> None:
     owner = hashlib.sha256(b"a" * 64).hexdigest()
     row = {
         "operation": "model.run.v1",
+        "presentation": {"utcOffsetMinutes": 0},
         "status": "ready",
         "metadata_expires_at": None,
         "retained_metadata": {
@@ -459,7 +461,6 @@ def test_clip_recipe_binds_only_existing_clip_inputs(kind: str) -> None:
                 "itemId": "countries",
                 "assetKey": "data",
                 "layerName": "countries",
-                "sourceSignature": "b" * 64,
                 "filter": {"enabled": True, "match": "all", "rules": []},
             },
         }
@@ -578,6 +579,7 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     binding = definition.steps[0].inputs["hydrology"]
     assert isinstance(binding, FixedInputBinding)
     submitted = ModelRunRequest(
+        utcOffsetMinutes=0,
         requestId="a" * 32,
         label="Configured source run",
         model={
@@ -601,16 +603,11 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     )
     calculation, invocation = build_model_calculation_request(submitted, registry)
     assert isinstance(calculation, DownstreamRequest)
-    assert calculation.hydrology_sources == binding.value
+    assert calculation.hydrology == binding.value
     assert "hydrology" not in invocation.model_dump(mode="json", by_alias=True)
     saved_invocation = invocation.model_dump(mode="json", by_alias=True)
-    explicit_empty_metadata = ModelInvocation.model_validate(
-        {**saved_invocation, "hydrology": {}}
-    )
-    assert (
-        explicit_empty_metadata.model_dump(mode="json", by_alias=True)
-        == saved_invocation
-    )
+    with pytest.raises(ValidationError, match="hydrology"):
+        ModelInvocation.model_validate({**saved_invocation, "hydrology": {}})
     assert (
         ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
         == invocation
@@ -652,39 +649,6 @@ def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) 
         document["inputs"].pop("values")
     with pytest.raises((ValidationError, ProcessingError)):
         ModelRegistry((ModelDefinition.model_validate(document),))
-
-
-def test_legacy_recipe_round_trip_preserves_its_original_checksum() -> None:
-    """Adding fixed bindings does not add fields to historical user-input recipes."""
-    from eolab_app.processing.model_run_contracts import CapturedModel
-    from eolab_app.processing.model_yaml import compute_document_checksum
-
-    document = (
-        ModelRegistry.load_installed()
-        .get("downstream-beneficiaries", "4.0.0")
-        .to_document()
-    )
-    document["version"] = "3.0.0"
-    document["inputs"]["hydrology"] = {
-        "type": "prepared_hydrology",
-        "label": "Prepared hydrology",
-    }
-    document["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
-    original_checksum = compute_document_checksum(document)
-    captured = CapturedModel.model_validate(
-        {
-            "id": document["id"],
-            "version": document["version"],
-            "definitionSha256": original_checksum,
-            "definition": document,
-        }
-    )
-    assert captured.definition.to_document() == document
-    assert captured.definition.digest == original_checksum
-    assert (
-        ModelRegistry((captured.definition,)).get(document["id"], "3.0.0")
-        == captured.definition
-    )
 
 
 class CalibrationSettings(BaseModel):
@@ -842,143 +806,14 @@ def test_operation_rejects_fixed_configuration_outside_its_schema(
         ModelRegistry((ModelDefinition.model_validate(document),))
 
 
-def historical_downstream_run(tmp_path: Path) -> dict[str, Any]:
-    """Build an old Run YAML document with its original hydrology registration metadata.
-
-    Args:
-        tmp_path: Temporary original-source fixtures for historical report checksums.
-
-    Returns:
-        A path-free version 3 model run using the historical invocation wire format.
-    """
-    from eolab_app.processing.model_yaml import compute_document_checksum
-    from test_prepared_hydrology import legacy_snapshot, prepare_sources
-
-    source_definition, dem, watersheds, _ = prepare_sources(tmp_path)
-    report = legacy_snapshot(source_definition, dem, watersheds)
-    definition = (
-        ModelRegistry.load_installed()
-        .get("downstream-beneficiaries", "4.0.0")
-        .to_document()
-    )
-    definition["version"] = "3.0.0"
-    definition["inputs"]["hydrology"] = {
-        "type": "prepared_hydrology",
-        "label": "Prepared hydrology",
-    }
-    definition["steps"][0]["inputs"]["hydrology"] = {"input": "hydrology"}
-    return {
-        "schema": "eolab.run/v1",
-        "jobId": "a" * 32,
-        "capturedAt": "2026-01-01T00:00:00Z",
-        "invocation": {
-            "model": {
-                "id": definition["id"],
-                "version": definition["version"],
-                "definitionSha256": compute_document_checksum(definition),
-                "definition": definition,
-            },
-            "inputs": {
-                "starting_mask": {
-                    "kind": "catalogRaster",
-                    "source": source_definition.dem.model_dump(by_alias=True),
-                },
-                "values": source_definition.dem.model_dump(by_alias=True),
-                "hydrology": report.reference.model_dump(),
-            },
-            "parameters": {
-                name: value["default"]
-                for name, value in definition["parameters"].items()
-            },
-            "label": "Historical calculation",
-            "hydrology": {"hydrology": report.model_dump(mode="json", by_alias=True)},
-        },
-        "execution": {
-            "state": "pending",
-            "applicationBuild": "historical-test",
-            "operations": {
-                "analysis": {
-                    "id": definition["steps"][0]["operation"],
-                    "implementationRevision": "b" * 64,
-                }
-            },
-            "sources": {"values": {"sourceSignature": "c" * 64, "band": 1}},
-        },
-    }
-
-
-def test_historical_run_preserves_operation_metadata_and_model_checksum(
-    tmp_path: Path,
-) -> None:
-    """Read and export an old run without moving or changing its operation-owned metadata.
-
-    Args:
-        tmp_path: Sources used to construct the historical registration record.
-    """
-    saved = historical_downstream_run(tmp_path)
-    restored = RunDocument.model_validate(
-        parse_yaml(export_yaml(saved, run=True), run=True)
-    )
-    exported = restored.model_dump(mode="json", by_alias=True, exclude_unset=True)
-    assert exported == saved
-    assert (
-        restored.invocation.model.definition.digest
-        == saved["invocation"]["model"]["definitionSha256"]
-    )
-    assert (
-        RunDocument.model_validate(
-            parse_yaml(export_yaml(exported, run=True), run=True)
-        )
-        == restored
-    )
-
-
-@pytest.mark.parametrize(
-    "problem",
-    [
-        "missing",
-        "empty",
-        "unknown_extra",
-        "unknown_report",
-        "mismatched_reference",
-        "malformed_report",
-    ],
-)
-def test_historical_run_rejects_invalid_operation_metadata(
-    tmp_path: Path, problem: str
-) -> None:
-    """Keep historical metadata validation at its owning operation's boundary.
-
-    Args:
-        tmp_path: Original sources for a valid historical invocation fixture.
-        problem: Missing, unknown or inconsistent saved metadata to reject.
-    """
-    saved = historical_downstream_run(tmp_path)
-    invocation = saved["invocation"]
-    if problem == "missing":
-        invocation.pop("hydrology")
-    elif problem == "empty":
-        invocation["hydrology"] = {}
-    elif problem == "unknown_extra":
-        invocation["arbitrary"] = {"path": "/private/input.tif"}
-    elif problem == "unknown_report":
-        invocation["hydrology"]["other"] = invocation["hydrology"]["hydrology"]
-    elif problem == "mismatched_reference":
-        invocation["inputs"]["hydrology"]["effectiveSha256"] = "f" * 64
-    else:
-        invocation["hydrology"]["hydrology"]["unknown"] = True
-    with pytest.raises(ValidationError):
-        RunDocument.model_validate(saved)
-
-
 @pytest.mark.parametrize("extra", ["hydrology", "arbitrary"])
-def test_saved_invocation_rejects_extras_without_an_operation_contract(
+def test_saved_invocation_rejects_extra_fields(
     extra: str,
 ) -> None:
-    """An operation with no metadata contract cannot accept unknown persisted fields.
+    """Saved model inputs reject fields outside the invocation schema.
 
     Args:
-        extra: Undeclared metadata field, including another operation's historical field.
+        extra: Undeclared metadata field.
     """
     _, invocation = build_model_calculation_request(
         ModelRunRequest.model_validate(summary_request()),

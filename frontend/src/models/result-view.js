@@ -1,5 +1,5 @@
 /** Present shared output types using the labels captured from a model's YAML. */
-import { processingDownloadUrl, processingArtifactDownloadUrl } from "../processing/api.js";
+import { processingArtifactDownloadUrl } from "../processing/api.js";
 import { formatDownloadBytes } from "../processing/presentation.js";
 import { calculationValue } from "../processing/calculation-result-view.js";
 
@@ -36,30 +36,21 @@ function statisticsCards(result, element) {
 }
 
 const RESULT_VIEWS = new Map([
-    ["raster", {cards: rasterCards, download: "Download GeoTIFF"}],
-    ["statistics", {cards: statisticsCards, download: "Download CSV"}],
+    ["raster", {cards: rasterCards}],
+    ["statistics", {cards: statisticsCards}],
 ]);
 
-/** Render a validated model output and its owned download links.
+/** Render the values or raster dimensions from a validated model output.
  * @param {HTMLElement} root Container owned by the model run view.
  * @param {Object} result Output validated at the Processing API boundary.
- * @param {string} jobId Owning run's opaque identity.
  * @param {Function} element Owning view's DOM element factory.
- * @param {boolean} [showDownloads=true] Include legacy links when no file inventory is available.
  * @return {void}
  * @throws {TypeError} If an internal caller bypasses output-type validation.
  */
-export function renderModelResult(root, result, jobId, element, showDownloads = true) {
+export function renderModelResult(root, result, element) {
     const view = RESULT_VIEWS.get(result.kind);
     if (!view) throw new TypeError("Unsupported model output type.");
     root.append(...view.cards(result, element));
-    if (!showDownloads) return;
-    const links = element("div", "", "models-actions");
-    for (const [kind, label, url] of [["result", view.download, result.url], ["provenance", "Download provenance", result.provenanceUrl]]) {
-        const link = element("a", label);
-        link.href = processingDownloadUrl(url, jobId, kind); link.download = ""; links.append(link);
-    }
-    root.append(links);
 }
 
 /** Show each complete result and retained intermediate in its owning run.

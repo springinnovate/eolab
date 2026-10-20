@@ -35,6 +35,7 @@ from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.sampling_area import WholeRasterSamplingArea
 from test_raster_aggregates import make_spec as summary_spec
 from test_raster_clips import make_spec as clip_spec, LIMITS as CLIP_LIMITS
+from catalog_selection_support import write_selection
 
 
 def test_real_mask_with_different_native_blocks_is_counted_and_read(
@@ -268,7 +269,13 @@ def test_clip_output_can_be_summarized_and_clipped_again(tmp_path: Path) -> None
             [[-0.9, -0.9], [-0.9, 0.9], [0.9, 0.9], [0.9, -0.9], [-0.9, -0.9]],
         ],
     }
-    area = ClipArea(kind="aoi", bounds=(-2, -2, 2, 2), geometries=(polygon,))
+    selected = write_selection(tmp_path / "selected.gpkg", [polygon])
+    area = ClipArea(
+        kind="catalogSelection",
+        bounds=(-2, -2, 2, 2),
+        catalogSelection=selected.selection,
+        resolved=selected,
+    )
     attempt = tmp_path / "clip"
     attempt.mkdir()
     clip = create_clip(source, clip_spec(source, area), attempt, CLIP_LIMITS)

@@ -63,14 +63,12 @@ def catalog_vector_feature_count(
 
 def require_assessed_metadata(
     item: dict[str, Any],
-    source_signature: tuple[tuple[str, int, int, int, int, int], ...],
     operation: str,
 ) -> dict[str, Any]:
-    """Require current eligible assessment metadata for a source signature.
+    """Require eligible assessment metadata for the deployed vector reader.
 
     Args:
         item: Authoritative Catalog Item.
-        source_signature: Current complete mounted-source signature.
         operation: User-facing operation name for a safe error.
 
     Returns:
@@ -78,7 +76,7 @@ def require_assessed_metadata(
 
     Raises:
         VectorConflictError: If the Item was not successfully assessed against
-            the current source and deployed reader contract.
+            the deployed reader contract.
     """
     metadata = item.get("properties", {}).get(VECTOR_RENDERING_METADATA_KEY)
     if (
@@ -87,9 +85,6 @@ def require_assessed_metadata(
         or metadata.get("eligible") is not True
         or metadata.get("reader_contract") != VECTOR_READER_CONTRACT
         or metadata.get("reader_compatible") is not True
-        or metadata.get("source_signature") != [
-            list(entry) for entry in source_signature
-        ]
     ):
         raise VectorConflictError(
             f"{operation} unavailable: reassess the current vector Item before "

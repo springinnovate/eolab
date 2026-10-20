@@ -13,7 +13,6 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.source_authorization import (
     CatalogRasterSourceAuthorizer,
 )
-from eolab_app.raster.sources import source_signature
 
 
 class _Catalog:
@@ -92,7 +91,7 @@ def test_source_authorization_ignores_rendering_and_geoprocessor_state(
     """
     source_path = tmp_path / "independent.tif"
     source_path.write_bytes(b"source")
-    signature = source_signature(source_path)
+    signature = RasterSourceIdentity.read(source_path)
     authorizer = CatalogRasterSourceAuthorizer(
         _Catalog(_item(signature)),
         _Resolver(source_path),
@@ -118,7 +117,7 @@ def test_source_authorization_accepts_legacy_identity_after_remount(
     """
     source_path = tmp_path / "independent.tif"
     source_path.write_bytes(b"source")
-    signature = source_signature(source_path)
+    signature = RasterSourceIdentity.read(source_path)
     item = _item(signature)
     metadata = item["assets"]["data"]["eolab:source"]
     assert isinstance(metadata, dict)
@@ -147,7 +146,7 @@ def test_source_authorization_retains_catalog_identity_without_file_rechecks(
     """
     source_path = tmp_path / "stale.tif"
     source_path.write_bytes(b"first")
-    scanned_signature = source_signature(source_path)
+    scanned_signature = RasterSourceIdentity.read(source_path)
     request = CatalogRasterRequest(
         collectionId="eolab-mounted-geotiffs",
         itemId="geotiff-0123456789abcdef01234567",

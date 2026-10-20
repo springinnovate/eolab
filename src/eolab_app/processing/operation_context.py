@@ -24,7 +24,7 @@ class OperationContext:
         native: Supervised native execution lane.
         run_native: Bounded execution function supplied by the worker.
         reuse_results: Whether this job may use the scalar-results cache.
-        source_checksum: Verified published checksum for a private raster input.
+        source_checksum: Published checksum for a private raster input.
         rasters: Additional raster inputs authorized for this operation attempt.
         downstream_limits: Shared lifecycle settings for downstream work.
     """

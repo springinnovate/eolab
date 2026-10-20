@@ -9,8 +9,7 @@ import httpx2
 import rasterio
 from rasterio.transform import from_origin
 
-from eolab_app.raster.sources import source_signature
-
+from eolab_app.raster.source_identity import RasterSourceIdentity
 
 TEST_GEOTIFF_ITEM_ID = "geotiff-0123456789abcdef01234567"
 RASTER_STYLE_ENVIRONMENT_ERROR = (
@@ -130,7 +129,7 @@ def mounted_geotiff_item(
         else None
     )
     source_identity = (
-        source_signature(source_path).to_catalog()
+        RasterSourceIdentity.read(source_path).to_catalog()
         if source_path is not None and source_path.is_file()
         else [0, 0, 0, 0]
     )

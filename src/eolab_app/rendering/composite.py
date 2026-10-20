@@ -132,7 +132,7 @@ class CompositeMapRenderingService:
 
         Raises:
             PublishedLayerNotAuthorizedError: If any layer is not current.
-            PublishedLayerChangedError: If a mounted source changed.
+            PublishedLayerChangedError: If a filter expired or source binding changed.
             PublishedLayerRequestError: If any requested style is not current.
         """
         sld_document, interpolations = await asyncio.to_thread(
@@ -168,7 +168,7 @@ class CompositeMapRenderingService:
 
         Raises:
             CompositeMapPlanUnavailableError: If this process lacks the plan.
-            PublishedLayerChangedError: If a mounted source changed.
+            PublishedLayerChangedError: If a filter expired or source binding changed.
             PublishedLayerRequestError: If an authorized style was superseded.
         """
         plan = self._store.get(plan_id)
@@ -196,14 +196,14 @@ class CompositeMapRenderingService:
         )
 
     def _require_current_plan(self, request: CompositeMapPlanRequest) -> None:
-        """Recheck every source and style without rebuilding the SLD.
+        """Recheck layer authorization and style without rebuilding the SLD.
 
         Args:
             request: Previously authorized immutable plan.
 
         Raises:
             PublishedLayerNotAuthorizedError: If a layer is no longer known.
-            PublishedLayerChangedError: If a mounted source changed.
+            PublishedLayerChangedError: If a filter expired or source binding changed.
             PublishedLayerRequestError: If a style was superseded.
         """
         for layer in request.layers:
@@ -255,7 +255,7 @@ class CompositeMapRenderingService:
 
         Raises:
             PublishedLayerNotAuthorizedError: If no feature owns the layer.
-            PublishedLayerChangedError: If the owning mounted source changed.
+            PublishedLayerChangedError: If a filter expired or source binding changed.
         """
         for registry in self._published_layers:
             try:

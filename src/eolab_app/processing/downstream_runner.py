@@ -73,7 +73,7 @@ def write_watershed_view(
     and the upstream traversal unchanged. Its source is an authorized native path.
 
     Args:
-        sources: Resolved original files with source identity checks.
+        sources: Authorized original files and selected catalog layers.
         spec: Field mappings captured from Model YAML.
         directory: Private directory owned by this calculation attempt.
 
@@ -82,11 +82,9 @@ def write_watershed_view(
 
     Raises:
         ProcessingError: If the configuration cannot represent HydroBASINS links.
-        SelectionUnavailableError: If the watershed source changed.
         OSError: If the private view cannot be written.
     """
-    sources.network.require_current()
-    topology = spec.inputs.hydrology_sources.topology
+    topology = spec.inputs.hydrology.topology
     if topology.idType != "integer" or topology.terminalIdField is None:
         raise ProcessingError(
             "unsupported_hydrology",
@@ -460,7 +458,7 @@ def run_original_downstream(
                 "beneficiariesRevision": BENEFICIARIES_REVISION,
                 "ecoshardRevision": ECOSHARD_REVISION,
                 "inputs": model_inputs.model_dump(mode="json", by_alias=True),
-                "watershedSelection": spec.watershed_selection.model_dump(
+                "watershedSelection": spec.watershedSelection.model_dump(
                     mode="json", by_alias=True
                 ),
                 "numericalPolicy": {

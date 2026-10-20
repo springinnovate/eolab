@@ -11,6 +11,7 @@ import psycopg
 import pytest
 
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.aggregate_models import UnpreparedCalculation
 from test_processing_jobs import boundary, store, HEADERS
 from test_processing_calculations import (
     calculation_inputs,
@@ -219,7 +220,11 @@ def test_cached_area_skips_geometry_work_even_after_entry_expires(
     monkeypatch.setattr(worker_module, "run_process", forbid_native_work)
     submitted = submit_calculation(client, calculation_inputs(client, **area))
     claimed = store.claim_next_job()
-    asyncio.run(worker._prepare_operation(claimed))
+    asyncio.run(
+        worker._prepare_operation(
+            claimed, UnpreparedCalculation.model_validate(claimed["spec"]), None
+        )
+    )
     assert claimed["spec"]["cachedRows"] == original["result"]["rows"]
     with psycopg.connect(store.conninfo) as connection:
         connection.execute("DELETE FROM processing.calculation_results")

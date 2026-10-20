@@ -18,7 +18,7 @@ class PublishedLayerNotAuthorizedError(Exception):
 
 
 class PublishedLayerChangedError(Exception):
-    """Raised when an authorized layer's source is no longer current."""
+    """Raised when a retained layer filter expires or its source binding changes."""
 
 
 class PublishedLayerRequestError(Exception):

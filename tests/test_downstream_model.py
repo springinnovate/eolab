@@ -390,52 +390,20 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
         calculate_downstream(sources, plan, directory, limits)
 
 
-@pytest.mark.parametrize("version", [1, 2])
-def test_historical_numerical_policy_remains_readable(version: int) -> None:
-    """Saved runs keep their original revisions and numerical descriptions.
-
-    Args:
-        version: Historical reimplementation or original open-edge WWF policy.
-    """
-    from eolab_app.processing.downstream_models import (
-        DownstreamNumericalPolicy,
-        WrappedDownstreamNumericalPolicy,
-    )
-    from eolab_app.processing.model_operations import get_model_operation
-
-    historical = (
-        DownstreamNumericalPolicy(bufferMetres=5000)
-        if version == 1
-        else WrappedDownstreamNumericalPolicy(
-            bufferMetres=5000, wgs84PixelSize=1, distancePixelSizeMetres=100000
-        )
-    ).model_dump(mode="json")
-    assert historical["ecoshardRevision"] == "f7e2adba2a4d41128aea941bb747470418d2dce9"
-    if version == 2:
-        assert (
-            historical["beneficiariesRevision"]
-            == "7e32ae28540ab53178248758a6f40affea8d6ff6"
-        )
-    assert "pitFillSearchLimit" not in historical
-    operation = get_model_operation("hydrology.downstream_beneficiaries.v1")
-    assert (
-        operation.policy_type.model_validate(historical).model_dump(mode="json")
-        == historical
-    )
-
-
 @pytest.mark.parametrize("pit_fill_search_limit", [None, 100, 1000, -1, 0, 2**63 - 1])
 def test_closed_edge_policy_records_current_filling_settings(
     tmp_path: Path, pit_fill_search_limit: int | None
 ) -> None:
-    """New runs record the requested filling behavior without changing old policies.
+    """Record the configured filling behavior in the current numerical policy.
 
     Args:
         tmp_path: Isolated native source metadata for a prepared plan.
         pit_fill_search_limit: Configured EcoShard search cutoff, or deployment default.
     """
     from eolab_app.processing.downstream_operation import describe_downstream_policy
-    from eolab_app.processing.downstream_models import DownstreamPolicy
+    from eolab_app.processing.downstream_models import (
+        ClosedEdgeDownstreamNumericalPolicy,
+    )
 
     sources, request, limits = downstream_fixture(tmp_path)
     if pit_fill_search_limit is not None:
@@ -449,7 +417,12 @@ def test_closed_edge_policy_records_current_filling_settings(
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
-    assert DownstreamPolicy.model_validate(saved).model_dump(mode="json") == saved
+    assert (
+        ClosedEdgeDownstreamNumericalPolicy.model_validate(saved).model_dump(
+            mode="json"
+        )
+        == saved
+    )
 
 
 def test_saved_plan_preserves_pit_filling_after_settings_change(
@@ -484,49 +457,6 @@ def test_saved_plan_preserves_pit_filling_after_settings_change(
     assert describe_downstream_policy(saved).pitFillSearchLimit == 17
 
 
-def test_historical_plan_uses_original_pit_fill_cutoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Plans without a saved cutoff retain 100 regardless of the current environment.
-
-    Args:
-        tmp_path: Isolated native sources for a historical plan.
-        monkeypatch: Supply a different current administrator setting.
-    """
-    from eolab_app.processing.downstream_models import DownstreamPlan
-    from eolab_app.processing.downstream_operation import describe_downstream_policy
-
-    sources, request, limits = downstream_fixture(tmp_path)
-    historical = plan_downstream(sources, request, limits).model_dump(
-        mode="json", by_alias=True
-    )
-    historical.pop("pit_fill_search_limit")
-    monkeypatch.setenv("PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT", "1000")
-    restored = DownstreamPlan.model_validate(historical)
-    assert restored.pit_fill_search_limit == 100
-    assert describe_downstream_policy(restored).pitFillSearchLimit == 100
-
-
-def test_historical_closed_edge_policy_uses_original_pit_fill_cutoff(
-    tmp_path: Path,
-) -> None:
-    """Policies without a saved cutoff retain 100 when the deployment default changes.
-
-    Args:
-        tmp_path: Isolated native sources for a historical numerical policy.
-    """
-    from eolab_app.processing.downstream_models import DownstreamPolicy
-    from eolab_app.processing.downstream_operation import describe_downstream_policy
-
-    sources, request, limits = downstream_fixture(tmp_path)
-    historical = describe_downstream_policy(
-        plan_downstream(sources, request, limits)
-    ).model_dump(mode="json")
-    historical.pop("pitFillSearchLimit")
-    restored = DownstreamPolicy.model_validate(historical)
-    assert restored.root.pitFillSearchLimit == 100
-
-
 @pytest.mark.parametrize("value", [True, "100", 1.5, -2, 2**63])
 def test_saved_pit_fill_cutoff_rejects_invalid_values(
     tmp_path: Path, value: Any
@@ -539,7 +469,10 @@ def test_saved_pit_fill_cutoff_rejects_invalid_values(
     """
     from pydantic import ValidationError
 
-    from eolab_app.processing.downstream_models import DownstreamPlan, DownstreamPolicy
+    from eolab_app.processing.downstream_models import (
+        DownstreamPlan,
+        ClosedEdgeDownstreamNumericalPolicy,
+    )
     from eolab_app.processing.downstream_operation import describe_downstream_policy
 
     sources, request, limits = downstream_fixture(tmp_path)
@@ -551,7 +484,7 @@ def test_saved_pit_fill_cutoff_rejects_invalid_values(
     saved_policy = describe_downstream_policy(plan).model_dump(mode="json")
     saved_policy["pitFillSearchLimit"] = value
     with pytest.raises(ValidationError, match="pitFillSearchLimit"):
-        DownstreamPolicy.model_validate(saved_policy)
+        ClosedEdgeDownstreamNumericalPolicy.model_validate(saved_policy)
 
 
 def test_upstream_relative_scratch_stays_in_run_after_failure(
@@ -720,14 +653,15 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     from eolab_app.processing.model_definitions import ModelDefinition
 
     document = registry.get("downstream-beneficiaries", "4.0.0").to_document()
-    document["steps"][0]["inputs"]["hydrology"]["value"] = (
-        request.hydrology_sources.model_dump(mode="json", by_alias=True)
+    document["steps"][0]["inputs"]["hydrology"]["value"] = request.hydrology.model_dump(
+        mode="json", by_alias=True
     )
     definition = ModelDefinition.model_validate(document)
     registry = ModelRegistry((definition,))
     submitted = ModelRunRequest(
         requestId=request.requestId,
         label=request.label,
+        utcOffsetMinutes=0,
         model={
             "id": definition.id,
             "version": definition.version,
@@ -761,7 +695,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     )
     references = {
         request.values.item_id: sources.rasters["values"],
-        request.hydrology_sources.dem.item_id: sources.rasters["dem"],
+        request.hydrology.dem.item_id: sources.rasters["dem"],
         request.starting_mask.source.item_id: sources.rasters["starting_mask"],
     }
 
@@ -785,6 +719,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         "spec": prepared.specification,
         "summary": prepared.summary,
         "retained_metadata": prepared.retained_metadata,
+        "presentation": {"utcOffsetMinutes": 0},
         "reserved_bytes": 0,
         "created_at": now,
         "updated_at": now,
@@ -1192,7 +1127,7 @@ def test_missing_configured_raster_names_the_runtime_input(
 def test_worker_captures_configured_watershed_then_keeps_that_identity(
     tmp_path: Path,
 ) -> None:
-    """Fresh runs resolve current sources and execution rechecks only that run's identity.
+    """Fresh runs capture configured sources and execution resolves those descriptors.
 
     Args:
         tmp_path: Real source files and current catalog descriptors.
@@ -1201,7 +1136,6 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     from eolab_app.processing.downstream_operation import (
         resolve_downstream_sources,
         resolve_downstream_execution_inputs,
-        check_downstream_execution,
     )
 
     sources, request, limits = downstream_fixture(tmp_path)
@@ -1211,7 +1145,6 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     )
     context = SimpleNamespace(
         areas=reader,
-        source_checksum=None,
         rasters={
             name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
             for name, path in sources.rasters.items()
@@ -1222,63 +1155,21 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
         sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
     )
     resolved = asyncio.run(resolve_downstream_sources(context, request, values))
-    reader.resolve_source.assert_awaited_once_with(request.hydrology_sources.watersheds)
+    reader.resolve_source.assert_awaited_once_with(request.hydrology.watersheds)
     reader.resolve_for_sampling.assert_not_awaited()
     plan = plan_downstream(resolved, request, limits)
     assert plan.watershedSelection == sources.network.selection
     restored = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
-    assert restored.watershed_selection == sources.network.selection
+    assert restored.watershedSelection == sources.network.selection
     execution_sources, _ = asyncio.run(
         resolve_downstream_execution_inputs(context, restored, values)
     )
     assert execution_sources.network == sources.network
     reader.resolve_for_sampling.assert_awaited_once_with(sources.network.selection)
-    reader.resolve_for_sampling.side_effect = SelectionUnavailableError("changed")
+    reader.resolve_for_sampling.side_effect = SelectionUnavailableError("unavailable")
     with pytest.raises(ProcessingError, match="watershed layer"):
         asyncio.run(resolve_downstream_execution_inputs(context, restored, values))
-    with pytest.raises(ProcessingError, match="watershed layer"):
-        asyncio.run(check_downstream_execution(context, restored))
     assert reader.resolve_source.await_count == 1
-
-
-def test_worker_does_not_compare_legacy_registration_fingerprints(
-    tmp_path: Path,
-) -> None:
-    """Retained registration metadata does not become a new-run eligibility gate.
-
-    Args:
-        tmp_path: Configured source files and legacy registration metadata.
-    """
-    from eolab_app.processing.downstream_operation import resolve_downstream_sources
-    from test_prepared_hydrology import legacy_snapshot
-
-    sources, request, limits = downstream_fixture(tmp_path / "current")
-    definition, dem, network, _ = prepare_sources(tmp_path / "historical")
-    historical = legacy_snapshot(definition, dem, network)
-    request = request.model_copy(update={"hydrology": historical})
-    reader = SimpleNamespace(
-        resolve_source=AsyncMock(return_value=sources.network),
-        resolve_for_sampling=AsyncMock(
-            side_effect=AssertionError("Historical signature used")
-        ),
-    )
-    context = SimpleNamespace(
-        areas=reader,
-        rasters={
-            name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
-            for name, path in sources.rasters.items()
-            if name != "values"
-        },
-    )
-    values = AuthorizedRaster(
-        sources.rasters["values"], RasterSourceIdentity.read(sources.rasters["values"])
-    )
-    resolved = asyncio.run(resolve_downstream_sources(context, request, values))
-    assert resolved.network == sources.network
-    reader.resolve_source.assert_awaited_once_with(historical.definition.watersheds)
-    reader.resolve_for_sampling.assert_not_awaited()
-    plan = plan_downstream(resolved, request, limits)
-    assert plan.watershed_selection == sources.network.selection
 
 
 def test_missing_configured_watershed_names_the_runtime_input(tmp_path: Path) -> None:

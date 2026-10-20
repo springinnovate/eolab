@@ -135,14 +135,14 @@ def test_actual_feature_and_coordinate_budgets(
 
 @pytest.mark.parametrize(
     "field,value",
-    [("assetKey", "other"), ("layerName", "other"), ("sourceSignature", "f" * 64)],
+    [("assetKey", "other"), ("layerName", "other")],
 )
 def test_descriptor_reauthorization_checks_all_source_identity(
     source: ResolvedCatalogSelection,
     field: str,
     value: str,
 ) -> None:
-    """A caller cannot substitute an asset, native layer, or stale source signature."""
+    """A caller cannot substitute an asset or native layer."""
     catalog = FixtureCatalog(
         ResolvedVectorSource("mounted", "geopackage", source.path, "data", "polygons")
     )
@@ -205,17 +205,16 @@ def test_selection_reauthorizes_after_restart_without_storage(
     asyncio.run(scenario())
 
 
-def test_configured_source_captures_current_identity_without_scanning(
+def test_configured_source_trusts_immutable_identity_without_scanning(
     source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """New resolutions follow current source metadata while saved selections stay strict.
+    """Resolve the configured source without scanning its features.
 
     Args:
         source: Real configured polygon layer.
-        monkeypatch: Reject feature access and simulate a replacement source identity.
+        monkeypatch: Reject feature access during source resolution.
     """
     from eolab_app.catalog.vector_contract import CatalogVectorRequest
-    from eolab_app.vector import selection_source
     from unittest.mock import AsyncMock
 
     catalog = FixtureCatalog(
@@ -237,29 +236,12 @@ def test_configured_source_captures_current_identity_without_scanning(
             VectorSamplingService(catalog, catalog).resolve_source(request)
         )
     assert not first.selection.filter.active
-    original_signature = selection_source.vector_source_signature
-
-    def changed_signature(value: ResolvedVectorSource) -> tuple[tuple[Any, ...], ...]:
-        """Change only source identity without opening or traversing the native layer.
-
-        Args:
-            value: Configured native source returned by the fixture catalog.
-
-        Returns:
-            Complete component signatures with a changed device number.
-        """
-        return tuple(
-            (name, device + 1, *rest)
-            for name, device, *rest in original_signature(value)
+    with pytest.raises(ValueError):
+        CatalogSelection.model_validate(
+            {**first.selection.model_dump(), "path": "/private"}
         )
-
-    monkeypatch.setattr(selection_source, "vector_source_signature", changed_signature)
     restarted = VectorSamplingService(catalog, catalog)
-    current = asyncio.run(restarted.resolve_source(request))
-    assert current.selection.sourceSignature != first.selection.sourceSignature
-    with pytest.raises(SelectionUnavailableError, match="identity changed"):
-        asyncio.run(restarted.resolve_for_sampling(first.selection))
     assert (
-        asyncio.run(restarted.resolve_for_sampling(current.selection)).selection
-        == current.selection
+        asyncio.run(restarted.resolve_for_sampling(first.selection)).selection
+        == first.selection
     )

@@ -3,7 +3,6 @@ import { validateCalculationRows, validateModelResult } from "./model-results.js
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
-import { hydrologyKey, hydrologyReference, validateHydrologyReference, validatePreparedHydrology } from "./hydrology.js";
 
 /** Serialize one raster identity without carrying display state or file paths.
  * @param {Object} source Catalog item or owned run-file source.
@@ -125,7 +124,7 @@ function validateJob(job) {
             ![job.progress.completed, job.progress.total].every(value => value == null || Number.isSafeInteger(value) && value >= 0) ||
             job.progress.completed != null && job.progress.total != null && job.progress.completed > job.progress.total)
             throw new Error("Processing returned invalid model run details.");
-        if (job.artifacts != null) validateModelArtifacts(job.artifacts, job);
+        validateModelArtifacts(job.artifacts, job);
         if (job.deletionUndo != null) {
             validateProcessingId(job.deletionUndo.deletionId);
             if (job.status !== "deleted" || !Number.isFinite(Date.parse(job.deletionUndo.expiresAt)))
@@ -157,7 +156,7 @@ function validateJob(job) {
  * @throws {Error} If identities, availability, sizes or download URLs are invalid.
  */
 function validateModelArtifacts(manifest, job) {
-    if (manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
+    if (!manifest || manifest.jobId !== job.jobId || manifest.expiresAt !== job.expiresAt ||
         !["pending", "available", "unavailable"].includes(manifest.availability) ||
         !Array.isArray(manifest.files) ||
         !Number.isSafeInteger(manifest.totalBytes) || manifest.totalBytes < 0 ||
@@ -469,12 +468,6 @@ export class ProcessingApiClient {
         validateAvailableModel({...invocation.model.definition, definitionSha256: invocation.model.definitionSha256});
         if (!invocation.inputs || !invocation.parameters || typeof invocation.label !== "string")
             throw new Error("Invalid saved model inputs.");
-        for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
-            if (input.type !== "prepared_hydrology") continue;
-            const reference = validateHydrologyReference(invocation.inputs[name]);
-            const snapshot = validatePreparedHydrology(invocation.hydrology?.[name]);
-            if (hydrologyKey(reference) !== hydrologyKey(hydrologyReference(snapshot))) throw new Error("Saved hydrology does not match the run's inputs.");
-        }
         return invocation;
     }
 
