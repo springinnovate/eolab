@@ -907,10 +907,10 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     first_status, second_status = asyncio.run(run_twice())
 
     assert first_status["state"] == "completed"
-    assert first_status["discovered"] == 3
-    assert first_status["processed"] == 3
-    assert first_status["indexed"] == 1
-    assert first_status["alreadyInCatalog"] == 0
+    assert first_status["sourceDatasetsDiscovered"] == 3
+    assert first_status["sourceDatasetsProcessed"] == 3
+    assert first_status["catalogItemsWritten"] == 1
+    assert first_status["catalogItemsAlreadyPresent"] == 0
     assert first_status["failed"] == 2
     assert set(first_status["timing"]) == {
         "elapsedSeconds",
@@ -932,8 +932,8 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         "invalid.tiff",
         "missing-crs.tif",
     }
-    assert second_status["indexed"] == 1
-    assert second_status["alreadyInCatalog"] == 1
+    assert second_status["catalogItemsWritten"] == 1
+    assert second_status["catalogItemsAlreadyPresent"] == 1
     assert len(catalog_writer.write_session.collections) == 2
     assert len(catalog_writer.write_session.items) == 1
     assert catalog_database.search_count_cache_invalidations == 2
@@ -963,9 +963,9 @@ def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["discovered"] == 2
-    assert status["processed"] == 2
-    assert status["indexed"] == 1
+    assert status["sourceDatasetsDiscovered"] == 2
+    assert status["sourceDatasetsProcessed"] == 2
+    assert status["catalogItemsWritten"] == 1
     assert status["failed"] == 1
     assert status["errors"] == [
         {
@@ -1008,7 +1008,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["indexed"] == 2
+    assert status["catalogItemsWritten"] == 2
     assert {
         item["properties"]["title"]
         for item in catalog_writer.write_session.items.values()
@@ -1045,12 +1045,12 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
     first_status, second_status = asyncio.run(run_twice())
 
     assert first_status["state"] == "completed"
-    assert first_status["discovered"] == 2
-    assert first_status["processed"] == 2
-    assert first_status["indexed"] == 2
-    assert first_status["alreadyInCatalog"] == 0
-    assert second_status["indexed"] == 2
-    assert second_status["alreadyInCatalog"] == 2
+    assert first_status["sourceDatasetsDiscovered"] == 2
+    assert first_status["sourceDatasetsProcessed"] == 2
+    assert first_status["catalogItemsWritten"] == 2
+    assert first_status["catalogItemsAlreadyPresent"] == 0
+    assert second_status["catalogItemsWritten"] == 2
+    assert second_status["catalogItemsAlreadyPresent"] == 2
     assert set(catalog_writer.write_session.collections) == {
         "eolab-mounted-geotiffs",
         "eolab-mounted-vectors",
@@ -1416,7 +1416,7 @@ def test_reconciliation_overlaps_metadata_extraction(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["indexed"] == 1
+    assert status["catalogItemsWritten"] == 1
     assert status["reconciliation"]["checked"] == 1
 
 
@@ -1494,9 +1494,9 @@ def test_scan_continues_after_an_incomplete_shapefile(tmp_path: Path) -> None:
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["discovered"] == 2
-    assert status["processed"] == 2
-    assert status["indexed"] == 1
+    assert status["sourceDatasetsDiscovered"] == 2
+    assert status["sourceDatasetsProcessed"] == 2
+    assert status["catalogItemsWritten"] == 1
     assert status["failed"] == 1
     assert status["errors"] == [{
         "path": "incomplete.shp",
@@ -1529,7 +1529,7 @@ def test_scan_continues_after_an_unreadable_shapefile(tmp_path: Path) -> None:
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["indexed"] == 1
+    assert status["catalogItemsWritten"] == 1
     assert status["failed"] == 1
     assert status["errors"][0]["path"] == "corrupt.shp"
     assert status["errors"][0]["error"]
@@ -1578,8 +1578,8 @@ def test_scan_continues_after_item_finalization_failure(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["processed"] == 2
-    assert status["indexed"] == 1
+    assert status["sourceDatasetsProcessed"] == 2
+    assert status["catalogItemsWritten"] == 1
     assert status["failed"] == 1
     assert status["errors"] == [{
         "path": "rejected.tif",
@@ -1635,8 +1635,8 @@ def test_existing_items_are_classified_by_collection_and_identifier(
 
     status = asyncio.run(run_scan())
 
-    assert status["indexed"] == 2
-    assert status["alreadyInCatalog"] == 1
+    assert status["catalogItemsWritten"] == 2
+    assert status["catalogItemsAlreadyPresent"] == 1
     assert [
         {item["collection"] for item in item_batch}
         for item_batch in catalog_writer.write_session.item_batches
@@ -1718,9 +1718,9 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         ("eolab-mounted-vectors", 40),
         ("eolab-mounted-vectors", 40),
     ]
-    assert status["processed"] == 210
-    assert status["indexed"] == 210
-    assert status["alreadyInCatalog"] == 0
+    assert status["sourceDatasetsProcessed"] == 210
+    assert status["catalogItemsWritten"] == 210
+    assert status["catalogItemsAlreadyPresent"] == 0
     assert status["failed"] == 0
 
 
@@ -1763,7 +1763,7 @@ def test_scan_runs_the_configured_number_of_catalog_writers(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["indexed"] == 405
+    assert status["catalogItemsWritten"] == 405
     assert concurrent_session.maximum_concurrent_writes == 4
     assert sorted(map(len, concurrent_session.item_batches)) == [
         5,
@@ -1814,7 +1814,7 @@ def test_scan_cancels_concurrent_writers_after_one_fails(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "failed"
-    assert status["indexed"] == 0
+    assert status["catalogItemsWritten"] == 0
     assert concurrent_session.maximum_concurrent_writes == 4
     assert concurrent_session.cancelled_writes == 3
     assert catalog_database.search_count_cache_invalidations == 0
@@ -1890,7 +1890,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "completed"
-    assert status["processed"] == 105
+    assert status["sourceDatasetsProcessed"] == 105
     assert status["failed"] == 105
     assert len(status["errors"]) == 7
     assert status["errorsTruncated"] is True
@@ -1938,8 +1938,8 @@ def test_scan_stops_after_a_bulk_catalog_failure(
     status = asyncio.run(run_scan())
 
     assert status["state"] == "failed"
-    assert status["processed"] == 100
-    assert status["indexed"] == 0
+    assert status["sourceDatasetsProcessed"] == 100
+    assert status["catalogItemsWritten"] == 0
     assert status["failed"] == 0
     assert status["reconciliation"]["state"] == "completed"
     assert len(catalog_writer.write_session.item_batches) == 1
