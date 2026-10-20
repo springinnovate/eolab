@@ -187,7 +187,7 @@ test("vector category summary sends identity and field then validates limits", a
     });
 });
 
-test("vector numeric classification sends bounded options and validates responses", async () => {
+test("vector numeric classification sends bounded options and rejects invalid HTTP responses", async () => {
     const requests = [];
     const summary = {
         field: "score",
@@ -234,6 +234,7 @@ test("vector numeric classification sends bounded options and validates response
         method: "equal-interval",
         classCount: 3,
     });
+    // Reject malformed or mismatched HTTP replies before returning a classification.
     for (const invalid of [
         { field: "other" }, { method: "quantile" },
         { requestedClassCount: 4 }, { classes: [] },
