@@ -241,7 +241,7 @@ def test_scan_status_is_available_before_first_scan(
 
     assert response.status_code == 200
     assert response.json()["state"] == "not_started"
-    assert response.json()["discovered"] == 0
+    assert response.json()["sourceDatasetsDiscovered"] == 0
     assert response.json()["workerCount"] == 8
     assert response.json()["writerCount"] == 4
     assert response.json()["batchSize"] == 250

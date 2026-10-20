@@ -225,25 +225,20 @@ class ScanStatus:
     timing: ScanTiming = field(default_factory=ScanTiming)
 
     def as_public_dict(self) -> dict[str, Any]:
-        """Return an isolated snapshot with explicit progress and aliases.
+        """Return an isolated snapshot of source-dataset and catalog-Item progress.
 
         Returns:
-            Deeply independent browser-safe scan status. The source-dataset
-            and catalog-Item fields are unambiguous; legacy count names remain
-            compatibility aliases.
+            Deeply independent browser-safe scan status with separate counts
+            for source datasets and catalog Items.
         """
         return {
             "id": self.id,
             "state": self.state,
-            "discovered": self.discovered,
-            "processed": self.processed,
             "sourceDatasetsDiscovered": self.discovered,
             "sourceDatasetsProcessed": self.processed,
             "catalogItemsProduced": self.items_produced,
             "catalogItemsWritten": self.indexed,
             "catalogItemsAlreadyPresent": self.already_in_catalog,
-            "indexed": self.indexed,
-            "alreadyInCatalog": self.already_in_catalog,
             "failed": self.failed,
             "workerCount": self.worker_count,
             "writerCount": self.writer_count,
