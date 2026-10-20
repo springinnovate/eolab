@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
 test("version two accepts only portable annotation references and version one stays unchanged", () => {
   const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
@@ -81,9 +82,9 @@ function savedMapCandidate() {
       visible: true,
       opacity: 0.65,
       style: {
-        kind: "raster",
-        definition: { minimum: 0 },
-        paletteName: "custom",
+        kind: "raster", appearanceVersion: 1, mode: "continuous",
+        continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
+        categorical: null,
       },
     }],
   };
@@ -176,6 +177,7 @@ test("saved raster appearance rejects mixed envelopes, invalid edit state and un
     "../../../tests/fixtures/saved-map-v3-categorical.json", import.meta.url
   ), "utf8"));
   for (const mutate of [
+    style => { delete style.appearanceVersion; },
     style => { style.appearanceVersion = 2; },
     style => { style.appearanceVersion = true; },
     style => { style.mode = "unknown"; },
@@ -192,4 +194,7 @@ test("saved raster appearance rejects mixed envelopes, invalid edit state and un
     mutate(candidate.layers[0].style);
     assert.throws(() => parseSavedMapView(JSON.stringify(candidate)));
   }
+  const candidate = structuredClone(fixture);
+  candidate.layers[0].style = { kind: "raster", definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom" };
+  assert.throws(() => parseSavedMapView(JSON.stringify(candidate)), /missing or unsupported fields/);
 });
