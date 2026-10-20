@@ -144,7 +144,7 @@ reset** restores the immediately previous map.
 
 Shared links and the locally remembered map do not include sampling areas,
 histogram results, feature plots or processing jobs. They refer to the deployment's
-current Catalog, so missing or changed sources can prevent full restoration.
+current Catalog, so missing sources can prevent full restoration.
 
 ## Add your own data
 

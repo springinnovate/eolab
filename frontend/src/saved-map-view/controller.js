@@ -7,7 +7,6 @@ import {
 } from "./fragment-codec.js";
 import {
     createSavedMapView,
-    hashSavedMapSourceRevision,
     MAX_SAVED_MAP_VIEW_BYTES,
     parseSavedMapView,
     serializeSavedMapView,
@@ -49,7 +48,6 @@ export class SavedMapViewController {
      * @param {{snapshot:()=>string,restore:(id:string)=>Promise<string|null>}} [configuration.basemap] Public basemap interface.
      * @param {{snapshot:()=>{visible:boolean,collapsed:boolean},restore:(state:Object)=>void}|null} [configuration.mapLegend] Map legend presentation preferences.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
-     * @param {SubtleCrypto} [configuration.subtleCrypto] Revision hasher.
      * @param {(handler:()=>void,delay:number)=>unknown} [configuration.setTimer]
      * Debounce timer provider.
      * @param {(timer:unknown)=>void} [configuration.clearTimer] Timer clearer.
@@ -77,7 +75,6 @@ export class SavedMapViewController {
         basemap = { snapshot: () => "detailed", restore: async () => null },
         mapLegend = null,
         clock = () => new Date(),
-        subtleCrypto = globalThis.crypto?.subtle,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
         clearTimer = (timer) => globalThis.clearTimeout(timer),
     }) {
@@ -117,7 +114,6 @@ export class SavedMapViewController {
         this.mapLegend = mapLegend;
         this.publishingView = null;
         this.clock = clock;
-        this.subtleCrypto = subtleCrypto;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
         this.busy = false;
@@ -162,7 +158,7 @@ export class SavedMapViewController {
                 else this.view.showCopyFallback(result.url);
                 return;
             }
-            const savedMapView = await this.#snapshotCurrentView();
+            const savedMapView = this.#snapshotCurrentView();
             const fragment = await encodeSavedMapViewFragment(
                 serializeSavedMapView(savedMapView),
                 { maximumInputBytes: MAX_SAVED_MAP_VIEW_BYTES }
@@ -185,7 +181,7 @@ export class SavedMapViewController {
         if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
-            this.publishingView = await this.#snapshotCurrentView();
+            this.publishingView = this.#snapshotCurrentView();
             this.view.showPublicationForm(this.publicationDefaults);
         } catch (error) {
             this.view.showError(asError(error), "copy");
@@ -261,7 +257,7 @@ export class SavedMapViewController {
         this.#setBusy(true);
         this.view.setPublishedMapSaving(true);
         try {
-            const view = await this.#snapshotCurrentView();
+            const view = this.#snapshotCurrentView();
             const saved = await this.publicationApi.update(this.namedMapSlug, {
                 ...fields, view, revision: this.editRevision,
             });
@@ -370,7 +366,7 @@ export class SavedMapViewController {
      * Coalesce persistence after a composition-owned layer or viewport change.
      *
      * The current complete view is validated immediately before storage. A
-     * newer change or restore invalidates any older asynchronous snapshot.
+     * newer change or restore invalidates any older scheduled snapshot.
      *
      * @return {void}
      */
@@ -399,7 +395,7 @@ export class SavedMapViewController {
         this.restoreGeneration = restoreGeneration;
         this.#setBusy(true);
         try {
-            const previousView = await this.#snapshotCurrentView();
+            const previousView = this.#snapshotCurrentView();
             const report = await this.#restore(
                 this.initialView,
                 restoreGeneration
@@ -459,17 +455,16 @@ export class SavedMapViewController {
      * Capture catalog layers and portable live-annotation references in map order.
      * Annotation polygons and private membership credentials never enter this document.
      *
-     * @return {Promise<Readonly<Object>>} Validated portable map document.
+     * @return {Readonly<Object>} Validated portable map document.
+     * @throws {Error} If a layer cannot be exported or the saved document is invalid.
      */
-    async #snapshotCurrentView() {
+    #snapshotCurrentView() {
         const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
-        const layers = await Promise.all(
-            records.map(async (record) => {
-                const layer = record.entry.item === null ? this.exportAnnotation(record) : await this.#exportLayer(record);
-                return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
-            })
-        );
+        const layers = records.map((record) => {
+            const layer = record.entry.item === null ? this.exportAnnotation(record) : this.#exportLayer(record);
+            return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
+        });
         return createSavedMapView({
             viewer: {
                 version: this.viewerVersion,
@@ -487,9 +482,10 @@ export class SavedMapViewController {
      * Export one layer through its feature-owned portable-style hook.
      *
      * @param {Object} record Neutral retained-layer record.
-     * @return {Promise<Object>} Portable identity, revision, and presentation.
+     * @return {Object} Portable identity and presentation.
+     * @throws {Error} If the adapter cannot export the layer's saved state.
      */
-    async #exportLayer(record) {
+    #exportLayer(record) {
         if (typeof record.adapter.exportSavedState !== "function") {
             throw new Error(
                 `${record.entry.label} cannot yet be saved as a portable layer.`
@@ -500,10 +496,6 @@ export class SavedMapViewController {
                 collection: record.entry.item.collection,
                 id: record.entry.item.id,
             },
-            sourceRevision: await hashSavedMapSourceRevision(
-                this.catalogVisualization.sourceRevision(record.entry.item),
-                this.subtleCrypto
-            ),
             visible: record.entry.visible,
             opacity: record.entry.opacity,
             ...(record.entry.customName ? { customName: record.entry.customName } : {}),
@@ -587,13 +579,6 @@ export class SavedMapViewController {
             const preparedItem = await this.catalogVisualization.prepare(
                 catalogItem
             );
-            const currentRevision = await hashSavedMapSourceRevision(
-                this.catalogVisualization.sourceRevision(preparedItem),
-                this.subtleCrypto
-            );
-            const changed = layer.sourceRevision !== null &&
-                currentRevision !== null &&
-                layer.sourceRevision !== currentRevision;
             const staged = await this.catalogVisualization.stage(
                 preparedItem,
                 { visible: layer.visible, opacity: layer.opacity,
@@ -616,17 +601,9 @@ export class SavedMapViewController {
                 }
                 await record.adapter.applyFilterState(record, layer.filter);
             }
-            const notices = [];
-            if (changed) notices.push("source changed; current data was used");
-            if (layer.sourceRevision !== null && currentRevision === null) {
-                notices.push("current source revision was unavailable");
-            }
-            if (styleWarning !== null) {
-                notices.push(`saved style was not applied: ${styleWarning}`);
-            }
-            const detail = notices.length === 0
+            const detail = styleWarning === null
                 ? null
-                : `${record.entry.label}: ${notices.join("; ")}.`;
+                : `${record.entry.label}: saved style was not applied: ${styleWarning}.`;
             return { staged, detail };
         } catch (error) {
             return {
@@ -665,7 +642,7 @@ export class SavedMapViewController {
         }
         this.rememberTimer = this.setTimer(() => {
             this.rememberTimer = null;
-            void this.#remember(generation);
+            this.#remember(generation);
         }, REMEMBER_DEBOUNCE_MILLISECONDS);
     }
 
@@ -675,11 +652,11 @@ export class SavedMapViewController {
      * Storage failures are deliberately private and non-blocking.
      *
      * @param {number} generation Scheduled persistence generation.
-     * @return {Promise<void>} Completion after a write or stale rejection.
+     * @return {void}
      */
-    async #remember(generation) {
+    #remember(generation) {
         try {
-            const savedMapView = await this.#snapshotCurrentView();
+            const savedMapView = this.#snapshotCurrentView();
             if (
                 this.destroyed ||
                 this.busy ||

@@ -9,8 +9,6 @@ import {
 } from "../../src/saved-map-view/fragment-codec.js";
 import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 
-const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
-
 test("published drafts ignore personal autosave and only write on explicit save", async () => {
   const view = createView(), storage = createStorage("private"), submissions = [], headings = [];
   view.showPublishedMapEditor = (saved, complete) => { view.editor = { saved, complete }; };
@@ -58,7 +56,7 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
   view.showPublishedMapEditor = (saved, complete) => { view.complete = complete; };
   view.showPublishedMapEditStatus = message => { view.editStatus = message; };
   view.setPublishedMapSaving = () => {};
-  const available = { catalogItem: { collection: "c", id: "available" }, sourceRevision: null,
+  const available = { catalogItem: { collection: "c", id: "available" },
     visible: false, opacity: 0.5, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), layers: [
     ...(keepAvailableLayer ? [available] : []), { ...available, catalogItem: { collection: "c", id: "gone" } },
@@ -69,7 +67,7 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
       async update(slug, request) { submissions.push({ slug, request }); return { ...request, slug, revision: 2 }; } },
     viewport: { restore() {}, snapshot: () => saved.viewport },
     mapLayers: { retainedRecords: records, commitStaged(staged) { records.push(...staged.map(layer => layer.record)); } },
-    catalogVisualization: { clear() {}, prepare: async item => item, sourceRevision: () => null,
+    catalogVisualization: { clear() {}, prepare: async item => item,
       async stage(item, presentation) { return { record: { entry: { item, ...presentation },
         adapter: { applySavedState() {}, exportSavedState: () => available.style } } }; } },
     catalogItems: { async get(item) { if (item.id === "gone") throw new Error("unavailable"); return item; } },
@@ -157,7 +155,7 @@ test("missing named maps never fall back to fragments or private maps", async ()
 test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
   const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
     visible: true, legendIncluded: false, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
-  const catalog = { catalogItem: { collection: "vectors", id: "included" }, sourceRevision: null,
+  const catalog = { catalogItem: { collection: "vectors", id: "included" },
     visible: true, legendIncluded: false, opacity: 1, style: { kind: "vector", definition: {} } };
   const saved = { ...emptySavedMap(10, 20, 6), mapLegend: { visible: false, collapsed: true }, layers: [catalog, annotation] };
   const fragment = await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 });
@@ -173,7 +171,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
     mapLegend: { snapshot: () => legendPreferences, restore(value) { legendPreferences = value; } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.splice(0, records.length, ...records.filter(r => r.entry.item === null)); },
-      prepare: async item => item, sourceRevision: () => null,
+      prepare: async item => item,
       stage: async item => ({ record: { entry: { key: "catalog", item, visible: true, opacity: 1 }, adapter: {
         applySavedState() {}, exportSavedState: () => catalog.style,
       } } }) },
@@ -207,7 +205,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
 test("shared viewer restores its starting presentation and never reads or writes author autosave", async () => {
   const view = createView(), storage = createStorage("private map"), applied = [];
   const saved = emptySavedMap(10, 20, 6);
-  const layer = { catalogItem: { collection: "vectors", id: "included" }, sourceRevision: null,
+  const layer = { catalogItem: { collection: "vectors", id: "included" },
     visible: true, opacity: 0.6, style: { kind: "vector", definition: { color: "red" } },
     filter: { enabled: true, match: "all", rules: [] } };
   const fragment = await encodeSavedMapViewFragment(serializeSavedMapView({ ...saved, layers: [layer] }), { maximumInputBytes: 512 * 1024 });
@@ -218,7 +216,7 @@ test("shared viewer restores its starting presentation and never reads or writes
     mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)) },
     catalogItems: { get: async identity => identity },
     catalogVisualization: {
-      clear() { records.length = 0; }, prepare: async item => item, sourceRevision: () => null,
+      clear() { records.length = 0; }, prepare: async item => item,
       stage: async (item, presentation) => ({ record: { entry: { item, ...presentation }, adapter: {
         applySavedState: (_record, style) => applied.push(style),
         applyFilterState: (_record, filter) => applied.push(filter),
@@ -260,14 +258,14 @@ test("saved filters restore before commit and invalid filters never expose an un
     const saved = createSavedMapView({
       viewer: { version: "0.5.0", origin: "https://viewer.example" }, createdAt: "2026-09-01T12:00:00Z",
       viewport: { center: { latitude: 0, longitude: 0 }, zoom: 4 },
-      layers: [{ catalogItem: { collection: "vectors", id: "quakes" }, sourceRevision: null,
+      layers: [{ catalogItem: { collection: "vectors", id: "quakes" },
         visible: true, opacity: 1, style: { kind: "vector", definition: {} }, filter: state }],
     });
     const layers = { retainedRecords: [], commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged; } };
     const controller = new SavedMapViewController({ view,
       viewport: { snapshot: () => saved.viewport, restore() {} }, mapLayers: layers,
       catalogItems: { get: async (identity) => identity },
-      catalogVisualization: { clear() {}, prepare: async (item) => item, sourceRevision: () => null,
+      catalogVisualization: { clear() {}, prepare: async (item) => item,
         stage: async (item) => ({ record: { entry: { item, label: "Quakes" }, adapter: {
           applySavedState() { calls.push("style"); },
           applyFilterState(_record, restored) {
@@ -393,15 +391,6 @@ async function flushAsyncWork() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-/**
- * Return a digest implementation with a stable non-secret fingerprint.
- *
- * @return {{digest:()=>Promise<ArrayBuffer>}} Test SubtleCrypto subset.
- */
-function zeroDigest() {
-  return { digest: async () => new Uint8Array(32).buffer };
-}
-
 test("saved map controller copies ordered Catalog layers and current viewport", async () => {
   const view = createView();
   const item = { collection: "vectors", id: "roads" };
@@ -418,12 +407,11 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
       center: { latitude: 10, longitude: 20 }, zoom: 4,
     }) },
     mapLayers: { retainedRecords: [record] },
-    catalogVisualization: { sourceRevision: () => [1, 2, 3] },
+    catalogVisualization: {},
     catalogItems: {},
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     clock: () => new Date("2026-09-01T12:00:00Z"),
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.copyMapLink();
@@ -433,7 +421,6 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   }));
   assert.deepEqual(copied.layers[0].catalogItem, item);
   assert.equal(copied.layers[0].customName, "Workshop roads");
-  assert.equal(copied.layers[0].sourceRevision, ZERO_REVISION);
   assert.deepEqual(copied.layers[0].filter, record.adapter.exportFilterState());
   assert.equal(Object.hasOwn(copied.layers[0].style, "filter"), false);
   assert.equal(view.copied, true);
@@ -461,7 +448,6 @@ test("saved map controller stages concurrently and commits final saved order", a
       mapLayers.retainedRecords = [];
     },
     prepare: async (item) => ({ ...item, prepared: true }),
-    sourceRevision: () => ["current"],
     async stage(item, presentation) {
       calls.push(["stage", item.id, presentation]);
       const record = {
@@ -483,14 +469,12 @@ test("saved map controller stages concurrently and commits final saved order", a
       {
         catalogItem: { collection: "vectors", id: "top" },
         customName: "Protected areas",
-        sourceRevision: `sha256:${"1".repeat(64)}`,
         visible: true,
         opacity: 0.5,
         style: { kind: "vector", definition: { width: 2 } },
       },
       {
         catalogItem: { collection: "rasters", id: "bottom" },
-        sourceRevision: ZERO_REVISION,
         visible: false,
         opacity: 0.8,
         style: {
@@ -515,7 +499,6 @@ test("saved map controller stages concurrently and commits final saved order", a
     catalogItems: { get: async (identity) => ({ ...identity }) },
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.openSharedFragment(await encodeSavedMapViewFragment(
@@ -536,8 +519,7 @@ test("saved map controller stages concurrently and commits final saved order", a
   );
   assert.equal(view.result.loaded, 2);
   assert.equal(view.loading, 2);
-  assert.equal(view.result.details.length, 1);
-  assert.match(view.result.details[0], /TOP: source changed/);
+  assert.deepEqual(view.result.details, []);
   assert.deepEqual(viewportCalls, [saved.viewport]);
 });
 
@@ -549,7 +531,6 @@ test("saved map restoration bounds work and isolates layer failures", async () =
   let committed = null;
   const layers = Array.from({ length: 9 }, (_, index) => ({
     catalogItem: { collection: "vectors", id: `layer-${index}` },
-    sourceRevision: null,
     visible: index % 2 === 0,
     opacity: 0.5,
     style: { kind: "vector", definition: {} },
@@ -570,7 +551,6 @@ test("saved map restoration bounds work and isolates layer failures", async () =
   const catalogVisualization = {
     clear() {},
     prepare: async (item) => item,
-    sourceRevision: () => null,
     async stage(item, presentation) {
       active += 1;
       activeCounts.push(active);
@@ -600,7 +580,6 @@ test("saved map restoration bounds work and isolates layer failures", async () =
     catalogItems: { get: async (identity) => ({ ...identity }) },
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.openSharedFragment(await encodeSavedMapViewFragment(
@@ -635,7 +614,6 @@ test("destroyed saved map restoration never commits its detached batch", async (
   let committed = false;
   const layer = {
     catalogItem: { collection: "vectors", id: "roads" },
-    sourceRevision: null,
     visible: true,
     opacity: 1,
     style: { kind: "vector", definition: {} },
@@ -656,7 +634,6 @@ test("destroyed saved map restoration never commits its detached batch", async (
     catalogVisualization: {
       clear() {},
       prepare: async (item) => item,
-      sourceRevision: () => null,
       async stage(item, presentation) {
         reportStageStarted();
         await stageReleased;
@@ -673,7 +650,6 @@ test("destroyed saved map restoration never commits its detached batch", async (
     catalogItems: { get: async (identity) => ({ ...identity }) },
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
   const opening = controller.openSharedFragment(
     await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
@@ -700,7 +676,6 @@ test("saved map controller ignores fragments owned by other components", async (
     catalogItems: {},
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.openSharedFragment("#catalog=roads");
@@ -725,7 +700,6 @@ test("saved map controller exposes the URL when clipboard access is denied", asy
     catalogItems: {},
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.copyMapLink();
@@ -745,7 +719,6 @@ test("saved map controller reports malformed owned fragments without clearing", 
     catalogItems: {},
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.openSharedFragment("#view=not+base64");
@@ -770,7 +743,6 @@ test("startup shared fragments take precedence over remembered local views", asy
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     storage,
-    subtleCrypto: zeroDigest(),
     setTimer: timers.setTimer.bind(timers),
     clearTimer: timers.clearTimer.bind(timers),
   });
@@ -797,7 +769,6 @@ test("malformed owned startup fragments never fall back to private state", async
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     storage,
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.restoreStartupView("#view=not+base64");
@@ -825,7 +796,6 @@ test("startup silently restores a valid remembered map through the transaction",
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     storage,
-    subtleCrypto: zeroDigest(),
     setTimer: timers.setTimer.bind(timers),
     clearTimer: timers.clearTimer.bind(timers),
   });
@@ -856,7 +826,6 @@ test("startup discards corrupt remembered content without blocking the map", asy
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     storage,
-    subtleCrypto: zeroDigest(),
   });
 
   await controller.restoreStartupView("");
@@ -883,13 +852,12 @@ test("remembered map persistence coalesces complete validated snapshots", async 
       center: { latitude: 8, longitude: 9 }, zoom: 5,
     }) },
     mapLayers: { retainedRecords: [record] },
-    catalogVisualization: { sourceRevision: () => null },
+    catalogVisualization: {},
     catalogItems: {},
     viewerVersion: "0.2.0",
     viewerOrigin: "https://viewer.example",
     storage,
     clock: () => new Date("2026-09-01T12:00:00Z"),
-    subtleCrypto: zeroDigest(),
     setTimer: timers.setTimer.bind(timers),
     clearTimer: timers.clearTimer.bind(timers),
   });
@@ -909,7 +877,6 @@ test("remembered map persistence coalesces complete validated snapshots", async 
   });
   assert.deepEqual(remembered.layers, [{
     catalogItem: item,
-    sourceRevision: null,
     visible: false,
     opacity: 0.35,
     customName: "Workshop roads",
@@ -944,7 +911,6 @@ test("reset and one-step undo reuse complete validated restore documents", async
   };
   const catalogVisualization = {
     clear() { mapLayers.retainedRecords = []; },
-    sourceRevision: () => null,
     prepare: async (catalogItem) => catalogItem,
     async stage(catalogItem, presentation) {
       const restoredRecord = {
@@ -987,7 +953,6 @@ test("reset and one-step undo reuse complete validated restore documents", async
     storage,
     initialViewport,
     clock: () => new Date("2026-09-01T12:00:00Z"),
-    subtleCrypto: zeroDigest(),
     setTimer: timers.setTimer.bind(timers),
     clearTimer: timers.clearTimer.bind(timers),
   });
@@ -1022,7 +987,6 @@ test("reset and one-step undo reuse complete validated restore documents", async
   assert.equal(view.undoVisible, false);
   assert.deepEqual(JSON.parse(storage.serialized).layers[0], {
     catalogItem: item,
-    sourceRevision: null,
     visible: true,
     opacity: 0.6,
     style,

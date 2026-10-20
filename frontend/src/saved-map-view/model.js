@@ -8,7 +8,6 @@ export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 const MAX_IDENTITY_LENGTH = 512;
 const MAX_VERSION_LENGTH = 100;
 const MAX_APPEARANCE_DEFINITION_BYTES = 65536;
-const SOURCE_REVISION_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 /** Error raised when an imported saved-map document violates its contract. */
 export class SavedMapViewValidationError extends Error {
@@ -73,31 +72,6 @@ export function parseSavedMapView(serialized) {
  */
 export function serializeSavedMapView(savedMapView) {
     return `${JSON.stringify(validateSavedMapView(savedMapView), null, 2)}\n`;
-}
-
-/**
- * Hash an opaque scanner-owned source revision without exporting its details.
- *
- * @param {unknown} sourceRevision Scanner-owned source revision value.
- * @param {SubtleCrypto} subtleCrypto Web Crypto digest implementation.
- * @return {Promise<string|null>} SHA-256 fingerprint or null when unavailable.
- */
-export async function hashSavedMapSourceRevision(
-    sourceRevision,
-    subtleCrypto = globalThis.crypto?.subtle
-) {
-    if (sourceRevision === null || sourceRevision === undefined) {
-        return null;
-    }
-    if (typeof subtleCrypto?.digest !== "function") {
-        throw new Error("This browser cannot fingerprint Catalog revisions.");
-    }
-    const bytes = new TextEncoder().encode(JSON.stringify(sourceRevision));
-    const digest = await subtleCrypto.digest("SHA-256", bytes);
-    const hexadecimal = [...new Uint8Array(digest)]
-        .map((value) => value.toString(16).padStart(2, "0"))
-        .join("");
-    return `sha256:${hexadecimal}`;
 }
 
 /**
@@ -228,7 +202,7 @@ function validateLayer(candidate) {
     requirePlainObject(candidate, "Saved layer");
     requireExactKeys(
         candidate,
-        ["catalogItem", "sourceRevision", "visible", "opacity", "style",
+        ["catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
@@ -262,12 +236,6 @@ function validateLayer(candidate) {
             "Catalog Item id"
         ),
     });
-    if (candidate.sourceRevision !== null &&
-        !SOURCE_REVISION_PATTERN.test(candidate.sourceRevision)) {
-        throw new SavedMapViewValidationError(
-            "Saved layer source revision is invalid."
-        );
-    }
     if (typeof candidate.visible !== "boolean") {
         throw new SavedMapViewValidationError(
             "Saved layer visibility must be true or false."
@@ -295,7 +263,6 @@ function validateLayer(candidate) {
     return Object.freeze({
         catalogItem,
         ...(customName === undefined ? {} : { customName }),
-        sourceRevision: candidate.sourceRevision,
         ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
         visible: candidate.visible,
         opacity: candidate.opacity,

@@ -198,6 +198,8 @@ def test_layer_and_size_boundaries() -> None:
     mutations.append(duplicate)
     for key, value in [
         ("path", "/source/data.tif"),
+        ("sourceRevision", None),
+        ("sourceRevision", "sha256:" + "a" * 64),
         ("filter", None),
         ("opacity", "1"),
         ("visible", 1),

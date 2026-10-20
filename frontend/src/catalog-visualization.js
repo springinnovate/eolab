@@ -166,22 +166,6 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Return the scanner-owned source revision for compatibility checks.
-     *
-     * The revision is an opaque value. Consumers must not infer paths or
-     * rendering authorization from its structure.
-     *
-     * @param {Object} item Supported, assessed Catalog Item.
-     * @return {unknown|null} Opaque revision or null when not supplied.
-     */
-    sourceRevision(item) {
-        const descriptor = this.#requireDescriptor(item);
-        return descriptor.kind === "raster"
-            ? item.assets?.data?.["eolab:source"]?.source_signature ?? null
-            : descriptor.metadata?.source_signature ?? null;
-    }
-
-    /**
      * Require one supported visualization descriptor.
      *
      * @param {Object} item Candidate Catalog STAC Item.

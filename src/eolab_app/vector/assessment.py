@@ -1,7 +1,6 @@
 """Authoritative catalog vector visualization assessment workflows."""
 
 import asyncio
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +23,9 @@ from eolab_app.vector.models import (
     VECTOR_RENDERING_POLICY,
     VectorGeometryKind,
     VectorReaderAssessment,
-    VectorSourceSignature,
 )
 from eolab_app.vector.ports import VectorCatalog, VectorReaderAssessor
-from eolab_app.vector.sources import MountedVectorResolver, vector_source_signature
+from eolab_app.vector.sources import MountedVectorResolver
 
 
 _UNSUPPORTED_FORMAT_REASONS = {
@@ -77,7 +75,6 @@ def _rendering_metadata(
     eligible: bool,
     reason_code: str | None,
     reason: str | None,
-    source_signature: VectorSourceSignature | None = None,
     reader_assessment: VectorReaderAssessment | None = None,
 ) -> dict[str, Any]:
     """Build one complete persisted vector rendering decision.
@@ -86,7 +83,6 @@ def _rendering_metadata(
         eligible: Whether publication is currently allowed.
         reason_code: Stable capability classification for an ineligible Item.
         reason: Actionable browser message for an ineligible Item.
-        source_signature: Mounted source identity inspected during assessment.
         reader_assessment: Optional deployed-reader result.
 
     Returns:
@@ -97,22 +93,13 @@ def _rendering_metadata(
     """
     if eligible != (reason_code is None and reason is None):
         raise ValueError("Vector eligibility must agree with capability reason")
-    if eligible and (
-        source_signature is None
-        or reader_assessment is None
-        or not reader_assessment.compatible
-    ):
-        raise ValueError("Eligible vectors require source and reader evidence")
+    if eligible and (reader_assessment is None or not reader_assessment.compatible):
+        raise ValueError("Eligible vectors require compatible reader evidence")
     return {
         "policy": VECTOR_RENDERING_POLICY,
         "eligible": eligible,
         "reason_code": reason_code,
         "reason": reason,
-        "source_signature": (
-            [list(entry) for entry in source_signature]
-            if source_signature is not None
-            else None
-        ),
         "reader_contract": (
             reader_assessment.contract
             if reader_assessment is not None
@@ -138,20 +125,15 @@ class VectorAssessmentFinalizer:
         self,
         source_resolver: MountedVectorResolver,
         reader_assessor: VectorReaderAssessor,
-        signature_reader: Callable[
-            [ResolvedVectorSource], VectorSourceSignature
-        ] = vector_source_signature,
     ) -> None:
         """Create a finalizer over source and deployed-reader boundaries.
 
         Args:
             source_resolver: Resolver confined to the shared scan mount.
             reader_assessor: Read-only deployed GeoTools vector probe.
-            signature_reader: Synchronous complete-source identity boundary.
         """
         self._source_resolver = source_resolver
         self._reader_assessor = reader_assessor
-        self._signature_reader = signature_reader
 
     async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
         """Attach a complete vector visualization decision to one fresh Item.
@@ -163,7 +145,7 @@ class VectorAssessmentFinalizer:
             The same Item with normalized source and rendering contracts.
 
         Raises:
-            VectorConflictError: If a mounted source cannot be inspected.
+            VectorConflictError: If a mounted source path cannot be resolved.
             VectorUpstreamError: If the deployed reader probe is unavailable.
         """
         if item.get("collection") != MOUNTED_VECTOR_COLLECTION_ID:
@@ -219,15 +201,6 @@ class VectorAssessmentFinalizer:
             )
             return item
 
-        try:
-            inspected_signature = await asyncio.to_thread(
-                self._signature_reader,
-                source,
-            )
-        except OSError as error:
-            raise VectorConflictError(
-                "Visualization unavailable: the vector source cannot be read."
-            ) from error
         assessment = await self._reader_assessor.assess(
             source.source_format,
             source.source_path,
@@ -238,7 +211,6 @@ class VectorAssessmentFinalizer:
                 eligible=True,
                 reason_code=None,
                 reason=None,
-                source_signature=inspected_signature,
                 reader_assessment=assessment,
             )
         else:
@@ -246,7 +218,6 @@ class VectorAssessmentFinalizer:
                 eligible=False,
                 reason_code=assessment.reason_code,
                 reason=_READER_REASON_TEXT[assessment.reason_code],
-                source_signature=inspected_signature,
                 reader_assessment=assessment,
             )
         item["properties"][VECTOR_RENDERING_METADATA_KEY] = metadata

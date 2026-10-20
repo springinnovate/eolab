@@ -211,7 +211,7 @@ def test_geoserver_assessment_uses_form_parameters_without_json_binding(
 def test_shapefile_assessment_preserves_all_components_and_native_layer(
     tmp_path: Path,
 ) -> None:
-    """Persist an explicit mounted contract and complete source signature.
+    """Preserve exact Shapefile components and deployed-reader compatibility.
 
     Args:
         tmp_path: Isolated mounted scan source.
@@ -237,12 +237,9 @@ def test_shapefile_assessment_preserves_all_components_and_native_layer(
     rendering = finalized["properties"][VECTOR_RENDERING_METADATA_KEY]
     assert rendering["eligible"] is True
     assert rendering["geometry_kind"] == "point"
-    assert {entry[0] for entry in rendering["source_signature"]} >= {
-        "Road Sites.shp",
-        "Road Sites.shx",
-        "Road Sites.dbf",
-        "Road Sites.prj",
-    }
+    assert set(
+        MountedVectorResolver(tmp_path).resolve(finalized).component_paths
+    ) == set(component_paths)
 
 
 def test_geopackage_assessment_uses_the_selected_exact_layer(
