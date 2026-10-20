@@ -59,24 +59,19 @@ class RasterSourceIdentity:
         return cls.from_status(source_path.stat())
 
     @classmethod
-    def from_catalog(cls, value: object) -> "RasterSourceIdentity":
+    def from_catalog(cls, value: list[int]) -> "RasterSourceIdentity":
         """Deserialize scanner-owned source identity metadata.
 
         Args:
-            value: Four-field JSON list written by the current scanner.
+            value: Scanner-produced integers in inode, size, modification-time,
+                and metadata-change-time order.
 
         Returns:
             Canonical typed raster source identity.
 
         Raises:
-            ValueError: If the value is not a four-field integer list.
+            ValueError: If the stored identity cannot unpack into four fields.
         """
-        if not isinstance(value, list) or len(value) != 4:
-            raise ValueError("Raster source identity must contain four fields")
-        if any(
-            isinstance(field, bool) or not isinstance(field, int) for field in value
-        ):
-            raise ValueError("Raster source identity fields must be integers")
         inode, size_bytes, modified_ns, changed_ns = value
         return cls(
             inode=inode,

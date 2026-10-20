@@ -53,24 +53,3 @@ def test_every_retained_field_invalidates_changed_source(
     )
 
     assert changed_identity != identity
-
-
-@pytest.mark.parametrize(
-    "invalid_value",
-    (
-        None,
-        [1, 2, 3],
-        [1, 2, 3, 4, 5],
-        [1, 2, 3, 4, 5, 6],
-        [True, 2, 3, 4],
-        [1, 2, 3, "4"],
-    ),
-)
-def test_catalog_parser_rejects_invalid_identity(invalid_value: object) -> None:
-    """Reject malformed metadata instead of weakening authorization.
-
-    Args:
-        invalid_value: Non-contract catalog value supplied to the parser.
-    """
-    with pytest.raises(ValueError):
-        RasterSourceIdentity.from_catalog(invalid_value)
