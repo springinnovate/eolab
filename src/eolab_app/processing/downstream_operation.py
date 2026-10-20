@@ -213,12 +213,11 @@ async def prepare_downstream(
     )
     if status != "ok":
         raise ProcessingError(*result)
-    spec = result.model_copy(update={"sourceChecksum": context.source_checksum})
     return PreparedJobPlan(
-        operation=spec.operation,
-        specification=spec.model_dump(mode="json", by_alias=True),
+        operation=result.operation,
+        specification=result.model_dump(mode="json", by_alias=True),
         summary={},
-        reserved_bytes=spec.reservedBytes,
+        reserved_bytes=result.reservedBytes,
     )
 
 
@@ -229,9 +228,8 @@ async def resolve_downstream_execution_inputs(
 
     A queued plan contains catalog/owned-output identities, never live file
     handles. This adapter resolves its vector inputs and binds its native
-    arguments at execution. The checksum comparison concerns a retained values
-    raster from a previous model run, not routine edits to the prepared DEM.
-    That persisted-file identity must agree with the input grant held by the worker.
+    arguments at execution. The worker supplies the values raster after
+    authorizing its catalog source or accepted input grant.
 
     Args:
         context: Worker capabilities and additional authorized rasters.
@@ -242,12 +240,8 @@ async def resolve_downstream_execution_inputs(
         Ephemeral native sources and the unchanged numerical plan.
 
     Raises:
-        ProcessingError: If a private values checksum changed or source access fails.
+        ProcessingError: If source access fails.
     """
-    if spec.sourceChecksum != context.source_checksum:
-        raise ProcessingError(
-            "source_changed", "The values raster changed after preparation.", 409
-        )
     return (
         await resolve_downstream_sources(
             context, spec.inputs, authorized, spec.watershedSelection

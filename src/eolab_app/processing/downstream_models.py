@@ -138,7 +138,6 @@ class DownstreamPlan(HydrologySchema):
     grid: ClipGrid
     watershedSelection: CatalogSelection
     reservedBytes: Annotated[int, Field(ge=0)]
-    sourceChecksum: str | None = None
     pit_fill_search_limit: PitFillSearchLimit
 
     @model_validator(mode="after")

@@ -1145,7 +1145,6 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     )
     context = SimpleNamespace(
         areas=reader,
-        source_checksum=None,
         rasters={
             name: AuthorizedRaster(path, RasterSourceIdentity.read(path))
             for name, path in sources.rasters.items()

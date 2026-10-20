@@ -80,14 +80,8 @@ async def prepare_raster_execution(
         Native source path and plan with an ephemeral resolved vector selection.
 
     Raises:
-        ProcessingError: If the source checksum or selection is unavailable.
+        ProcessingError: If the catalog selection is unavailable.
     """
-    if spec.sourceChecksum != context.source_checksum:
-        raise ProcessingError(
-            "source_changed",
-            "The prepared input does not match the accepted raster file.",
-            409,
-        )
     if spec.area.kind == "catalogSelection":
         if context.areas is None:
             raise ProcessingError(
