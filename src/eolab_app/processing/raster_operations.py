@@ -104,7 +104,6 @@ class SummaryNumericalPolicy(BaseModel):
     """Numerical rules actually used by the native raster-summary operation.
 
     ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
-    None preserves historical run documents written before that declaration.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -117,14 +116,13 @@ class SummaryNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     groundArea: GroundAreaPlan | None = None
-    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"]
 
 
 class ClipNumericalPolicy(BaseModel):
     """Numerical rules actually used by the native raster-clip operation.
 
     ``sourceValidity`` versions the combined mask, NoData and finite-value rule.
-    None preserves historical run documents written before that declaration.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -137,7 +135,7 @@ class ClipNumericalPolicy(BaseModel):
     )
     valueDomain: Literal["stored_native_values"]
     overviewResampling: Literal["nearest"]
-    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] | None = None
+    sourceValidity: Literal["finite-unmasked-non-nodata-v1"]
 
 
 async def prepare_summary(

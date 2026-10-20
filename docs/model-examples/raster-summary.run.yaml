@@ -86,6 +86,7 @@ execution:
     resampling: none
     numericInclusion: cell_center
     nodata: exclude_source_nodata_and_nonfinite
+    sourceValidity: finite-unmasked-non-nodata-v1
     valueDomain: stored_native_values
   limits:
     runtimeSeconds: 600

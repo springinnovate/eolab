@@ -2,9 +2,8 @@
 
 from dataclasses import asdict, dataclass, fields
 from typing import Annotated, Literal
-from sys import float_info
 
-from pydantic import Field, RootModel, model_validator
+from pydantic import Field, model_validator
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
@@ -12,7 +11,6 @@ from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
     HydrologySources,
-    NetworkId,
 )
 from eolab_app.processing.raster_expression import compile_expression, walk
 from eolab_app.raster.models import CatalogRasterRequest
@@ -23,7 +21,6 @@ ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
 BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
 DEFAULT_PIT_FILL_SEARCH_LIMIT = 1000
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
-FLOW_THRESHOLD = 100 * float_info.epsilon
 
 PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
 """EcoShard's signed-64-bit pit-search cutoff; -1 and 0 allow unlimited searches."""
@@ -134,24 +131,15 @@ class DownstreamPlan(HydrologySchema):
     The original model constructs its own calculation grid using the captured
     pixel-size setting. The worker saves its pit-search cutoff during preparation;
     execution uses this value even if supplied different worker settings later.
-    Historical plans without the cutoff retain the original default of 100.
     """
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
     inputs: DownstreamRequest
     grid: ClipGrid
     watershedSelection: CatalogSelection
-    # Historical plans retain their original admission metadata for export.
-    routingGrid: ClipGrid | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
-    watersheds: tuple[NetworkId, ...] | None = Field(
-        default=None, min_length=1, exclude_if=lambda value: value is None
-    )
     reservedBytes: Annotated[int, Field(ge=0)]
     sourceChecksum: str | None = None
-    # Missing fields describe older runs, not the current deployment default.
-    pit_fill_search_limit: PitFillSearchLimit = 100
+    pit_fill_search_limit: PitFillSearchLimit
 
     @model_validator(mode="after")
     def check_watershed_selection(self) -> "DownstreamPlan":
@@ -177,47 +165,19 @@ class DownstreamPlan(HydrologySchema):
         return self
 
 
-class DownstreamNumericalPolicy(HydrologySchema):
-    """Read the numerical rules retained with historical reimplementation runs."""
+class ClosedEdgeDownstreamNumericalPolicy(HydrologySchema):
+    """Record closed-edge pit filling before the original WWF MFD calculation.
 
-    version: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
-    ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        "f7e2adba2a4d41128aea941bb747470418d2dce9"
-    )
-    routing: Literal["mfd_prepared_dem_native_grid"] = "mfd_prepared_dem_native_grid"
-    seeds: Literal["cell_center_positive_valid_raster_or_filtered_vector"] = (
-        "cell_center_positive_valid_raster_or_filtered_vector"
-    )
-    distance: Literal["wgs84_geodesic_between_cell_centers"] = (
-        "wgs84_geodesic_between_cell_centers"
-    )
-    coverage: Literal["union_buffered_downstream_cells_then_seed_distance_cutoff"] = (
-        "union_buffered_downstream_cells_then_seed_distance_cutoff"
-    )
-    valueGrid: Literal["native_no_resampling"] = "native_no_resampling"
-    valueInclusion: Literal["native_cell_center_in_binary_dem_coverage"] = (
-        "native_cell_center_in_binary_dem_coverage"
-    )
-    sourceValidity: Literal["finite-unmasked-non-nodata-v1"] = (
-        "finite-unmasked-non-nodata-v1"
-    )
-    signedAndZeroValues: Literal["included"] = "included"
-    flowThreshold: float = FLOW_THRESHOLD
-    bufferMetres: float
-    cutoffMetres: float | None = None
+    The search limit uses EcoShard's exploration cutoff, not an exact count of
+    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
+    """
 
-
-class WrappedDownstreamNumericalPolicy(HydrologySchema):
-    """Read historical WWF runs that allowed drainage to NoData during filling."""
-
-    version: Literal["hydrology.downstream_beneficiaries.v2"] = (
-        "hydrology.downstream_beneficiaries.v2"
+    version: Literal["hydrology.downstream_beneficiaries.v3"]
+    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
+        BENEFICIARIES_REVISION
     )
-    beneficiariesRevision: Literal["7e32ae28540ab53178248758a6f40affea8d6ff6"] = (
-        "7e32ae28540ab53178248758a6f40affea8d6ff6"
-    )
-    ecoshardRevision: Literal["f7e2adba2a4d41128aea941bb747470418d2dce9"] = (
-        "f7e2adba2a4d41128aea941bb747470418d2dce9"
+    ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
+        ECOSHARD_REVISION
     )
     calculation: Literal["unchanged_upstream_functions"] = (
         "unchanged_upstream_functions"
@@ -232,37 +192,5 @@ class WrappedDownstreamNumericalPolicy(HydrologySchema):
     distancePixelSizeMetres: float
     bufferMetres: float
     cutoffMetres: float | None = None
-
-
-class ClosedEdgeDownstreamNumericalPolicy(WrappedDownstreamNumericalPolicy):
-    """Record closed-edge pit filling before the original WWF MFD calculation.
-
-    The search limit uses EcoShard's exploration cutoff, not an exact count of
-    changed elevations. NoData remains unchanged and MFD retains its edge fallback.
-    Historical policies without the cutoff retain the original default of 100.
-    """
-
-    version: Literal["hydrology.downstream_beneficiaries.v3"] = (
-        "hydrology.downstream_beneficiaries.v3"
-    )
-    beneficiariesRevision: Literal["3f577e27deb347cd4520977eb99474fb81e990fc"] = (
-        BENEFICIARIES_REVISION
-    )
-    ecoshardRevision: Literal["6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"] = (
-        ECOSHARD_REVISION
-    )
-    pitFillSearchLimit: PitFillSearchLimit = 100
+    pitFillSearchLimit: PitFillSearchLimit
     pitFillTreatNodataAsClosed: Literal[True] = PIT_FILL_TREAT_NODATA_AS_CLOSED
-
-
-class DownstreamPolicy(
-    RootModel[
-        Annotated[
-            DownstreamNumericalPolicy
-            | WrappedDownstreamNumericalPolicy
-            | ClosedEdgeDownstreamNumericalPolicy,
-            Field(discriminator="version"),
-        ]
-    ]
-):
-    """Read both historical calculations and the current upstream model provenance."""

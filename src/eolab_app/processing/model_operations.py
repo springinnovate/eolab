@@ -28,7 +28,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
-    DownstreamPolicy,
+    ClosedEdgeDownstreamNumericalPolicy,
     StartingMask,
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
@@ -218,7 +218,7 @@ OPERATIONS = MappingProxyType(
                 execution_profile="downstream-small-region",
                 queued_type=QueuedDownstream,
                 prepared_type=DownstreamPlan,
-                policy_type=DownstreamPolicy,
+                policy_type=ClosedEdgeDownstreamNumericalPolicy,
                 bind=downstream.bind_downstream,
                 source=downstream.get_values_source,
                 polygon=downstream.get_uploaded_polygon,
