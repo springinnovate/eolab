@@ -211,6 +211,18 @@ class _NativeStatisticsDataset:
         """
         return None
 
+    def overviews(self, band: int) -> list[int]:
+        """Report no overviews for this native-block source.
+
+        Args:
+            band: One-based band index.
+
+        Returns:
+            Empty list of overview factors.
+        """
+        assert band == 1
+        return []
+
     def block_window(
         self,
         band: int,

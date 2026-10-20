@@ -264,15 +264,12 @@ def _overview_read_shape(
         Intermediate overview height and width, or ``None`` when no advertised
         overview preserves the final grid within the fixed edge limit.
     """
-    read_overviews = getattr(dataset, "overviews", None)
-    if not callable(read_overviews):
-        return None
     source_width = int(source_window.width)
     source_height = int(source_window.height)
     overview_factors = sorted(
         {
             int(factor)
-            for factor in read_overviews(1)
+            for factor in dataset.overviews(1)
             if int(factor) > 1
         },
         reverse=True,
