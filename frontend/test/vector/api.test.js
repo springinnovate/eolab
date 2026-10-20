@@ -187,7 +187,7 @@ test("vector category summary sends identity and field then validates limits", a
     });
 });
 
-test("vector numeric classification sends only identity and bounded options", async () => {
+test("vector numeric classification sends bounded options and validates responses", async () => {
     const requests = [];
     const summary = {
         field: "score",
@@ -234,6 +234,15 @@ test("vector numeric classification sends only identity and bounded options", as
         method: "equal-interval",
         classCount: 3,
     });
+    for (const invalid of [
+        { field: "other" }, { method: "quantile" },
+        { requestedClassCount: 4 }, { classes: [] },
+    ]) {
+        await assert.rejects(classifyCatalogVectorNumbers(
+            VECTOR_ITEM, "score", "equal-interval", 3,
+            async () => new Response(JSON.stringify({ ...summary, ...invalid })),
+        ), VectorRenderingRequestError);
+    }
 });
 
 test("vector publication preserves actionable upstream categories", async () => {
