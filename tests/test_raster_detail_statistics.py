@@ -33,6 +33,7 @@ class _NativeBlockDataset:
 
     count = 1
     crs = "EPSG:4326"
+    overview_factors: tuple[int, ...] = ()
 
     def __init__(
         self,
@@ -61,6 +62,18 @@ class _NativeBlockDataset:
         )
         self.files = (str(source_path.resolve()),)
         self.read_windows: list[Window] = []
+
+    def overviews(self, band: int) -> list[int]:
+        """Return controlled overview factors for band one.
+
+        Args:
+            band: One-based band index.
+
+        Returns:
+            Advertised overview factors.
+        """
+        assert band == 1
+        return list(self.overview_factors)
 
     def block_window(
         self,
@@ -139,18 +152,6 @@ class _OverviewDataset(_NativeBlockDataset):
         self.overview_reads: list[
             tuple[Window, tuple[int, int], Resampling]
         ] = []
-
-    def overviews(self, band: int) -> list[int]:
-        """Return controlled overview factors for band one.
-
-        Args:
-            band: One-based band index.
-
-        Returns:
-            Advertised overview factors.
-        """
-        assert band == 1
-        return list(self.overview_factors)
 
     def read(
         self,
