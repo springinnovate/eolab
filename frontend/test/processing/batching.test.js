@@ -5,7 +5,7 @@ import { calculationIntent } from "../../src/processing/calculation-session.js";
 
 const intent={source:{collectionId:"r",itemId:"r1",label:"Raster"},area:{kind:"wholeRaster"},calculations:[{label:"Mean",expression:"mean(a)"}]};
 const execution={targetChunkPixels:65536,readWidth:512,readHeight:128,evaluationWidth:512,evaluationHeight:128,readWindows:1};
-const grid={width:512,height:128,crs:"EPSG:4326",dtype:"float32",transform:[1,0,0,0,-1,90],nativeBlocks:4,decodedBytes:262144,execution};
+const grid={width:512,height:128,crs:"EPSG:4326",dtype:"float32",transform:[1,0,0,0,-1,90],nativeBlocks:4,execution};
 const plan={jobId:"P".repeat(32),status:"running",progress:{phase:"calculating"},operation:"raster.aggregate.v1",expiresAt:"2099-01-01T00:00:00Z",grid};
 
 test("API transmits opt-in batch tuning and keeps omitted legacy requests compatible",async()=>{
@@ -32,13 +32,14 @@ test("API rejects corrupt execution metadata",async()=>{
 
 test("out-of-coverage pixel calculations accept zero work and reject malformed empty grids",async()=>{
     const emptyExecution={targetChunkPixels:65536,readWidth:1,readHeight:1,evaluationWidth:1,evaluationHeight:1,readWindows:0};
-    const emptyGrid={...grid,width:0,height:0,nativeBlocks:0,decodedBytes:0,execution:emptyExecution};
+    const emptyGrid={...grid,width:0,height:0,nativeBlocks:0,execution:emptyExecution};
     const identifier="J".repeat(32);
     const emptyJob={jobId:identifier,operation:"raster.aggregate.v1",status:"ready",grid:emptyGrid,progress:{phase:"ready"},
         result:{url:`/api/processing/jobs/${identifier}/result`,provenanceUrl:`/api/processing/jobs/${identifier}/provenance`,
             rows:[{label:"Pixel",expression:"pixelValue(a)",state:"no_valid_data",value:null,valueType:"float",aggregates:[]}]}};
     for(const candidate of [emptyJob,{...emptyJob,operation:"raster.clip.v1"},{...emptyJob,grid:{...emptyGrid,height:1}},
-        {...emptyJob,grid:{...emptyGrid,nativeBlocks:1}}]) {
+        {...emptyJob,grid:{...emptyGrid,nativeBlocks:1}},
+        {...emptyJob,grid:{...emptyGrid,execution:{...emptyExecution,readWindows:1}}}]) {
         const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:candidate));
         if(candidate===emptyJob)assert.equal((await client.getJob(identifier)).result.rows[0].state,"no_valid_data");
         else await assert.rejects(()=>client.getJob(identifier),/invalid/);

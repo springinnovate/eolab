@@ -72,7 +72,7 @@ def _plan_clip_grid(
         limits: Shared clip job lifecycle settings.
 
     Returns:
-        Exact grid metadata without a storage reservation.
+        Native grid, source block count and estimated uncompressed output size.
 
     Raises:
         ProcessingError: If the source grid or selected area is invalid.
@@ -90,10 +90,7 @@ def _plan_clip_grid(
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
         nativeBlocks=block_count,
-        decodedBytes=0,
         estimatedRawBytes=raw_bytes,
-        # Retained for saved-grid compatibility; new plans do not reserve disk.
-        reservedBytes=0,
     )
 
 

@@ -26,7 +26,7 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
 function fixture(overrides = {}, data = new Map()) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
-    const grid={nativeBlocks:1,decodedBytes:100,width:10,height:10,crs:"EPSG:4326"};
+    const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326"};
     const api={
         validateCalculation:async formulas=>{requests.push(["validate",formulas]);return {valid:true};},
         planCalculation:async intent=>{const planId=String(++serial).padStart(32,"0");requests.push(["plan",intent]);plans.set(planId,intent);return {planId,grid,expiresAt:"2099-01-01T00:00:00Z"};},

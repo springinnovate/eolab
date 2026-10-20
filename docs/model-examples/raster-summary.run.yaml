@@ -73,8 +73,6 @@ execution:
         nodata: null
         window: [0, 0, 10, 10]
         nativeBlocks: 1
-        decodedBytes: 400
-        estimatedMemoryBytes: 1048576
         scale: "1"
         offset: "0"
         storedUnit: null

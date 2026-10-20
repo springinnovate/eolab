@@ -141,7 +141,7 @@ class ClipArea(BaseModel):
 
 
 class ClipGrid(BaseModel):
-    """Planned native window and conservative work/storage estimates."""
+    """Native clip window, source block count and estimated uncompressed size."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     crs: str
@@ -152,9 +152,7 @@ class ClipGrid(BaseModel):
     dtype: str
     nodata: str | None
     nativeBlocks: int
-    decodedBytes: int
     estimatedRawBytes: int
-    reservedBytes: int
 
 
 class ClipSpec(BaseModel):

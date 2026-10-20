@@ -45,7 +45,7 @@ export const clipResult = {name: "raster", label: "Clipped raster", role: "resul
     sha256: "c".repeat(64), validPixels: 90, url: `/api/processing/jobs/${"1".repeat(32)}/result`,
     provenanceUrl: `/api/processing/jobs/${"1".repeat(32)}/provenance`,
     grid: {width: 10, height: 10, window: [0, 0, 10, 10], crs: "EPSG:4326", dtype: "int16", transform: [0.1, 0, 0, 0, -0.1, 1],
-        nodata: null, nativeBlocks: 1, decodedBytes: 200, estimatedRawBytes: 300, reservedBytes: 1024}};
+        nodata: null, nativeBlocks: 1, estimatedRawBytes: 300}};
 
 /** A completed summary result with one formula row and CSV download metadata. */
 export const statisticsResult = {name: "statistics", label: "Statistics", role: "result", presentation: "table", kind: "statistics",

@@ -132,9 +132,7 @@ def describe_values_grid(dataset: rasterio.io.DatasetReader) -> ClipGrid:
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
         nativeBlocks=count_native_raster_blocks(dataset, window),
-        decodedBytes=0,
         estimatedRawBytes=0,
-        reservedBytes=0,
     )
 
 

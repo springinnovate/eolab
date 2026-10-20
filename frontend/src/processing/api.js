@@ -78,7 +78,7 @@ function validateGrid(grid, operation) {
     const empty = grid?.width === 0 && grid?.height === 0;
     if (!grid || ![grid.width, grid.height].every(value => Number.isSafeInteger(value) && value >= 0) ||
         (grid.width === 0 || grid.height === 0) && !empty ||
-        empty && (operation !== "raster.aggregate.v1" || grid.nativeBlocks !== 0 || grid.decodedBytes !== 0 || grid.execution?.readWindows !== 0) ||
+        empty && (operation !== "raster.aggregate.v1" || grid.nativeBlocks !== 0 || grid.execution?.readWindows !== 0) ||
         typeof grid.crs !== "string" || typeof grid.dtype !== "string" ||
         !Array.isArray(grid.transform) || grid.transform.length !== 6 || !grid.transform.every(Number.isFinite)) {
         throw new Error("Processing returned an invalid native grid.");

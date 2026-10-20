@@ -337,7 +337,7 @@ def test_outside_pixel_has_empty_grid_and_no_raster_reads(
     monkeypatch.setattr(kernel, "read_native_raster_block", unexpected)
     artifact = calculate_raster_statistics_for_area(path, spec, tmp_path, LIMITS)
     assert spec.grid.window == (0, 0, 0, 0)
-    assert spec.grid.nativeBlocks == spec.grid.decodedBytes == 0
+    assert spec.grid.nativeBlocks == 0
     assert artifact.rows[0]["state"] == "no_valid_data"
 
 

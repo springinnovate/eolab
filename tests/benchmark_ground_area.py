@@ -137,7 +137,6 @@ def main() -> None:
                     "sourcePixels": case.rows * case.columns,
                     "plannedPixels": spec.grid.width * spec.grid.height,
                     "nativeBlocks": spec.grid.nativeBlocks,
-                    "decodedBytes": spec.grid.decodedBytes,
                     "geometryCells": spec.grid.groundArea.estimatedGeometryCells,
                     "planSeconds": round(planned - start, 4),
                     "executeSeconds": round(end - planned, 4),

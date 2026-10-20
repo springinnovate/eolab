@@ -128,7 +128,6 @@ def measure(path: Path, output: Path, case: str, target: int | None) -> dict:
     execution_seconds = time.perf_counter() - execution_started
     return {
         "planSeconds": plan_seconds,
-        "estimatedMemoryBytes": spec.grid.estimatedMemoryBytes,
         "nativeBlocks": spec.grid.nativeBlocks,
         "executionSeconds": execution_seconds,
         "rows": result.rows,

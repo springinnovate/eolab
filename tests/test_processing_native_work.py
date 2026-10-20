@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from affine import Affine
 import numpy as np
+from pydantic import ValidationError
 import pytest
 from rasterio.crs import CRS
 from rasterio.windows import Window
@@ -46,7 +47,16 @@ def test_plans_do_not_enumerate_or_size_native_reads(
         else aggregate_spec(path, ["count(a)"], AggregateArea(kind="wholeRaster"))
     )
     assert spec.grid.nativeBlocks == 4
-    assert spec.grid.decodedBytes == 0
+    serialized = spec.model_dump(mode="json", by_alias=True)
+    assert type(spec).model_validate(serialized).grid == spec.grid
+    for field in (
+        "decodedBytes",
+        "reservedBytes" if operation == "clip" else "estimatedMemoryBytes",
+    ):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            type(spec).model_validate(
+                {**serialized, "grid": {**serialized["grid"], field: 0}}
+            )
 
 
 def test_billion_cell_downstream_grid_needs_only_metadata() -> None:
@@ -66,8 +76,7 @@ def test_billion_cell_downstream_grid_needs_only_metadata() -> None:
     )
     grid = describe_values_grid(dataset)
     assert grid.width * grid.height == 1_200_000_000
-    assert grid.reservedBytes == 0
-    assert grid.decodedBytes == 0
+    assert type(grid).model_validate_json(grid.model_dump_json()) == grid
     assert count_native_raster_blocks(dataset, Window(0, 0, width, height)) == 157 * 118
 
 
