@@ -55,9 +55,9 @@ def _select_clip_area(
         dataset,
         area.kind,
         area.bounds,
-        (),
-        None,
-        area.resolved,
+        geometries=(),
+        max_coordinates=None,
+        resolved=area.resolved,
     )
 
 
