@@ -488,16 +488,12 @@ class ResolvedModelSource(ModelSchema):
 
 
 class ModelExecutionLimits(ModelSchema):
-    """Execution allowances and output retention recorded for a model run.
+    """Server-configured output retention recorded for a model run.
 
-    New runs have null time and memory ceilings and reserve zero bytes before
-    execution. Positive values remain readable in historical run documents.
-    A submitted recipe cannot change these server-owned records.
+    The result lifetime starts when execution finishes. A submitted recipe
+    cannot change this server-owned retention period.
     """
 
-    runtimeSeconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None
-    processMemoryBytes: Annotated[int, Field(gt=0)] | None
-    reservedBytes: Annotated[int, Field(ge=0)]
     resultTtlSeconds: Annotated[int, Field(gt=0)]
 
 
@@ -529,7 +525,7 @@ class ModelExecution(ModelSchema):
     """Software, source data, calculation settings and results recorded for a run.
 
     Before preparation, it records the software and source checksums. Preparation
-    adds grid details and calculation limits; completion adds the outcome.
+    adds grid details and result retention; completion adds the outcome.
     """
 
     state: Literal["pending", "prepared"]
@@ -587,7 +583,7 @@ class ModelExecution(ModelSchema):
             This execution record after checking its preparation details.
 
         Raises:
-            ValueError: If a prepared record lacks limits, numerical settings or a grid.
+            ValueError: If a prepared record lacks retention, numerical settings or a grid.
         """
         if self.state == "prepared" and (
             self.limits is None

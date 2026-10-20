@@ -258,14 +258,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     document = RunDocument.model_validate(
         parse_yaml(export_model_job_yaml(ready, run=True), run=True)
     )
-    assert document.execution.limits.runtimeSeconds is None
-    assert document.execution.limits.processMemoryBytes is None
-    assert document.execution.limits.reservedBytes == 0
-    historical = document.model_dump(mode="json", by_alias=True)
-    historical["execution"]["limits"].update(
-        runtimeSeconds=600, processMemoryBytes=2**31
-    )
-    assert RunDocument.model_validate(historical).execution.limits.runtimeSeconds == 600
+    assert document.execution.limits.model_dump() == {"resultTtlSeconds": 86_400}
     store.get_cached_calculation_results.assert_not_called()
     if custom == "multiple":
         assert {file.name for file in response.artifacts.files} == {
