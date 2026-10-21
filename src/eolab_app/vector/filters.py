@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from eolab_app.attribute_filter import (
     AttributeFilterError,
@@ -29,10 +29,16 @@ _COMPARISONS = {
 }
 
 
-class CatalogVectorFilterRequest(CatalogVectorRequest):
-    """Catalog identity and bounded rule builder state."""
+class VectorFilterRequest(BaseModel):
+    """Specify the attribute rules used to filter a vector layer."""
+
+    model_config = ConfigDict(extra="forbid")
 
     filter: VectorFilter
+
+
+class CatalogVectorFilterRequest(CatalogVectorRequest, VectorFilterRequest):
+    """Identify a catalog vector and the attribute rules used to filter it."""
 
 
 class AppliedVectorFilter(BaseModel):

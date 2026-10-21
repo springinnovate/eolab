@@ -9,6 +9,7 @@ from dataclasses import replace
 from hashlib import sha256
 from threading import Lock
 from pathlib import Path
+import re
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -361,6 +362,33 @@ class PublishedVectorRegistry:
             str,
             tuple[ResolvedVectorSource, str, str | None],
         ] = {}
+
+    def get_upload_id(self, layer_name: str) -> UUID | None:
+        """Return the upload behind a published layer or one of its filtered views.
+
+        Base upload names carry their UUID so ownership can still be checked
+        after an application restart. Filter aliases refer to their original
+        layer in this registry. Catalog and raster names return None.
+
+        Args:
+            layer_name: Workspace-qualified layer name, or a bare resource name.
+
+        Returns:
+            The private upload UUID, or None for another kind of source.
+
+        Raises:
+            PublishedLayerChangedError: If a requested filtered view has expired.
+        """
+        if layer_name.startswith("eolab:filtered-"):
+            with self._filter_lock:
+                view = self._filters.get(layer_name)
+            if view is None:
+                raise PublishedLayerChangedError(
+                    "The vector filter expired; reapply it or reload the map"
+                )
+            layer_name = view[0]
+        match = re.fullmatch(r"(?:eolab:)?upload_([a-f0-9]{32})", layer_name)
+        return UUID(hex=match[1]) if match else None
 
     def authorize(
         self,

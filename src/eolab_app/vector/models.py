@@ -101,6 +101,30 @@ class ResolvedVectorSource:
 
 
 @dataclass(frozen=True)
+class VectorLayer:
+    """A vector file and the metadata needed to display and style its selected layer.
+
+    Catalog or upload lookup supplies these values after checking source access.
+    The original file stays immutable; this object does not prevent deletion.
+
+    Attributes:
+        resource_name: Server-chosen GeoServer resource name without its workspace.
+        source: Original file format, path and exact native layer.
+        fields: Attribute names and their declared types.
+        feature_count: Number of features in the original layer.
+        bbox: Layer bounds in WGS84 longitude/latitude order.
+        geometry_kind: Point, line or polygon style family.
+    """
+
+    resource_name: str
+    source: ResolvedVectorSource
+    fields: dict[str, str]
+    feature_count: int
+    bbox: tuple[float, float, float, float]
+    geometry_kind: VectorGeometryKind
+
+
+@dataclass(frozen=True)
 class VectorCategoryRead:
     """Bounded category counts read from one exact mounted vector layer.
 
@@ -140,8 +164,10 @@ class VectorNumericRead:
     complete: bool
 
 
-class CatalogVectorCategoryRequest(CatalogVectorRequest):
-    """Identify one Catalog vector and an authoritative attribute field."""
+class VectorCategoryRequest(BaseModel):
+    """Choose the attribute field whose category values should be summarized."""
+
+    model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1, max_length=256, strict=True)
 
@@ -164,8 +190,14 @@ class CatalogVectorCategoryRequest(CatalogVectorRequest):
         return value
 
 
-class CatalogVectorNumericClassificationRequest(CatalogVectorRequest):
-    """Request one bounded classification for a current numeric field."""
+class CatalogVectorCategoryRequest(CatalogVectorRequest, VectorCategoryRequest):
+    """Identify a catalog vector and the field whose categories should be summarized."""
+
+
+class VectorNumericClassificationRequest(BaseModel):
+    """Choose a numeric field, classification method and number of classes."""
+
+    model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1, max_length=256, strict=True)
     method: VectorClassificationMethod
@@ -193,6 +225,12 @@ class CatalogVectorNumericClassificationRequest(CatalogVectorRequest):
         if any(ord(character) < 32 or ord(character) == 127 for character in value):
             raise ValueError("Numeric field cannot contain control characters")
         return value
+
+
+class CatalogVectorNumericClassificationRequest(
+    CatalogVectorRequest, VectorNumericClassificationRequest
+):
+    """Identify a catalog vector and its requested numeric field classification."""
 
 
 class VectorCategoryValue(BaseModel):
@@ -903,10 +941,16 @@ class VectorStyle(BaseModel):
         return self
 
 
-class CatalogVectorStyleRequest(CatalogVectorRequest):
-    """Identify one Catalog vector and its complete validated style."""
+class VectorStyleRequest(BaseModel):
+    """Specify the complete appearance to apply to a vector layer."""
+
+    model_config = ConfigDict(extra="forbid")
 
     style: VectorStyle
+
+
+class CatalogVectorStyleRequest(CatalogVectorRequest, VectorStyleRequest):
+    """Identify a catalog vector and the complete appearance to apply."""
 
 
 class AppliedVectorStyle(BaseModel):

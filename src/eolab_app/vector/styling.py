@@ -12,11 +12,7 @@ from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
 )
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
-from eolab_app.vector.metadata import (
-    catalog_vector_fields as _catalog_vector_fields,
-    catalog_vector_feature_count as _catalog_vector_feature_count,
-    require_assessed_metadata as _require_assessed_metadata,
-)
+from eolab_app.vector.metadata import get_catalog_vector_layer
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.models import (
     AppliedVectorStyle,
@@ -29,10 +25,8 @@ from eolab_app.vector.models import (
     VECTOR_NUMERIC_DEFAULT_CLASS_COUNT,
     VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
     VECTOR_NUMERIC_MINIMUM_CLASS_COUNT,
-    VECTOR_READER_CONTRACT,
-    VECTOR_RENDERING_METADATA_KEY,
-    VECTOR_RENDERING_POLICY,
     ResolvedVectorSource,
+    VectorLayer,
     VectorCategoryRead,
     VectorCategorySummary,
     VectorCategoryValue,
@@ -41,6 +35,7 @@ from eolab_app.vector.models import (
     VectorNumericClass,
     VectorNumericClassificationSummary,
     VectorNumericRead,
+    VectorStyle,
 )
 from eolab_app.vector.ports import (
     VectorCatalog,
@@ -53,11 +48,11 @@ from eolab_app.vector.sources import (
 )
 
 
-_FieldRead = TypeVar("_FieldRead")
+_FieldRead = TypeVar("_FieldRead", VectorCategoryRead, VectorNumericRead)
 
 
 class VectorStyleService:
-    """Apply styles only to current, published, authoritative vector Items."""
+    """Style catalog and uploaded vectors and summarize their attribute values."""
 
     def __init__(
         self,
@@ -105,12 +100,31 @@ class VectorStyleService:
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
-        fields = _catalog_vector_fields(item)
-        field_type = fields.get(request.field)
+        layer = get_catalog_vector_layer(item, source, "Category summary")
+        return await self.summarize_layer_categories(layer, request.field)
+
+    async def summarize_layer_categories(
+        self,
+        layer: VectorLayer,
+        field: str,
+    ) -> VectorCategorySummary:
+        """Summarize an authorized layer's category values without contacting GeoServer.
+
+        Args:
+            layer: Original source and attribute metadata from catalog or upload lookup.
+            field: Attribute whose values should be counted.
+
+        Returns:
+            The most frequent typed values and whether the bounded read finished.
+
+        Raises:
+            VectorConflictError: If the field is unsupported or cannot be read.
+        """
+        field_type = layer.fields.get(field)
         if field_type is None:
             raise VectorConflictError(
                 "Category summary unavailable: the selected field is not a "
-                "current attribute of the authoritative vector Item."
+                "known attribute of this vector layer."
             )
         category_kind = _categorical_field_kind(field_type)
         if category_kind is None:
@@ -118,22 +132,19 @@ class VectorStyleService:
                 "Category summary unavailable: choose a text, integer, "
                 "number, or boolean field."
             )
-        category_read, feature_count = await self._read_current_field(
-            item,
-            source,
-            request.field,
+        category_read = await self._read_current_field(
+            layer,
+            field,
             self._field_reader.read_categories,
             "Category summary",
         )
-        if not isinstance(category_read, VectorCategoryRead):
-            raise TypeError("Category field reader violated its result contract")
         if any(
             _category_value_kind(value) != category_kind
             for value, _count in category_read.counts
         ):
             raise VectorConflictError(
                 "Category summary unavailable: the current source values do "
-                "not match the Catalog field type; reassess the vector Item."
+                "not match the layer's recorded field type."
             )
 
         values = tuple(
@@ -150,7 +161,7 @@ class VectorStyleService:
         )
         observed_distinct_count = len(category_read.counts)
         return VectorCategorySummary(
-            field=request.field,
+            field=field,
             fieldType=field_type,
             values=values,
             observedDistinctCount=observed_distinct_count,
@@ -158,7 +169,7 @@ class VectorStyleService:
                 observed_distinct_count if category_read.complete else None
             ),
             scannedFeatureCount=category_read.scanned_feature_count,
-            featureCount=feature_count,
+            featureCount=layer.feature_count,
             nullCount=category_read.null_count,
             unsupportedValueCount=category_read.unsupported_value_count,
             complete=category_read.complete,
@@ -187,28 +198,25 @@ class VectorStyleService:
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
-        return await self._classify_current_numeric(
-            item,
-            source,
+        return await self.classify_layer_numeric(
+            get_catalog_vector_layer(item, source, "Numeric classification"),
             request.field,
             request.method,
             request.class_count,
         )
 
-    async def _classify_current_numeric(
+    async def classify_layer_numeric(
         self,
-        item: dict[str, Any],
-        source: ResolvedVectorSource,
+        layer: VectorLayer,
         field: str,
         method: VectorClassificationMethod,
         class_count: int,
     ) -> VectorNumericClassificationSummary:
-        """Build one authoritative classification from a resolved source.
+        """Classify an authorized layer's numeric values for a graduated style.
 
         Args:
-            item: Authoritative Catalog Item.
-            source: Exact source identity resolved from ``item``.
-            field: Current numeric Catalog field.
+            layer: Original source and metadata from catalog or upload lookup.
+            field: Numeric attribute to classify.
             method: Equal-interval, quantile, or percentile-interval classification.
             class_count: Requested number of classes.
 
@@ -219,21 +227,18 @@ class VectorStyleService:
             VectorConflictError: If the field, source, or finite values cannot
                 satisfy the graduated-style contract.
         """
-        field_type = _catalog_vector_fields(item).get(field)
+        field_type = layer.fields.get(field)
         if field_type is None or not _numeric_field_type(field_type):
             raise VectorConflictError(
                 "Numeric classification unavailable: choose a current integer "
-                "or floating-point Catalog field."
+                "or floating-point attribute."
             )
-        numeric_read, feature_count = await self._read_current_field(
-            item,
-            source,
+        numeric_read = await self._read_current_field(
+            layer,
             field,
             self._field_reader.read_numbers,
             "Numeric classification",
         )
-        if not isinstance(numeric_read, VectorNumericRead):
-            raise TypeError("Numeric field reader violated its result contract")
         if not numeric_read.values:
             raise VectorConflictError(
                 "Numeric classification unavailable: this field has no finite "
@@ -255,7 +260,7 @@ class VectorStyleService:
             observedMaximum=max(numeric_read.values),
             numericValueCount=len(numeric_read.values),
             scannedFeatureCount=numeric_read.scanned_feature_count,
-            featureCount=feature_count,
+            featureCount=layer.feature_count,
             nullCount=numeric_read.null_count,
             unsupportedValueCount=numeric_read.unsupported_value_count,
             complete=numeric_read.complete,
@@ -266,39 +271,35 @@ class VectorStyleService:
 
     async def _read_current_field(
         self,
-        item: dict[str, Any],
-        source: ResolvedVectorSource,
+        layer: VectorLayer,
         field: str,
         read: Callable[
             [ResolvedVectorSource, str, int, Event],
             _FieldRead,
         ],
         operation: str,
-    ) -> tuple[_FieldRead, int]:
+    ) -> _FieldRead:
         """Read an immutable vector field within its interactive work limits.
 
         Args:
-            item: Authoritative Catalog Item.
-            source: Exact source identity resolved from ``item``.
-            field: Current authoritative field identity.
+            layer: Original source and metadata from catalog or upload lookup.
+            field: Attribute selected for this read.
             read: Focused field-reader operation.
             operation: User-facing operation name for safe errors.
 
         Returns:
-            Field-reader result and authoritative Catalog feature count.
+            Field values and completion details returned by the existing reader.
 
         Raises:
-            VectorConflictError: If assessment metadata is unavailable or the
-                read result disagrees with its Catalog row count.
+            VectorConflictError: If the read result disagrees with the recorded
+                feature count.
         """
-        feature_count = _catalog_vector_feature_count(item, operation)
-        _require_assessed_metadata(item, operation)
         cancel_event = Event()
         try:
             async with self._field_slots:
                 result = await asyncio.to_thread(
                     read,
-                    source,
+                    layer.source,
                     field,
                     VECTOR_FIELD_FEATURE_LIMIT,
                     cancel_event,
@@ -306,14 +307,12 @@ class VectorStyleService:
         except asyncio.CancelledError:
             cancel_event.set()
             raise
-        complete = getattr(result, "complete", None)
-        scanned_feature_count = getattr(result, "scanned_feature_count", None)
-        if complete is True and scanned_feature_count != feature_count:
+        if result.complete and result.scanned_feature_count != layer.feature_count:
             raise VectorConflictError(
-                f"{operation} unavailable: reassess the vector Item because "
-                "its feature count has changed."
+                f"{operation} unavailable: the feature count read from the file "
+                "disagrees with the layer metadata."
             )
-        return result, feature_count
+        return result
 
     async def apply(
         self,
@@ -334,10 +333,33 @@ class VectorStyleService:
                 geometry, or style fields disagree with the authoritative Catalog Item.
         """
 
+        item = await self._catalog.get_item(request)
+        source = self._source_resolver.resolve(item)
+        layer = get_catalog_vector_layer(item, source, "Style")
+        return await self.apply_layer_style(layer, request.style)
+
+    async def apply_layer_style(
+        self,
+        layer: VectorLayer,
+        style: VectorStyle,
+    ) -> AppliedVectorStyle:
+        """Apply an appearance to a published catalog or uploaded vector layer.
+
+        Args:
+            layer: Original source and metadata from catalog or upload lookup.
+            style: Complete requested appearance, validated by the HTTP boundary.
+
+        Returns:
+            Applied style name and appearance used by normal WMS rendering.
+
+        Raises:
+            VectorConflictError: If publication, geometry or attributes do not
+                support the requested style.
+            VectorPublicationError: If GeoServer cannot apply the style.
+        """
         async with self._style_lock:
-            item = await self._catalog.get_item(request)
-            source = self._source_resolver.resolve(item)
-            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
+            source = layer.source
+            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
             try:
                 authorization = self._vector_registry.require_current(layer_name)
             except (
@@ -345,7 +367,7 @@ class VectorStyleService:
                 PublishedLayerNotAuthorizedError,
             ) as error:
                 raise VectorConflictError(
-                    "Style unavailable: add the current vector Item to the map "
+                    "Style unavailable: add the current vector layer to the map "
                     "before styling it."
                 ) from error
             if source != authorization.source:
@@ -353,37 +375,22 @@ class VectorStyleService:
                     "Style unavailable: the authoritative vector source no "
                     "longer matches the published layer."
                 )
-            metadata = item.get("properties", {}).get(
-                VECTOR_RENDERING_METADATA_KEY
-            )
-            if (
-                not isinstance(metadata, dict)
-                or metadata.get("policy") != VECTOR_RENDERING_POLICY
-                or metadata.get("eligible") is not True
-                or metadata.get("reader_contract") != VECTOR_READER_CONTRACT
-                or metadata.get("reader_compatible") is not True
-            ):
-                raise VectorConflictError(
-                    "Style unavailable: reassess and add the current vector "
-                    "Item to the map before styling it."
-                )
-            geometry_kind = metadata.get("geometry_kind")
-            if geometry_kind != request.style.geometry_kind:
+            if layer.geometry_kind != style.geometry_kind:
                 raise VectorConflictError(
                     "Style unavailable: the requested symbol geometry does not "
                     "match the assessed vector layer."
                 )
-            fields = _catalog_vector_fields(item)
+            fields = layer.fields
             if (
-                request.style.label is not None
-                and request.style.label.field not in fields
+                style.label is not None
+                and style.label.field not in fields
             ):
                 raise VectorConflictError(
                     "Style unavailable: the selected label field is not a "
-                    "current attribute of the authoritative vector Item."
+                    "known attribute of this vector layer."
                 )
-            if request.style.categorical is not None:
-                categorical = request.style.categorical
+            if style.categorical is not None:
+                categorical = style.categorical
                 field_type = fields.get(categorical.field)
                 category_kind = (
                     _categorical_field_kind(field_type)
@@ -393,7 +400,7 @@ class VectorStyleService:
                     raise VectorConflictError(
                         "Style unavailable: the selected category field is "
                         "not a current scalar attribute of the authoritative "
-                        "vector Item."
+                        "vector layer."
                     )
                 if any(
                     rule.value.kind != category_kind
@@ -401,13 +408,12 @@ class VectorStyleService:
                 ):
                     raise VectorConflictError(
                         "Style unavailable: a category value type does not "
-                        "match the current Catalog field type."
+                        "match the layer's recorded field type."
                     )
-            if request.style.graduated is not None:
-                graduated = request.style.graduated
-                classification = await self._classify_current_numeric(
-                    item,
-                    source,
+            if style.graduated is not None:
+                graduated = style.graduated
+                classification = await self.classify_layer_numeric(
+                    layer,
                     graduated.field,
                     graduated.method,
                     graduated.class_count,
@@ -421,8 +427,8 @@ class VectorStyleService:
                         "values to style."
                     )
             publication = await self._styler.apply_style(
-                request.item_id,
-                request.style,
+                layer.resource_name,
+                style,
             )
             self._vector_registry.authorize(
                 layer_name,
@@ -432,7 +438,7 @@ class VectorStyleService:
             )
             return AppliedVectorStyle(
                 styleName=publication.style_name,
-                style=request.style,
+                style=style,
             )
 
 

@@ -4,7 +4,6 @@ import asyncio
 import math
 from collections import OrderedDict
 from threading import Event
-from typing import Any
 from eolab_app.vector.filters import (
     AppliedVectorFilter,
     CatalogVectorFilterRequest,
@@ -12,7 +11,7 @@ from eolab_app.vector.filters import (
     VectorFilterCount,
     validate_filter,
 )
-from eolab_app.vector.metadata import catalog_vector_fields, catalog_vector_feature_count, require_assessed_metadata
+from eolab_app.vector.metadata import get_catalog_vector_layer
 from eolab_app.rendering.errors import PublishedLayerNotAuthorizedError
 
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
@@ -24,11 +23,8 @@ from eolab_app.vector.errors import (
 )
 from eolab_app.vector.models import (
     CatalogVectorRequest,
-    ResolvedVectorSource,
+    VectorLayer,
     PublishedVector,
-    VECTOR_READER_CONTRACT,
-    VECTOR_RENDERING_METADATA_KEY,
-    VECTOR_RENDERING_POLICY,
 )
 from eolab_app.vector.ports import VectorCatalog, VectorPublisher, VectorFieldReader
 from eolab_app.vector.sources import (
@@ -102,91 +98,87 @@ class VectorPublicationService:
             VectorConflictError: If assessment is absent, unsupported, or
                 the Catalog source binding is invalid.
         """
+        item = await self._catalog.get_item(request)
+        source = self._source_resolver.resolve(item)
+        return await self.publish_layer(
+            get_catalog_vector_layer(item, source, "Visualization")
+        )
+
+    async def publish_layer(self, layer: VectorLayer) -> PublishedVector:
+        """Display an authorized catalog or uploaded vector through GeoServer.
+
+        Args:
+            layer: Original file and metadata supplied by its source owner.
+
+        Returns:
+            WMS layer name, bounds and the geometry's default appearance.
+
+        Raises:
+            VectorPublicationError: If GeoServer cannot publish the source layer.
+        """
         async with self._publish_lock:
-            item = await self._catalog.get_item(request)
-            source = self._source_resolver.resolve(item)
-            metadata = item.get("properties", {}).get(
-                VECTOR_RENDERING_METADATA_KEY
-            )
-            if (
-                not isinstance(metadata, dict)
-                or metadata.get("policy") != VECTOR_RENDERING_POLICY
-            ):
-                raise VectorConflictError(
-                    "Visualization unavailable: assess this vector layer first."
-                )
-            if metadata.get("eligible") is not True:
-                reason = metadata.get("reason")
-                raise VectorConflictError(
-                    reason if isinstance(reason, str) and reason else
-                    "Visualization unavailable for this vector layer."
-                )
-            if (
-                metadata.get("reader_contract") != VECTOR_READER_CONTRACT
-                or metadata.get("reader_compatible") is not True
-            ):
-                raise VectorConflictError(
-                    "Visualization unavailable: reassess this vector layer for "
-                    "the current GeoServer reader."
-                )
-            if (
-                source.source_kind != "mounted"
-                or source.source_path is None
-                or source.layer_name is None
-                or source.source_format not in {"shapefile", "geopackage"}
-            ):
-                raise VectorConflictError(
-                    "Visualization unavailable: the assessed mounted vector "
-                    "source contract is no longer valid."
-                )
-            geometry_kind = metadata.get("geometry_kind")
-            if geometry_kind not in {"point", "line", "polygon"}:
-                raise VectorConflictError(
-                    "Visualization unavailable: the assessed geometry is invalid."
-                )
+            source = layer.source
             style_name = await self._publisher.publish(
-                request.item_id,
+                layer.resource_name,
                 source.source_format,
                 source.source_path,
                 source.layer_name,
-                geometry_kind,
+                layer.geometry_kind,
             )
-            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
+            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
             self._vector_registry.authorize(layer_name, source, style_name)
             return PublishedVector(
                 layerName=layer_name,
-                bbox=tuple(item["bbox"]),
-                geometryKind=geometry_kind,
+                bbox=layer.bbox,
+                geometryKind=layer.geometry_kind,
                 styleName=style_name,
-                style=default_vector_style(geometry_kind),
+                style=default_vector_style(layer.geometry_kind),
             )
 
-    async def _prepare_published_filter(
+    async def _get_catalog_filter_layer(
         self, request: CatalogVectorFilterRequest
-    ) -> tuple[dict[str, Any], ResolvedVectorSource, VectorFilter, str]:
-        """Resolve the published vector source and validate its requested feature filter.
+    ) -> VectorLayer:
+        """Load the catalog layer whose displayed features will be filtered.
 
         Args:
             request: Catalog identity and bounded filter rules.
 
         Returns:
-            Item, source, validated rules, and original layer name.
+            Original source and its assessed display and attribute metadata.
 
         Raises:
             VectorConflictError: If assessment, fields, or publication is unavailable.
         """
         item = await self._catalog.get_item(request)
         source = self._source_resolver.resolve(item)
+        return get_catalog_vector_layer(item, source, "Filtering")
+
+    def _validate_layer_filter(
+        self,
+        layer: VectorLayer,
+        candidate: VectorFilter,
+    ) -> tuple[VectorFilter, str]:
+        """Check a feature filter against its published source and attribute schema.
+
+        Args:
+            layer: Authorized original source and metadata.
+            candidate: Attribute rules supplied by the browser.
+
+        Returns:
+            Validated rules and the original WMS layer name.
+
+        Raises:
+            VectorConflictError: If publication or attribute validation fails.
+        """
         try:
-            require_assessed_metadata(item, "Filtering")
-            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
+            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{layer.resource_name}"
             authorization = self._vector_registry.require_current(layer_name)
-            if authorization.source != source:
+            if authorization.source != layer.source:
                 raise VectorConflictError("The published vector binding changed; reload the layer")
         except (PublishedLayerChangedError, PublishedLayerNotAuthorizedError) as error:
             raise VectorConflictError("The vector publication is unavailable; reload the layer") from error
-        validated_filter = validate_filter(request.filter, catalog_vector_fields(item))
-        return item, source, validated_filter, layer_name
+        validated_filter = validate_filter(candidate, layer.fields)
+        return validated_filter, layer_name
 
     async def apply_filter(self, request: CatalogVectorFilterRequest) -> AppliedVectorFilter:
         """Authorize a per-map predicate without changing GeoServer layer state.
@@ -200,8 +192,28 @@ class VectorPublicationService:
         Raises:
             VectorConflictError: If the fields, source binding, or publication is invalid.
         """
-        _, _, validated_filter, published_layer_name = (
-            await self._prepare_published_filter(request)
+        layer = await self._get_catalog_filter_layer(request)
+        return await self.apply_layer_filter(layer, request.filter)
+
+    async def apply_layer_filter(
+        self,
+        layer: VectorLayer,
+        candidate: VectorFilter,
+    ) -> AppliedVectorFilter:
+        """Apply attribute rules to a catalog or uploaded layer's displayed features.
+
+        Args:
+            layer: Authorized original source and metadata.
+            candidate: Structurally validated filter requested by the browser.
+
+        Returns:
+            Validated rules and a WMS identity for the filtered view.
+
+        Raises:
+            VectorConflictError: If the source, fields or publication are unavailable.
+        """
+        validated_filter, published_layer_name = self._validate_layer_filter(
+            layer, candidate
         )
         try:
             layer_name = self._vector_registry.authorize_filter(
@@ -232,10 +244,34 @@ class VectorPublicationService:
                 within the queue wait deadline.
             asyncio.CancelledError: If the requesting browser disconnects.
         """
-        item, source, validated_filter, published_layer_name = (
-            await self._prepare_published_filter(request)
+        layer = await self._get_catalog_filter_layer(request)
+        return await self.count_layer_filter(layer, request.filter)
+
+    async def count_layer_filter(
+        self,
+        layer: VectorLayer,
+        candidate: VectorFilter,
+    ) -> VectorFilterCount:
+        """Count matching features through the existing bounded field reader and queue.
+
+        Args:
+            layer: Authorized original source and metadata.
+            candidate: Structurally validated filter requested by the browser.
+
+        Returns:
+            Exact counts, or an incomplete result when a read reaches its budget.
+
+        Raises:
+            VectorConflictError: If source access or attribute validation fails.
+            VectorFilterCountCapacityError: If the waiting queue is full.
+            VectorFilterCountQueueTimeoutError: If waiting exceeds its deadline.
+            asyncio.CancelledError: If the caller stops waiting for the count.
+        """
+        validated_filter, published_layer_name = self._validate_layer_filter(
+            layer, candidate
         )
-        total = catalog_vector_feature_count(item, "Filter count")
+        source = layer.source
+        total = layer.feature_count
         if not validated_filter.active:
             return VectorFilterCount(matched=total, total=total, complete=True)
         key = (
@@ -280,7 +316,7 @@ class VectorPublicationService:
             cancel_event.set()
         if result.complete and result.total != total:
             raise VectorConflictError(
-                "The feature count disagrees with Catalog metadata; reassess the layer"
+                "The feature count read from the file disagrees with the layer metadata"
             )
         if result.complete:
             self._filter_counts[key] = result

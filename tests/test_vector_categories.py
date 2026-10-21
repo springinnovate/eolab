@@ -196,5 +196,5 @@ def test_category_service_rejects_non_scalar_fields_and_incorrect_row_counts(
         field="category",
     )
 
-    with pytest.raises(VectorConflictError, match="reassess"):
+    with pytest.raises(VectorConflictError, match="disagrees with the layer metadata"):
         asyncio.run(service.summarize_categories(category_request))

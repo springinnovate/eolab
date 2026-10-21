@@ -21,6 +21,7 @@ from eolab_app.routes.saved_maps import (
 from eolab_app.routes.admin_auth import create_administrator_dependency
 from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
+from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
@@ -56,6 +57,7 @@ from eolab_app.raster.sources import (
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.rendering.composite import CompositeMapRenderingService
 from eolab_app.rendering.artifact_preview import ArtifactPreviewService
+from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.composite_map import create_composite_map_router
@@ -76,7 +78,10 @@ from eolab_app.routes.stac_proxy import (
     create_stac_proxy_router,
 )
 from eolab_app.routes.system import create_system_router
-from eolab_app.routes.vectors import create_vector_feature
+from eolab_app.routes.vectors import (
+    create_uploaded_vector_router,
+    create_vector_feature,
+)
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import (
     APPLICATION_VERSION_PATH,
@@ -106,7 +111,8 @@ from eolab_app.vector.selection_jobs import SelectionJobs
 from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
-from eolab_app.vector_uploads import VectorUploadStore
+from eolab_app.vector.uploaded_sources import UploadedVectorSourceResolver
+from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 
 
 def create_app(
@@ -256,29 +262,56 @@ def create_app(
     async def authorize_map_layers(
         layer_names: tuple[str, ...], request: Request
     ) -> bool:
-        """Supply current-session access to ordinary rendering without coupling its services.
+        """Check browser ownership before rendering private uploads or model outputs.
 
         Args:
             layer_names: Validated layer identities requested for WMS or composition.
-            request: Browser request carrying its existing HttpOnly session cookie.
+            request: Browser request carrying its existing HttpOnly ownership cookies.
 
         Returns:
-            Whether the response contains private run output.
+            Whether the response contains any private source.
 
         Raises:
             HTTPException: If ownership, expiry or file availability rejects access.
         """
-        if not any(temporary_raster_source(name) for name in layer_names):
-            return False
-        owner = get_processing_session_owner_hash(
-            request, Response(), processing_session_ttl
-        )
         try:
-            return await raster_publication.authorize_layers(layer_names, owner)
-        except SourceFileError as error:
+            upload_ids = {
+                identifier
+                for name in layer_names
+                if (identifier := published_vectors.get_upload_id(name)) is not None
+            }
+            private = bool(upload_ids)
+            if upload_ids:
+                owner = get_browser_owner_hash(
+                    request, Response(), mutation_header="X-EOLab-Uploads"
+                )
+                for identifier in upload_ids:
+                    await asyncio.to_thread(
+                        vector_uploads.get_upload_source, owner, identifier
+                    )
+            if any(temporary_raster_source(name) for name in layer_names):
+                owner = get_processing_session_owner_hash(
+                    request, Response(), processing_session_ttl
+                )
+                private = (
+                    await raster_publication.authorize_layers(layer_names, owner)
+                    or private
+                )
+            return private
+        except (SourceFileError, VectorUploadError) as error:
             raise HTTPException(
                 error.status, str(error), headers={"Cache-Control": "private, no-store"}
             ) from error
+        except PublishedLayerChangedError as error:
+            raise HTTPException(
+                409, str(error), headers={"Cache-Control": "private, no-store"}
+            ) from error
+        except HTTPException as error:
+            error.headers = {
+                **(error.headers or {}),
+                "Cache-Control": "private, no-store",
+            }
+            raise
 
     async def reconcile_output_publications() -> None:
         """Retry temporary GeoServer cleanup independently of model execution.
@@ -319,6 +352,20 @@ def create_app(
         app_global_configuration.geoserver_internal_url,
     )
     vector_field_reader = OgrVectorFieldReader()
+    vector_publication = VectorPublicationService(
+        vector_catalog,
+        vector_source_resolver,
+        vector_publisher,
+        published_vectors,
+        field_reader=vector_field_reader,
+    )
+    vector_styles = VectorStyleService(
+        vector_catalog,
+        vector_source_resolver,
+        vector_publisher,
+        published_vectors,
+        vector_field_reader,
+    )
     vector_feature = create_vector_feature(
         VectorAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -326,20 +373,8 @@ def create_app(
             vector_source_resolver,
             vector_assessment_finalizer,
         ),
-        VectorPublicationService(
-            vector_catalog,
-            vector_source_resolver,
-            vector_publisher,
-            published_vectors,
-            field_reader=vector_field_reader,
-        ),
-        VectorStyleService(
-            vector_catalog,
-            vector_source_resolver,
-            vector_publisher,
-            published_vectors,
-            vector_field_reader,
-        ),
+        vector_publication,
+        vector_styles,
         published_vectors,
     )
     get_map_request_tracker = GetMapRequestTracker(
@@ -405,6 +440,13 @@ def create_app(
         app_global_configuration.vector_upload_max_bytes,
     )
     application.include_router(create_vector_uploads_router(vector_uploads))
+    application.include_router(
+        create_uploaded_vector_router(
+            UploadedVectorSourceResolver(vector_uploads),
+            vector_publication,
+            vector_styles,
+        )
+    )
     application.include_router(
         create_shared_layer_admin_router(
             annotation_sessions, app_global_configuration.admin_password
@@ -500,7 +542,10 @@ def create_app(
             get_map_request_tracker,
             render_queue,
             authorize_layers=authorize_map_layers,
-            hidden_layer=lambda name: temporary_raster_source(name) is not None,
+            hidden_layer=lambda name: (
+                temporary_raster_source(name) is not None
+                or published_vectors.get_upload_id(name) is not None
+            ),
         )
     )
     application.include_router(
