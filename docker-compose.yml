@@ -203,7 +203,7 @@ services:
         max-size: 10m
         max-file: "3"
 
-  # Vector measurements/outlines read Catalog and the scan mount in this executor.
+  # Vector measurements/outlines read original catalog and private upload files.
   jobs:
     build:
       context: .
@@ -229,6 +229,7 @@ services:
     cap_drop:
       - ALL
     volumes:
+      - vector-uploads:/vector-uploads:ro
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}
         target: /scan-source

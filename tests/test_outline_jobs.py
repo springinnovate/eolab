@@ -386,8 +386,18 @@ def test_remote_outlines_do_not_gate_selection(
         started = 0
         ready, release = asyncio.Event(), asyncio.Event()
 
-        async def remote(_: CatalogSelection) -> dict[str, Any]:
-            """Hold three independent Jobs submissions until local selection ends."""
+        async def remote(
+            selection: CatalogSelection, upload_owner: str | None
+        ) -> dict[str, Any]:
+            """Hold three independent Jobs submissions until local selection ends.
+
+            Args:
+                selection: Authorized catalog selection submitted for display.
+                upload_owner: Absent for the catalog fixture.
+
+            Returns:
+                No result; the simulated Jobs outage raises VectorConflictError.
+            """
             nonlocal started
             started += 1
             if started == 3:
@@ -396,11 +406,14 @@ def test_remote_outlines_do_not_gate_selection(
             raise VectorConflictError("Jobs offline")
 
         async with httpx2.AsyncClient() as client:
-            async def measure(candidate: CatalogSelection) -> dict[str, Any]:
+            async def measure(
+                candidate: CatalogSelection, upload_owner: str | None
+            ) -> dict[str, Any]:
                 """Return measurements independently of pending outline results.
 
                 Args:
                     candidate: Authorized descriptor to measure.
+                    upload_owner: Unused browser identity for this catalog selection.
 
                 Returns:
                     Fixture feature count and bounds.

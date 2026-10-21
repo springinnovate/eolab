@@ -6,15 +6,18 @@ This service retains selection authorization and execution routing;
 an unavailable outline does not prevent numeric analysis of the selection.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 from eolab_app.catalog.vector_contract import CatalogVectorRequest
 from eolab_app.attribute_filter import VectorFilter
 
 from eolab_app.catalog_selection import (
-    CatalogSelection,
     ResolvedCatalogSelection,
     SelectionUnavailableError,
+    UploadedSelection,
+    UploadedVectorFilterRequest,
+    VectorSelection,
 )
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.filters import (
@@ -23,24 +26,26 @@ from eolab_app.vector.filters import (
 from eolab_app.vector.ports import VectorCatalog
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector_uploads import VectorUploadStore
 
 
 class VectorSamplingService:
-    """Validate filtered catalog features and request their measurements or outlines."""
+    """Authorize filtered vector features and request their measurements or outlines."""
 
     def __init__(
         self,
         catalog: VectorCatalog,
         resolver: MountedVectorResolver,
         outline_executor: (
-            Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
+            Callable[[VectorSelection, str | None], Awaitable[dict[str, Any]]] | None
         ) = None,
         *,
         selection_executor: (
-            Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
+            Callable[[VectorSelection, str | None], Awaitable[dict[str, Any]]] | None
         ) = None,
+        uploads: VectorUploadStore | None = None,
     ) -> None:
-        """Connect catalog source resolution with feature-measurement and outline jobs.
+        """Connect vector source resolution with feature-measurement and outline jobs.
 
         Args:
             catalog: Authoritative Catalog reader.
@@ -51,35 +56,41 @@ class VectorSamplingService:
             selection_executor: Jobs adapter for measuring filtered features.
                 Consumers that only reauthorize descriptors may omit it; select()
                 then reports unavailable without launching a local process.
+            uploads: Original browser-owned GeoPackages and their admission metadata.
         """
         self.catalog = catalog
         self.resolver = resolver
         self._outline_executor = outline_executor
         self._selection_executor = selection_executor
+        self._uploads = uploads
 
     async def resolve_for_sampling(
-        self, selection: CatalogSelection
+        self, selection: VectorSelection, upload_owner: str | None = None
     ) -> ResolvedCatalogSelection:
-        """Authorize a saved feature selection against its Catalog binding and filter.
+        """Authorize a feature selection against its source identity and filter.
 
         Args:
-            selection: Validated catalog source identity and feature filter.
+            selection: Validated catalog or upload identity and feature filter.
+            upload_owner: Server-derived browser identity for private uploads.
 
         Returns:
             Authorized dataset path and feature filter.
 
         Raises:
-            SelectionUnavailableError: If identity, source or predicate changed.
+            SelectionUnavailableError: If source identity or predicate is invalid.
+            VectorUploadError: If the upload is unavailable to this browser.
         """
         try:
-            resolved = await resolve_selection(self.catalog, self.resolver, selection)
+            resolved = await resolve_selection(
+                self.catalog, self.resolver, selection, self._uploads, upload_owner
+            )
         except (VectorFeatureError, OSError, ValueError) as error:
             raise SelectionUnavailableError(
-                "The catalog vector is unavailable; select it again."
+                "The selected vector is unavailable; select it again."
             ) from error
         if resolved.selection != selection:
             raise SelectionUnavailableError(
-                "The catalog vector identity changed; select it again."
+                "The selected vector identity changed; select it again."
             )
         return resolved
 
@@ -109,11 +120,16 @@ class VectorSamplingService:
                 "The configured catalog vector source is missing or unreadable."
             ) from error
 
-    async def select(self, request: CatalogVectorFilterRequest) -> dict[str, Any]:
+    async def select(
+        self,
+        request: CatalogVectorFilterRequest | UploadedVectorFilterRequest,
+        upload_owner: str | None = None,
+    ) -> dict[str, Any]:
         """Queue a filtered-feature measurement without retaining coordinates.
 
         Args:
-            request: Catalog identity and typed predicate.
+            request: Catalog or upload identity and typed predicate.
+            upload_owner: Server-derived browser identity for private uploads.
 
         Returns:
             Exact counts/bounds and path-free selection descriptor.
@@ -121,24 +137,36 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If unavailable, empty, over budget or queue-full.
             SelectionUnavailableError: If the source cannot be read.
+            VectorUploadError: If the upload is unavailable to this browser.
             asyncio.CancelledError: After the Jobs client cancels abandoned work.
         """
-        resolved = await resolve_selection(self.catalog, self.resolver, request)
+        resolved = await resolve_selection(
+            self.catalog, self.resolver, request, self._uploads, upload_owner
+        )
         if self._selection_executor is None:
             raise VectorConflictError("The vector selection executor is unavailable")
-        result = await self._selection_executor(resolved.selection)
+        if isinstance(resolved.selection, UploadedSelection):
+            await asyncio.to_thread(self._uploads.prepare_source_read, resolved.path)
+        result = await self._selection_executor(resolved.selection, upload_owner)
         return {
             **result,
             "selection": resolved.selection.model_dump(mode="json", by_alias=True),
             "filter": request.filter.model_dump(mode="json"),
-            "label": request.item_id,
+            "label": (
+                resolved.selection.layerName
+                if isinstance(request, UploadedVectorFilterRequest)
+                else request.item_id
+            ),
         }
 
-    async def outline(self, selection: CatalogSelection) -> dict[str, Any]:
+    async def outline(
+        self, selection: VectorSelection, upload_owner: str | None = None
+    ) -> dict[str, Any]:
         """Create a simplified map outline of the selected features.
 
         Args:
-            selection: Previously validated catalog descriptor.
+            selection: Catalog or upload descriptor returned by selection.
+            upload_owner: Server-derived browser identity for private uploads.
 
         Returns:
             Approximate FeatureCollection for map display only.
@@ -146,11 +174,14 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If no executor is supplied, or Jobs display work
                 is unavailable or over budget.
-            SelectionUnavailableError: If the Catalog binding or source is unavailable.
+            SelectionUnavailableError: If the source identity is invalid.
+            VectorUploadError: If the upload is unavailable to this browser.
             asyncio.CancelledError: After the executor's bounded cleanup.
         """
-        await self.resolve_for_sampling(selection)
+        resolved = await self.resolve_for_sampling(selection, upload_owner)
         if self._outline_executor is None:
             raise VectorConflictError("The map outline executor is unavailable")
-        result = await self._outline_executor(selection)
+        if isinstance(selection, UploadedSelection):
+            await asyncio.to_thread(self._uploads.prepare_source_read, resolved.path)
+        result = await self._outline_executor(selection, upload_owner)
         return result

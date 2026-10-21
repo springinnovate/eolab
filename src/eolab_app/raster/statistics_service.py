@@ -210,12 +210,14 @@ class RasterStatisticsService:
         self,
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> RasterStatistics:
         """Summarize original raster data while retaining its authorized source.
 
         Args:
             request: Existing catalog request or explicit raster source and area.
             owner: Server-derived session hash for a private source.
+            upload_owner: Server-derived browser hash for uploaded polygon selections.
 
         Returns:
             Counts, ranges, percentiles and a histogram with sampling details.
@@ -223,22 +225,25 @@ class RasterStatisticsService:
         Raises:
             RasterFeatureError: If source, area or bounded reading is unavailable.
             SourceFileError: If private file access changes before delivery.
+            VectorUploadError: If the polygon upload is unavailable to this browser.
         """
         async with self._source_access.open(
             raster_source_reference(request), owner
         ) as source:
-            return await self._get_authorized_statistics(request, source)
+            return await self._get_authorized_statistics(request, source, upload_owner)
 
     async def _get_authorized_statistics(
         self,
         request: CatalogRasterStatisticsRequest | RasterStatisticsSourceRequest,
         authorized_raster: RasterReadSource,
+        upload_owner: str | None,
     ) -> RasterStatistics:
         """Reuse or calculate statistics for an authorized raster and sampling area.
 
         Args:
             request: Validated raster identity and strict sampling-area union.
             authorized_raster: Source retained by the calling access scope.
+            upload_owner: Browser identity for the selected uploaded polygons.
 
         Returns:
             Cached or newly computed rendering-independent statistics.
@@ -248,9 +253,10 @@ class RasterStatisticsService:
             RasterConflictError: If raster, catalog selection, or bounded reading fails.
             RasterStatisticsCapacityError: If the pending-read or caller limit is full.
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
+            VectorUploadError: If the selected upload is unavailable to this browser.
         """
         try:
-            sampling_area = await self._resolve_sampling_area(request)
+            sampling_area = await self._resolve_sampling_area(request, upload_owner)
         except SelectionUnavailableError as error:
             raise RasterConflictError(error.detail) from error
         category_values = (
@@ -302,16 +308,16 @@ class RasterStatisticsService:
             return cast(RasterStatistics, await asyncio.shield(work.task))
         except NoRasterBoundsOverlapError as error:
             detail = (
-                "The catalog selection does not overlap the raster. Choose another "
-                "catalog selection or use the whole raster."
+                "The selected polygons do not overlap the raster. Choose another "
+                "polygon selection or use the whole raster."
                 if isinstance(sampling_area, CatalogSelectionSamplingArea)
                 else "The selected area does not overlap the raster"
             )
             raise RasterConflictError(detail) from error
         except NoValidRasterSamplesError as error:
             detail = (
-                "The catalog selection overlaps the raster but contains no finite, "
-                "non-nodata sampled pixels. Choose another catalog selection or raster."
+                "The selected polygons overlap the raster but contain no finite, "
+                "non-nodata sampled pixels. Choose another polygon selection or raster."
                 if isinstance(sampling_area, CatalogSelectionSamplingArea)
                 else "No finite, non-nodata pixels were found in the bounded "
                 "raster sample"
@@ -341,12 +347,14 @@ class RasterStatisticsService:
         self,
         request: CatalogRasterPairRequest | RasterPairSourceRequest,
         owner: str | None = None,
+        upload_owner: str | None = None,
     ) -> RasterPairedStatistics:
         """Compare original data while holding both source access scopes.
 
         Args:
             request: Ordered raster references and optional sampling area.
             owner: Server-derived session hash for any private input.
+            upload_owner: Server-derived browser hash for uploaded polygon selections.
 
         Returns:
             Joint and marginal histograms on the X raster's sampling grid.
@@ -354,6 +362,7 @@ class RasterStatisticsService:
         Raises:
             RasterFeatureError: If either source or the sampling area is unavailable.
             SourceFileError: If private access changes before delivery.
+            VectorUploadError: If the polygon upload is unavailable to this browser.
         """
         async with AsyncExitStack() as stack:
             x = await stack.enter_async_context(
@@ -362,13 +371,16 @@ class RasterStatisticsService:
             y = await stack.enter_async_context(
                 self._source_access.open(request.y_raster, owner)
             )
-            return await self._get_authorized_paired_statistics(request, x, y)
+            return await self._get_authorized_paired_statistics(
+                request, x, y, upload_owner
+            )
 
     async def _get_authorized_paired_statistics(
         self,
         request: CatalogRasterPairRequest | RasterPairSourceRequest,
         authorized_x: RasterReadSource,
         authorized_y: RasterReadSource,
+        upload_owner: str | None,
     ) -> RasterPairedStatistics:
         """Return bounded paired statistics for two authorized original rasters.
 
@@ -380,6 +392,7 @@ class RasterStatisticsService:
             request: Validated ordered source pair and optional WGS 84 bounds.
             authorized_x: Retained X reference-grid source.
             authorized_y: Retained Y source for alignment.
+            upload_owner: Browser identity for the selected uploaded polygons.
 
         Returns:
             Cached or newly computed paired histogram on the X reference grid.
@@ -390,6 +403,7 @@ class RasterStatisticsService:
                 bounded-reading contracts fail.
             RasterStatisticsCapacityError: If the pending-read or caller limit is full.
             RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
+            VectorUploadError: If the selected upload is unavailable to this browser.
         """
         selected_bounds = (
             request.selected_bounds.canonical_tuple()
@@ -397,7 +411,7 @@ class RasterStatisticsService:
             else None
         )
         try:
-            sampling_area = await self._resolve_sampling_area(request)
+            sampling_area = await self._resolve_sampling_area(request, upload_owner)
         except SelectionUnavailableError as error:
             raise RasterConflictError(error.detail) from error
         cache_key: tuple[object, ...] = (
@@ -755,18 +769,20 @@ class RasterStatisticsService:
             | CatalogRasterPairRequest
             | RasterPairSourceRequest
         ),
+        upload_owner: str | None,
     ) -> RasterSamplingArea:
-        """Resolve the requested whole-raster, rectangular or catalog-feature area.
+        """Resolve the requested whole-raster, rectangular or vector-feature area.
 
         Args:
             request: Validated raster identity and exclusive sampling fields.
+            upload_owner: Browser identity used to authorize an uploaded selection.
 
         Returns:
-            Whole-raster, rectangular, or immutable resolved catalog selection area.
+            Whole-raster, rectangular, or authorized vector selection area.
 
         Raises:
-            SelectionUnavailableError: If an catalog selection reader is unavailable or
-                the opaque lifecycle cannot be resolved.
+            SelectionUnavailableError: If the selection reader or source is unavailable.
+            VectorUploadError: If the selected upload is unavailable to this browser.
         """
         if request.selected_bounds is not None:
             return SelectedBoundsSamplingArea(request.selected_bounds.canonical_tuple())
@@ -774,10 +790,10 @@ class RasterStatisticsService:
             return WholeRasterSamplingArea()
         if self._catalog_selection_reader is None:
             raise SelectionUnavailableError(
-                "Catalog vector sampling is not available. Use the whole raster."
+                "Vector sampling is not available. Use the whole raster."
             )
         resolved = await self._catalog_selection_reader.resolve_for_sampling(
-            request.catalog_selection
+            request.catalog_selection, upload_owner
         )
         return CatalogSelectionSamplingArea(resolved)
 

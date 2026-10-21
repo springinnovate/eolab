@@ -1991,12 +1991,13 @@ def test_statistics_service_authorizes_selection_once_per_request(
         resolutions: int = 0
 
         async def resolve_for_sampling(
-            self, selection: CatalogSelection
+            self, selection: CatalogSelection, upload_owner: str | None = None
         ) -> ResolvedCatalogSelection:
             """Authorize the requested fixture descriptor once.
 
             Args:
                 selection: Public vector and predicate descriptor.
+                upload_owner: Unused browser identity for this catalog-only fixture.
 
             Returns:
                 The resolved immutable fixture selection.

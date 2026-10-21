@@ -64,7 +64,7 @@ class UploadedVectorSourceResolver:
             VectorUploadError: If published-file permissions cannot be set.
         """
         await asyncio.to_thread(
-            self._store.prepare_rendering_source, layer.source.source_path
+            self._store.prepare_source_read, layer.source.source_path
         )
 
     async def get_layer(self, owner: str, identifier: UUID) -> VectorLayer:

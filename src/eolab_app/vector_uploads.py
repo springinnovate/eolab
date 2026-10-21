@@ -300,24 +300,25 @@ class VectorUploadStore:
                 503, "Upload storage could not be read. Try again shortly."
             ) from error
 
-    def prepare_rendering_source(self, source_path: Path) -> None:
-        """Allow GeoServer's separate user to read an authorized published file.
+    def prepare_source_read(self, source_path: Path) -> None:
+        """Allow the map server and Jobs worker to read an authorized upload.
 
         Args:
             source_path: Exact original path returned by get_upload_source. The
                 caller has already checked ownership and path confinement.
 
         Raises:
-            VectorUploadError: If filesystem permissions cannot be set. GeoServer
-                mounts this volume read-only; staging directories stay private.
+            VectorUploadError: If filesystem permissions cannot be set. Readers
+                mount this volume read-only; staging directories stay private.
         """
         try:
             for directory in (self.root, source_path.parent.parent, source_path.parent):
                 directory.chmod(0o755)
             source_path.chmod(0o644)
+            (source_path.parent / "metadata.json").chmod(0o644)
         except OSError as error:
             raise VectorUploadError(
-                503, "The uploaded file could not be made readable by the map server."
+                503, "The uploaded file could not be made readable by the server."
             ) from error
 
     def delete(self, owner: str, identifier: UUID) -> None:

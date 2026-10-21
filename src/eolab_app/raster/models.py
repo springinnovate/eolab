@@ -1,6 +1,6 @@
 """Public requests, responses, and internal raster value objects."""
 
-from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.catalog_selection import VectorSelection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
@@ -163,7 +163,7 @@ class RasterStatisticsArea(BaseModel):
     Attributes:
         selected_bounds: Optional canonical WGS 84 rectangle; absence selects
             the whole raster unless ``catalog_selection`` is present.
-        catalog_selection: Optional immutable Catalog descriptor;
+        catalog_selection: Optional immutable catalog or uploaded-vector descriptor;
             absence selects bounds or the whole raster.
         category_values: Optional distinct numeric classification codes. Labels,
             colors and opacity remain outside the analysis contract.
@@ -175,7 +175,7 @@ class RasterStatisticsArea(BaseModel):
         default=None,
         alias="selectedBounds",
     )
-    catalog_selection: CatalogSelection | None = Field(
+    catalog_selection: VectorSelection | None = Field(
         default=None, alias="catalogSelection"
     )
 
@@ -233,7 +233,7 @@ class CatalogRasterPairRequest(BaseModel):
         alias="selectedBounds",
     )
 
-    catalog_selection: CatalogSelection | None = Field(
+    catalog_selection: VectorSelection | None = Field(
         default=None, alias="catalogSelection"
     )
 
@@ -380,7 +380,7 @@ class RasterPairedStatistics(BaseModel):
     """
 
     scope: Literal["wholeOverlap", "selectedArea", "catalogSelection"]
-    catalog_selection: CatalogSelection | None = Field(
+    catalog_selection: VectorSelection | None = Field(
         default=None, alias="catalogSelection", exclude_if=_exclude_none_from_response
     )
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
@@ -542,7 +542,7 @@ class RasterStatistics(BaseModel):
         band: Fixed source band summarized by this response.
         scope: Whole-raster, rectangle, or catalog-selection area discriminator.
         selected_bounds: Canonical WGS 84 rectangle for ``selectedArea`` only.
-        catalog_selection: Opaque lifecycle identity for ``catalogSelection`` only.
+        catalog_selection: Catalog or uploaded-vector descriptor for ``catalogSelection``.
         source_width: Width of the integral source envelope in pixels.
         source_height: Height of the integral source envelope in pixels.
         source_pixel_count: Pixel count of the integral source envelope.
@@ -563,7 +563,7 @@ class RasterStatistics(BaseModel):
     band: Literal[1] = 1
     scope: Literal["wholeRaster", "selectedArea", "catalogSelection"]
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
-    catalog_selection: CatalogSelection | None = Field(
+    catalog_selection: VectorSelection | None = Field(
         default=None, alias="catalogSelection", exclude_if=_exclude_none_from_response
     )
     source_width: int = Field(alias="sourceWidth", gt=0)

@@ -134,11 +134,14 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
         MountedRasterResolver(tmp_path),
     )
 
-    async def measure_selection(selection: CatalogSelection) -> dict[str, Any]:
+    async def measure_selection(
+        selection: CatalogSelection, upload_owner: str | None
+    ) -> dict[str, Any]:
         """Measure fixture polygons at Processing's injected Vector boundary.
 
         Args:
             selection: Descriptor to reauthorize against the fixture Catalog.
+            upload_owner: Unused browser identity for this catalog selection.
 
         Returns:
             Native feature measurements; Jobs transport is tested separately.
