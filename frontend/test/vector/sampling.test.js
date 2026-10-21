@@ -1,7 +1,7 @@
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VectorSamplingController, vectorSelectionReview } from "../../src/vector/sampling.js";
+import { VectorSamplingController, vectorSelectionReview, createVectorSamplingArea } from "../../src/vector/sampling.js";
 
 const filter = { enabled: true, match: "all", rules: [{field:"iso3",operator:"eq",value:"PER"}] };
 const ready = { selection:CATALOG_SELECTION, filter, label:"Countries",
@@ -82,4 +82,31 @@ test("cancelled analysis discards its eventual descriptor without activation or 
     h.controller.invalidate("Selection cancelled"); resolve(ready);
     assert.equal(await pending, null); assert.deepEqual(h.events, []);
     assert.equal(h.view.state.area, null);
+});
+
+test("catalog and uploaded selections use original source identifiers and the applied filter", async t => {
+    for (const source of [{ collectionId: CATALOG_SELECTION.collectionId, itemId: CATALOG_SELECTION.itemId },
+        { uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d" }]) {
+        const selection = source.uploadId ? { ...source, layerName: "areas", filter } : { ...CATALOG_SELECTION, filter };
+        const reply = { ...ready, selection };
+        let request;
+        t.mock.method(globalThis, "fetch", async (url, options) => {
+            request = { url, options };
+            return new Response(JSON.stringify(reply));
+        });
+        const controller = fixture(createVectorSamplingArea);
+        controller.change([{ key: "polygons", label: "Selected polygons",
+            item: { ...source, key: "polygons", label: "Selected polygons", fields: [{ name: "iso3", type: "str" }], filter: { ...filter, rules: [] } }, filter }]);
+        await controller.controller.use({ analysis: true });
+        assert.deepEqual(JSON.parse(request.options.body), { ...source, filter });
+        assert.equal(request.url, "/api/vector-sampling/areas");
+        assert.equal(request.options.headers["X-EOLab-Uploads"], source.uploadId ? "1" : undefined);
+        assert.equal(request.options.credentials, "same-origin");
+        assert.equal(request.options.cache, "no-store");
+        assert.deepEqual(controller.view.state.area.selection, selection);
+        controller.controller.activate(selection, true);
+        assert.deepEqual(controller.events, [["activate", selection]]);
+        controller.change([]);
+        assert.deepEqual(controller.events.at(-1), ["invalidate", selection]);
+    }
 });

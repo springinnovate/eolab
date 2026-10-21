@@ -236,7 +236,7 @@ test("an older job listing cannot erase a newly accepted clip", async () => {
     assert.equal(h.timers.at(-1)[1], 2000);
 });
 
-test("session cookie is established before submission and only catalog identity/explicit area is sent", async () => {
+test("clip submission and recovery preserve source identities and exact areas without paths", async () => {
     const requests=[];
     const api = new ProcessingApiClient(async (url,options) => {
         requests.push([url,options]);
@@ -248,6 +248,17 @@ test("session cookie is established before submission and only catalog identity/
     const sent = requests.find(([url]) => url.endsWith("/raster-clips"))[1];
     assert.deepEqual(JSON.parse(sent.body), { collectionId: source.collectionId, itemId: source.itemId, selectedBounds: box.selectedBounds, requestId: "request-1234567890" });
     assert.equal(sent.headers["X-EOLab-Processing"], "1"); assert.equal(sent.credentials, "same-origin");
+    const uploaded = {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter};
+    const h = fixture();
+    const submission = {source, area: {kind: "catalogSelection", catalogSelection: uploaded}, requestId: "request-1234567890", label: "Uploaded basin clip"};
+    h.storage.write(submission);
+    const recovered = h.storage.read();
+    assert.deepEqual(recovered, submission);
+    await api.submitClip(recovered);
+    const uploadRequest = requests.at(-1)[1];
+    assert.deepEqual(JSON.parse(uploadRequest.body), {collectionId: source.collectionId, itemId: source.itemId,
+        catalogSelection: uploaded, requestId: submission.requestId});
+    assert.equal(uploadRequest.headers["X-EOLab-Processing"], "1");
     await assert.rejects(api.submitClip({source, area:{kind:"wholeRaster"}}), /Select a box/);
 });
 

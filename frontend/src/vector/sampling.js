@@ -1,5 +1,5 @@
 /** Select filtered polygons as an analysis area and track changes to that selection. */
-import { validateCatalogSelection, catalogSelectionsEqual } from "../selected-area.js";
+import { validateVectorSelection, vectorSelectionsEqual } from "../selected-area.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./filter.js";
 
 /** Identify calculation inputs, excluding presentation-only annotation edits.
@@ -75,7 +75,7 @@ export class VectorSamplingController {
         this.render();
     }
     /** Read the selected analysis predicate without exposing controller state.
-     * @param {string} key Retained catalog-layer identity.
+     * @param {string} key Retained polygon-layer identity.
      * @return {Object|null} Independent copy of the committed predicate.
      */
     selectedFilter(key) {
@@ -141,7 +141,7 @@ export class VectorSamplingController {
             this.render();
         } else if (["review", "confirm"].includes(this.state.phase)) this.activate();
     }
-    /** Activate a catalog selection or private polygon reference returned by composition.
+    /** Activate the selected polygon features returned by composition.
      * @param {Object|null} [selection=null] Expected descriptor for a completed primary action.
      * @param {boolean} [calculate=false] Explicit intent to run configured statistics.
      * @return {void}
@@ -150,7 +150,7 @@ export class VectorSamplingController {
         if (!this.state.area) return;
         if (selection !== null && (this.state.area.polygonArea
             ? this.state.area.polygonArea.id !== selection.id
-            : !catalogSelectionsEqual(this.state.area.selection, selection))) return;
+            : !vectorSelectionsEqual(this.state.area.selection, selection))) return;
         this.state.phase = "active";
         const area = this.state.area;
         this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · calculations use the exact polygon geometry.`;
@@ -182,19 +182,22 @@ export class VectorSamplingController {
 }
 
 /**
- * Request an immutable catalog selection using source identity and typed rules.
- * @param {Object} item Catalog item.
+ * Select filtered polygons from a catalog layer or this browser's uploaded GeoPackage.
+ * @param {{collectionId:string,itemId:string}|{uploadId:string}} source Public source identity, optionally with UI metadata.
  * @param {Object} filter Applied filter.
  * @param {AbortSignal} signal Native read cancellation.
- * @return {Promise<Object>} Catalog descriptor and counts.
+ * @return {Promise<Object>} Immutable selection descriptor, bounds and feature counts.
+ * @throws {Error} If selection fails or the response violates the selection contract.
  */
-export async function createVectorSamplingArea(item, filter, signal) {
+export async function createVectorSamplingArea(source, filter, signal) {
+    const identity = source.uploadId ? { uploadId: source.uploadId } : { collectionId: source.collectionId, itemId: source.itemId };
     const response = await fetch("/api/vector-sampling/areas", { method: "POST", signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ collectionId: item.collection, itemId: item.id, filter }) });
+        headers: { "Content-Type": "application/json", ...(source.uploadId ? { "X-EOLab-Uploads": "1" } : {}) },
+        credentials: "same-origin", cache: "no-store",
+        body: JSON.stringify({ ...identity, filter }) });
     const value = await response.json();
     if (!response.ok) throw new Error(value.detail ?? "Could not select these features");
-    validateCatalogSelection(value.selection);
+    value.selection = validateVectorSelection(value.selection);
     if (!Array.isArray(value.bbox) || value.bbox.length !== 4 || !value.bbox.every(Number.isFinite) ||
         !Number.isSafeInteger(value.matched) || value.matched < 1 || !Number.isSafeInteger(value.total) || value.total < value.matched)
         throw new Error("Invalid vector sampling response");

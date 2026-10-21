@@ -374,6 +374,30 @@ test("calculation API serializes identities, explicit scopes, and useful validat
     assert.equal(calls[1][1].headers["X-EOLab-Processing"],"1");
 });
 
+test("uploaded vector calculations preserve the original identity and filter through recovery and batch submission", async () => {
+    const uploaded = {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter};
+    const h = fixture();
+    const intent = h.intent({area: {kind: "catalogSelection", catalogSelection: uploaded}});
+    const requestId = "uploaded-calculation-request";
+    h.storage.write({intent, jobId: null, pending: {requestId}, cancelRequested: false});
+    const recovered = h.storage.read();
+    assert.deepEqual(recovered.intent.area, intent.area);
+    const requests = [];
+    const api = new ProcessingApiClient(async (url, options) => {
+        requests.push({url, ...options});
+        return new Response(JSON.stringify(url.endsWith("/jobs") ? {jobs: []} : {items: [{index: 0, job: {
+            jobId: "d".repeat(32), operation: "raster.aggregate.v1", status: "queued", sources: {a: source},
+            calculations: intent.calculations, area: {kind: "catalogSelection", bounds: null}, grid: null, progress: {}, result: null,
+        }}]}));
+    });
+    await api.submitCalculation({...recovered.intent, requestId: recovered.pending.requestId});
+    assert.equal(requests.at(-1).url, "/api/processing/raster-calculations/batch");
+    assert.equal(requests.at(-1).headers["X-EOLab-Processing"], "1");
+    assert.deepEqual(JSON.parse(requests.at(-1).body), {items: [{requestId,
+        sources: {a: {collectionId: source.collectionId, itemId: source.itemId}},
+        calculations: intent.calculations, catalogSelection: uploaded}]});
+});
+
 
 
 

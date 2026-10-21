@@ -1,4 +1,4 @@
-/** Optional presentation of a catalog selection; never authorizes analysis. */
+/** Optional display outlines for catalog or uploaded polygons; never authorizes analysis. */
 export class VectorSelectionOverlay {
     /**
      * @param {Object} map Leaflet map.
@@ -18,7 +18,8 @@ export class VectorSelectionOverlay {
         try {
             const response = await fetch("/api/vector-sampling/outline", {
                 method: "POST", signal: this.abort.signal,
-                headers: { "Content-Type": "application/json" }, body: JSON.stringify(area.selection),
+                headers: { "Content-Type": "application/json", ...(area.selection.uploadId ? { "X-EOLab-Uploads": "1" } : {}) },
+                credentials: "same-origin", cache: "no-store", body: JSON.stringify(area.selection),
             });
             if (!response.ok) return;
             const value = await response.json();

@@ -1,5 +1,5 @@
 /** Domain validation and lookup helpers for paired raster statistics. */
-import { catalogSelectionsEqual, normalizeRasterSamplingArea } from "../selected-area.js";
+import { vectorSelectionsEqual, normalizeRasterSamplingArea } from "../selected-area.js";
 import { validateRasterSelectedBounds } from "./geometry.js";
 import { estimateHistogramPercentile } from "./statistics.js";
 
@@ -224,7 +224,7 @@ export function validateRasterPairedStatisticsForSelection(
     const validated = validateRasterPairedStatistics(statistics);
     const area = normalizeRasterPairedSamplingArea(samplingArea);
     if (area.kind === "catalogSelection") {
-        if (validated.scope !== "catalogSelection" || !catalogSelectionsEqual(validated.catalogSelection, area.catalogSelection)) throw pairedContractError("catalog selection identity");
+        if (validated.scope !== "catalogSelection" || !vectorSelectionsEqual(validated.catalogSelection, area.catalogSelection)) throw pairedContractError("catalog selection identity");
         return validated;
     }
     if (area.kind === "wholeOverlap") {

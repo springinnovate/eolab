@@ -27,8 +27,9 @@ import {
 } from "./style.js";
 
 /**
- * Source attributes and geometry needed by vector consumers.
+ * Source identity, attributes and geometry needed by vector consumers.
  * @typedef {Object} VectorSourceDescription
+ * @property {Readonly<{uploadId:string}|{collectionId:string,itemId:string}>} source Original source identity.
  * @property {ReturnType<typeof vectorLabelFields>} fields Frozen non-geometry fields.
  * @property {"point"|"line"|"polygon"} geometryKind Normalized geometry family.
  * @property {string|null} primaryGeometry Catalog geometry field, when declared.
@@ -336,14 +337,17 @@ export function createVectorMapLayerAdapter({
             };
         },
         /**
-         * Read the fields and geometry used by filtering, styling and selection.
-         * The field list is immutable; no publication, request or renderer is read.
+         * Read the source identity, fields and geometry used by vector controls.
+         * Identity and fields are immutable; no publication or request is started.
          *
          * @param {Object} record Layer record owned by this adapter.
          * @return {VectorSourceDescription} Current source metadata.
          */
         describeSource(record) {
             return {
+                source: Object.freeze(record.state.source.kind === "upload"
+                    ? { uploadId: record.state.source.id }
+                    : { collectionId: record.state.source.collection, itemId: record.state.source.id }),
                 fields: record.state.labelFields,
                 geometryKind: record.state.style.geometryKind,
                 primaryGeometry: record.state.source.kind === "upload" ? null

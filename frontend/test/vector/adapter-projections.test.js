@@ -93,7 +93,8 @@ test("source descriptions expose usable immutable fields for each geometry witho
     for (const geometryKind of ["point", "line", "polygon"]) {
         const { adapter, record, calls } = createFixture({ geometryKind });
         const source = adapter.describeSource(record);
-        assert.deepEqual(source, { fields: FIELDS, geometryKind, primaryGeometry: "geometry" });
+        assert.deepEqual(source, { source: { collectionId: "vectors", itemId: "parcels" }, fields: FIELDS, geometryKind, primaryGeometry: "geometry" });
+        assert.ok(Object.isFrozen(source.source));
         assert.ok(Object.isFrozen(source.fields));
         assert.ok(source.fields.every(Object.isFrozen));
         assert.throws(() => { source.fields[0].name = "changed"; }, TypeError);
@@ -109,6 +110,7 @@ test("source descriptions expose usable immutable fields for each geometry witho
 test("source descriptions preserve missing geometry metadata and empty field choices", () => {
     const { adapter, record, calls } = createFixture({ properties: {} });
     assert.deepEqual(adapter.describeSource(record), {
+        source: { collectionId: "vectors", itemId: "parcels" },
         fields: [], geometryKind: "polygon", primaryGeometry: null,
     });
     assert.deepEqual(calls, []);

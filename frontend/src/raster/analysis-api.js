@@ -120,7 +120,7 @@ export async function sampleRasterPixel(
  * Load bounded band-1 statistics for one original raster and sampling area.
  *
  * @param {Object} item Catalog Item or original-source descriptor.
- * @param {Object} samplingArea Strict whole/bounds/polygon selection sampling-area union.
+ * @param {Object} samplingArea Whole raster, selected bounds or filtered catalog/uploaded polygons.
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
@@ -152,7 +152,8 @@ export async function loadRasterStatistics(
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
-                "X-EOLab-Processing": "1"
+                "X-EOLab-Processing": "1",
+                ...(normalizedArea.catalogSelection?.uploadId ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"
@@ -176,7 +177,7 @@ export async function loadRasterStatistics(
  *
  * @param {Object} xItem Raster source assigned to the X reference grid.
  * @param {Object} yItem Distinct raster source aligned to X.
- * @param {Object} samplingArea Whole overlap or selected WGS 84 bounds.
+ * @param {Object} samplingArea Whole overlap, selected bounds or filtered catalog/uploaded polygons.
  * @param {AbortSignal} signal Cancellation signal for stale pair intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
@@ -208,6 +209,7 @@ export async function loadRasterPairedStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
+                ...(normalizedArea.catalogSelection?.uploadId ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify(requestDocument),
             signal, credentials: "same-origin", cache: "no-store"

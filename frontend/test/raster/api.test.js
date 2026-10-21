@@ -221,6 +221,23 @@ test("loadRasterStatistics sends a path-free catalog selection without geometry"
   );
 });
 
+test("uploaded polygon statistics send their selection and both private-source headers", async () => {
+  const selection = { uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "areas", filter: CATALOG_SELECTION.filter };
+  const raster = { kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32) };
+  let request;
+  const result = await loadRasterStatistics(raster, { kind: "catalogSelection", catalogSelection: selection },
+    new AbortController().signal, async (url, options) => {
+      request = { url, options };
+      return new Response(JSON.stringify({ ...CATALOG_SELECTION_RASTER_STATISTICS, catalogSelection: selection }));
+    });
+  assert.deepEqual(result.catalogSelection, selection);
+  assert.deepEqual(JSON.parse(request.options.body), { source: raster, catalogSelection: selection });
+  assert.equal(request.options.headers["X-EOLab-Uploads"], "1");
+  assert.equal(request.options.headers["X-EOLab-Processing"], "1");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.cache, "no-store");
+});
+
 test("statistics capacity is classified without matching user-facing message text", async () => {
   for (const code of ["statistics_capacity_busy", "invalid_area", null]) {
     await assert.rejects(loadRasterStatistics(

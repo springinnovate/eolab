@@ -108,13 +108,23 @@ test("map refresh does not guess or replace the user's mask and values choices",
 });
 
 test("duplicate preserves mask, values and formula without a hydrology check or new run", async () => {
-    const h = fixture(); await chooseInputs(h); await h.controller.submit();
-    await h.controller.duplicateRun();
-    const draft = h.controller.state.draft;
-    assert.deepEqual(captureModelSubmission(draft, "c".repeat(32)).inputs, h.requests[0].inputs);
-    assert.equal(h.requests.length, 1);
-    assert.equal(h.view.setup.run.disabled, false);
-    assert.equal(h.controller.state.error, "");
+    for (const uploaded of [false, true]) {
+        const h = fixture();
+        if (uploaded) {
+            const source = {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "starting_areas", filter: selection.filter};
+            h.context.vectors = [{...source, label: "My starting areas"}];
+            h.controller.prepareVector = async () => ({selection: source, matched: 1, total: 3});
+            h.controller.refreshMapLayers();
+        }
+        await chooseInputs(h); await h.controller.submit();
+        await h.controller.duplicateRun();
+        const draft = h.controller.state.draft;
+        assert.deepEqual(captureModelSubmission(draft, "c".repeat(32)).inputs, h.requests[0].inputs);
+        assert.equal(h.requests[0].inputs.start.selection.uploadId, h.context.vectors[0].uploadId);
+        assert.equal(h.requests.length, 1);
+        assert.equal(h.view.setup.run.disabled, false);
+        assert.equal(h.controller.state.error, "");
+    }
 });
 
 test("parameters keep optional cutoff blank and reject invalid distance values", async () => {

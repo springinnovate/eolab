@@ -1,4 +1,4 @@
-/** Build model drafts from catalog identities and explicit analysis areas. */
+/** Build model drafts from available source identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
 
 /** Check whether a model declares an input of the requested type.
@@ -9,10 +9,13 @@ import { normalizeCalculationArea } from "../processing/calculation-area.js";
 export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
 
 /** Identify a raster or vector choice without using its label or map visibility.
- * @param {Object} source Catalog identity or owned run-file reference.
+ * @param {Object} source Catalog identity, uploaded vector identity or owned run-file reference.
  * @return {string} Composite identity for a choice list.
  */
-export function modelSourceKey(source) { return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId] : [source.collectionId, source.itemId]); }
+export function modelSourceKey(source) {
+    return JSON.stringify(source.kind === "runArtifact" ? [source.kind, source.jobId, source.artifactId]
+        : source.uploadId ? ["upload", source.uploadId] : [source.collectionId, source.itemId]);
+}
 
 /** List unexpired raster outputs available as inputs to another model run.
  * @param {Object[]} runs Run status and file lists already loaded by Models.
