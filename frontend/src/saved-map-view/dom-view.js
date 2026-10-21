@@ -334,10 +334,10 @@ export class SavedMapViewDomView {
         const completedWithWarnings = report.loaded === report.total;
         this.#prepareDialog(
             completedWithWarnings
-                ? "Shared map opened with warnings"
-                : "Shared map view partially opened",
+                ? "Map opened with warnings"
+                : "Map partially opened",
             `${formatCount(report.loaded, "layer")} loaded from ` +
-                `${formatCount(report.total, "shared layer")}.`,
+                `${formatCount(report.total, "saved layer")}.`,
             report.details
         );
         this.cancelButton.textContent = "Close";

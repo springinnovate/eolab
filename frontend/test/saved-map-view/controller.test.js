@@ -10,6 +10,19 @@ import {
 import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
+/**
+ * Create a test controller with no upload layers unless the test supplies them.
+ * @param {Object} configuration Test-owned view, layer and persistence adapters.
+ * @return {SavedMapViewController} Controller connected to those test adapters.
+ */
+function createController(configuration) {
+  return new SavedMapViewController({
+    exportUpload: () => null,
+    restoreUpload: async () => { throw new Error("This test did not provide an upload to restore."); },
+    ...configuration,
+  });
+}
+
 test("published drafts ignore personal autosave and only write on explicit save", async () => {
   const view = createView(), storage = createStorage("private"), submissions = [], headings = [];
   view.showPublishedMapEditor = (saved, complete) => { view.editor = { saved, complete }; };
@@ -17,7 +30,7 @@ test("published drafts ignore personal autosave and only write on explicit save"
   view.setPublishedMapSaving = saving => { view.saving = saving; };
   let position = emptySavedMap(10, 20, 6).viewport;
   const loaded = { slug: "amazon", title: "Original", subtitle: "", revision: 1, view: emptySavedMap(10, 20, 6) };
-  const controller = new SavedMapViewController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
+  const controller = createController({ view, storage, editPublishedMap: true, namedMapSlug: "amazon",
     viewerVersion: "0.6.0", viewerOrigin: loaded.view.viewer.origin,
     publicationApi: {
       async getForEditing(slug) { assert.equal(slug, "amazon"); return loaded; },
@@ -62,7 +75,7 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
   const saved = { ...emptySavedMap(10, 20, 6), layers: [
     ...(keepAvailableLayer ? [available] : []), { ...available, catalogItem: { collection: "c", id: "gone" } },
   ] };
-  const controller = new SavedMapViewController({ view, editPublishedMap: true, namedMapSlug: "amazon",
+  const controller = createController({ view, editPublishedMap: true, namedMapSlug: "amazon",
     viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
     publicationApi: { getForEditing: async () => ({ title: "Map", subtitle: "", revision: 1, view: saved }),
       async update(slug, request) { submissions.push({ slug, request }); return { ...request, slug, revision: 2 }; } },
@@ -93,7 +106,7 @@ test("publication captures once and preserves that view while correcting a dupli
     showPublicationError(message) { this.publicationError = message; },
     showPublishedMap(slug) { this.published = slug; },
   });
-  const controller = new SavedMapViewController({ view, allowPublishing: true,
+  const controller = createController({ view, allowPublishing: true,
     viewport: { snapshot: () => current }, mapLayers: { retainedRecords: [] },
     viewerVersion: "0.6.0", viewerOrigin: "https://viewer.example",
     publicationDefaults: { title: "Site", subtitle: "Explore" },
@@ -122,7 +135,7 @@ test("named URLs override fragments and private state, restore basemap and copy 
   let position;
   view.copyNamedMapLink = async slug => { view.namedCopy = slug; return { copied: true }; };
   const saved = { ...emptySavedMap(10, 20, 6), basemap: "none" };
-  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true, namedMapSlug: "amazon",
+  const controller = createController({ view, storage, restoreSharedMap: true, namedMapSlug: "amazon",
     publicationApi: { async get(slug) { loaded.push(slug); return { title: "Amazon", subtitle: "", view: saved }; } },
     applyMapHeading: (...values) => headings.push(values),
     viewport: { snapshot: () => position, restore(value) { position = value; } },
@@ -144,7 +157,7 @@ test("named URLs override fragments and private state, restore basemap and copy 
 
 test("missing named maps never fall back to fragments or private maps", async () => {
   const view = createView(), storage = createStorage("private");
-  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true, namedMapSlug: "missing",
+  const controller = createController({ view, storage, restoreSharedMap: true, namedMapSlug: "missing",
     publicationApi: { async get() { throw new Error("Saved map not found."); } },
   });
   await controller.restoreStartupView("#view=other-map");
@@ -163,7 +176,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
   const view = createView(), records = [], restorations = [], ordered = [];
   const annotationRecord = { entry: { key: "local:annotation:mine", item: null }, polygons: ["private polygon"] };
   let legendPreferences;
-  const controller = new SavedMapViewController({ view, restoreSharedMap: true,
+  const controller = createController({ view, restoreSharedMap: true,
     viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
     viewport: { snapshot: () => saved.viewport, restore() {} },
     mapLayers: { retainedRecords: records,
@@ -212,7 +225,7 @@ test("shared viewer restores its starting presentation and never reads or writes
   const fragment = await encodeSavedMapViewFragment(serializeSavedMapView({ ...saved, layers: [layer] }), { maximumInputBytes: 512 * 1024 });
   let position;
   const records = [];
-  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true,
+  const controller = createController({ view, storage, restoreSharedMap: true,
     viewport: { snapshot: () => position, restore: value => { position = value; } },
     mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)) },
     catalogItems: { get: async identity => identity },
@@ -242,7 +255,7 @@ test("shared viewer restores its starting presentation and never reads or writes
 test("missing and invalid shared links report errors without falling back to private maps", async () => {
   for (const fragment of ["", "#view=bad"]) {
     const view = createView(), storage = createStorage("private map");
-    const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true });
+    const controller = createController({ view, storage, restoreSharedMap: true });
     await controller.restoreStartupView(fragment);
     assert.equal(view.errorOperation, "open");
     await controller.resetView();
@@ -263,7 +276,7 @@ test("saved filters restore before commit and invalid filters never expose an un
         visible: true, opacity: 1, style: { kind: "vector", definition: {} }, filter: state }],
     });
     const layers = { retainedRecords: [], commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged; } };
-    const controller = new SavedMapViewController({ view,
+    const controller = createController({ view,
       viewport: { snapshot: () => saved.viewport, restore() {} }, mapLayers: layers,
       catalogItems: { get: async (identity) => identity },
       catalogVisualization: { clear() {}, prepare: async (item) => item,
@@ -402,7 +415,7 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
       exportFilterState: () => ({ enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] }),
     },
   };
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { snapshot: () => ({
       center: { latitude: 10, longitude: 20 }, zoom: 4,
@@ -486,7 +499,7 @@ test("saved map controller stages concurrently and commits final saved order", a
       },
     ],
   });
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: {
       snapshot: () => saved.viewport,
@@ -573,7 +586,7 @@ test("saved map restoration bounds work and isolates layer failures", async () =
       return { key: getCatalogItemKey(item), record, layer: {} };
     },
   };
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { restore() {} },
     mapLayers,
@@ -625,7 +638,7 @@ test("destroyed saved map restoration never commits its detached batch", async (
     viewport: { center: { latitude: 0, longitude: 0 }, zoom: 3 },
     layers: [layer],
   });
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { restore: () => assert.fail("stale viewport restored") },
     mapLayers: {
@@ -669,7 +682,7 @@ test("destroyed saved map restoration never commits its detached batch", async (
 
 test("saved map controller ignores fragments owned by other components", async () => {
   const view = createView();
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: {},
     mapLayers: { retainedRecords: [] },
@@ -691,7 +704,7 @@ test("saved map controller exposes the URL when clipboard access is denied", asy
     copied: false,
     url: `https://viewer.example/${fragment}`,
   });
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { snapshot: () => ({
       center: { latitude: 0, longitude: 0 }, zoom: 2,
@@ -712,7 +725,7 @@ test("saved map controller exposes the URL when clipboard access is denied", asy
 test("saved map controller reports malformed owned fragments without clearing", async () => {
   const view = createView();
   let cleared = false;
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: {},
     mapLayers: { retainedRecords: [] },
@@ -735,7 +748,7 @@ test("startup shared fragments take precedence over remembered local views", asy
   const storage = createStorage(serializeSavedMapView(localView));
   const timers = createTimers();
   const restored = [];
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view: createView(),
     viewport: { restore: (viewport) => restored.push(viewport) },
     mapLayers: { retainedRecords: [], commitStaged() {} },
@@ -761,7 +774,7 @@ test("malformed owned startup fragments never fall back to private state", async
   const storage = createStorage(serializeSavedMapView(emptySavedMap(1, 2, 3)));
   const view = createView();
   let restored = false;
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { restore: () => { restored = true; } },
     mapLayers: { retainedRecords: [] },
@@ -785,7 +798,7 @@ test("startup silently restores a valid remembered map through the transaction",
   const timers = createTimers();
   const calls = [];
   const view = createView();
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: { restore: (viewport) => calls.push(["viewport", viewport]) },
     mapLayers: {
@@ -818,7 +831,7 @@ test("startup discards corrupt remembered content without blocking the map", asy
   const storage = createStorage("not valid saved-map JSON");
   let clearedMap = false;
   const view = createView();
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: {},
     mapLayers: { retainedRecords: [] },
@@ -847,7 +860,7 @@ test("remembered map persistence coalesces complete validated snapshots", async 
   };
   const storage = createStorage();
   const timers = createTimers();
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view: createView(),
     viewport: { snapshot: () => ({
       center: { latitude: 8, longitude: 9 }, zoom: 5,
@@ -937,7 +950,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
   const view = createView();
   const storage = createStorage();
   const timers = createTimers();
-  const controller = new SavedMapViewController({
+  const controller = createController({
     view,
     viewport: {
       snapshot: () => currentViewport,
@@ -1010,7 +1023,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
 
 test("shared map links exclude private local annotation contents", async () => {
   const view = createView();
-  const controller = new SavedMapViewController({ view,
+  const controller = createController({ view,
     viewport: {snapshot: () => ({center: {latitude: 0, longitude: 0}, zoom: 4})},
     mapLayers: {retainedRecords: [{entry: {item: null, label: "Private workshop"},
       adapter: {exportSavedState() {throw new Error("Local data must never be exported here");}}}]},
@@ -1019,4 +1032,134 @@ test("shared map links exclude private local annotation contents", async () => {
   await controller.copyMapLink();
   const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {maximumOutputBytes: 512 * 1024}));
   assert.deepEqual(copied.layers, []);
+});
+
+test("upload references survive autosave and links with their appearance and map order", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: false, opacity: 0.4, legendIncluded: false,
+    style: { kind: "vector", definition: { fillColor: "#123456" } },
+    filter: { enabled: true, match: "all", rules: [{ field: "label", operator: "eq", value: "Café wetlands" }] } };
+  const record = { entry: { item: null, key: `local:upload:${upload.uploadId}`, legendIncluded: false } };
+  const storage = createStorage(), view = createView(), timers = createTimers();
+  const saved = emptySavedMap(10, 20, 6);
+  const controller = createController({ view, storage,
+    viewport: { snapshot: () => saved.viewport }, mapLayers: { retainedRecords: [record] },
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    exportUpload: candidate => candidate === record ? upload : null,
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  controller.scheduleRemember();
+  timers.runOnly();
+  assert.deepEqual(JSON.parse(storage.serialized).layers, [upload]);
+  await controller.copyMapLink();
+  const linked = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  assert.deepEqual(linked.layers, [upload]);
+  controller.destroy();
+
+  const restoredView = createView(), records = [], restored = [], order = [];
+  const restarted = createController({ view: restoredView, storage,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { restore() {} }, catalogVisualization: { clear() {} },
+    mapLayers: { retainedRecords: records, commitStaged() {},
+      setLegendIncluded(key, included) { assert.equal(key, record.entry.key); assert.equal(included, false); },
+      restoreOrder(keys) { order.push(keys); } },
+    restoreUpload: async (layer, isCurrent) => {
+      assert.equal(isCurrent(), true); restored.push(layer); records.push(record); return record.entry.key;
+    },
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  await restarted.restoreStartupView("");
+  assert.deepEqual(restored, [upload]);
+  assert.deepEqual(order, [[record.entry.key]]);
+  assert.equal(restoredView.result, null, "successful private restoration stays quiet");
+  restarted.destroy();
+});
+
+test("unavailable private uploads are explained after refresh and when opening links", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [upload] };
+  const serialized = serializeSavedMapView(saved);
+  const fragment = await encodeSavedMapViewFragment(serialized, { maximumInputBytes: 512 * 1024 });
+  for (const useLink of [false, true]) {
+    const view = createView(), timers = createTimers();
+    let attempts = 0;
+    const controller = createController({ view, storage: createStorage(serialized),
+      viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+      viewport: { restore() {} }, catalogVisualization: { clear() {} },
+      mapLayers: { retainedRecords: [], commitStaged() {} },
+      restoreUpload: async () => { attempts += 1; throw new Error("This upload is unavailable. Open it in the browser that uploaded it; it may have been deleted."); },
+      setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+    });
+    await controller.restoreStartupView(useLink ? fragment : "");
+    assert.equal(attempts, 1);
+    assert.equal(view.result.loaded, 0);
+    assert.equal(view.result.total, 1);
+    assert.match(view.result.details[0], /Wetlands:.*browser that uploaded it/);
+    controller.viewerOrigin = "https://different-site.example";
+    await controller.openSharedFragment(fragment);
+    assert.equal(attempts, 1, "foreign upload identifiers never reach local source access");
+    assert.match(view.result.details[0], /original EOLab site/);
+    controller.destroy();
+  }
+});
+
+test("removing a restored upload while another layer loads does not discard the saved map", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const later = { ...upload, uploadId: "22222222-2222-4222-8222-222222222222", customName: "Forest" };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [upload, later] };
+  const records = [], ordered = [], view = createView(), timers = createTimers();
+  const storage = createStorage(serializeSavedMapView(saved));
+  let finishLater;
+  const waiting = new Promise(resolve => { finishLater = resolve; });
+  const controller = createController({ view, storage,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { restore() {} }, catalogVisualization: { clear() {} },
+    mapLayers: { retainedRecords: records, commitStaged() {},
+      setLegendIncluded(key) { assert.ok(records.some(record => record.entry.key === key), "only retained layers receive legend changes"); },
+      restoreOrder(keys) { ordered.push(keys); } },
+    restoreUpload: async layer => {
+      if (layer.uploadId === later.uploadId) await waiting;
+      const key = `local:upload:${layer.uploadId}`;
+      records.push({ entry: { key, item: null } });
+      return key;
+    },
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  const restoring = controller.restoreStartupView("");
+  await flushAsyncWork();
+  assert.equal(records.length, 1);
+  records.length = 0;
+  finishLater();
+  await restoring;
+  assert.equal(storage.clears, 0);
+  assert.equal(view.result.loaded, 1);
+  assert.equal(view.result.total, 2);
+  assert.match(view.result.details[0], /Wetlands was removed from the map/);
+  assert.deepEqual(ordered, [[`local:upload:${later.uploadId}`]]);
+  controller.destroy();
+});
+
+test("undoing Reset explains an upload deleted after the reset", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const saved = emptySavedMap(10, 20, 6), view = createView(), timers = createTimers();
+  const records = [{ entry: { key: `local:upload:${upload.uploadId}`, item: null } }];
+  const controller = createController({ view, storage: createStorage(), initialViewport: saved.viewport,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { snapshot: () => saved.viewport, restore() {} },
+    catalogVisualization: { clear() {} }, beforeRestore() { records.length = 0; },
+    mapLayers: { retainedRecords: records, commitStaged() {} }, exportUpload: () => upload,
+    restoreUpload: async () => { throw new Error("This private upload was deleted."); },
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  await controller.resetView();
+  assert.equal(view.undoVisible, true);
+  await controller.undoReset();
+  assert.equal(view.undoVisible, false);
+  assert.equal(view.result.loaded, 0);
+  assert.equal(view.result.total, 1);
+  assert.match(view.result.details[0], /Wetlands:.*deleted/);
+  controller.destroy();
 });

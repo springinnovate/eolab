@@ -136,11 +136,15 @@ function validateSavedMapView(candidate) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
         }
+        if (Object.hasOwn(layer, "uploadId") && candidate.schemaVersion !== 3) {
+            throw new SavedMapViewValidationError("Uploaded layers require saved-map version three.");
+        }
         return validateLayer(layer);
     });
     const identities = new Set();
     for (const layer of layers) {
-        const key = layer.sharedAnnotation ? `annotation:${layer.sharedAnnotation.id}` : JSON.stringify([
+        const key = layer.sharedAnnotation ? `annotation:${layer.sharedAnnotation.id}`
+            : layer.uploadId ? `upload:${layer.uploadId}` : JSON.stringify([
             layer.catalogItem.collection,
             layer.catalogItem.id,
         ]);
@@ -193,22 +197,24 @@ function validateAnnotationReference(candidate) {
 }
 
 /**
- * Validate one layer entry without interpreting its owner-specific style.
+ * Validate a catalog or private-upload reference and its saved appearance.
+ * Upload identifiers locate data; they never grant another browser access.
  *
  * @param {unknown} candidate Untrusted layer value.
  * @return {Readonly<Object>} Frozen normalized layer entry.
+ * @throws {SavedMapViewValidationError} If the identity or presentation is invalid.
  */
 function validateLayer(candidate) {
     requirePlainObject(candidate, "Saved layer");
+    const isUpload = Object.hasOwn(candidate, "uploadId");
     requireExactKeys(
         candidate,
-        ["catalogItem", "visible", "opacity", "style",
+        [isUpload ? "uploadId" : "catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
     );
-    requirePlainObject(candidate.catalogItem, "Catalog Item identity");
     let customName;
     if (Object.hasOwn(candidate, "customName")) {
         customName = candidate.customName;
@@ -219,23 +225,21 @@ function validateLayer(candidate) {
             customName = customName.trim();
         }
     }
-    requireExactKeys(
-        candidate.catalogItem,
-        ["collection", "id"],
-        "Catalog Item identity"
-    );
-    const catalogItem = Object.freeze({
-        collection: requireBoundedString(
-            candidate.catalogItem.collection,
-            MAX_IDENTITY_LENGTH,
-            "Catalog Collection id"
-        ),
-        id: requireBoundedString(
-            candidate.catalogItem.id,
-            MAX_IDENTITY_LENGTH,
-            "Catalog Item id"
-        ),
-    });
+    let identity;
+    if (isUpload) {
+        if (typeof candidate.uploadId !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(candidate.uploadId)) {
+            throw new SavedMapViewValidationError("Uploaded layer identifier is invalid.");
+        }
+        identity = { uploadId: candidate.uploadId };
+    } else {
+        requirePlainObject(candidate.catalogItem, "Catalog Item identity");
+        requireExactKeys(candidate.catalogItem, ["collection", "id"], "Catalog Item identity");
+        identity = { catalogItem: Object.freeze({
+            collection: requireBoundedString(candidate.catalogItem.collection, MAX_IDENTITY_LENGTH, "Catalog Collection id"),
+            id: requireBoundedString(candidate.catalogItem.id, MAX_IDENTITY_LENGTH, "Catalog Item id"),
+        }) };
+    }
     if (typeof candidate.visible !== "boolean") {
         throw new SavedMapViewValidationError(
             "Saved layer visibility must be true or false."
@@ -253,6 +257,9 @@ function validateLayer(candidate) {
             "Saved layer style kind must be raster or vector."
         );
     }
+    if (isUpload && candidate.style.kind !== "vector") {
+        throw new SavedMapViewValidationError("Uploaded layers require a vector style.");
+    }
     validateSavedStyleStructure(candidate.style);
     if (Object.hasOwn(candidate, "filter")) {
         requirePlainObject(candidate.filter, "Saved filter");
@@ -261,7 +268,7 @@ function validateLayer(candidate) {
         }
     }
     return Object.freeze({
-        catalogItem,
+        ...identity,
         ...(customName === undefined ? {} : { customName }),
         ...(Object.hasOwn(candidate, "legendIncluded") ? { legendIncluded: candidate.legendIncluded } : {}),
         visible: candidate.visible,

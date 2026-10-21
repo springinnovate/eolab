@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from eolab_app.saved_maps.models import (
     CreateSavedMap,
     MapAnnotationLayer,
+    MapUploadLayer,
     MAX_REQUEST_BYTES,
     SavedMap,
     SavedMapError,
@@ -185,7 +186,8 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
             Created map. Reusing a URL name never overwrites its contents.
 
         Raises:
-            HTTPException: If a browser submits from another origin.
+            HTTPException: If a browser submits from another origin or private
+                upload/shared-layer references belong to another site.
             SavedMapError: If the name is taken, capacity is full or storage fails.
         """
         origin = request.headers.get("origin")
@@ -194,10 +196,12 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
         ):
             raise HTTPException(403, "Create saved maps from this site.")
         if any(
-            isinstance(layer, MapAnnotationLayer) for layer in payload.view.layers
+            isinstance(layer, (MapAnnotationLayer, MapUploadLayer))
+            for layer in payload.view.layers
         ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
             raise HTTPException(
-                422, "Shared annotation references must belong to this EOLab site."
+                422,
+                "Shared layers and uploaded polygons must belong to this EOLab site.",
             )
         result = store.create_saved_map(payload)
         response.headers["Location"] = f"/api/saved-maps/{result.slug}"
@@ -279,20 +283,22 @@ def create_saved_maps_admin_router(store: SavedMapStore, password: str) -> APIRo
         Args:
             slug: Existing map's fixed URL name.
             payload: Replacement configuration and revision opened for editing.
-            request: Origin used to validate shared-layer references.
+            request: Origin used to validate shared-layer and upload references.
 
         Returns:
             Updated saved configuration and revision.
 
         Raises:
-            HTTPException: If shared-layer references belong to another site.
+            HTTPException: If shared-layer or upload references belong to another site.
             SavedMapError: If missing, renamed, stale, or storage is unavailable.
         """
         if any(
-            isinstance(layer, MapAnnotationLayer) for layer in payload.view.layers
+            isinstance(layer, (MapAnnotationLayer, MapUploadLayer))
+            for layer in payload.view.layers
         ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
             raise HTTPException(
-                422, "Shared annotation references must belong to this EOLab site."
+                422,
+                "Shared layers and uploaded polygons must belong to this EOLab site.",
             )
         return store.update_saved_map(slug, payload)
 

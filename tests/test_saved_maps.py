@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 import pytest
 
-from eolab_app.routes.saved_maps import create_saved_maps_router
+from eolab_app.routes.saved_maps import (
+    create_saved_maps_admin_router,
+    create_saved_maps_router,
+)
 from eolab_app.saved_maps.models import CreateSavedMap, MAX_REQUEST_BYTES
 from eolab_app.saved_maps.store import SavedMapStore
 from eolab_app.settings import load_settings
@@ -38,6 +41,64 @@ def test_browser_document_round_trip() -> None:
     """Keep optional fields absent and preserve the existing browser wire document."""
     result = CreateSavedMap.model_validate(map_request())
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
+
+
+def test_private_upload_reference_contract() -> None:
+    """Preserve upload identifiers and appearance without accepting source data or access credentials."""
+    candidate = map_request()
+    candidate["view"].update(schemaVersion=3, basemap="detailed")
+    candidate["view"]["layers"] = [
+        {
+            "uploadId": "11111111-1111-4111-8111-111111111111",
+            "customName": "Wetlands",
+            "visible": False,
+            "opacity": 0.4,
+            "legendIncluded": False,
+            "style": {"kind": "vector", "definition": {"fillColor": "#123456"}},
+            "filter": {
+                "enabled": True,
+                "match": "all",
+                "rules": [
+                    {"field": "label", "operator": "eq", "value": "Café wetlands"}
+                ],
+            },
+        }
+    ]
+    assert (
+        CreateSavedMap.model_validate(candidate).model_dump(
+            mode="json", exclude_unset=True
+        )
+        == candidate
+    )
+    for field in (
+        "catalogItem",
+        "sourcePath",
+        "fields",
+        "features",
+        "browserHash",
+        "publication",
+    ):
+        invalid = deepcopy(candidate)
+        invalid["view"]["layers"][0][field] = "not part of a map reference"
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["layers"] *= 2
+    with pytest.raises(ValidationError, match="duplicate"):
+        CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["schemaVersion"] = 2
+    del invalid["view"]["basemap"]
+    with pytest.raises(ValidationError, match="version three"):
+        CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["layers"][0]["uploadId"] = "../private.gpkg"
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["layers"][0]["style"] = deepcopy(VIEW["layers"][0]["style"])
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(invalid)
 
 
 def test_custom_layer_name_round_trip() -> None:
@@ -115,18 +176,44 @@ def test_shared_annotation_reference_contract() -> None:
         CreateSavedMap.model_validate(candidate)
 
 
-def test_foreign_annotation_reference_rejected_before_storage() -> None:
-    """Named maps cannot save invitations belonging to a different EOLab site."""
+@pytest.mark.parametrize("source", ["annotation", "upload"])
+def test_foreign_layer_reference_rejected_before_storage(source: str) -> None:
+    """Reject private uploads and shared invitations from another EOLab site.
+
+    Args:
+        source: Saved layer reference to exercise through create and edit routes.
+    """
     view = json.loads(
         (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
     )
+    if source == "upload":
+        view.update(schemaVersion=3, basemap="detailed")
+        view["layers"] = [
+            {
+                "uploadId": "11111111-1111-4111-8111-111111111111",
+                "visible": True,
+                "opacity": 1,
+                "style": {"kind": "vector", "definition": {}},
+            }
+        ]
     view["viewer"]["origin"] = "https://another-site.example"
     app = FastAPI()
     app.include_router(create_saved_maps_router(object()))
+    app.include_router(
+        create_saved_maps_admin_router(object(), "test-map-administrator")
+    )
     response = TestClient(app, base_url="https://testserver").post(
         BASE,
         headers=HEADERS,
         json={"title": "Foreign", "slug": "foreign", "view": view},
+    )
+    assert response.status_code == 422
+    assert "this EOLab site" in response.json()["detail"]
+    response = TestClient(app, base_url="https://testserver").put(
+        "/api/admin/saved-maps/foreign",
+        headers={"X-EOLab-Admin": "1"},
+        auth=("admin", "test-map-administrator"),
+        json={"title": "Foreign", "slug": "foreign", "view": view, "revision": 1},
     )
     assert response.status_code == 422
     assert "this EOLab site" in response.json()["detail"]
