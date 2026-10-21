@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
 from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.vector.sources import resolve_uploaded_vector
 from eolab_app.vector_uploads import VectorUpload, VectorUploadError, VectorUploadStore
 
 
@@ -68,7 +69,7 @@ class VectorUploadRoute(APIRoute):
 
 
 def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
-    """Expose upload/list/delete endpoints and clean interrupted writes at startup.
+    """Expose private upload access and clean interrupted writes at startup.
 
     POST accepts the raw GeoPackage body and a display name query parameter. Both
     mutations require X-EOLab-Uploads: 1. The browser cookie is the access credential;
@@ -119,6 +120,24 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
             VectorUploadError: If upload metadata cannot be read.
         """
         return store.list_uploads(browser)
+
+    @router.get("/{identifier}", response_model=VectorUpload)
+    def describe_upload(identifier: UUID, browser: Browser) -> VectorUpload:
+        """Return one accessible upload's layer, CRS and attribute schema.
+
+        Args:
+            identifier: Upload ID returned by upload/list.
+            browser: Identity from the validated private cookie.
+
+        Returns:
+            Admission metadata without the server-only source grant or credentials.
+
+        Raises:
+            VectorUploadError: If the upload is unavailable to this browser or
+                its storage cannot be read.
+        """
+        metadata, _source = resolve_uploaded_vector(store, browser, identifier)
+        return metadata
 
     @router.post(
         "",

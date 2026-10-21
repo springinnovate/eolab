@@ -251,6 +251,55 @@ class VectorUploadStore:
                 503, "Upload storage could not be read. Try again shortly."
             ) from error
 
+    def get_upload_source(
+        self, owner: str, identifier: UUID
+    ) -> tuple[VectorUpload, Path]:
+        """Return this browser's upload metadata and original GeoPackage path.
+
+        The vector source resolver calls this to locate a file for its readers.
+        The metadata and source paths must stay inside the requested upload's
+        directory. The GeoPackage is immutable and is not reopened or rescanned.
+        Returning its path does not prevent deletion; a later read can fail if
+        the browser owner deletes the upload in the meantime.
+
+        Args:
+            owner: Hash produced by the browser identity boundary.
+            identifier: Opaque upload ID validated by the HTTP boundary.
+
+        Returns:
+            Stored metadata and the original GeoPackage path on the server.
+
+        Raises:
+            VectorUploadError: If the upload is unavailable to this browser,
+                either file is missing or outside its directory, or the stored
+                metadata cannot be read.
+        """
+        try:
+            upload_path = self.root.resolve() / owner / str(identifier)
+            directory = upload_path.resolve(strict=True)
+            metadata_path = (directory / "metadata.json").resolve(strict=True)
+            source_path = (directory / "source.gpkg").resolve(strict=True)
+            if not all(
+                path.is_relative_to(upload_path)
+                for path in (directory, metadata_path, source_path)
+            ):
+                raise VectorUploadError(
+                    404, "This upload is not available to this browser."
+                )
+            metadata = VectorUpload.model_validate_json(
+                metadata_path.read_text(encoding="utf-8")
+            )
+            return metadata, source_path
+        except FileNotFoundError as error:
+            raise VectorUploadError(
+                404, "This upload is not available to this browser."
+            ) from error
+        except (OSError, ValidationError) as error:
+            LOGGER.exception("Could not read vector upload metadata or locate its file")
+            raise VectorUploadError(
+                503, "Upload storage could not be read. Try again shortly."
+            ) from error
+
     def delete(self, owner: str, identifier: UUID) -> None:
         """Withdraw and delete one browser-owned upload and its original file.
 

@@ -73,14 +73,20 @@ VectorSequentialPalette = Literal[
 
 @dataclass(frozen=True)
 class ResolvedVectorSource:
-    """Exact source and layer identity derived from one authoritative Item.
+    """A vector dataset's format, server file path, and selected layer.
+
+    Catalog lookup or upload ownership checks produce this object for
+    server-side readers. Its file paths are not exposed in API responses.
 
     Attributes:
-        source_kind: Whether the Asset is mounted or remotely addressed.
+        source_kind: Whether the source is mounted or remotely addressed.
         source_format: Explicit container or file format.
         source_path: Canonical mounted container path, or ``None`` for remote
             sources.
-        asset_key: STAC Asset carrying the primary container identity.
+        asset_key: Key naming the main dataset in a catalog Item's ``assets``
+            mapping, such as ``"data"`` for a GeoPackage or ``"shp"`` for a
+            Shapefile. Private uploads use the literal string ``"data"``
+            without creating a catalog Item.
         layer_name: Exact native layer name, or ``None`` for single-layer
             formats without a named inner layer.
         component_paths: Canonical files forming a mounted Shapefile.

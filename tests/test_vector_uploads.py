@@ -7,7 +7,7 @@ from io import FileIO
 from pathlib import Path
 from threading import Event
 from typing import Any, IO
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import fiona
 from fastapi import FastAPI
@@ -15,10 +15,15 @@ from fastapi.testclient import TestClient
 import pytest
 from starlette.requests import ClientDisconnect
 
+from eolab_app.execution.bounded_process import ProcessResultWriter, run_bounded_process
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.routes.browser_identity import COOKIE
 from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.settings import load_settings
+from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.fields import OgrVectorFieldReader
+from eolab_app.vector.models import ResolvedVectorSource
+from eolab_app.vector.sources import resolve_uploaded_vector
 from eolab_app.vector_uploads import VectorUploadStore
 
 BASE = "/api/vector-uploads"
@@ -196,13 +201,128 @@ def test_annotation_identity_is_reused_and_uploads_remain_private(
         identifier = response.json()["id"]
         assert owner.cookies[COOKIE] == cookie
         assert store.list_uploads(memberships.owner)[0].id == UUID(identifier)
+        metadata = owner.get(f"{BASE}/{identifier}")
+        assert metadata.status_code == 200
+        assert metadata.json() == response.json()
+        assert metadata.headers["Cache-Control"] == "private, no-store"
+        assert metadata.headers["X-Content-Type-Options"] == "nosniff"
+        assert str(tmp_path) not in metadata.text
+        assert memberships.owner not in metadata.text and cookie not in metadata.text
         assert other.get(BASE).json() == []
+        unknown = owner.get(f"{BASE}/{uuid4()}")
+        denied_read = other.get(f"{BASE}/{identifier}")
+        assert denied_read.status_code == unknown.status_code == 404
+        assert denied_read.json() == unknown.json()
+        assert denied_read.headers["Cache-Control"] == "private, no-store"
         denied = other.delete(f"{BASE}/{identifier}", headers=HEADERS)
         assert denied.status_code == 404
         assert denied.headers["Cache-Control"] == "private, no-store"
         assert len(owner.get(BASE).json()) == 1
         assert owner.delete(f"{BASE}/{identifier}").status_code == 403
         assert owner.delete(f"{BASE}/{identifier}", headers=HEADERS).status_code == 204
+        deleted = owner.get(f"{BASE}/{identifier}")
+        assert deleted.status_code == 404 and deleted.json() == unknown.json()
+
+
+def read_uploaded_fields(
+    writer: ProcessResultWriter, source: ResolvedVectorSource
+) -> None:
+    """Read original attributes in a child using only its explicit source grant.
+
+    Args:
+        writer: Supervisor pipe receiving ordinary field results or a safe error.
+        source: Private grant returned by the real ownership boundary.
+    """
+    reader = OgrVectorFieldReader()
+    try:
+        writer.put(
+            (
+                reader.read_numbers(source, "count", 10, Event()),
+                reader.read_categories(source, "label", 10, Event()),
+            )
+        )
+    except VectorConflictError as error:
+        writer.put(error)
+
+
+def test_authorized_grant_uses_native_field_reader_and_reports_deleted_file(
+    tmp_path: Path,
+) -> None:
+    """Use the ordinary native reader without browser credentials or rendering.
+
+    Args:
+        tmp_path: Isolated original GeoPackage and private upload volume.
+    """
+    pytest.importorskip("osgeo")
+    body = write_layer(tmp_path / "source.gpkg")
+    store = VectorUploadStore(tmp_path / "uploads", None)
+    with client_for(store) as client:
+        record = client.post(
+            BASE, params={"name": "Native read"}, headers=HEADERS, content=body
+        ).json()
+        owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+        metadata, grant = resolve_uploaded_vector(store, owner, UUID(record["id"]))
+        assert metadata.model_dump(mode="json") == record
+        numbers, categories = asyncio.run(
+            run_bounded_process(read_uploaded_fields, (grant,), 30)
+        )
+        assert numbers.complete and numbers.values == (7.0,)
+        assert categories.complete and categories.counts == (("Café wetlands", 1),)
+        assert (
+            client.delete(f"{BASE}/{record['id']}", headers=HEADERS).status_code == 204
+        )
+        failure = asyncio.run(run_bounded_process(read_uploaded_fields, (grant,), 30))
+        assert isinstance(failure, VectorConflictError)
+        assert str(tmp_path) not in str(failure)
+
+
+@pytest.mark.parametrize(
+    "case", ["missing", "outside", "other-browser", "metadata", "directory"]
+)
+def test_source_access_confines_files_to_the_owned_upload(
+    tmp_path: Path, case: str
+) -> None:
+    """Deny unavailable files and symlinks into another upload or outside storage.
+
+    Args:
+        tmp_path: Isolated original file and two browsers' upload directories.
+        case: Missing source or the filesystem entry redirected out of its upload.
+    """
+    original = tmp_path / "source.gpkg"
+    body = write_layer(original)
+    store = VectorUploadStore(tmp_path / "uploads", None)
+    with client_for(store) as owner, client_for(store) as other:
+        records = []
+        for client in (owner, other):
+            record = client.post(
+                BASE, params={"name": "Private"}, headers=HEADERS, content=body
+            ).json()
+            browser = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+            records.append((record, store.root / browser / record["id"]))
+        record, directory = records[0]
+        other_directory = records[1][1]
+        entry = directory / "source.gpkg"
+        if case == "missing":
+            entry.unlink()
+        else:
+            target = original if case == "outside" else other_directory / "source.gpkg"
+            if case == "metadata":
+                entry, target = (
+                    directory / "metadata.json",
+                    other_directory / "metadata.json",
+                )
+            elif case == "directory":
+                entry, target = directory, other_directory
+            entry.rename(entry.with_name(f"{entry.name}.saved"))
+            try:
+                entry.symlink_to(target, target_is_directory=case == "directory")
+            except OSError as error:
+                pytest.skip(f"Symbolic links unavailable: {error}")
+        response = owner.get(f"{BASE}/{record['id']}")
+        assert response.status_code == 404
+        assert response.headers["Cache-Control"] == "private, no-store"
+        assert response.json() == owner.get(f"{BASE}/{uuid4()}").json()
+        assert str(tmp_path) not in response.text
 
 
 @pytest.mark.parametrize("case", ["not-gpkg", "multiple", "point", "missing-crs"])

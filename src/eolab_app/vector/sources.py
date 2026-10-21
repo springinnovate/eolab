@@ -1,4 +1,8 @@
-"""Resolve exact catalog vector source identities inside the scan mount."""
+"""Locate vector dataset files and track access to their published map layers.
+
+Catalog datasets are located inside the scan mount. Private uploads are looked
+up by upload ID and checked against the owning browser.
+"""
 
 from collections import OrderedDict
 from dataclasses import replace
@@ -8,6 +12,7 @@ from pathlib import Path
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
 from eolab_app.catalog.filegeodatabase import FILE_GEODATABASE_MEDIA_TYPE
 from eolab_app.catalog.geojson import GEOJSON_MEDIA_TYPE
@@ -33,6 +38,38 @@ from eolab_app.vector.models import (
     VectorSourceKind,
 )
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
+from eolab_app.vector_uploads import VectorUpload, VectorUploadStore
+
+
+def resolve_uploaded_vector(
+    store: VectorUploadStore,
+    owner: str,
+    identifier: UUID,
+) -> tuple[VectorUpload, ResolvedVectorSource]:
+    """Return an upload's metadata and file details for the existing vector readers.
+
+    Args:
+        store: Storage containing uploaded GeoPackages and their metadata.
+        owner: Server-derived browser identity, never supplied by the client.
+        identifier: Validated opaque upload ID.
+
+    Returns:
+        Upload metadata and a source object containing the authorized file path,
+        format, and layer name. Readers use that object without browser
+        credentials. A later read can fail if the owner deletes the upload.
+
+    Raises:
+        VectorUploadError: If the upload is unavailable to this browser or storage
+            cannot be read.
+    """
+    metadata, path = store.get_upload_source(owner, identifier)
+    return metadata, ResolvedVectorSource(
+        source_kind="mounted",
+        source_format="geopackage",
+        source_path=path,
+        asset_key="data",
+        layer_name=metadata.layer_name,
+    )
 
 
 _FORMAT_ASSET_CONTRACTS: dict[VectorFormat, tuple[str, str]] = {
