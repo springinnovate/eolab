@@ -439,6 +439,39 @@ h5 {
   overflow-wrap: anywhere;
 }
 
+.map-layer-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.map-layer-source-actions[hidden] { display: none; }
+.map-layer-source-actions .annotation-layer-tools { margin: 0; min-width: 0; }
+.map-layer-source-actions > .secondary-button { padding: 4px 8px; }
+
+.upload-polygons-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.upload-polygons-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.upload-polygons-dialog h2 { font-size: 1.1rem; margin-top: 0; }
+.upload-polygons-dialog label { display: grid; gap: 0.25rem; margin-top: 0.75rem; }
+.upload-polygons-dialog input { width: 100%; min-width: 0; padding: 0.4rem; }
+.upload-polygons-dialog p { font-size: 0.85rem; overflow-wrap: anywhere; }
+.upload-polygons-dialog .is-error { color: var(--status-danger); }
+.upload-polygons-dialog progress { width: 100%; accent-color: var(--brand); }
+.upload-polygons-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.upload-polygons-actions button { padding: 0.4rem 0.6rem; }
+
 .map-layer-visibility-actions {
   display: flex;
   flex-wrap: wrap;

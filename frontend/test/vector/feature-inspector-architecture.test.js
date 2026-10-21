@@ -85,7 +85,7 @@ test("vector inspection coordination remains in the browser composition root", (
   assert.match(COMPOSITION_SOURCE, /getVisibleTargets:\s*\(\)\s*=>/);
   assert.match(
     COMPOSITION_SOURCE,
-    /bbox:\s*\[\.\.\.record\.entry\.item\.bbox\]/,
+    /bbox:\s*\[\.\.\.record\.publication\.bbox\]/,
   );
   assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onSampleChange:\s*\(sample\)\s*=>/);

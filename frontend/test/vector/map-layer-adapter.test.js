@@ -147,6 +147,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   );
   assert.deepEqual(fitted.adapter.snapshot(record), {
     datasetKind: "vector",
+    canInfo: true,
     canFilter: true,
     filterActive: false,
     filterStatus: "",

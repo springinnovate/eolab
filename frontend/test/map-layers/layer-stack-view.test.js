@@ -639,6 +639,15 @@ test("raster and vector rows use the same compact action layout", () => {
   }
 });
 
+test("an uploaded vector keeps map controls without an unavailable Catalog Info action", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  view.render([{ ...LAYERS[0], item: null, datasetKind: "vector", canInfo: false, canFilter: true }], null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  assert.throws(() => actionControl(row, "info"));
+  for (const action of ["style", "filter", "zoom", "visibility", "copy-style", "remove"]) actionControl(row, action);
+});
+
 test("utility icons stay directly accessible with tooltips and layer-specific names", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);

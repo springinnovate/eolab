@@ -27,6 +27,7 @@ export class CompositeMapPlanClient {
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-EOLab-Processing": "1",
+                "X-EOLab-Uploads": "1",
             },
             body: JSON.stringify({ layers }),
             signal,

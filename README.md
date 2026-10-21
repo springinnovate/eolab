@@ -65,6 +65,12 @@ Open **Map layers** to see the current stack. The first layer in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
 the same handle.
 
+Use **Upload polygons…** beside **Shared layers** to add a GeoPackage containing
+one polygon layer. It is stored on this server and available only to this browser.
+Uploaded layers support styling, filters and attribute inspection. They are not
+yet restored after a page reload or included in saved/shared maps, analyses or
+model inputs. Removing a layer from the map does not delete the stored file.
+
 Each layer row keeps its frequent actions visible:
 
 - the checkbox shows or hides the layer;
