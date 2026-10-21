@@ -1,4 +1,8 @@
-"""Resolve catalog and browser-owned vectors to exact authorized source files."""
+"""Locate vector dataset files and track access to their published map layers.
+
+Catalog datasets are located inside the scan mount. Private uploads are looked
+up by upload ID and checked against the owning browser.
+"""
 
 from collections import OrderedDict
 from dataclasses import replace
