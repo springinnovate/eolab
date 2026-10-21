@@ -309,7 +309,7 @@ def create_clip(
             else {}
         ),
         **({"sourceChecksum": spec.sourceChecksum} if spec.sourceChecksum else {}),
-        "area": spec.area.model_dump(),
+        "area": spec.area.model_dump(mode="json"),
         "grid": spec.grid.model_dump(),
         "allTouched": True,
         "sourceValidity": RASTER_VALIDITY_POLICY,
