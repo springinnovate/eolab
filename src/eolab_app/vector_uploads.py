@@ -121,12 +121,13 @@ async def _finish_disk_operation(operation: Callable[[], T]) -> T:
 class VectorUploadStore:
     """Own upload admission, private metadata and removal on a persistent volume."""
 
-    def __init__(self, root: Path, max_bytes: int) -> None:
+    def __init__(self, root: Path, max_bytes: int | None) -> None:
         """Configure storage without touching the filesystem.
 
         Args:
             root: Absolute upload directory validated by application settings.
-            max_bytes: Positive per-file admission limit validated by settings.
+            max_bytes: Optional positive per-file limit validated by settings;
+                None streams uploads without an application file-size cap.
         """
         self.root = root
         self.max_bytes = max_bytes
@@ -175,7 +176,7 @@ class VectorUploadStore:
                     with (pending / "source.gpkg").open("wb") as output:
                         async for chunk in chunks:
                             size += len(chunk)
-                            if size > self.max_bytes:
+                            if self.max_bytes is not None and size > self.max_bytes:
                                 raise VectorUploadError(
                                     413,
                                     f"The GeoPackage exceeds the upload limit of {self.max_bytes} bytes.",

@@ -185,7 +185,8 @@ class Settings:
             Blank disables administration; never included in browser configuration.
         processing_data_path: Persistent private clip volume shared with the worker.
         vector_upload_data_path: Persistent private GeoPackage upload directory.
-        vector_upload_max_bytes: Maximum bytes accepted for one GeoPackage upload.
+        vector_upload_max_bytes: Optional administrator-set maximum bytes per
+            GeoPackage upload; None means no application file-size cap.
         jobs_token: Server-only bearer credential identifying the
             application as a Jobs caller. Jobs uses that identity to restrict
             status, result, cancellation and deletion to the owning caller.
@@ -226,7 +227,7 @@ class Settings:
     initial_zoom: float
     processing_data_path: Path = Path("/processing-data").absolute()
     vector_upload_data_path: Path = Path("/vector-uploads").absolute()
-    vector_upload_max_bytes: int = 512 * 1024 * 1024
+    vector_upload_max_bytes: int | None = None
     jobs_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
@@ -298,7 +299,7 @@ class Settings:
             raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
         if not self.vector_upload_data_path.is_absolute():
             raise ValueError("VECTOR_UPLOAD_DATA_PATH must be an absolute path")
-        if self.vector_upload_max_bytes < 1:
+        if self.vector_upload_max_bytes is not None and self.vector_upload_max_bytes < 1:
             raise ValueError("VECTOR_UPLOAD_MAX_BYTES must be greater than zero")
         if not -180 <= self.initial_longitude <= 180:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
@@ -515,6 +516,7 @@ def load_settings(
     ):
         raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
 
+    raw_upload_max_bytes = os.environ.get("VECTOR_UPLOAD_MAX_BYTES", "").strip()
     return Settings(
         saved_map_capacity=int(os.environ.get("SAVED_MAP_CAPACITY", "1000")),
         shared_layer_capacity=int(os.environ.get("SHARED_LAYER_CAPACITY", "10000")),
@@ -601,7 +603,7 @@ def load_settings(
                 "VECTOR_UPLOAD_DATA_PATH", str(Path("/vector-uploads").absolute())
             )
         ),
-        vector_upload_max_bytes=int(
-            os.environ.get("VECTOR_UPLOAD_MAX_BYTES", str(512 * 1024 * 1024))
+        vector_upload_max_bytes=(
+            int(raw_upload_max_bytes) if raw_upload_max_bytes else None
         ),
     )
