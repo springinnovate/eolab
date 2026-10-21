@@ -3,6 +3,8 @@
 from typing import Any
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.models import (
+    ResolvedVectorSource,
+    VectorLayer,
     VECTOR_RENDERING_METADATA_KEY, VECTOR_RENDERING_POLICY, VECTOR_READER_CONTRACT,
 )
 
@@ -82,14 +84,66 @@ def require_assessed_metadata(
     if (
         not isinstance(metadata, dict)
         or metadata.get("policy") != VECTOR_RENDERING_POLICY
-        or metadata.get("eligible") is not True
-        or metadata.get("reader_contract") != VECTOR_READER_CONTRACT
+    ):
+        raise VectorConflictError(
+            f"{operation} unavailable: assess this vector layer first."
+        )
+    if metadata.get("eligible") is not True:
+        reason = metadata.get("reason")
+        raise VectorConflictError(
+            reason if isinstance(reason, str) and reason else
+            f"{operation} unavailable for this vector layer."
+        )
+    if (
+        metadata.get("reader_contract") != VECTOR_READER_CONTRACT
         or metadata.get("reader_compatible") is not True
     ):
         raise VectorConflictError(
-            f"{operation} unavailable: reassess the current vector Item before "
-            "styling it."
+            f"{operation} unavailable: reassess this vector layer for "
+            "the current GeoServer reader."
         )
     return metadata
 
 
+def get_catalog_vector_layer(
+    item: dict[str, Any],
+    source: ResolvedVectorSource,
+    operation: str,
+) -> VectorLayer:
+    """Read the display and attribute metadata for an assessed catalog vector.
+
+    Args:
+        item: Catalog Item returned by the catalog adapter.
+        source: File and native layer located from this Item.
+        operation: User-facing operation name included in metadata errors.
+
+    Returns:
+        Original source and metadata used by publication, styling and filters.
+
+    Raises:
+        VectorConflictError: If the catalog does not describe a supported,
+            assessed vector layer or its feature count is unavailable.
+    """
+    metadata = require_assessed_metadata(item, operation)
+    if (
+        source.source_kind != "mounted"
+        or source.source_path is None
+        or source.layer_name is None
+        or source.source_format not in {"shapefile", "geopackage"}
+    ):
+        raise VectorConflictError(
+            f"{operation} unavailable: the assessed mounted vector source is unsupported."
+        )
+    geometry_kind = metadata.get("geometry_kind")
+    if geometry_kind not in {"point", "line", "polygon"}:
+        raise VectorConflictError(
+            f"{operation} unavailable: the assessed geometry is invalid."
+        )
+    return VectorLayer(
+        resource_name=item["id"],
+        source=source,
+        fields=catalog_vector_fields(item),
+        feature_count=catalog_vector_feature_count(item, operation),
+        bbox=tuple(item["bbox"]),
+        geometry_kind=geometry_kind,
+    )

@@ -1,18 +1,15 @@
 """Accept private GeoPackages using the browser identity shared with annotations."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.exceptions import RequestValidationError
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.routing import APIRoute
-from starlette.responses import JSONResponse
 
 from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.vector.sources import resolve_uploaded_vector
 from eolab_app.vector_uploads import VectorUpload, VectorUploadError, VectorUploadStore
 
@@ -31,41 +28,6 @@ def upload_browser(request: Request, response: Response) -> str:
         HTTPException: If a mutation lacks X-EOLab-Uploads: 1 or is cross-origin.
     """
     return get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads")
-
-
-class VectorUploadRoute(APIRoute):
-    """Keep upload metadata private and translate storage failures into HTTP errors."""
-
-    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
-        """Wrap an endpoint without buffering its streamed request body.
-
-        Returns:
-            Handler applying private response headers to successes and errors.
-        """
-        handler = super().get_route_handler()
-
-        async def private(request: Request) -> Response:
-            """Return a private response without exposing storage paths.
-
-            Args:
-                request: Incoming upload API request.
-
-            Returns:
-                Endpoint result or a safe admission/validation error.
-            """
-            try:
-                response = await handler(request)
-            except VectorUploadError as error:
-                response = JSONResponse({"detail": str(error)}, error.status)
-            except HTTPException as error:
-                response = JSONResponse({"detail": error.detail}, error.status_code)
-            except RequestValidationError as error:
-                response = await request_validation_exception_handler(request, error)
-            response.headers["Cache-Control"] = "private, no-store"
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            return response
-
-        return private
 
 
 def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
@@ -101,7 +63,7 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
     router = APIRouter(
         prefix="/api/vector-uploads",
         tags=["vector uploads"],
-        route_class=VectorUploadRoute,
+        route_class=PrivateVectorRoute,
         lifespan=lifespan,
     )
     Browser = Annotated[str, Depends(upload_browser)]

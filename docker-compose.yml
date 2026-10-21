@@ -112,6 +112,7 @@ services:
     volumes:
       - geoserver-data:/opt/geoserver_data
       - processing-data:/processing-data:ro
+      - vector-uploads:/vector-uploads:ro
       # GeoServer also verifies at startup that /scan-source is read-only.
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}

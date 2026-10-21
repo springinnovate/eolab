@@ -661,7 +661,7 @@ def test_style_service_rejects_label_fields_outside_authoritative_table(
         UnusedFieldReader(),
     )
 
-    with pytest.raises(VectorConflictError, match="authoritative vector Item"):
+    with pytest.raises(VectorConflictError, match="known attribute of this vector layer"):
         asyncio.run(service.apply(polygon_request(
             item,
             label_field="browser-invented-field",
