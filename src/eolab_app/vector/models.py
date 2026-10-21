@@ -73,14 +73,14 @@ VectorSequentialPalette = Literal[
 
 @dataclass(frozen=True)
 class ResolvedVectorSource:
-    """Exact source and layer identity derived from one authoritative Item.
+    """Server-only source grant issued by catalog or private-upload resolution.
 
     Attributes:
-        source_kind: Whether the Asset is mounted or remotely addressed.
+        source_kind: Whether the source is mounted or remotely addressed.
         source_format: Explicit container or file format.
         source_path: Canonical mounted container path, or ``None`` for remote
             sources.
-        asset_key: STAC Asset carrying the primary container identity.
+        asset_key: Primary data asset key; private GeoPackages use ``data``.
         layer_name: Exact native layer name, or ``None`` for single-layer
             formats without a named inner layer.
         component_paths: Canonical files forming a mounted Shapefile.

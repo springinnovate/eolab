@@ -251,6 +251,49 @@ class VectorUploadStore:
                 503, "Upload storage could not be read. Try again shortly."
             ) from error
 
+    def resolve(self, owner: str, identifier: UUID) -> tuple[VectorUpload, Path]:
+        """Authorize a short read of this browser's original uploaded file.
+
+        This does not lease the file: a concurrent deletion can make a later
+        native read fail. Long-running job retention is a separate lifecycle.
+        Admitted contents and metadata are immutable and are not reinspected.
+
+        Args:
+            owner: Hash produced by the browser identity boundary.
+            identifier: Opaque upload ID validated by the HTTP boundary.
+
+        Returns:
+            Admission metadata and the confined original GeoPackage path.
+
+        Raises:
+            VectorUploadError: If ownership, file availability or storage fails.
+        """
+        try:
+            upload_path = self.root.resolve() / owner / str(identifier)
+            directory = upload_path.resolve(strict=True)
+            metadata_path = (directory / "metadata.json").resolve(strict=True)
+            source_path = (directory / "source.gpkg").resolve(strict=True)
+            if not all(
+                path.is_relative_to(upload_path)
+                for path in (directory, metadata_path, source_path)
+            ):
+                raise VectorUploadError(
+                    404, "This upload is not available to this browser."
+                )
+            metadata = VectorUpload.model_validate_json(
+                metadata_path.read_text(encoding="utf-8")
+            )
+            return metadata, source_path
+        except FileNotFoundError as error:
+            raise VectorUploadError(
+                404, "This upload is not available to this browser."
+            ) from error
+        except (OSError, ValidationError) as error:
+            LOGGER.exception("Could not resolve vector upload")
+            raise VectorUploadError(
+                503, "Upload storage could not be read. Try again shortly."
+            ) from error
+
     def delete(self, owner: str, identifier: UUID) -> None:
         """Withdraw and delete one browser-owned upload and its original file.
 

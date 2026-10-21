@@ -1,4 +1,4 @@
-"""Resolve exact catalog vector source identities inside the scan mount."""
+"""Resolve catalog and browser-owned vectors to exact authorized source files."""
 
 from collections import OrderedDict
 from dataclasses import replace
@@ -8,6 +8,7 @@ from pathlib import Path
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
 from eolab_app.catalog.filegeodatabase import FILE_GEODATABASE_MEDIA_TYPE
 from eolab_app.catalog.geojson import GEOJSON_MEDIA_TYPE
@@ -33,6 +34,39 @@ from eolab_app.vector.models import (
     VectorSourceKind,
 )
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
+from eolab_app.vector_uploads import VectorUpload, VectorUploadStore
+
+
+def resolve_uploaded_vector(
+    store: VectorUploadStore,
+    owner: str,
+    identifier: UUID,
+) -> tuple[VectorUpload, ResolvedVectorSource]:
+    """Grant access to one private upload through the ordinary vector reader contract.
+
+    Args:
+        store: Authority for admitted uploads and their file lifecycle.
+        owner: Server-derived browser identity, never supplied by the client.
+        identifier: Validated opaque upload ID.
+
+    Returns:
+        Public admission metadata and a server-only source grant. Native readers
+        receive the grant after authorization, not a browser credential or an
+        arbitrary path. Short reads may fail if the owner concurrently deletes
+        the file; the grant does not provide job retention.
+
+    Raises:
+        VectorUploadError: If the upload is unavailable to this browser or storage
+            cannot be read.
+    """
+    metadata, path = store.resolve(owner, identifier)
+    return metadata, ResolvedVectorSource(
+        source_kind="mounted",
+        source_format="geopackage",
+        source_path=path,
+        asset_key="data",
+        layer_name=metadata.layer_name,
+    )
 
 
 _FORMAT_ASSET_CONTRACTS: dict[VectorFormat, tuple[str, str]] = {
