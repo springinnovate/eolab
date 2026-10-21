@@ -14,9 +14,9 @@ from eolab_app.annotation_sessions.colors import (
     get_contributor_color,
 )
 from eolab_app.routes.annotation_sessions import (
-    COOKIE,
     create_annotation_sessions_router,
 )
+from eolab_app.routes.browser_identity import COOKIE
 from eolab_app.settings import load_settings
 
 
@@ -175,7 +175,11 @@ def test_cookie_and_same_origin_boundary() -> None:
     first = store.browser
     client.get("/api/annotation-sessions")
     assert store.browser == first
-    assert client.post("/api/annotation-sessions", json={}).status_code == 403
+    rejected = client.post("/api/annotation-sessions", json={})
+    assert rejected.status_code == 403
+    assert rejected.json() == {
+        "detail": "Use a same-origin request with X-EOLab-Annotations: 1."
+    }
     assert (
         client.post(
             "/api/annotation-sessions",

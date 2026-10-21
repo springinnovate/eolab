@@ -3,12 +3,8 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-import hashlib
 import logging
-import re
-import secrets
 from typing import Annotated, Any
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -29,8 +25,7 @@ from eolab_app.annotation_sessions.models import (
     MAX_LAYER_BYTES,
 )
 from eolab_app.annotation_sessions.store import AnnotationSessionStore
-
-COOKIE = "__Host-eolab-annotations"
+from eolab_app.routes.browser_identity import get_browser_owner_hash
 
 
 class AnnotationSessionRoute(APIRoute):
@@ -104,7 +99,7 @@ class AnnotationSessionRoute(APIRoute):
 
 
 def browser_identity(request: Request, response: Response) -> str:
-    """Recognize a browser using an automatically generated private cookie.
+    """Identify the browser and require the annotation API's mutation header.
 
     Args:
         request: Same-origin browser request.
@@ -116,29 +111,9 @@ def browser_identity(request: Request, response: Response) -> str:
     Raises:
         HTTPException: If a mutation lacks the same-origin request header.
     """
-    if request.method != "GET":
-        origin = request.headers.get("origin")
-        if (
-            request.headers.get("sec-fetch-site") == "cross-site"
-            or (origin and urlsplit(origin).netloc != request.url.netloc)
-            or request.headers.get("x-eolab-annotations") != "1"
-        ):
-            raise HTTPException(
-                403, "Use a same-origin request with X-EOLab-Annotations: 1."
-            )
-    token = request.cookies.get(COOKIE, "")
-    if not re.fullmatch(r"[a-f0-9]{64}", token):
-        token = secrets.token_hex(32)
-    response.set_cookie(
-        COOKIE,
-        token,
-        max_age=365 * 86400,
-        secure=True,
-        httponly=True,
-        samesite="strict",
-        path="/",
+    return get_browser_owner_hash(
+        request, response, mutation_header="X-EOLab-Annotations"
     )
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRouter:

@@ -54,11 +54,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture
-def configured_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def configured_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Set the complete default deployment environment for a test.
 
     Args:
         monkeypatch: Pytest environment mutation fixture.
+        tmp_path: Isolated writable upload directory parent.
     """
     for environment_variable_name, environment_variable_value in (
         DEFAULT_ENVIRONMENT.items()
@@ -67,6 +68,7 @@ def configured_environment(monkeypatch: pytest.MonkeyPatch) -> None:
             environment_variable_name,
             environment_variable_value,
         )
+    monkeypatch.setenv("VECTOR_UPLOAD_DATA_PATH", str(tmp_path / "vector-uploads"))
 
 
 @pytest.fixture
