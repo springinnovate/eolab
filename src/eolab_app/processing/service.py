@@ -347,7 +347,7 @@ class ProcessingService:
             return await asyncio.to_thread(
                 self.jobs.submit, owner, request_key, prepared, request_hash
             )
-        results = await self._submit_upload_jobs(
+        results = await self._submit_jobs_with_uploaded_inputs(
             owner,
             [JobSubmission(request_key, request_hash, prepared.operation, prepared)],
             [selection],
@@ -358,18 +358,22 @@ class ProcessingService:
             raise result
         return result
 
-    async def _submit_upload_jobs(
+    async def _submit_jobs_with_uploaded_inputs(
         self,
         owner: str,
         submissions: list[JobSubmission],
         selections: list[VectorSelection | None],
         upload_owner: str | None,
     ) -> list[dict[str, Any] | ProcessingError]:
-        """Retain original upload files until their accepted jobs stop.
+        """Submit jobs and keep their uploaded polygon files available until they stop.
 
-        Retention and database admission share a lock with cleanup. Cancellation
-        waits for admission to settle before releasing that lock. Failed or
-        superseded submissions leave unowned links for the next cleanup pass.
+        A hard link to each authorized GeoPackage lets an accepted job read the
+        file even if the user deletes the upload. Cleanup removes that link once
+        the job stops. A batch may also contain jobs without uploaded inputs.
+
+        Link creation and job submission share a lock with cleanup. If the caller
+        cancels, submission finishes before that lock is released. Failed or
+        duplicate submissions can leave unused links for the next cleanup pass.
 
         Args:
             owner: Processing session receiving each job handle.
@@ -382,11 +386,11 @@ class ProcessingService:
 
         Raises:
             ProcessingError: If the shared database admission fails.
-            asyncio.CancelledError: After retention and admission have stopped.
+            asyncio.CancelledError: After file linking and job submission have stopped.
         """
 
         async def retain_and_submit() -> list[dict[str, Any] | ProcessingError]:
-            """Capture authorized files, then commit the batch to job storage.
+            """Create hard links to uploaded GeoPackages, then submit the batch.
 
             Returns:
                 The store's accepted jobs and per-item failures.
@@ -914,7 +918,7 @@ class ProcessingService:
         ]
         selections = [request.catalogSelection for request in requests]
         if any(isinstance(selection, UploadedSelection) for selection in selections):
-            results = await self._submit_upload_jobs(
+            results = await self._submit_jobs_with_uploaded_inputs(
                 owner, submissions, selections, upload_owner
             )
         else:
