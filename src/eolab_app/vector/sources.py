@@ -46,24 +46,23 @@ def resolve_uploaded_vector(
     owner: str,
     identifier: UUID,
 ) -> tuple[VectorUpload, ResolvedVectorSource]:
-    """Grant access to one private upload through the ordinary vector reader contract.
+    """Return an upload's metadata and file details for the existing vector readers.
 
     Args:
-        store: Authority for admitted uploads and their file lifecycle.
+        store: Storage containing uploaded GeoPackages and their metadata.
         owner: Server-derived browser identity, never supplied by the client.
         identifier: Validated opaque upload ID.
 
     Returns:
-        Public admission metadata and a server-only source grant. Native readers
-        receive the grant after authorization, not a browser credential or an
-        arbitrary path. Short reads may fail if the owner concurrently deletes
-        the file; the grant does not provide job retention.
+        Upload metadata and a source object containing the authorized file path,
+        format, and layer name. Readers use that object without browser
+        credentials. A later read can fail if the owner deletes the upload.
 
     Raises:
         VectorUploadError: If the upload is unavailable to this browser or storage
             cannot be read.
     """
-    metadata, path = store.resolve(owner, identifier)
+    metadata, path = store.get_upload_source(owner, identifier)
     return metadata, ResolvedVectorSource(
         source_kind="mounted",
         source_format="geopackage",

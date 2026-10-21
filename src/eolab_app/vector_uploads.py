@@ -251,22 +251,28 @@ class VectorUploadStore:
                 503, "Upload storage could not be read. Try again shortly."
             ) from error
 
-    def resolve(self, owner: str, identifier: UUID) -> tuple[VectorUpload, Path]:
-        """Authorize a short read of this browser's original uploaded file.
+    def get_upload_source(
+        self, owner: str, identifier: UUID
+    ) -> tuple[VectorUpload, Path]:
+        """Return this browser's upload metadata and original GeoPackage path.
 
-        This does not lease the file: a concurrent deletion can make a later
-        native read fail. Long-running job retention is a separate lifecycle.
-        Admitted contents and metadata are immutable and are not reinspected.
+        The vector source resolver calls this to locate a file for its readers.
+        The metadata and source paths must stay inside the requested upload's
+        directory. The GeoPackage is immutable and is not reopened or rescanned.
+        Returning its path does not prevent deletion; a later read can fail if
+        the browser owner deletes the upload in the meantime.
 
         Args:
             owner: Hash produced by the browser identity boundary.
             identifier: Opaque upload ID validated by the HTTP boundary.
 
         Returns:
-            Admission metadata and the confined original GeoPackage path.
+            Stored metadata and the original GeoPackage path on the server.
 
         Raises:
-            VectorUploadError: If ownership, file availability or storage fails.
+            VectorUploadError: If the upload is unavailable to this browser,
+                either file is missing or outside its directory, or the stored
+                metadata cannot be read.
         """
         try:
             upload_path = self.root.resolve() / owner / str(identifier)
@@ -289,7 +295,7 @@ class VectorUploadStore:
                 404, "This upload is not available to this browser."
             ) from error
         except (OSError, ValidationError) as error:
-            LOGGER.exception("Could not resolve vector upload")
+            LOGGER.exception("Could not read vector upload metadata or locate its file")
             raise VectorUploadError(
                 503, "Upload storage could not be read. Try again shortly."
             ) from error
