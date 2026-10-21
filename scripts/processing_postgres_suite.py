@@ -7,6 +7,7 @@ import pytest
 
 SUITES = (
     "test_processing_private_inputs_postgres.py",
+    "test_processing_uploaded_vectors.py",
     "test_model_artifact_previews_postgres.py",
     "test_model_artifacts_postgres.py",
     "test_model_runs_postgres.py",
@@ -100,6 +101,7 @@ def main() -> int:
                 f"--processing-dsn={args.dsn}",
                 *(str(root / "tests" / name) for name in SUITES),
                 str(root / "tests" / "test_processing_database_safety.py"),
+                str(root / "tests" / "test_processing_upload_retention.py"),
                 str(root / "tests" / "test_model_definitions.py"),
                 str(root / "tests" / "test_model_progress.py"),
                 str(root / "tests" / "test_downstream_model.py"),

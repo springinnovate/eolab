@@ -1,8 +1,9 @@
 """Store immutable, browser-owned GeoPackages on the application's upload volume.
 
 One application process owns writes to this volume. Each upload is published by
-renaming a directory containing its original file and metadata together. Hidden
-directories are incomplete uploads or deletions, removed at application startup.
+renaming a directory containing its original file and metadata together. Pending
+uploads and interrupted deletions are removed at application startup. Processing
+retains hard links separately until its accepted calculations stop.
 """
 
 import asyncio
@@ -319,6 +320,113 @@ class VectorUploadStore:
         except OSError as error:
             raise VectorUploadError(
                 503, "The uploaded file could not be made readable by the server."
+            ) from error
+
+    def _retained_directory(self) -> Path:
+        """Return the confined directory for Processing's retained upload links.
+
+        Returns:
+            The retained-link directory, which may not exist yet.
+
+        Raises:
+            VectorUploadError: If the directory resolves outside upload storage.
+            OSError: If the filesystem cannot resolve the directory.
+        """
+        root = self.root.resolve()
+        directory = (root / ".retained").resolve()
+        if directory.parent != root:
+            raise VectorUploadError(503, "Retained upload storage is unavailable.")
+        return directory
+
+    def retain_source(self, source_path: Path) -> str:
+        """Keep an authorized GeoPackage available after its upload is deleted.
+
+        Creates a hard link on the upload volume without copying or inspecting
+        the immutable file. Processing serializes this operation and admission
+        with retained-file cleanup.
+
+        Args:
+            source_path: Original file returned by the authorized source resolver.
+
+        Returns:
+            Opaque server-only token identifying the retained file.
+
+        Raises:
+            VectorUploadError: If deletion wins before the link is made, or the
+                retained file cannot be created or made readable by the worker.
+        """
+        target = None
+        try:
+            directory = self._retained_directory()
+            directory.mkdir(exist_ok=True)
+            self.root.chmod(0o755)
+            directory.chmod(0o755)
+            token = uuid4().hex
+            target = directory / f"{token}.gpkg"
+            target.hardlink_to(source_path)
+            target.chmod(0o644)
+            return token
+        except FileNotFoundError as error:
+            raise VectorUploadError(
+                404, "This upload is not available to this browser."
+            ) from error
+        except OSError as error:
+            if target is not None:
+                target.unlink(missing_ok=True)
+            raise VectorUploadError(
+                503, "The uploaded file could not be retained for this calculation."
+            ) from error
+
+    def get_retained_source(self, token: str) -> Path:
+        """Locate a GeoPackage retained for an accepted Processing calculation.
+
+        Args:
+            token: Server-only token recorded with the accepted job.
+
+        Returns:
+            Existing source path confined to retained upload storage.
+
+        Raises:
+            VectorUploadError: If the file is missing, outside retained storage,
+                or its path cannot be read.
+        """
+        try:
+            directory = self._retained_directory()
+            source = (directory / f"{token}.gpkg").resolve(strict=True)
+            if source.parent != directory:
+                raise VectorUploadError(
+                    404, "This calculation's uploaded file is unavailable."
+                )
+            return source
+        except FileNotFoundError as error:
+            raise VectorUploadError(
+                404, "This calculation's uploaded file is unavailable."
+            ) from error
+        except OSError as error:
+            raise VectorUploadError(
+                503, "This calculation's uploaded file could not be located."
+            ) from error
+
+    def remove_unretained_sources(self, active: set[str]) -> None:
+        """Remove upload links no unfinished calculation needs.
+
+        Processing calls this while holding its admission lock, after reading
+        the authoritative active tokens from job storage. That also removes
+        links left by interrupted or rejected admission.
+
+        Args:
+            active: Tokens used by queued, running or cancelling jobs.
+
+        Raises:
+            VectorUploadError: If retained storage cannot be accessed or cleaned.
+        """
+        try:
+            for source in self._retained_directory().glob("*.gpkg"):
+                if source.stem not in active:
+                    source.unlink()
+        except OSError as error:
+            raise VectorUploadError(
+                503, "Unused calculation input files could not be removed."
             ) from error
 
     def delete(self, owner: str, identifier: UUID) -> None:

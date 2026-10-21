@@ -268,3 +268,8 @@ FOR EACH ROW EXECUTE FUNCTION processing.release_finished_inputs();
 INSERT INTO processing.schema_version VALUES (18) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (19) ON CONFLICT DO NOTHING;
 INSERT INTO processing.schema_version VALUES (20) ON CONFLICT DO NOTHING;
+
+-- The upload store retains immutable source links for accepted computations.
+-- Tokens remain server-only and are not included in the subscribed_jobs view.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_uploads jsonb NOT NULL DEFAULT '{}'::jsonb;
+INSERT INTO processing.schema_version VALUES (21) ON CONFLICT DO NOTHING;

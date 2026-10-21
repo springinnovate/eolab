@@ -224,6 +224,8 @@ def create_app(
         ),
         changes=processing_events,
         model_authorizer=raster_source_authorizer,
+        uploads=vector_uploads,
+        areas=vector_selection_reader,
     )
     source_files = create_model_source_files(processing_service)
     raster_sources = RasterSourceAccess(raster_source_authorizer, source_files)
@@ -336,6 +338,24 @@ def create_app(
                     "Temporary raster publication cleanup will retry."
                 )
 
+    async def release_finished_upload_inputs() -> None:
+        """Remove retained uploads after their Processing jobs have stopped.
+
+        Reconciles every five seconds, including unfinished cleanup after a
+        restart. Admission shares the service's lock; database outages keep files.
+
+        Raises:
+            asyncio.CancelledError: After in-flight cleanup stops on shutdown.
+        """
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await processing_service.reconcile_upload_inputs()
+            except (ProcessingError, VectorUploadError):
+                logging.getLogger(__name__).warning(
+                    "Retained upload cleanup will retry."
+                )
+
     vector_catalog = StacVectorCatalog(
         catalog_client,
         app_global_configuration.catalog_internal_url,
@@ -421,12 +441,16 @@ def create_app(
                 client_stack.push_async_callback(client.aclose)
             client_stack.push_async_callback(render_queue.close)
             publication_cleanup = asyncio.create_task(reconcile_output_publications())
+            upload_cleanup = asyncio.create_task(release_finished_upload_inputs())
             try:
                 yield
             finally:
                 publication_cleanup.cancel()
                 with suppress(asyncio.CancelledError):
                     await publication_cleanup
+                upload_cleanup.cancel()
+                with suppress(asyncio.CancelledError):
+                    await upload_cleanup
 
     application = FastAPI(
         title=app_global_configuration.app_title,
@@ -639,6 +663,7 @@ async def run_processing_worker() -> None:
             StacVectorCatalog(client, settings.catalog_internal_url),
             MountedVectorResolver(settings.scan_mount_path),
         )
+        uploads = VectorUploadStore(settings.vector_upload_data_path, max_bytes=None)
         task = asyncio.current_task()
         for event in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):
@@ -666,6 +691,7 @@ async def run_processing_worker() -> None:
                     limits,
                     native=execution_native,
                     areas=areas,
+                    uploads=uploads,
                     downstream_limits=downstream_limits,
                 )
                 workers.create_task(

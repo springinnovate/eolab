@@ -59,7 +59,14 @@ from eolab_app.processing.model_yaml import (
     encode_canonical_json,
     export_yaml,
 )
-from eolab_app.source_files import ResolvedSourceFile
+from eolab_app.source_files import ResolvedSourceFile, finish_source_task
+from eolab_app.catalog_selection import (
+    CatalogSelectionReader,
+    SelectionUnavailableError,
+    UploadedSelection,
+    VectorSelection,
+)
+from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 
 
 def require_operation(row: dict[str, Any], operation: str) -> None:
@@ -172,6 +179,8 @@ class ProcessingService:
         submission_wait_seconds: float = 0.45,
         model_registry: ModelRegistry | None = None,
         model_authorizer: RasterSourceAuthorizer | None = None,
+        uploads: VectorUploadStore | None = None,
+        areas: CatalogSelectionReader | None = None,
     ) -> None:
         """Configure job storage, source access and the installed model library.
 
@@ -186,6 +195,8 @@ class ProcessingService:
                 eagerly when omitted, failing readiness if invalid.
             model_authorizer: Catalog-only source authority for capturing model
                 inputs at admission. Existing raster endpoints retain their behavior.
+            uploads: Original GeoPackages and retained links for accepted jobs.
+            areas: Existing reader authorizing uploaded vector selections.
 
         Raises:
             ValueError: If the submission observation budget is negative or non-finite.
@@ -202,9 +213,12 @@ class ProcessingService:
             else ModelRegistry.load_installed()
         )
         self.model_authorizer = model_authorizer
+        self.uploads = uploads
+        self.areas = areas
+        self._upload_admission_lock = asyncio.Lock()
 
     async def submit_model_run(
-        self, owner: str, request: ModelRunRequest
+        self, owner: str, request: ModelRunRequest, upload_owner: str | None = None
     ) -> dict[str, Any]:
         """Start a model run, or recover a previously accepted submission.
 
@@ -215,6 +229,7 @@ class ProcessingService:
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
             request: The chosen model, input datasets, area, parameters and run label.
+            upload_owner: Separate browser identity authorizing private GeoPackages.
 
         Returns:
             The newly queued run, or the original run for an unchanged retry.
@@ -293,10 +308,166 @@ class ProcessingService:
         prepared = replace(
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
         )
-        row = await asyncio.to_thread(
-            self.jobs.submit, owner, request.requestId, prepared, request_hash
+        row = await self._submit_job(
+            owner,
+            request.requestId,
+            prepared,
+            request_hash,
+            operation.selection(calculation),
+            upload_owner,
         )
         return serialize_processing_job(row)
+
+    async def _submit_job(
+        self,
+        owner: str,
+        request_key: str,
+        prepared: PreparedJobPlan,
+        request_hash: str,
+        selection: VectorSelection | None,
+        upload_owner: str | None,
+    ) -> dict[str, Any]:
+        """Queue one job after retaining any uploaded polygon input.
+
+        Args:
+            owner: Processing session that owns the submitted job.
+            request_key: Stable browser retry identifier.
+            prepared: Queued operation data and captured raster inputs.
+            request_hash: Complete public request identity.
+            selection: Vector input declared by the registered operation.
+            upload_owner: Browser identity for private GeoPackage access.
+
+        Returns:
+            The accepted job or its previously accepted retry.
+
+        Raises:
+            ProcessingError: If source access or job admission fails.
+        """
+        if not isinstance(selection, UploadedSelection):
+            return await asyncio.to_thread(
+                self.jobs.submit, owner, request_key, prepared, request_hash
+            )
+        results = await self._submit_upload_jobs(
+            owner,
+            [JobSubmission(request_key, request_hash, prepared.operation, prepared)],
+            [selection],
+            upload_owner,
+        )
+        result = results[0]
+        if isinstance(result, ProcessingError):
+            raise result
+        return result
+
+    async def _submit_upload_jobs(
+        self,
+        owner: str,
+        submissions: list[JobSubmission],
+        selections: list[VectorSelection | None],
+        upload_owner: str | None,
+    ) -> list[dict[str, Any] | ProcessingError]:
+        """Retain original upload files until their accepted jobs stop.
+
+        Retention and database admission share a lock with cleanup. Cancellation
+        waits for admission to settle before releasing that lock. Failed or
+        superseded submissions leave unowned links for the next cleanup pass.
+
+        Args:
+            owner: Processing session receiving each job handle.
+            submissions: Queued plans or input errors, in request order.
+            selections: The corresponding operation-declared vector inputs.
+            upload_owner: Browser identity used only while authorizing uploads.
+
+        Returns:
+            Accepted jobs or per-item errors, including unchanged retry results.
+
+        Raises:
+            ProcessingError: If the shared database admission fails.
+            asyncio.CancelledError: After retention and admission have stopped.
+        """
+
+        async def retain_and_submit() -> list[dict[str, Any] | ProcessingError]:
+            """Capture authorized files, then commit the batch to job storage.
+
+            Returns:
+                The store's accepted jobs and per-item failures.
+
+            Raises:
+                ProcessingError: If the admission transaction fails.
+            """
+            captured = []
+            for submission, selection in zip(submissions, selections, strict=True):
+                prepared = submission.prepared
+                if isinstance(selection, UploadedSelection) and isinstance(
+                    prepared, PreparedJobPlan
+                ):
+                    try:
+                        if (
+                            self.uploads is None
+                            or self.areas is None
+                            or upload_owner is None
+                        ):
+                            raise VectorUploadError(
+                                404, "This upload is not available to this browser."
+                            )
+                        resolved = await self.areas.resolve_for_sampling(
+                            selection, upload_owner
+                        )
+                        token = await asyncio.to_thread(
+                            self.uploads.retain_source, resolved.path
+                        )
+                        prepared = replace(
+                            prepared,
+                            input_uploads={str(selection.uploadId): token},
+                            work_key=None,
+                        )
+                    except VectorUploadError as error:
+                        prepared = ProcessingError(
+                            "source_unavailable", str(error), error.status
+                        )
+                    except SelectionUnavailableError as error:
+                        prepared = ProcessingError(
+                            "source_unavailable", error.detail, 409
+                        )
+                captured.append(replace(submission, prepared=prepared))
+            return await asyncio.to_thread(self.jobs.submit_batch, owner, captured)
+
+        async with self._upload_admission_lock:
+            task = asyncio.create_task(retain_and_submit())
+            try:
+                return await asyncio.shield(task)
+            finally:
+                await finish_source_task(task)
+
+    async def reconcile_upload_inputs(self) -> None:
+        """Release uploaded files once no queued or executing job needs them.
+
+        The API is the upload volume's sole writer. Its periodic reconciliation
+        shares the admission lock, so a file cannot be removed between retention
+        and the database commit. Database unavailability leaves all files intact.
+
+        Raises:
+            ProcessingError: If active job inputs cannot be read.
+            VectorUploadError: If retained files cannot be removed.
+        """
+        if self.uploads is None:
+            return
+
+        async def release_unused() -> None:
+            """Remove retained links absent from the active job snapshot.
+
+            Raises:
+                ProcessingError: If the job snapshot is unavailable.
+                VectorUploadError: If the upload directory cannot be cleaned.
+            """
+            retained = await asyncio.to_thread(self.jobs.active_input_uploads)
+            await asyncio.to_thread(self.uploads.remove_unretained_sources, retained)
+
+        async with self._upload_admission_lock:
+            task = asyncio.create_task(release_unused())
+            try:
+                await asyncio.shield(task)
+            finally:
+                await finish_source_task(task)
 
     async def capture_input_file(
         self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan
@@ -541,13 +712,14 @@ class ProcessingService:
         await asyncio.to_thread(self.jobs.discard_input, owner, identifier)
 
     async def submit_raster_clip(
-        self, owner: str, request: ClipJobRequest
+        self, owner: str, request: ClipJobRequest, upload_owner: str | None = None
     ) -> dict[str, Any]:
         """Join identical active clipping work or queue a clip with its complete inputs.
 
         Args:
             owner: Current browser-session hash.
             request: Catalog or private raster, explicit area and stable retry key.
+            upload_owner: Browser identity authorizing an uploaded clipping area.
 
         Returns:
             The caller's handle for shared/new work, or the same handle on retry.
@@ -583,18 +755,19 @@ class ProcessingService:
                     409,
                 )
             return serialize_processing_job(existing)
-        row = await asyncio.to_thread(
-            self.jobs.submit,
+        row = await self._submit_job(
             owner,
             request.requestId,
             prepared,
             request_hash,
+            operation.selection(request),
+            upload_owner,
         )
         require_operation(row, operation.id)
         return serialize_processing_job(row)
 
     async def submit_calculation_inputs(
-        self, owner: str, request: AggregateJobRequest
+        self, owner: str, request: AggregateJobRequest, upload_owner: str | None = None
     ) -> dict[str, Any]:
         """Join identical active statistics work or queue a calculation with its inputs.
 
@@ -603,6 +776,7 @@ class ProcessingService:
             request: Validated raster reference, selected area, formulas and stable
                 retry key. Direct callers must construct AggregateJobRequest
                 through its normal validation, just as the HTTP boundary does.
+            upload_owner: Browser identity authorizing an uploaded summary area.
 
         Returns:
             The caller's observed job and labels, or the same handle after a retry.
@@ -639,12 +813,13 @@ class ProcessingService:
         if existing:
             row = existing
         else:
-            row = await asyncio.to_thread(
-                self.jobs.submit,
+            row = await self._submit_job(
                 owner,
                 request.requestId,
                 submission.prepared,
                 request_hash,
+                request.catalogSelection,
+                upload_owner,
             )
         return (
             await self._observe_submitted_calculations(
@@ -711,13 +886,17 @@ class ProcessingService:
         return JobSubmission(request.requestId, request_hash, operation.id, prepared)
 
     async def submit_calculation_batch(
-        self, owner: str, requests: list[AggregateJobRequest]
+        self,
+        owner: str,
+        requests: list[AggregateJobRequest],
+        upload_owner: str | None = None,
     ) -> list[dict[str, Any] | ProcessingError]:
         """Submit independent calculations through one store admission transaction.
 
         Args:
             owner: Current browser-session hash.
             requests: One to fifty requests validated at the HTTP boundary.
+            upload_owner: Browser identity authorizing uploaded summary areas.
 
         Returns:
             Public job snapshots or sanitized per-item rejections, in input order.
@@ -733,7 +912,15 @@ class ProcessingService:
             await self.build_calculation_submission(owner, request, polygon_inputs)
             for request in requests
         ]
-        results = await asyncio.to_thread(self.jobs.submit_batch, owner, submissions)
+        selections = [request.catalogSelection for request in requests]
+        if any(isinstance(selection, UploadedSelection) for selection in selections):
+            results = await self._submit_upload_jobs(
+                owner, submissions, selections, upload_owner
+            )
+        else:
+            results = await asyncio.to_thread(
+                self.jobs.submit_batch, owner, submissions
+            )
         return await self._observe_submitted_calculations(
             owner,
             [

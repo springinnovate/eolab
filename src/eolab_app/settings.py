@@ -95,22 +95,26 @@ class ProcessingWorkerSettings:
         catalog_internal_url: Internal read-only Catalog API address.
         scan_mount_path: Absolute read-only mounted input root.
         processing_data_path: Absolute private writable artifact volume.
+        vector_upload_data_path: Absolute read-only upload volume containing retained inputs.
     """
 
     catalog_internal_url: str
     scan_mount_path: Path
     processing_data_path: Path
+    vector_upload_data_path: Path
 
     def __post_init__(self) -> None:
         """Require a catalog URL and absolute source and result-storage paths.
 
         Raises:
-            ValueError: If Catalog URL is blank or either storage root is relative.
+            ValueError: If Catalog URL is blank or a storage root is relative.
         """
 
         if not self.catalog_internal_url:
             raise ValueError("CATALOG_INTERNAL_URL must not be blank")
-        if not self.scan_mount_path.is_absolute() or not self.processing_data_path.is_absolute():
+        if not all(path.is_absolute() for path in (
+            self.scan_mount_path, self.processing_data_path, self.vector_upload_data_path,
+        )):
             raise ValueError("Worker source and processing paths must be absolute")
 
 
@@ -128,6 +132,9 @@ def load_processing_worker_settings() -> ProcessingWorkerSettings:
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
         processing_data_path=Path(os.environ["PROCESSING_DATA_PATH"]),
+        vector_upload_data_path=Path(os.environ.get(
+            "VECTOR_UPLOAD_DATA_PATH", str(Path("/vector-uploads").absolute())
+        )),
     )
 
 
