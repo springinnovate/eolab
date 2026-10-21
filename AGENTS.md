@@ -388,22 +388,28 @@ update the README only when its setup or user-facing guidance changes.
 Every new or materially modified named class, function, method, or public
 contract must have complete type information and documentation.
 
-Before accepting a name and its documentation, ask: **Can someone unfamiliar
-with this implementation understand the name and first sentence together?**
-The name and first sentence should establish understanding; the remaining
-documentation should add precision.
+Before committing, review every added or changed name and docstring alongside
+a real call or construction site. **Without reading the implementation, can a
+developer tell what it does, what it returns or changes, and why to use it?**
+Rewrite unclear names or opening sentences before considering the change done.
 
 Names and documentation must make sense to a developer reading the code:
 
 - Name classes for what they represent and functions or methods for what they
-  do. Use an action and its object when needed: `discover_models`,
-  `download_model_yaml`, or `compute_implementation_checksum`. Avoid vague
-  nouns for actions and do not make names longer just to repeat clear context.
+  do. Use an action and its object: `get_upload_source` is clearer than
+  `resolve` when returning upload metadata and a file path. Do not use a
+  docstring to compensate for a vague name, or lengthen names just to repeat
+  the class or module context.
 - Start module and symbol documentation with its purpose or behavior in plain
-  language. The description must agree with the name and implementation.
+  language. Say "Return this browser's upload metadata and original GeoPackage
+  path", not "Authorize a short read", when that is what the function returns.
+  Explain when or why to call it if the purpose is still unclear.
 - Use established domain terms and explain necessary technical language.
-  Avoid unexplained phrases such as "bounded submission envelope" or a
-  description that only says a component sits "above" another component.
+  Do not use phrases such as "source grant" or "bounded submission envelope"
+  as substitutes for naming the actual file, metadata, value or operation.
+- Distinguish field names from literal values: write "the literal string
+  `"data"`", not just "uses data". Include a small concrete example when it
+  removes ambiguity; do not add examples or prose mechanically.
 - Keep important contract details after the purpose. Explain concrete limits,
   session ownership, checksum contents, side effects, expiry and cancellation
   where relevant; do not replace those details with vague assurances.
