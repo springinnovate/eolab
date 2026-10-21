@@ -37,10 +37,13 @@ const CLASSIFICATION = {
 
 test("uploaded polygons use ordinary vector styling, filtering and local removal Undo", async t => {
     const requests = [], wmsLayers = [], fits = [], status = [];
+    let waitForRestoredStyle = null, failFilter = false;
     t.mock.method(globalThis, "fetch", async (url, options) => {
         const body = JSON.parse(options.body);
         const action = url.slice(url.lastIndexOf("/") + 1);
         requests.push({ url, options, body, action });
+        if (action === "styles" && body.style.fillColor === "#abcdef") await waitForRestoredStyle;
+        if (action === "filters" && failFilter) return new Response(JSON.stringify({ detail: "Filter failed" }), { status: 503 });
         const replies = {
             layers: PUBLICATION,
             "numeric-classifications": CLASSIFICATION,
@@ -150,4 +153,51 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     assert.deepEqual(requests[3].body, { field: "label" });
     assert.deepEqual(requests[4].body, { filter });
     assert.deepEqual(requests[5].body, { filter });
+
+    // Exercise the composition callbacks with the real layer and vector owners.
+    const callbacksSource = main.slice(main.indexOf("async function restoreSavedUpload("),
+        main.indexOf("if (!isSharedViewer) new UploadPolygonsDialog"));
+    const { restoreSavedUpload, removeDeletedUpload } = new Function(
+        "mapLayerController", "vectorMapLayerAdapter", "getUpload",
+        `${callbacksSource}; return {restoreSavedUpload, removeDeletedUpload};`
+    )(controller, adapter, async id => { assert.equal(id, UPLOAD.id); return UPLOAD; });
+    controller.removeKey(key);
+    const savedStyle = { ...edited, graduated: { ...publication.style.graduated, rules: [
+        { minimum: null, maximum: 123, color: "#ffffcc" },
+        { minimum: 123, maximum: null, color: "#800026" },
+    ] } };
+    const saved = { uploadId: UPLOAD.id, customName: "Saved wetlands", visible: true, opacity: 0.4,
+        style: { kind: "vector", definition: savedStyle }, filter };
+    let releaseStyle;
+    waitForRestoredStyle = new Promise(resolve => { releaseStyle = resolve; });
+    const reopening = restoreSavedUpload(saved, () => true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(controller.getRecord(key).entry.visible, false, "Restoration stays hidden until its appearance and filter are applied");
+    releaseStyle();
+    assert.equal(await reopening, key);
+    const reopened = controller.getRecord(key);
+    assert.equal(reopened.entry.label, "Saved wetlands");
+    assert.equal(reopened.entry.opacity, 0.4);
+    assert.equal(reopened.entry.visible, true);
+    assert.deepEqual(adapter.describeStyle(reopened).style.graduated.rules, savedStyle.graduated.rules);
+    assert.deepEqual(adapter.exportFilterState(reopened), filter);
+    controller.removeWithUndo(key);
+    removeDeletedUpload(UPLOAD.id);
+    await controller.undoLayerRemoval();
+    assert.equal(controller.getRecord(key), null, "Deleted uploads cannot be restored by map-removal Undo");
+
+    failFilter = true;
+    await assert.rejects(restoreSavedUpload(saved, () => true), /Filter failed/);
+    assert.equal(controller.getRecord(key), null, "Filter failure leaves no unfiltered layer");
+    failFilter = false;
+    waitForRestoredStyle = new Promise(resolve => { releaseStyle = resolve; });
+    const obsolete = restoreSavedUpload(saved, () => true);
+    await new Promise(resolve => setImmediate(resolve));
+    controller.removeKey(key);
+    const replacement = controller.addLocal({ key, label: UPLOAD.name, upload: UPLOAD,
+        publication, visible: false }, adapter);
+    releaseStyle();
+    assert.equal(await obsolete, null);
+    assert.equal(controller.getRecord(key), replacement);
+    assert.equal(replacement.entry.visible, false, "Obsolete restoration cannot change a replacement layer");
 });

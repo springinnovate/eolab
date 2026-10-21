@@ -25,6 +25,34 @@ import {
   serializeSavedMapView,
 } from "../../src/saved-map-view/model.js";
 
+test("private upload references preserve appearance without accepting data or credentials", () => {
+  const candidate = createSavedMapView({ ...savedMapCandidate(), layers: [{
+    uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: false, opacity: 0.4, legendIncluded: false,
+    style: { kind: "vector", definition: { fillColor: "#123456" } },
+    filter: { enabled: true, match: "all", rules: [{ field: "label", operator: "eq", value: "Café wetlands" }] },
+  }] });
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(candidate)), candidate);
+  for (const field of ["catalogItem", "sourcePath", "fields", "features", "browserHash", "publication"]) {
+    const invalid = structuredClone(candidate);
+    invalid.layers[0][field] = "not part of a map reference";
+    assert.throws(() => parseSavedMapView(JSON.stringify(invalid)), /unsupported fields/);
+  }
+  const duplicate = structuredClone(candidate);
+  duplicate.layers.push(structuredClone(duplicate.layers[0]));
+  assert.throws(() => parseSavedMapView(JSON.stringify(duplicate)), /cannot repeat/);
+  const older = structuredClone(candidate);
+  older.schemaVersion = 2;
+  delete older.basemap;
+  assert.throws(() => parseSavedMapView(JSON.stringify(older)), /version three/);
+  const invalidId = structuredClone(candidate);
+  invalidId.layers[0].uploadId = "../private.gpkg";
+  assert.throws(() => parseSavedMapView(JSON.stringify(invalidId)), /identifier/);
+  const raster = structuredClone(candidate);
+  raster.layers[0].style = savedMapCandidate().layers[0].style;
+  assert.throws(() => parseSavedMapView(JSON.stringify(raster)), /vector style/);
+});
+
 test("saved map serialization preserves vector CSV rules as an opaque owner definition", async () => {
   const { parseCategoricalVectorCsv } = await import("../../src/vector/categorical-csv.js");
   const { normalizeVectorStyle } = await import("../../src/vector/style.js");

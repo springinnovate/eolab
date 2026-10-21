@@ -15,10 +15,10 @@ import {
 const RESTORE_CONCURRENCY = 4;
 const REMEMBER_DEBOUNCE_MILLISECONDS = 350;
 
-/** Save map settings and restore them through the existing catalog and layer adapters. */
+/** Save map settings and restore catalog, uploaded and shared layers through their owners. */
 export class SavedMapViewController {
     /**
-     * Connect map save, share and restore controls to catalog and layer adapters.
+     * Connect map save, share and restore controls to layer owners and browser services.
      *
      * @param {Object} configuration Map adapters, controls and browser services.
      * @param {Object} configuration.view Saved-map DOM adapter.
@@ -39,6 +39,8 @@ export class SavedMapViewController {
      * for transient map presentations excluded from the portable contract.
      * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
+     * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreUpload Open this browser's upload with its saved appearance and return its map key, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
      * @param {string|null} [configuration.namedMapSlug] URL name to load instead of fragments or private autosave.
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
@@ -66,6 +68,8 @@ export class SavedMapViewController {
         beforeRestore = () => {},
         exportAnnotation = () => null,
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
+        exportUpload,
+        restoreUpload,
         publicationApi = null,
         namedMapSlug = null,
         editPublishedMap = false,
@@ -103,6 +107,8 @@ export class SavedMapViewController {
         this.beforeRestore = beforeRestore;
         this.exportAnnotation = exportAnnotation;
         this.restoreAnnotation = restoreAnnotation;
+        this.exportUpload = exportUpload;
+        this.restoreUpload = restoreUpload;
         this.publicationApi = publicationApi;
         this.namedMapSlug = namedMapSlug;
         this.editPublishedMap = editPublishedMap;
@@ -354,7 +360,10 @@ export class SavedMapViewController {
         this.#setBusy(true);
         try {
             const report = await this.#restore(savedMapView, restoreGeneration);
-            if (report !== null) this.rememberPending = true;
+            if (report !== null) {
+                if (report.loaded !== report.total || report.details.length > 0) this.view.showResults(report);
+                this.rememberPending = true;
+            }
         } catch {
             this.storage.clear();
         } finally {
@@ -452,8 +461,8 @@ export class SavedMapViewController {
     }
 
     /**
-     * Capture catalog layers and portable live-annotation references in map order.
-     * Annotation polygons and private membership credentials never enter this document.
+     * Capture layer identifiers and map appearance in drawing order.
+     * Upload references grant no access; GeoPackage contents and browser credentials are excluded.
      *
      * @return {Readonly<Object>} Validated portable map document.
      * @throws {Error} If a layer cannot be exported or the saved document is invalid.
@@ -462,7 +471,9 @@ export class SavedMapViewController {
         const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
         const layers = records.map((record) => {
-            const layer = record.entry.item === null ? this.exportAnnotation(record) : this.#exportLayer(record);
+            const layer = record.entry.item === null
+                ? this.exportUpload(record) ?? this.exportAnnotation(record)
+                : this.#exportLayer(record);
             return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
         });
         return createSavedMapView({
@@ -505,8 +516,9 @@ export class SavedMapViewController {
     }
 
     /**
-     * Prepare saved layers concurrently, restore the viewport, then commit
-     * them top-first.
+     * Restore saved layers through their owners and apply the saved drawing order.
+     * Private uploads and shared layers must belong to this deployment; their
+     * owners enforce browser access before returning a map key.
      *
      * @param {Object} savedMapView Validated saved-map document.
      * @param {number} restoreGeneration Current restoration generation.
@@ -520,6 +532,17 @@ export class SavedMapViewController {
             savedMapView.layers,
             RESTORE_CONCURRENCY,
             async (layer) => {
+                if (layer.uploadId) {
+                    try {
+                        if (savedMapView.viewer.origin !== this.viewerOrigin) {
+                            throw new Error("Private uploaded layers can only be opened on their original EOLab site.");
+                        }
+                        const key = await this.restoreUpload(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                        return { key, staged: null, detail: null };
+                    } catch (error) {
+                        return { staged: null, detail: `${layer.customName ?? "Private uploaded layer"}: ${asError(error).message}` };
+                    }
+                }
                 if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
                 try {
                     if (savedMapView.viewer.origin !== this.viewerOrigin) {

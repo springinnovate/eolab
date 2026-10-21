@@ -1,4 +1,4 @@
-"""Validate named maps, catalog layers and live shared-annotation references."""
+"""Validate named maps and their catalog, private-upload and shared-layer references."""
 
 import json
 from datetime import datetime, timezone
@@ -186,15 +186,14 @@ class MapVectorStyle(MapDocumentPart):
     definition: dict[str, JsonValue]
 
 
-class MapLayer(MapDocumentPart):
-    """Catalog reference and map appearance, including name and legend inclusion.
+class MapStyledLayer(MapDocumentPart):
+    """Saved appearance and filtering shared by catalog and uploaded layers.
 
-    customName is presentation text; it never replaces the catalog identity or
+    customName is presentation text; it never replaces the source identity or
     source metadata. Omitted or null means to display the original source name.
     Omitted legendIncluded means to include a visible layer in the map legend.
     """
 
-    catalogItem: MapCatalogItem
     customName: Title | None = None
     visible: bool
     legendIncluded: bool = True
@@ -221,6 +220,27 @@ class MapLayer(MapDocumentPart):
             if len(serialized.encode("utf-16-le")) // 2 > 8192:
                 raise ValueError("A layer filter must fit within 8,192 characters.")
         return self
+
+
+class MapLayer(MapStyledLayer):
+    """Catalog identity and appearance restored through the catalog layer adapter."""
+
+    catalogItem: MapCatalogItem
+
+
+class MapUploadLayer(MapStyledLayer):
+    """Private upload identity and appearance, without access credentials or data.
+
+    Opening this reference still requires the browser that owns the upload.
+    """
+
+    uploadId: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        ),
+    ]
+    style: MapVectorStyle
 
 
 class MapAnnotationReference(MapDocumentPart):
@@ -269,8 +289,8 @@ class MapLegendAppearance(MapDocumentPart):
 class SavedMapView(MapDocumentPart):
     """Portable map JSON with optional legend visibility and collapse preferences.
 
-    Version three includes a basemap provider. Older maps without mapLegend
-    open with the legend visible and expanded.
+    Version three includes a basemap provider and can reference private uploads.
+    Older maps without mapLegend open with the legend visible and expanded.
     """
 
     format: Literal["eolab-map-view"]
@@ -280,7 +300,9 @@ class SavedMapView(MapDocumentPart):
     viewport: MapViewport
     basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
     mapLegend: MapLegendAppearance | None = None
-    layers: Annotated[list[MapLayer | MapAnnotationLayer], Field(max_length=50)]
+    layers: Annotated[
+        list[MapLayer | MapUploadLayer | MapAnnotationLayer], Field(max_length=50)
+    ]
 
     @field_validator("createdAt")
     @classmethod
@@ -331,6 +353,10 @@ class SavedMapView(MapDocumentPart):
                         "Shared annotations require saved-map version two."
                     )
                 identities.append(("annotation", layer.sharedAnnotation.id))
+            elif isinstance(layer, MapUploadLayer):
+                if self.schemaVersion != 3:
+                    raise ValueError("Uploaded layers require saved-map version three.")
+                identities.append(("upload", layer.uploadId))
             else:
                 identities.append(
                     ("catalog", layer.catalogItem.collection, layer.catalogItem.id)

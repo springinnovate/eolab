@@ -471,6 +471,12 @@ h5 {
 .upload-polygons-dialog progress { width: 100%; accent-color: var(--brand); }
 .upload-polygons-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .upload-polygons-actions button { padding: 0.4rem 0.6rem; }
+.upload-polygons-dialog h3 { font-size: 1rem; margin: 1rem 0 0.5rem; }
+.upload-polygons-list { list-style: none; padding: 0; margin: 0; }
+.upload-polygons-list li { display: grid; gap: 0.5rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border-2); }
+.upload-polygons-list strong { overflow-wrap: anywhere; }
+.upload-polygons-confirmation { padding: 0.75rem; border: 1px solid var(--status-danger); margin-top: 0.75rem; }
+.upload-polygons-confirmation button { margin-right: 0.5rem; }
 
 .map-layer-visibility-actions {
   display: flex;

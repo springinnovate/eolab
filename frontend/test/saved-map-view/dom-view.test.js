@@ -197,7 +197,7 @@ test("partial shared maps retain an actionable result dialog", () => {
 
   assert.equal(dialog.open, true);
   assert.equal(elements.get("#saved-map-view-dialog-title").textContent,
-    "Shared map view partially opened");
+    "Map partially opened");
   assert.equal(elements.get("#cancel-open-map-view").textContent, "Close");
   assert.equal(elements.get("#saved-map-view-dialog-details").children.length, 1);
 });
@@ -214,7 +214,7 @@ test("shared maps retain actionable restoration warnings", () => {
 
   assert.equal(elements.get("#saved-map-view-dialog").open, true);
   assert.equal(elements.get("#saved-map-view-dialog-title").textContent,
-    "Shared map opened with warnings");
+    "Map opened with warnings");
 });
 
 test("saved map controls bind reset and one-step undo accessibly", () => {

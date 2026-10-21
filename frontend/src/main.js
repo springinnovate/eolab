@@ -95,6 +95,7 @@ import { VectorFilterControls } from "./vector/filter-controls.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { UploadPolygonsDialog } from "./vector-uploads/dialog.js";
+import { getUpload } from "./vector-uploads/api.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
@@ -942,11 +943,13 @@ async function initializeCatalog(
         onTileError: reportMapTileError,
     });
     /** Publish an admitted upload and add it with the ordinary vector controls.
+     * An upload already on the map keeps its current appearance.
      * @param {import("./vector-uploads/api.js").VectorUpload} upload This browser's stored polygon layer.
      * @return {Promise<void>} Completion after the layer joins the map.
      * @throws {Error} If publication or map construction fails.
      */
     async function addUploadedVector(upload) {
+        if (mapLayerController.getRecord(`local:upload:${upload.id}`)) return;
         const source = { kind: "upload", ...upload };
         const publication = await vectorMapLayerAdapter.publish(source);
         const record = mapLayerController.addLocal({
@@ -974,7 +977,53 @@ async function initializeCatalog(
         }, vectorMapLayerAdapter);
         mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
     }
-    if (!isSharedViewer) new UploadPolygonsDialog({ document, addToMap: addUploadedVector });
+    /** Restore a saved upload's appearance without showing an unfiltered layer.
+     * Metadata is fetched with this browser's cookie; the saved ID grants no access.
+     * @param {Object} layer Saved upload identity and presentation.
+     * @param {()=>boolean} isCurrent Whether this map restoration is still active.
+     * @return {Promise<string|null>} Restored map key, or null after supersession.
+     * @throws {Error} If the upload is unavailable or its saved appearance cannot be applied.
+     */
+    async function restoreSavedUpload(layer, isCurrent) {
+        const upload = { kind: "upload", ...await getUpload(layer.uploadId) };
+        const publication = await vectorMapLayerAdapter.publish(upload);
+        if (!isCurrent()) return null;
+        const key = `local:upload:${upload.id}`;
+        const record = mapLayerController.addLocal({
+            key, label: upload.name, sourceName: upload.name, customName: layer.customName,
+            upload, publication, visible: false, opacity: layer.opacity,
+        }, vectorMapLayerAdapter);
+        /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
+        const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
+        try {
+            await vectorMapLayerAdapter.applyStyle(record, layer.style.definition);
+            if (!stillRetained()) return null;
+            if (layer.filter) await vectorMapLayerAdapter.applyFilterState(record, layer.filter);
+            if (!stillRetained()) return null;
+            mapLayerController.setVisible(key, layer.visible);
+            return key;
+        } catch (error) {
+            if (mapLayerController.getRecord(key) === record) mapLayerController.removeKey(key);
+            throw error;
+        } finally {
+            if (!isCurrent() && mapLayerController.getRecord(key) === record) mapLayerController.removeKey(key);
+        }
+    }
+    /** Forget the deleted upload's map layer and map-removal Undo.
+     * Accepted Processing jobs keep their server-owned source until they finish.
+     * @param {string} uploadId Upload successfully deleted by the server.
+     * @return {void}
+     */
+    function removeDeletedUpload(uploadId) {
+        const key = `local:upload:${uploadId}`;
+        mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.key === key);
+        if (mapLayerController.getRecord(key)) mapLayerController.removeKey(key);
+    }
+    if (!isSharedViewer) new UploadPolygonsDialog({
+        document, addToMap: addUploadedVector,
+        isOnMap: id => mapLayerController.getRecord(`local:upload:${id}`) !== null,
+        onDeleted: removeDeletedUpload,
+    });
     let modelFilterControls = null;
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
@@ -1240,7 +1289,25 @@ async function initializeCatalog(
             },
             zoom: appGlobalConfiguration.initialView.zoom,
         },
-        beforeRestore: clearCatalogSelection,
+        beforeRestore: () => {
+            clearCatalogSelection();
+            for (const record of mapLayerController.retainedRecords) {
+                if (record.adapter === vectorMapLayerAdapter && record.entry.item === null) {
+                    mapLayerController.removeKey(record.entry.key);
+                }
+            }
+        },
+        exportUpload: record => {
+            if (record.adapter !== vectorMapLayerAdapter || record.entry.item !== null) return null;
+            return {
+                uploadId: record.adapter.describeSource(record).source.uploadId,
+                visible: record.entry.visible, opacity: record.entry.opacity,
+                ...(record.entry.customName ? { customName: record.entry.customName } : {}),
+                style: record.adapter.exportSavedState(record),
+                filter: record.adapter.exportFilterState(record),
+            };
+        },
+        restoreUpload: restoreSavedUpload,
         exportAnnotation: record => {
             if (record.adapter === vectorMapLayerAdapter) return null;
             if (record.entry.key.startsWith("local:artifact:")) return null;
