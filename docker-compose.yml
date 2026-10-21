@@ -263,6 +263,8 @@ services:
       - "SHARED_LAYER_CAPACITY=${EOLAB_SHARED_LAYER_CAPACITY-10000}"
       - "SHARED_LAYER_CREATION_LIMIT=${EOLAB_SHARED_LAYER_CREATION_LIMIT-100}"
       - "SHARED_LAYER_CREATION_WINDOW_SECONDS=${EOLAB_SHARED_LAYER_CREATION_WINDOW_SECONDS-60}"
+      - "VECTOR_UPLOAD_DATA_PATH=/vector-uploads"
+      - "VECTOR_UPLOAD_MAX_BYTES=${EOLAB_VECTOR_UPLOAD_MAX_BYTES-536870912}"
       - "ADMIN_PASSWORD=${EOLAB_ADMIN_PASSWORD-}"
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
@@ -316,6 +318,7 @@ services:
       - "8000"
     volumes:
       - processing-data:/processing-data:ro
+      - vector-uploads:/vector-uploads
       # Primary container-level protection. The image also verifies the
       # effective kernel mount mode at startup in case deployment metadata
       # reports or requests this bind as writable.
@@ -347,3 +350,5 @@ volumes:
     name: ${EOLAB_GEOSERVER_DATA_VOLUME_NAME:-eolab-geoserver-data}
   processing-data:
     name: ${EOLAB_PROCESSING_DATA_VOLUME_NAME:-eolab-processing-data}
+  vector-uploads:
+    name: ${EOLAB_VECTOR_UPLOAD_DATA_VOLUME_NAME:-eolab-vector-uploads}

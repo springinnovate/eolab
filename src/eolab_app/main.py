@@ -21,6 +21,7 @@ from eolab_app.routes.saved_maps import (
 from eolab_app.routes.admin_auth import create_administrator_dependency
 from eolab_app.saved_maps.models import Slug
 from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
+from eolab_app.routes.vector_uploads import create_vector_uploads_router
 from eolab_app.routes.shared_layer_admin import create_shared_layer_admin_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
@@ -105,6 +106,7 @@ from eolab_app.vector.selection_jobs import SelectionJobs
 from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
+from eolab_app.vector_uploads import VectorUploadStore
 
 
 def create_app(
@@ -398,6 +400,11 @@ def create_app(
         creation_window_seconds=app_global_configuration.shared_layer_creation_window_seconds,
     )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
+    vector_uploads = VectorUploadStore(
+        app_global_configuration.vector_upload_data_path,
+        app_global_configuration.vector_upload_max_bytes,
+    )
+    application.include_router(create_vector_uploads_router(vector_uploads))
     application.include_router(
         create_shared_layer_admin_router(
             annotation_sessions, app_global_configuration.admin_password

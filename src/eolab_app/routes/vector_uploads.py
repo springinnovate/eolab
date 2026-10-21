@@ -1,0 +1,171 @@
+"""Accept private GeoPackages using the browser identity shared with annotations."""
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.routing import APIRoute
+from starlette.responses import JSONResponse
+
+from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.vector_uploads import VectorUpload, VectorUploadError, VectorUploadStore
+
+
+def upload_browser(request: Request, response: Response) -> str:
+    """Recognize the browser and require the upload API's same-origin mutation header.
+
+    Args:
+        request: Incoming browser request.
+        response: Response renewing the existing private browser cookie.
+
+    Returns:
+        Hashed browser identity used to locate only its uploads.
+
+    Raises:
+        HTTPException: If a mutation lacks X-EOLab-Uploads: 1 or is cross-origin.
+    """
+    return get_browser_owner_hash(request, response, mutation_header="X-EOLab-Uploads")
+
+
+class VectorUploadRoute(APIRoute):
+    """Keep upload metadata private and translate storage failures into HTTP errors."""
+
+    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+        """Wrap an endpoint without buffering its streamed request body.
+
+        Returns:
+            Handler applying private response headers to successes and errors.
+        """
+        handler = super().get_route_handler()
+
+        async def private(request: Request) -> Response:
+            """Return a private response without exposing storage paths.
+
+            Args:
+                request: Incoming upload API request.
+
+            Returns:
+                Endpoint result or a safe admission/validation error.
+            """
+            try:
+                response = await handler(request)
+            except VectorUploadError as error:
+                response = JSONResponse({"detail": str(error)}, error.status)
+            except HTTPException as error:
+                response = JSONResponse({"detail": error.detail}, error.status_code)
+            except RequestValidationError as error:
+                response = await request_validation_exception_handler(request, error)
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
+
+        return private
+
+
+def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
+    """Expose upload/list/delete endpoints and clean interrupted writes at startup.
+
+    POST accepts the raw GeoPackage body and a display name query parameter. Both
+    mutations require X-EOLab-Uploads: 1. The browser cookie is the access credential;
+    it is never returned in metadata. There is no public catalog registration.
+
+    Args:
+        store: Sole writer for this application's persistent upload directory.
+
+    Returns:
+        Router independent of rendering, analysis and Processing services.
+    """
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """Clean abandoned staging directories before accepting uploads.
+
+        Args:
+            _: Application supplied by FastAPI.
+
+        Yields:
+            Control while upload routes serve requests.
+
+        Raises:
+            OSError: If the configured upload volume cannot be initialized.
+        """
+        await asyncio.to_thread(store.initialize)
+        yield
+
+    router = APIRouter(
+        prefix="/api/vector-uploads",
+        tags=["vector uploads"],
+        route_class=VectorUploadRoute,
+        lifespan=lifespan,
+    )
+    Browser = Annotated[str, Depends(upload_browser)]
+
+    @router.get("", response_model=list[VectorUpload])
+    def list_uploads(browser: Browser) -> list[VectorUpload]:
+        """List uploads belonging to the requesting browser.
+
+        Args:
+            browser: Identity from the validated private cookie.
+
+        Returns:
+            Only this browser's published upload records.
+
+        Raises:
+            VectorUploadError: If upload metadata cannot be read.
+        """
+        return store.list_uploads(browser)
+
+    @router.post(
+        "",
+        status_code=201,
+        response_model=VectorUpload,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/geopackage+sqlite3": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                },
+            }
+        },
+    )
+    async def upload(
+        request: Request,
+        browser: Browser,
+        name: Annotated[str, Query(min_length=1, max_length=200, pattern=r"\S")],
+    ) -> VectorUpload:
+        """Store one immutable polygon GeoPackage from the streamed request body.
+
+        Args:
+            request: Raw GeoPackage body; no multipart envelope is used.
+            browser: Identity from the validated private cookie.
+            name: User-facing label, never interpreted as a filesystem path.
+
+        Returns:
+            Metadata and the opaque identifier for reopening this upload.
+
+        Raises:
+            VectorUploadError: If admission or storage fails.
+        """
+        return await store.create(browser, name, request.stream())
+
+    @router.delete("/{identifier}", status_code=204)
+    def delete_upload(identifier: UUID, browser: Browser) -> None:
+        """Delete this browser's upload and its stored file.
+
+        Args:
+            identifier: Upload identifier returned by upload/list.
+            browser: Identity from the validated private cookie.
+
+        Raises:
+            VectorUploadError: If the upload is unavailable or deletion fails.
+        """
+        store.delete(browser, identifier)
+
+    return router

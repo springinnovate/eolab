@@ -112,8 +112,8 @@ RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
     && python -c "from eolab_app.processing.downstream_runner import load_beneficiaries; assert callable(load_beneficiaries().calculate_downstream_coverage_from_conditional_raster)" \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy'); from ecoshard.geoprocessing import routing; assert callable(routing.flow_dir_mfd)" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
-    && mkdir -p /processing-data \
-    && chown -R eolab:eolab /app /processing-data
+    && mkdir -p /processing-data /vector-uploads \
+    && chown -R eolab:eolab /app /processing-data /vector-uploads
 
 USER eolab
 
