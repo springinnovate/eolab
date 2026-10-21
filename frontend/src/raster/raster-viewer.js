@@ -3358,7 +3358,7 @@ export function initializeRasterViewer(
             return "Calculating a bounded histogram for the selected area...";
         }
         return (
-            `Calculating a bounded histogram for catalog vector ` +
+            `Calculating a bounded histogram for vector layer ` +
             `${rasterAnalysis.selectedCatalogSelection.filename}, layer ` +
             `${rasterAnalysis.selectedCatalogSelection.selectedDataset}...`
         );

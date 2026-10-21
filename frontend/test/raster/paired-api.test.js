@@ -67,3 +67,23 @@ test("paired statistics request sends only two catalog identities and area", asy
   assert.equal(JSON.stringify(body).includes("path"), false);
   assert.equal(request.options.signal, signal);
 });
+
+test("paired statistics retain the uploaded polygon filter and browser owner", async () => {
+  const selection = { uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "areas",
+    filter: { enabled: true, match: "all", rules: [{ field: "count", operator: "ge", value: 7 }] } };
+  let request;
+  const result = await loadRasterPairedStatistics(X_ITEM, Y_ITEM, { kind: "catalogSelection", catalogSelection: selection },
+    new AbortController().signal, async (url, options) => {
+      request = { url, options };
+      return new Response(JSON.stringify({ ...pairedResponse(), scope: "catalogSelection", catalogSelection: selection }));
+    });
+  assert.deepEqual(result.catalogSelection, selection);
+  assert.deepEqual(JSON.parse(request.options.body), {
+    xRaster: { collectionId: X_ITEM.collection, itemId: X_ITEM.id },
+    yRaster: { collectionId: Y_ITEM.collection, itemId: Y_ITEM.id }, catalogSelection: selection,
+  });
+  assert.equal(request.options.headers["X-EOLab-Uploads"], "1");
+  assert.equal(request.options.headers["X-EOLab-Processing"], "1");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(request.options.cache, "no-store");
+});

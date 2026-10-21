@@ -15,7 +15,7 @@ export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
     upper: 95
 });
 
-import { catalogSelectionsEqual, normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
+import { vectorSelectionsEqual, normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
 export { normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
 
 /**
@@ -229,7 +229,7 @@ export function validateRasterStatisticsForSelection(
         normalizedArea.kind === "catalogSelection" &&
         (
             validatedStatistics.scope !== "catalogSelection" ||
-            !catalogSelectionsEqual(validatedStatistics.catalogSelection, normalizedArea.catalogSelection)
+            !vectorSelectionsEqual(validatedStatistics.catalogSelection, normalizedArea.catalogSelection)
         )
     ) {
         throw rasterStatisticsContractError("catalog-selection response identity");
@@ -252,7 +252,7 @@ export function rasterStatisticsMatchesSelection(
     if (normalizedArea.kind === "catalogSelection") {
         return (
             statistics.scope === "catalogSelection" &&
-            catalogSelectionsEqual(statistics.catalogSelection, normalizedArea.catalogSelection)
+            vectorSelectionsEqual(statistics.catalogSelection, normalizedArea.catalogSelection)
         );
     }
     if (normalizedArea.kind === "wholeRaster") {

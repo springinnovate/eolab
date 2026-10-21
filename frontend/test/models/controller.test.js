@@ -8,7 +8,7 @@ import { VectorFilterControls } from "../../src/vector/filter-controls.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
-import { captureModelSubmission, createModelDraft, modelViewportArea } from "../../src/models/inputs.js";
+import { captureModelSubmission, createModelDraft, modelSourceKey, modelViewportArea } from "../../src/models/inputs.js";
 import { model, raster, area, invocation, selection, job, clipModel, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Compose the real controller and observer with controllable boundary responses.
@@ -34,7 +34,7 @@ function fixture(overrides = {}, viewOverride = null) {
         closeVectorFilter: () => filterRequests.at(-1)?.close(),
         applyMapFilter: async (source, filter) => {
             mapFilters.push({source, filter});
-            context.vectors.find(value => value.collectionId === source.collectionId && value.itemId === source.itemId).filter = filter;
+            context.vectors.find(value => modelSourceKey(value) === modelSourceKey(source)).filter = filter;
             return filter;
         }, onOpen: () => controller.setActive(true),
         onClose: () => controller.setActive(false), newId: () => String(++sequence).padStart(32, "0")});
@@ -524,6 +524,38 @@ test("duplicated vector runs expose their original filter directly in the vector
     await h.controller.openVectorFilter(); assert.deepEqual(h.filterRequests[0].filter, selection.filter);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "another-request-id").inputs, saved.inputs);
     assert.equal(h.submitted.length, 0);
+});
+
+for (const recipe of [model, clipModel]) test(`${recipe.title} preserves uploaded choices and filters through selection and run duplication`, async () => {
+    let saved;
+    const h = fixture({discoverModels: async () => [recipe], readModelInvocation: async () => saved});
+    const uploads = ["75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", "bc3e4f52-1477-44f4-a4d5-a36f74158028"];
+    h.context.vectors = uploads.map((uploadId, index) => ({uploadId, key: `local:upload:${uploadId}`,
+        label: `Uploaded basins ${index + 1}`, filter: structuredClone(selection.filter), fields: [{name: "BASIN", type: "str"}]}));
+    const uploaded = {uploadId: uploads[1], layerName: "basins", filter: structuredClone(selection.filter)};
+    h.context.area = {kind: "catalogSelection", catalogSelection: uploaded};
+    h.controller.prepareVector = async source => ({selection: {uploadId: source.uploadId, layerName: "basins", filter: source.filter}, matched: 1, total: 3});
+    await h.controller.loadLibrary(); h.controller.chooseModel(recipe); await new Promise(resolve => setImmediate(resolve));
+    assert.notEqual(modelSourceKey(h.context.vectors[0]), modelSourceKey(h.context.vectors[1]));
+    assert.equal(h.controller.state.draft.vectorKey, modelSourceKey(uploaded));
+    assert.deepEqual(h.controller.state.draft.area.selection, uploaded);
+    const filter = structuredClone(uploaded.filter); filter.rules[0].value = "South";
+    await h.controller.selectVectorFeatures(modelSourceKey(uploaded), filter);
+    assert.equal(h.mapFilters[0].source.key, h.context.vectors[1].key);
+    assert.deepEqual(h.context.vectors[0].filter, selection.filter);
+    const submitted = captureModelSubmission(h.controller.state.draft, "uploaded-request");
+    assert.deepEqual(submitted.inputs.area.selection, {...uploaded, filter});
+    saved = {...submitted, model: {...recipe, definition: recipe}};
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs, submitted.inputs);
+    h.context.vectors[1].filter = structuredClone(selection.filter);
+    await h.controller.duplicateRun();
+    const duplicate = h.controller.state.draft;
+    assert.deepEqual(duplicate.vectors[1], {...h.context.vectors[1], filter});
+    assert.deepEqual(captureModelSubmission(duplicate, "duplicate-upload").inputs, submitted.inputs);
+    h.context.vectors.pop(); h.controller.refreshMapLayers();
+    assert.equal(duplicate.area, null);
+    assert.match(duplicate.selectionError, /Add the vector layer/);
 });
 
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
 import { createVectorMapLayerAdapter } from "../../src/vector/map-layer-adapter.js";
@@ -86,7 +87,7 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     adapter.added(record);
     assert.equal(record.entry.item, null);
     assert.equal(record.state.source, UPLOAD);
-    assert.deepEqual(adapter.describeSource(record), { fields: [
+    assert.deepEqual(adapter.describeSource(record), { source: { uploadId: UPLOAD.id }, fields: [
         { name: "label", type: "str:80" }, { name: "count", type: "int" }, { name: "weight", type: "float" },
     ], geometryKind: "polygon", primaryGeometry: null });
     assert.equal(adapter.describeStyle(record).style.graduated.field, "count");
@@ -107,6 +108,11 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     controller.renameLayer(key, "My wetlands");
     controller.setOpacity(key, 0.4);
     controller.setVisible(key, false);
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const targetsSource = main.slice(main.indexOf("const getPolygonTargets ="), main.indexOf("models = new ModelsController({"));
+    const getPolygonTargets = new Function("mapLayerController", "vectorMapLayerAdapter", `${targetsSource}; return getPolygonTargets;`)(controller, adapter);
+    assert.deepEqual(getPolygonTargets(), [{ key, label: "My wetlands", item: { uploadId: UPLOAD.id },
+        fields: adapter.describeSource(record).fields, filter }], "Hidden uploads remain selectable with their applied filter");
     const snapshot = controller.copyLayerForUndo(key);
     assert.equal(snapshot.local.kind, "uploaded-vector");
     assert.equal(snapshot.item, null);
@@ -114,6 +120,7 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     assert.deepEqual(snapshot.local.publication.style, edited);
     const requestCount = requests.length;
     assert.equal(controller.removeWithUndo(key), true);
+    assert.deepEqual(getPolygonTargets(), [], "Removed uploads leave the analysis choices");
     assert.equal(record.state.disposed, true);
     await controller.undoLayerRemoval();
     const restored = controller.getRecord(key);

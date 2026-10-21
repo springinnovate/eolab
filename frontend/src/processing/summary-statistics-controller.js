@@ -2,7 +2,7 @@
 import { rasterSourceKey } from "../raster-source.js";
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
-import { catalogSelectionsEqual } from "../selected-area.js";
+import { vectorSelectionsEqual } from "../selected-area.js";
 import { RasterSeriesCalculations } from "./raster-series-calculations.js";
 
 /** Execution status received from CalculationExecutor's onChange callback.
@@ -126,7 +126,7 @@ export class SummaryStatisticsController {
         this.state.sources = sources;
         const selected = area === undefined ? context.area : area;
         if (area !== undefined || (!this.state.area && this.state.areaChoice === "selection")) {
-            this.state.areaChoice = this.state.vectorArea && catalogSelectionsEqual(selected?.catalogSelection, this.state.vectorArea.selection) ? "vector" : "selection";
+            this.state.areaChoice = this.state.vectorArea && vectorSelectionsEqual(selected?.catalogSelection, this.state.vectorArea.selection) ? "vector" : "selection";
             this.setSelection(selected, false);
             this.changeArea(this.state.selectedArea, false);
         }
@@ -252,10 +252,10 @@ export class SummaryStatisticsController {
      * @param {Object} id Catalog selection to invalidate. @return {void}
      */
     invalidateSamplingArea(id) {
-        if (catalogSelectionsEqual(this.batch?.intent.area?.catalogSelection, id)) this.invalidateBatch();
-        if (catalogSelectionsEqual(this.state.area?.catalogSelection, id)) { this.invalidateBatch(); this.changeArea(null, false); }
-        if (catalogSelectionsEqual(this.state.selectedArea?.catalogSelection, id)) this.state.selectedArea = null;
-        if (catalogSelectionsEqual(this.state.vectorArea?.selection, id)) this.state.vectorArea = null;
+        if (vectorSelectionsEqual(this.batch?.intent.area?.catalogSelection, id)) this.invalidateBatch();
+        if (vectorSelectionsEqual(this.state.area?.catalogSelection, id)) { this.invalidateBatch(); this.changeArea(null, false); }
+        if (vectorSelectionsEqual(this.state.selectedArea?.catalogSelection, id)) this.state.selectedArea = null;
+        if (vectorSelectionsEqual(this.state.vectorArea?.selection, id)) this.state.vectorArea = null;
         this.render();
     }
     /** Receive the current map selection and supersede an active vector area when it changes.
@@ -270,10 +270,10 @@ export class SummaryStatisticsController {
         const vectorArea = this.state.vectorArea;
         const currentUsesVector = this.state.area?.kind === "polygonArea"
             ? this.state.area.polygonArea.id === vectorArea?.polygonArea?.id
-            : catalogSelectionsEqual(this.state.area?.catalogSelection, vectorArea?.selection);
+            : vectorSelectionsEqual(this.state.area?.catalogSelection, vectorArea?.selection);
         const nextUsesVector = next?.kind === "polygonArea"
             ? next.polygonArea.id === vectorArea?.polygonArea?.id
-            : catalogSelectionsEqual(next?.catalogSelection, vectorArea?.selection);
+            : vectorSelectionsEqual(next?.catalogSelection, vectorArea?.selection);
         if (next && this.state.areaChoice === "vector" && currentUsesVector && !nextUsesVector) {
             this.state.areaChoice = "selection";
         }

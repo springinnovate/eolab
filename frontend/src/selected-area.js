@@ -79,47 +79,51 @@ export function normalizeRasterSamplingArea(
     }
     if (samplingArea.kind === "catalogSelection" && keys.length === 2 &&
         keys[0] === "catalogSelection" && keys[1] === "kind") {
-        return Object.freeze({ kind: "catalogSelection", catalogSelection: validateCatalogSelection(samplingArea.catalogSelection) });
+        return Object.freeze({ kind: "catalogSelection", catalogSelection: validateVectorSelection(samplingArea.catalogSelection) });
     }
     throw new TypeError("Raster statistics sampling area is invalid.");
 }
 
-/** Validate and copy an immutable catalog vector selection.
- * @param {Object} value Public source identity and typed predicate.
- * @return {Readonly<Object>} Deeply immutable descriptor.
+/** Validate and copy the source identity and filter for selected vector features.
+ * @param {Object} value Public catalog or upload identity and typed predicate.
+ * @return {Readonly<Object>} Deeply immutable source identity, layer and filter.
  * @throws {TypeError} For paths, geometry, malformed identity or filter fields.
  */
-export function validateCatalogSelection(value) {
-    const keys = ["assetKey", "collectionId", "filter", "itemId", "layerName"];
+export function validateVectorSelection(value) {
+    const uploaded = value?.uploadId !== undefined;
+    const keys = uploaded ? ["filter", "layerName", "uploadId"] : ["assetKey", "collectionId", "filter", "itemId", "layerName"];
     if (!value || typeof value !== "object" || Object.keys(value).sort().join() !== keys.join() ||
+        typeof value.layerName !== "string" || !value.layerName) throw new TypeError("Invalid vector selection identity");
+    if (uploaded ? typeof value.uploadId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.uploadId) :
         value.collectionId !== "eolab-mounted-vectors" ||
         typeof value.itemId !== "string" || value.itemId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value.itemId) ||
-        ![value.assetKey, value.layerName].every(v => typeof v === "string" && v.length > 0 && v.length <= 256)) throw new TypeError("Invalid catalog selection identity");
+        typeof value.assetKey !== "string" || !value.assetKey || value.assetKey.length > 256 || value.layerName.length > 256)
+        throw new TypeError("Invalid vector selection identity");
     const input = value.filter;
     if (!input || Object.keys(input).sort().join() !== "enabled,match,rules" ||
         typeof input.enabled !== "boolean" || !["all", "any"].includes(input.match) ||
-        !Array.isArray(input.rules) || input.rules.length > 12) throw new TypeError("Invalid catalog selection filter");
+        !Array.isArray(input.rules) || input.rules.length > 12) throw new TypeError("Invalid vector selection filter");
     const rules = input.rules.map(rule => {
         if (!rule || Object.keys(rule).sort().join() !== "field,operator,value" ||
             typeof rule.field !== "string" || !rule.field || rule.field.length > 256 || /[\u0000-\u001f]/.test(rule.field) ||
             !["eq", "ne", "gt", "ge", "lt", "le", "contains", "missing", "present"].includes(rule.operator) ||
             !(rule.value === null || typeof rule.value === "boolean" ||
               typeof rule.value === "number" && Number.isFinite(rule.value) && Math.abs(rule.value) <= Number.MAX_SAFE_INTEGER ||
-              typeof rule.value === "string" && rule.value.length <= 256 && !/[\u0000-\u001f]/.test(rule.value))) throw new TypeError("Invalid catalog selection rule");
+              typeof rule.value === "string" && rule.value.length <= 256 && !/[\u0000-\u001f]/.test(rule.value))) throw new TypeError("Invalid vector selection rule");
         return Object.freeze({ field: rule.field, operator: rule.operator, value: rule.value });
     });
     const filter = Object.freeze({ enabled: input.enabled, match: input.match, rules: Object.freeze(rules) });
-    return Object.freeze({ collectionId: value.collectionId, itemId: value.itemId,
+    return Object.freeze(uploaded ? { uploadId: value.uploadId, layerName: value.layerName, filter } : { collectionId: value.collectionId, itemId: value.itemId,
         assetKey: value.assetKey, layerName: value.layerName, filter });
 }
 
-/** Compare immutable selections independently of property order.
- * @param {Object|null|undefined} left First descriptor.
- * @param {Object|null|undefined} right Second descriptor.
+/** Compare the source, layer and filter of catalog or uploaded vector selections.
+ * @param {Object|null|undefined} left First selection descriptor.
+ * @param {Object|null|undefined} right Second selection descriptor.
  * @return {boolean} Whether both descriptors identify the same exact selection.
  * @throws {TypeError} When a present descriptor violates its public contract.
  */
-export function catalogSelectionsEqual(left, right) {
+export function vectorSelectionsEqual(left, right) {
     if (left == null || right == null) return false;
-    return JSON.stringify(validateCatalogSelection(left)) === JSON.stringify(validateCatalogSelection(right));
+    return JSON.stringify(validateVectorSelection(left)) === JSON.stringify(validateVectorSelection(right));
 }

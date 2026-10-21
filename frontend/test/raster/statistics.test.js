@@ -71,7 +71,7 @@ test("raster statistics validate their fixed bounded response contract", () => {
       ...CATALOG_SELECTION_RASTER_STATISTICS,
       catalogSelection: "../../server-file",
     }),
-    /Invalid catalog selection identity/,
+    /Invalid vector selection identity/,
   );
 });
 

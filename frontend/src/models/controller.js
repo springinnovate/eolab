@@ -111,7 +111,7 @@ export class ModelsController {
      */
     navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
-    /** Create a fresh draft from the current source suggestions.
+    /** Create a fresh draft and prepare any selected vector using its map-layer choice.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
@@ -122,10 +122,9 @@ export class ModelsController {
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.area?.kind === "catalogSelection") {
-            const selection = draft.area.selection;
-            const source = {collectionId: selection.collectionId, itemId: selection.itemId, label: selection.layerName, filter: selection.filter};
+            const key = modelSourceKey(draft.area.selection);
             draft.areaMode = "vector";
-            if (draft.vectors.some(value => modelSourceKey(value) === modelSourceKey(source))) void this.chooseVector(modelSourceKey(source));
+            if (draft.vectors.some(value => modelSourceKey(value) === key)) void this.chooseVector(key);
             else { draft.area = null; draft.selectionError = "Choose a vector layer from Map layers."; this.render(); }
         }
     }
@@ -598,7 +597,8 @@ export class ModelsController {
         finally { notice.busy = false; this.scheduleDeletions(); this.render(); }
     }
 
-    /** Copy saved inputs to a new draft only when its exact recipe is still installed.
+    /** Copy a run into a new draft using its saved filter and available map-layer choices.
+     * The exact model recipe must still be installed; absent sources need a new choice.
      * @return {Promise<void>}
      */
     async duplicateRun() {
@@ -626,11 +626,9 @@ export class ModelsController {
                 if (draft.area.kind === "catalogSelection") {
                     const selection = draft.area.selection;
                     const key = modelSourceKey(selection);
-                    const source = {...draft.vectors.find(value => modelSourceKey(value) === key),
-                        collectionId: selection.collectionId, itemId: selection.itemId, label: selection.layerName, filter: structuredClone(selection.filter)};
                     draft.vectorKey = key; draft.areaMode = "vector";
                     if (draft.vectors.some(value => modelSourceKey(value) === key)) {
-                        draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? source : value);
+                        draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(selection.filter)} : value);
                     } else {
                         draft.vectorKey = ""; draft.area = null;
                         draft.selectionError = "Add the original vector layer to Map layers, or choose another layer.";

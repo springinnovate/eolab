@@ -994,19 +994,19 @@ async function initializeCatalog(
     });
     mapLayerController.onFilter = key => vectorFilterControls.open(key);
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
-    /** Read catalog polygon choices for Models, histogram and summary controls.
+    /** Read polygon choices for Models, histogram and summary controls.
      * Visibility and WMS publication do not determine numerical selection.
-     * @return {Array<{key:string,label:string,item:Object,
+     * @return {Array<{key:string,label:string,item:import("./vector/map-layer-adapter.js").VectorSourceDescription["source"],
      * fields:import("./vector/map-layer-adapter.js").VectorSourceDescription["fields"],
      * filter:ReturnType<typeof import("./vector/filter.js").normalizeVectorFilter>}>}
-     * Retained catalog identities, immutable fields and applied filter snapshots.
+     * Retained source identities, immutable fields and applied filter snapshots.
      */
-    const catalogPolygonTargets = () => mapLayerController.retainedRecords
-        .filter(record => record.adapter === vectorMapLayerAdapter && record.entry.item !== null)
+    const getPolygonTargets = () => mapLayerController.retainedRecords
+        .filter(record => record.adapter === vectorMapLayerAdapter)
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
             return source.geometryKind === "polygon" ? [{
-                key: record.entry.key, label: record.entry.label, item: record.entry.item,
+                key: record.entry.key, label: record.entry.label, item: source.source,
                 fields: source.fields, filter: record.adapter.exportFilterState(record),
             }] : [];
         });
@@ -1048,18 +1048,18 @@ async function initializeCatalog(
             return {
                 rasters: mapLayerController.snapshots().filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
-                vectors: catalogPolygonTargets().map(target => ({...describeCalculationSource(target.item, target.label), filter: target.filter, fields: target.fields})),
+                vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
         },
         /** Read the draft's vector and predicate without requiring a display layer.
-         * @param {Object} source Catalog source and captured filter.
+         * @param {Object} source Catalog or uploaded source and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
          * @return {Promise<Object>} Selection descriptor, bounds and matched feature count.
          */
         prepareVector: (source, signal) => createVectorSamplingArea(
-            {collection: source.collectionId, id: source.itemId}, source.filter ?? EMPTY_VECTOR_FILTER, signal),
+            source, source.filter ?? EMPTY_VECTOR_FILTER, signal),
         /** Open the existing rule editor inside setup using the chosen map layer's fields.
          * @param {Object} request Inline host, source, predicate and model-owned callbacks.
          * @return {void}
@@ -1076,13 +1076,13 @@ async function initializeCatalog(
         },
         closeVectorFilter: () => modelFilterControls?.close(),
         /** Apply reviewed rules to the corresponding map layer; Models reports display failures separately.
-         * @param {Object} source Catalog collection/item identity from Map layers.
+         * @param {Object} source Vector choice with its Map layers key.
          * @param {Object} filter Checked attribute rules.
          * @return {Promise<Object|null>} Applied filter, or null when superseded.
          * @throws {Error} If the layer was removed or its map filter cannot be applied.
          */
         applyMapFilter: async (source, filter) => {
-            const record = mapLayerController.getRecord(getCatalogItemKey({collection: source.collectionId, id: source.itemId}));
+            const record = mapLayerController.getRecord(source.key);
             if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector layer is no longer in Map layers.");
             return record.adapter.applyFilterState(record, filter);
         },
@@ -1099,7 +1099,7 @@ async function initializeCatalog(
     leafletMap.on("moveend resize", () => models.refreshMapArea());
     vectorSampling = new VectorSamplingController({
         view: new VectorSamplingView(),
-        getTargets: catalogPolygonTargets,
+        getTargets: getPolygonTargets,
         createArea: createVectorSamplingArea,
         onEditFilter: key => vectorFilterControls.open(key, calculations.isActive ? {
             filter: vectorSampling.selectedFilter(key),
@@ -1109,7 +1109,7 @@ async function initializeCatalog(
         } : null),
         onSelectionState: selection => calculations.setVectorSelectionState(selection),
         /** Accept reviewed features and run configured statistics when accepting from Summarize.
-         * @param {Object} area Authoritative catalog descriptor and selection metadata.
+         * @param {Object} area Authoritative vector descriptor and selection metadata.
          * @param {boolean} calculate Explicit calculation intent from the filter action.
          * @return {void}
          */
@@ -1131,14 +1131,14 @@ async function initializeCatalog(
     });
     summarySampling = new VectorSamplingController({
         view: new VectorSamplingView(document, { root: "#calculations-vector-area", choice: null, disclosure: null }),
-        getTargets: () => [...catalogPolygonTargets(), ...(annotations?.summaryTargets() ?? [])],
-        /** Select catalog features or upload the exact matched annotation polygons.
-         * @param {Object|null} item Catalog item, absent for browser-owned annotations.
+        getTargets: () => [...getPolygonTargets(), ...(annotations?.summaryTargets() ?? [])],
+        /** Select source features or prepare the exact matched annotation polygons.
+         * @param {Object|null} item Catalog or uploaded source identity; null for browser annotations.
          * @param {Object} filter Applied field conditions.
-         * @param {AbortSignal} signal Superseded catalog selection.
+         * @param {AbortSignal} signal Cancellation of a superseded vector selection.
          * @param {Object} target Committed layer snapshot supplied above.
          * @return {Promise<Object>} Area reference, bounds and feature counts.
-         * @throws {Error} If no polygons match, upload fails or catalog selection fails.
+         * @throws {Error} If no polygons match, annotation upload fails or source selection fails.
          */
         createArea: async (item, filter, signal, target) => {
             if (item) return createVectorSamplingArea(item, filter, signal);
