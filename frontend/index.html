@@ -447,6 +447,8 @@
                       aria-hidden="false"
                     >
                     <p class="models-help" data-private-result-notice hidden>Result previews are temporary and private. Saved and shared maps omit them. Reopen them from Models → Runs.</p>
+                    <div class="map-layer-source-actions">
+                    <button class="secondary-button" id="upload-polygons" type="button">Upload polygons…</button>
                     <details class="annotation-layer-tools">
                       <summary>Shared layers</summary>
                       <div class="annotation-layer-actions" role="group" aria-label="Shared layers">
@@ -457,6 +459,7 @@
                       <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import polygons from a GeoJSON file" hidden>
                       </div>
                     </details>
+                    </div>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map layer controls">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>
@@ -482,7 +485,7 @@
                     ></p>
                     </section>
                     <p class="map-layers-empty-state">
-                      No map layers yet. Add an item from Catalog or create a shared layer to draw on the map.
+                      No map layers yet. Add an item from Catalog, upload polygons, or create a shared layer to draw on the map.
                     </p>
                     <div
                       class="raster-layer-stack"

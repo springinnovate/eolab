@@ -41,6 +41,7 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string|null} error Visible layer failure, when present.
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
+ * @property {boolean} [canInfo] Omit the details action when false.
  * @property {boolean} [filterActive] A filter is currently applied.
  * @property {string} [filterStatus] Actionable filter result summary.
  * @property {{label:string,description:string}|null} [roleBadge] Analysis role supplied by the owner.
@@ -519,7 +520,7 @@ export class MapLayerStackView {
             () => this.handlers?.onZoom(layer.key), focusTargets
         );
         zoom.title = `Zoom to ${layer.label}`;
-        const info = layer.detailsControl ? null : this.#iconButton(
+        const info = layer.detailsControl || layer.canInfo === false ? null : this.#iconButton(
             "info", `View details for ${accessibleName}`, layer.key, "info",
             () => this.handlers?.onInfo(layer.key), focusTargets
         );
@@ -592,7 +593,7 @@ export class MapLayerStackView {
                 "rename", `Rename ${accessibleName}`, layer.key, "rename",
                 () => this.#openRenameEditor(layer), focusTargets,
             )] : []),
-            ...(!layer.detailsControl ? [info] : []),
+            ...(info ? [info] : []),
             copyStyle,
             pasteStyle,
             ...(layer.capabilities?.calculations ? [this.#iconButton(

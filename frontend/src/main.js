@@ -94,6 +94,7 @@ import {
 import { VectorFilterControls } from "./vector/filter-controls.js";
 import { EMPTY_VECTOR_FILTER } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
+import { UploadPolygonsDialog } from "./vector-uploads/dialog.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
@@ -804,7 +805,8 @@ async function initializeCatalog(
         restoreRemovedLayer: async (snapshot, isCurrent) => snapshot.local?.kind === "model-output-preview"
             ? outputLayers.restore(snapshot, isCurrent).then(() => {
                 if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
-            }) : snapshot.item === null ? annotations.restoreRemovedLayer(snapshot, isCurrent)
+            }) : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
+            : snapshot.item === null ? annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
     const processingApi = new ProcessingApiClient();
@@ -939,6 +941,40 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    /** Publish an admitted upload and add it with the ordinary vector controls.
+     * @param {import("./vector-uploads/api.js").VectorUpload} upload This browser's stored polygon layer.
+     * @return {Promise<void>} Completion after the layer joins the map.
+     * @throws {Error} If publication or map construction fails.
+     */
+    async function addUploadedVector(upload) {
+        const source = { kind: "upload", ...upload };
+        const publication = await vectorMapLayerAdapter.publish(source);
+        const record = mapLayerController.addLocal({
+            key: `local:upload:${upload.id}`, label: upload.name, sourceName: upload.name,
+            upload: source, publication,
+        }, vectorMapLayerAdapter);
+        onRenderingWorkspaceRequested();
+        vectorMapLayerAdapter.added(record);
+        mapLayerStackView.announceStatus(`${upload.name} added to map.`);
+    }
+    /** Undo map removal using the upload's captured appearance and immutable source.
+     * The WMS endpoint authorizes each request for the restored layer.
+     * @param {import("./map-layers/controller.js").RemovedMapLayer} snapshot Removed upload and presentation.
+     * @param {()=>boolean} isCurrent Whether this Undo still belongs to the current action.
+     * @return {void}
+     * @throws {Error} If the layer can no longer be added to this map.
+     */
+    function restoreUploadedVector(snapshot, isCurrent) {
+        if (!isCurrent()) return;
+        const { upload, publication } = snapshot.local;
+        mapLayerController.addLocal({
+            key: snapshot.key, label: snapshot.label, sourceName: upload.name,
+            customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
+            upload, publication, restore: snapshot.local,
+        }, vectorMapLayerAdapter);
+        mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+    }
+    if (!isSharedViewer) new UploadPolygonsDialog({ document, addToMap: addUploadedVector });
     let modelFilterControls = null;
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
@@ -966,7 +1002,7 @@ async function initializeCatalog(
      * Retained catalog identities, immutable fields and applied filter snapshots.
      */
     const catalogPolygonTargets = () => mapLayerController.retainedRecords
-        .filter(record => record.adapter === vectorMapLayerAdapter)
+        .filter(record => record.adapter === vectorMapLayerAdapter && record.entry.item !== null)
         .flatMap(record => {
             const source = record.adapter.describeSource(record);
             return source.geometryKind === "polygon" ? [{
@@ -1206,6 +1242,7 @@ async function initializeCatalog(
         },
         beforeRestore: clearCatalogSelection,
         exportAnnotation: record => {
+            if (record.adapter === vectorMapLayerAdapter) return null;
             if (record.entry.key.startsWith("local:artifact:")) return null;
             const sharedAnnotation = annotationSessions?.getMapReference(record.state.id);
             if (!sharedAnnotation) return null;
@@ -1282,7 +1319,7 @@ async function initializeCatalog(
                     sourceId: record.entry.key,
                     label: record.entry.label,
                     opacity: record.entry.opacity,
-                    bbox: [...record.entry.item.bbox],
+                    bbox: [...record.publication.bbox],
                     publication: {
                         layerName: record.publication.layerName,
                         styleName: record.publication.styleName,
@@ -2050,7 +2087,7 @@ async function startApplication() {
         () => layoutController?.notifyLayoutChange(),
         { detailsDialog: isSharedViewer ? document.querySelector("#shared-layer-details") : null }
     );
-    document.querySelector(".annotation-layer-tools").hidden = isSharedViewer;
+    document.querySelector(".map-layer-source-actions").hidden = isSharedViewer;
     if (isSharedViewer || editableMapSlug !== null) {
         document.querySelector("#reset-map-view").hidden = true;
         document.querySelector("#copy-map-link").hidden = true;

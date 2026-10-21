@@ -3,11 +3,11 @@ import test from "node:test";
 
 import {
     assessCatalogVector,
-    classifyCatalogVectorNumbers,
-    countCatalogVectorFilter,
-    publishCatalogVector,
-    styleCatalogVector,
-    summarizeCatalogVectorCategories,
+    classifyVectorNumbers,
+    countVectorFilter,
+    publishVector,
+    styleVector,
+    summarizeVectorCategories,
     VectorRenderingRequestError,
 } from "../../src/vector/api.js";
 
@@ -19,16 +19,16 @@ const VECTOR_ITEM = Object.freeze({
 test("filter count distinguishes queue saturation and expiry from incomplete counts", async () => {
     const controller = new AbortController();
     for (const [status, category] of [[429, "filter_count_queue_full"], [503, "filter_count_queue_timeout"]]) {
-        await assert.rejects(countCatalogVectorFilter(VECTOR_ITEM, {}, controller.signal, async (url, options) => {
+        await assert.rejects(countVectorFilter(VECTOR_ITEM, {}, controller.signal, async (url, options) => {
             assert.equal(url, "/api/vector-rendering/filter-counts");
             assert.equal(options.signal, controller.signal);
             return new Response(JSON.stringify({ detail: { category, message: "Apply filter again to retry counting." } }), { status });
         }), error => error instanceof VectorRenderingRequestError && error.category === category);
     }
     const incomplete = { matched: null, total: null, complete: false };
-    assert.deepEqual(await countCatalogVectorFilter(VECTOR_ITEM, {}, undefined, async () =>
+    assert.deepEqual(await countVectorFilter(VECTOR_ITEM, {}, undefined, async () =>
         new Response(JSON.stringify(incomplete))), incomplete);
-    await assert.rejects(countCatalogVectorFilter(VECTOR_ITEM, {}, controller.signal, async () => {
+    await assert.rejects(countVectorFilter(VECTOR_ITEM, {}, controller.signal, async () => {
         throw new DOMException("Canceled", "AbortError");
     }), { name: "AbortError" });
 });
@@ -81,7 +81,7 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
         },
     };
 
-    assert.deepEqual(await publishCatalogVector(
+    assert.deepEqual(await publishVector(
         VECTOR_ITEM,
         async () => new Response(JSON.stringify(publication), {
             status: 200,
@@ -90,7 +90,7 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
     ), publication);
 
     await assert.rejects(
-        publishCatalogVector(
+        publishVector(
             VECTOR_ITEM,
             async () => new Response(JSON.stringify({
                 ...publication,
@@ -129,7 +129,7 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
         style,
     };
 
-    assert.deepEqual(await styleCatalogVector(
+    assert.deepEqual(await styleVector(
         VECTOR_ITEM,
         style,
         async (url, options) => {
@@ -168,7 +168,7 @@ test("vector category summary sends identity and field then validates limits", a
         maximumLimit: 50,
     };
 
-    assert.deepEqual(await summarizeCatalogVectorCategories(
+    assert.deepEqual(await summarizeVectorCategories(
         VECTOR_ITEM,
         "risk",
         async (url, options) => {
@@ -213,7 +213,7 @@ test("vector numeric classification sends bounded options and rejects invalid HT
         maximumClassCount: 9,
     };
 
-    assert.deepEqual(await classifyCatalogVectorNumbers(
+    assert.deepEqual(await classifyVectorNumbers(
         VECTOR_ITEM,
         "score",
         "equal-interval",
@@ -239,7 +239,7 @@ test("vector numeric classification sends bounded options and rejects invalid HT
         { field: "other" }, { method: "quantile" },
         { requestedClassCount: 4 }, { classes: [] },
     ]) {
-        await assert.rejects(classifyCatalogVectorNumbers(
+        await assert.rejects(classifyVectorNumbers(
             VECTOR_ITEM, "score", "equal-interval", 3,
             async () => new Response(JSON.stringify({ ...summary, ...invalid })),
         ), VectorRenderingRequestError);
@@ -247,7 +247,7 @@ test("vector numeric classification sends bounded options and rejects invalid HT
 });
 
 test("vector publication preserves actionable upstream categories", async () => {
-    const request = publishCatalogVector(
+    const request = publishVector(
         VECTOR_ITEM,
         async () => new Response(JSON.stringify({
             detail: {

@@ -1,12 +1,12 @@
 /** Publish, style and filter vector datasets displayed in the map's layer list. */
 
 import {
-    classifyCatalogVectorNumbers,
-    filterCatalogVector,
-    countCatalogVectorFilter,
-    publishCatalogVector,
-    styleCatalogVector,
-    summarizeCatalogVectorCategories,
+    classifyVectorNumbers,
+    filterVector,
+    countVectorFilter,
+    publishVector,
+    styleVector,
+    summarizeVectorCategories,
 } from "./api.js";
 import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterStatus } from "./filter.js";
 import { createVectorWmsLayer, vectorMapBounds } from "./leaflet.js";
@@ -27,12 +27,23 @@ import {
 } from "./style.js";
 
 /**
- * Catalog attributes and geometry needed by vector consumers.
+ * Source attributes and geometry needed by vector consumers.
  * @typedef {Object} VectorSourceDescription
  * @property {ReturnType<typeof vectorLabelFields>} fields Frozen non-geometry fields.
  * @property {"point"|"line"|"polygon"} geometryKind Normalized geometry family.
  * @property {string|null} primaryGeometry Catalog geometry field, when declared.
  */
+
+/**
+ * Return the original attribute names and types used by vector style and filter controls.
+ * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
+ * @return {ReturnType<typeof vectorLabelFields>} Frozen non-geometry field options.
+ */
+function getVectorSourceFields(source) {
+    return source.kind === "upload"
+        ? Object.freeze(Object.entries(source.fields).map(([name, type]) => Object.freeze({ name, type })))
+        : vectorLabelFields(source);
+}
 
 /**
  * Validate one untrusted saved vector style without accepting extra fields.
@@ -141,7 +152,7 @@ function checkPortableVectorStyleCompatibility(record, savedState) {
 }
 
 /**
- * Reclassify a copied graduated style against its target vector Item.
+ * Reclassify a copied graduated style against its target vector source.
  *
  * Numeric rule boundaries describe source data rather than portable visual
  * intent. Field, method, requested class count, palette, and symbol settings
@@ -150,7 +161,7 @@ function checkPortableVectorStyleCompatibility(record, savedState) {
  *
  * @param {Object} record Target retained vector record.
  * @param {Object} copiedStyle Validated copied vector style.
- * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
+ * @param {(source:import("./api.js").VectorSource,field:string,method:string,classCount:number)=>Promise<Object>}
  * classify API adapter returning a validated classification matching the request.
  * @return {Promise<Object>} Validated style using target-specific ranges.
  * @throws {Error} If classification fails or the resulting style is invalid.
@@ -165,7 +176,7 @@ async function adaptPortableVectorStyleToTarget(
         return copiedStyle;
     }
     const summary = await classify(
-        record.state.item,
+        record.state.source,
         graduated.field,
         graduated.method,
         graduated.classCount
@@ -201,18 +212,20 @@ async function adaptPortableVectorStyleToTarget(
  * Report a layer-specific tile error.
  * @param {boolean} [configuration.fitToBounds=true] Whether a newly added
  * layer should fit the map to its assessed extent.
- * @param {(item:Object)=>Promise<Object>} [configuration.publish=publishCatalogVector]
+ * @param {(source:import("./api.js").VectorSource)=>Promise<Object>} [configuration.publish=publishVector]
  * Vector publication API adapter.
- * @param {(item:Object,style:Object)=>Promise<Object>} [configuration.style=styleCatalogVector]
+ * @param {(source:import("./api.js").VectorSource,style:Object)=>Promise<Object>} [configuration.style=styleVector]
  * Vector style API adapter.
- * @param {(item:Object,field:string)=>Promise<Object>}
- * [configuration.summarize=summarizeCatalogVectorCategories] Bounded category
+ * @param {(source:import("./api.js").VectorSource,field:string)=>Promise<Object>}
+ * [configuration.summarize=summarizeVectorCategories] Bounded category
  * summary API adapter.
- * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
- * [configuration.classify=classifyCatalogVectorNumbers] Bounded numeric
+ * @param {(source:import("./api.js").VectorSource,field:string,method:string,classCount:number)=>Promise<Object>}
+ * [configuration.classify=classifyVectorNumbers] Bounded numeric
  * classification API adapter.
- * @param {Function} [configuration.filter=filterCatalogVector] Cancellable filter registration.
- * @param {Function} [configuration.countFilter=countCatalogVectorFilter] Exact count boundary.
+ * @param {(source:import("./api.js").VectorSource,filter:Object,signal:AbortSignal)=>Promise<Object>}
+ * [configuration.filter=filterVector] Cancellable filter registration.
+ * @param {(source:import("./api.js").VectorSource,filter:Object,signal:AbortSignal)=>Promise<Object>}
+ * [configuration.countFilter=countVectorFilter] Exact count boundary.
  * @param {(record:Object)=>void} [configuration.onFilterChange] Composition callback after applied-state changes.
  * @return {Object} Immutable adapter consumed by the shared layer lifecycle.
  */
@@ -222,12 +235,12 @@ export function createVectorMapLayerAdapter({
     wmsUrl,
     onTileError,
     fitToBounds = true,
-    publish = publishCatalogVector,
-    style = styleCatalogVector,
-    summarize = summarizeCatalogVectorCategories,
-    classify = classifyCatalogVectorNumbers,
-    filter = filterCatalogVector,
-    countFilter = countCatalogVectorFilter,
+    publish = publishVector,
+    style = styleVector,
+    summarize = summarizeVectorCategories,
+    classify = classifyVectorNumbers,
+    filter = filterVector,
+    countFilter = countVectorFilter,
     onFilterChange = () => {},
 }) {
     if (typeof fitToBounds !== "boolean") {
@@ -244,19 +257,19 @@ export function createVectorMapLayerAdapter({
          * are applied by the existing detached restoration lifecycle afterwards.
          * Optional appearance failures retain the authorized fixed publication.
          *
-         * @param {Object} item Authoritative Catalog vector Item.
+         * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
          * @return {Promise<Object>} Publication with applied defaults and any notice.
          * @throws {Error} If the underlying publication fails.
          */
-        async publish(item) {
-            const publication = await publish(item);
-            const fields = vectorLabelFields(item);
+        async publish(source) {
+            const publication = await publish(source);
+            const fields = getVectorSourceFields(source);
             const numericField = defaultVectorNumericField(fields);
             let candidate = deriveDefaultVectorStyle(publication.style, fields);
             let defaultStyleNotice = "";
             if (numericField !== null) {
                 try {
-                    const summary = await classify(item, numericField,
+                    const summary = await classify(source, numericField,
                         VECTOR_NUMERIC_DEFAULTS.method, VECTOR_NUMERIC_DEFAULTS.classCount);
                     candidate = deriveDefaultVectorStyle(publication.style, fields, summary);
                 } catch {
@@ -267,7 +280,7 @@ export function createVectorMapLayerAdapter({
             try {
                 // Content-address even a solid default so cached tiles from
                 // an older fixed initializer style cannot retain old colors.
-                const result = await style(item, candidate);
+                const result = await style(source, candidate);
                 return {
                     ...publication,
                     styleName: result.styleName,
@@ -285,26 +298,31 @@ export function createVectorMapLayerAdapter({
         /**
          * Build a stable user-facing label.
          *
-         * @param {Object} item Catalog vector Item.
-         * @return {string} Item title or stable identifier.
+         * @param {import("./api.js").VectorSource} source Catalog Item or admitted upload.
+         * @return {string} Upload name, catalog title or stable catalog identifier.
          */
-        label(item) {
-            const { filename, context } = buildCatalogResultPresentation(item, "Vector");
+        label(source) {
+            if (source.kind === "upload") return source.name;
+            const { filename, context } = buildCatalogResultPresentation(source, "Vector");
             return context?.startsWith("Layer: ")
                 ? `${filename} — ${context.slice(7)}` : filename;
         },
         /**
          * Create adapter-owned state for one retained vector layer.
          *
-         * @param {{item:Object,publication:Object}} context Neutral retained-layer context.
-         * @return {{item:Object,style:Object,labelFields:ReadonlyArray,
-         * defaultStyleNotice:string,layer:Object|null}} Vector-owned state.
+         * @param {Object} context Neutral retained-layer context.
+         * @param {Object} [context.item] Catalog Item supplied by catalog addition.
+         * @param {{upload:import("./api.js").UploadedVectorSource,restore?:Object}} [context.source]
+         * Uploaded source and optional filter/count captured for immediate removal Undo.
+         * @param {Object} context.publication Published layer and current appearance.
+         * @return {Object} Vector-owned source, filter, appearance and request state.
          */
-        createState({ item, publication }) {
+        createState({ item, source, publication }) {
+            const vectorSource = item ?? source.upload;
             return {
-                item,
-                filter: structuredClone(EMPTY_VECTOR_FILTER),
-                filterCount: null,
+                source: vectorSource,
+                filter: structuredClone(source?.restore?.filter ?? EMPTY_VECTOR_FILTER),
+                filterCount: structuredClone(source?.restore?.filterCount ?? null),
                 filterCounting: false,
                 filterCountError: null,
                 filterGeneration: 0,
@@ -312,7 +330,7 @@ export function createVectorMapLayerAdapter({
                 filterCountAbort: null,
                 disposed: false,
                 style: normalizeVectorStyle(publication.style),
-                labelFields: vectorLabelFields(item),
+                labelFields: getVectorSourceFields(vectorSource),
                 defaultStyleNotice: publication.defaultStyleNotice ?? "",
                 layer: null,
             };
@@ -328,7 +346,8 @@ export function createVectorMapLayerAdapter({
             return {
                 fields: record.state.labelFields,
                 geometryKind: record.state.style.geometryKind,
-                primaryGeometry: record.state.item.properties?.["table:primary_geometry"] ?? null,
+                primaryGeometry: record.state.source.kind === "upload" ? null
+                    : record.state.source.properties?.["table:primary_geometry"] ?? null,
             };
         },
         /**
@@ -401,7 +420,7 @@ export function createVectorMapLayerAdapter({
          */
         async applyStyle(record, candidate) {
             const normalized = normalizeVectorStyle(candidate);
-            const result = await style(record.state.item, normalized);
+            const result = await style(record.state.source, normalized);
             const applied = normalizeVectorStyle(result.style);
             record.publication = {
                 ...record.publication,
@@ -435,7 +454,7 @@ export function createVectorMapLayerAdapter({
             const generation = record.state.filterGeneration;
             const controller = new AbortController();
             record.state.filterApplyAbort = controller;
-            const result = await filter(record.state.item, normalized, controller.signal);
+            const result = await filter(record.state.source, normalized, controller.signal);
             if (record.state.disposed || generation !== record.state.filterGeneration) return null;
             record.state.filterApplyAbort = null;
             record.state.filter = normalizeVectorFilter(result.filter, record.state.labelFields);
@@ -449,7 +468,7 @@ export function createVectorMapLayerAdapter({
             if (record.state.filterCounting) {
                 const counter = new AbortController();
                 record.state.filterCountAbort = counter;
-                void countFilter(record.state.item, normalized, counter.signal).then((count) => {
+                void countFilter(record.state.source, normalized, counter.signal).then((count) => {
                     if (!counter.signal.aborted && !record.state.disposed) record.state.filterCount = count;
                 }).catch((error) => {
                     // Counts are optional; the rendering predicate stays applied.
@@ -490,6 +509,20 @@ export function createVectorMapLayerAdapter({
             record.state.disposed = true;
             this.cancelPendingFilter(record);
             record.state.filterCountAbort?.abort();
+        },
+        /**
+         * Capture an uploaded layer's source and display so removal can be undone without uploading again.
+         * @param {Object} record Browser-owned uploaded vector layer.
+         * @return {Object} Detached upload metadata, authorized publication, filter and count.
+         */
+        copyLayerForUndo(record) {
+            return structuredClone({
+                kind: "uploaded-vector",
+                upload: record.state.source,
+                publication: record.publication,
+                filter: record.state.filter,
+                filterCount: record.state.filterCount,
+            });
         },
         /**
          * Export only the validated vector appearance owned by this adapter.
@@ -551,37 +584,41 @@ export function createVectorMapLayerAdapter({
             await this.applyStyle(record, savedState.definition);
         },
         /**
-         * Read bounded typed categories for one authoritative Catalog field.
+         * Read category values and their counts for a source attribute.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @param {string} field Current Catalog attribute field.
+         * @param {string} field Original source attribute field.
          * @return {Promise<Object>} Normalized category summary.
+         * @throws {Error} If the category request fails.
          */
         summarizeCategories(record, field) {
-            return summarize(record.state.item, field);
+            return summarize(record.state.source, field);
         },
         /**
-         * Read bounded numeric classes for one authoritative Catalog field.
+         * Divide a numeric source attribute into classes for graduated styling.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @param {string} field Current numeric Catalog attribute field.
+         * @param {string} field Original numeric source attribute field.
          * @param {string} method Equal-interval, quantile, or percentile-interval classification.
          * @param {number} classCount Requested bounded class count.
          * @return {Promise<Object>} Normalized numeric classification.
+         * @throws {Error} If classification fails.
          */
         classifyNumbers(record, field, method, classCount) {
-            return classify(record.state.item, field, method, classCount);
+            return classify(record.state.source, field, method, classCount);
         },
         /**
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{datasetKind:"vector",legend:Object}} Dataset type and
-         * neutral fixed, categorical, or graduated legend snapshot.
+         * @return {{datasetKind:"vector",canInfo:boolean,canFilter:boolean,
+         * filterActive:boolean,filterStatus:string,legend:Object}} Layer actions,
+         * filter status and fixed, categorical or graduated legend.
          */
         snapshot(record) {
             return {
                 datasetKind: "vector",
+                canInfo: record.state.source.kind !== "upload",
                 canFilter: true,
                 filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
                 filterStatus: vectorFilterStatus(record.state),
@@ -605,6 +642,15 @@ export function createVectorMapLayerAdapter({
                 vectorMapBounds(record.publication.bbox),
                 { maxZoom: 14, padding: [24, 24] }
             );
+        },
+        /**
+         * Fit an uploaded layer's published extent using the ordinary vector map bounds.
+         * @param {Object} record Uploaded vector layer retained by the map.
+         * @return {void}
+         */
+        zoom(record) {
+            leafletMap.fitBounds(vectorMapBounds(record.publication.bbox),
+                { maxZoom: 14, padding: [24, 24] });
         },
         /**
          * Report a tile failure through application composition.

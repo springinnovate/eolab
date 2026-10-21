@@ -30,6 +30,9 @@ test("composite plan client sends one exact top-first plan", async () => {
         assert.equal(requests.length, 1);
         assert.equal(requests[0].url, "/api/map-rendering/plans");
         assert.deepEqual(JSON.parse(requests[0].options.body), { layers });
+        assert.equal(requests[0].options.credentials, "same-origin");
+        assert.equal(requests[0].options.headers["X-EOLab-Uploads"], "1");
+        assert.equal(requests[0].options.headers["X-EOLab-Processing"], "1");
         assert.equal(result.planId, planId);
     } finally {
         globalThis.fetch = originalFetch;

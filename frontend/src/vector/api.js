@@ -1,9 +1,19 @@
-/** HTTP contracts for catalog vector assessment and publication. */
+/** Publish, style and filter catalog vectors and this browser's uploaded polygons. */
 
 import {
     normalizeVectorCategorySummary,
     normalizeVectorNumericClassification,
 } from "./style.js";
+
+/**
+ * Admitted upload metadata tagged for the ordinary vector rendering pipeline.
+ * @typedef {import("../vector-uploads/api.js").VectorUpload & {kind:"upload"}} UploadedVectorSource
+ */
+
+/**
+ * Catalog identity or admitted upload metadata used by vector rendering.
+ * @typedef {{collection:string,id:string,properties?:Object}|UploadedVectorSource} VectorSource
+ */
 
 const VECTOR_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
@@ -65,11 +75,11 @@ async function vectorRenderingError(response, action) {
 }
 
 /**
- * Post one selected vector Item identity to an owned rendering action.
+ * Send a catalog identity or upload UUID to its vector rendering endpoint.
  *
- * @param {Object} item Selected STAC Item.
+ * @param {VectorSource} source Catalog Item or admitted upload.
  * @param {"assessments"|"layers"|"styles"|"category-summaries"|
- * "numeric-classifications"} action
+ * "numeric-classifications"|"filters"|"filter-counts"} action
  * Rendering action path.
  * @param {string} actionLabel User-facing failure action.
  * @param {typeof fetch} fetchImplementation HTTP implementation.
@@ -79,25 +89,27 @@ async function vectorRenderingError(response, action) {
  * @throws {VectorRenderingRequestError} If HTTP or JSON contracts fail.
  */
 async function postVectorAction(
-    item,
+    source,
     action,
     actionLabel,
     fetchImplementation,
     additionalBody = {},
     signal = undefined,
 ) {
+    const uploaded = source.kind === "upload";
+    const endpoint = uploaded ? `uploads/${source.id}/${action}` : action;
     let response;
     try {
-        response = await fetchImplementation(`/api/vector-rendering/${action}`, {
+        response = await fetchImplementation(`/api/vector-rendering/${endpoint}`, {
             method: "POST",
             ...(signal === undefined ? {} : { signal }),
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
+                ...(uploaded ? { "X-EOLab-Uploads": "1" } : {}),
             },
             body: JSON.stringify({
-                collectionId: item.collection,
-                itemId: item.id,
+                ...(uploaded ? {} : { collectionId: source.collection, itemId: source.id }),
                 ...additionalBody,
             }),
         });
@@ -138,20 +150,20 @@ export function assessCatalogVector(item, fetchImplementation = globalThis.fetch
 }
 
 /**
- * Publish one assessed exact catalog vector source layer.
+ * Publish a catalog vector or this browser's uploaded polygons as a WMS layer.
  *
- * @param {Object} item Selected vector STAC Item.
+ * @param {VectorSource} source Catalog Item or admitted upload.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
  * implementation.
  * @return {Promise<Object>} Published bounded-WMS layer contract.
  * @throws {VectorRenderingRequestError} If publication fails.
  */
-export async function publishCatalogVector(
-    item,
+export async function publishVector(
+    source,
     fetchImplementation = globalThis.fetch
 ) {
     const publication = await postVectorAction(
-        item,
+        source,
         "layers",
         "publication",
         fetchImplementation
@@ -173,22 +185,22 @@ export async function publishCatalogVector(
 }
 
 /**
- * Apply one complete vector style to a published catalog vector.
+ * Apply a complete style to a published catalog vector or uploaded polygon layer.
  *
- * @param {Object} item Selected vector STAC Item.
+ * @param {VectorSource} source Catalog Item or admitted upload.
  * @param {Object} style Validated geometry-specific browser style state.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
  * implementation.
  * @return {Promise<Object>} Normalized applied style state.
  * @throws {VectorRenderingRequestError} If style application fails.
  */
-export async function styleCatalogVector(
-    item,
+export async function styleVector(
+    source,
     style,
     fetchImplementation = globalThis.fetch,
 ) {
     const result = await postVectorAction(
-        item,
+        source,
         "styles",
         "styling",
         fetchImplementation,
@@ -211,20 +223,20 @@ export async function styleCatalogVector(
 /**
  * Summarize one authoritative scalar field through a bounded source read.
  *
- * @param {Object} item Selected vector STAC Item.
- * @param {string} field Exact Catalog attribute field.
+ * @param {VectorSource} source Catalog Item or admitted upload.
+ * @param {string} field Exact source attribute field.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
  * implementation.
  * @return {Promise<Object>} Normalized typed category summary.
  * @throws {VectorRenderingRequestError} If summary or response validation fails.
  */
-export async function summarizeCatalogVectorCategories(
-    item,
+export async function summarizeVectorCategories(
+    source,
     field,
     fetchImplementation = globalThis.fetch,
 ) {
     const result = await postVectorAction(
-        item,
+        source,
         "category-summaries",
         "category summary",
         fetchImplementation,
@@ -246,8 +258,8 @@ export async function summarizeCatalogVectorCategories(
 /**
  * Classify one authoritative numeric field through a bounded source read.
  *
- * @param {Object} item Selected vector STAC Item.
- * @param {string} field Exact numeric Catalog attribute field.
+ * @param {VectorSource} source Catalog Item or admitted upload.
+ * @param {string} field Exact numeric source attribute field.
  * @param {"equal-interval"|"quantile"|"percentile-interval"} method Classification method.
  * @param {number} classCount Requested class count.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
@@ -255,15 +267,15 @@ export async function summarizeCatalogVectorCategories(
  * @return {Promise<Object>} Normalized numeric classification summary.
  * @throws {VectorRenderingRequestError} If classification or validation fails.
  */
-export async function classifyCatalogVectorNumbers(
-    item,
+export async function classifyVectorNumbers(
+    source,
     field,
     method,
     classCount,
     fetchImplementation = globalThis.fetch,
 ) {
     const result = await postVectorAction(
-        item,
+        source,
         "numeric-classifications",
         "numeric classification",
         fetchImplementation,
@@ -289,14 +301,16 @@ export async function classifyCatalogVectorNumbers(
 
 /**
  * Authorize a vector filter without changing global layer configuration.
- * @param {Object} item Authoritative Catalog Item.
+ * @param {VectorSource} source Catalog Item or admitted upload.
  * @param {Object} filter Validated rule builder state.
  * @param {AbortSignal} [signal] Request cancellation.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
  * @return {Promise<Object>} Applied rules and opaque rendering identity.
+ * @throws {VectorRenderingRequestError} If filtering fails or its response is invalid.
+ * @throws {DOMException} If the requesting layer cancels the operation.
  */
-export async function filterCatalogVector(item, filter, signal, fetchImplementation = globalThis.fetch) {
-    const result = await postVectorAction(item, "filters", "filtering", fetchImplementation, { filter }, signal);
+export async function filterVector(source, filter, signal, fetchImplementation = globalThis.fetch) {
+    const result = await postVectorAction(source, "filters", "filtering", fetchImplementation, { filter }, signal);
     if (typeof result?.layerName !== "string" || !/^eolab:[a-zA-Z0-9_.:-]+$/.test(result.layerName) ||
         JSON.stringify(result.filter) !== JSON.stringify(filter)) {
         throw new VectorRenderingRequestError("Vector filtering returned an invalid response.");
@@ -306,7 +320,7 @@ export async function filterCatalogVector(item, filter, signal, fetchImplementat
 
 /**
  * Request exact counts independently of rendering; never accept partial totals.
- * @param {Object} item Authoritative Catalog Item.
+ * @param {VectorSource} source Catalog Item or admitted upload.
  * @param {Object} filter Applied rules.
  * @param {AbortSignal} [signal] Count cancellation.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
@@ -315,8 +329,8 @@ export async function filterCatalogVector(item, filter, signal, fetchImplementat
  * or the request/response is invalid. Queue errors include their category.
  * @throws {DOMException} If the requesting layer cancels the count.
  */
-export async function countCatalogVectorFilter(item, filter, signal, fetchImplementation = globalThis.fetch) {
-    const result = await postVectorAction(item, "filter-counts", "filter count", fetchImplementation, { filter }, signal);
+export async function countVectorFilter(source, filter, signal, fetchImplementation = globalThis.fetch) {
+    const result = await postVectorAction(source, "filter-counts", "filter count", fetchImplementation, { filter }, signal);
     const valid = result?.complete === false ? result.matched === null && result.total === null :
         result?.complete === true && Number.isSafeInteger(result.matched) && Number.isSafeInteger(result.total) &&
         result.matched >= 0 && result.total >= result.matched;
