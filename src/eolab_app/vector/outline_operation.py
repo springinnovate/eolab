@@ -1,12 +1,19 @@
-"""Create simplified catalog-feature outlines in a Jobs worker."""
+"""Create simplified vector-feature outlines in a Jobs worker."""
 
 import asyncio
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, FiniteFloat, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    JsonValue,
+    model_validator,
+)
 
-from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
+from eolab_app.catalog_selection import VectorSelection, SelectionUnavailableError
 
 # Fixed Compose service/mount contracts; job callers cannot redirect source access.
 # Public hostnames do not affect the Catalog's internal DNS name. Deployments
@@ -14,6 +21,7 @@ from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableEr
 # at /scan-source in both the application and Jobs containers.
 CATALOG_URL = "http://stac-api:8080"
 SCAN_MOUNT = Path("/scan-source")
+UPLOAD_MOUNT = Path("/vector-uploads")
 # Maximum compact UTF-8 GeoJSON bytes in a returned map outline. Kept at the
 # display_geometry producer's MAX_DISPLAY_BYTES contract without importing its
 # native GIS dependencies during operation discovery. A contract test ties them.
@@ -21,10 +29,11 @@ MAX_OUTLINE_GEOMETRY_BYTES = 256 * 1024
 
 
 class OutlineInput(BaseModel):
-    """The catalog vector source and feature filter used to create a map outline."""
+    """Identify a vector selection and its private owner when outlining an upload."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    selection: CatalogSelection
+    selection: VectorSelection
+    uploadOwner: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class OutlineResult(BaseModel):
@@ -61,26 +70,27 @@ class OutlineResult(BaseModel):
 
 
 def calculate_outline(inputs: OutlineInput) -> OutlineResult:
-    """Execute Catalog-authorized outline computation in the Jobs child.
+    """Read an authorized vector selection and build its outline in a Jobs child.
 
     GIS imports are lazy so service discovery and diagnostic jobs do not load
     native libraries. No scheduler or application service is constructed here.
 
     Args:
-        inputs: Validated path-free immutable selection.
+        inputs: Path-free immutable selection and private owner for uploads.
 
     Returns:
         A simplified GeoJSON FeatureCollection and its bounding box.
 
     Raises:
-        SelectionUnavailableError: If the Catalog binding or source is unavailable.
+        SelectionUnavailableError: If the source identity is invalid.
+        VectorUploadError: If the upload is unavailable to the submitted owner.
         ValueError: If source reading or display validation fails.
     """
     return asyncio.run(_calculate_outline(inputs))
 
 
 async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
-    """Authorize the Catalog selection and read its immutable native source.
+    """Authorize the vector selection and read its immutable native source.
 
     Args:
         inputs: Validated operation inputs.
@@ -89,7 +99,8 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
         Validated display result.
 
     Raises:
-        SelectionUnavailableError: For an unavailable Catalog binding or source.
+        SelectionUnavailableError: If the source identity is invalid.
+        VectorUploadError: If the upload is unavailable to the submitted owner.
         ValueError: For invalid polygons or exceeded work budgets.
     """
     # The registry imports this module to list operations and validate requests.
@@ -101,16 +112,23 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
     from eolab_app.vector.geometry import build_outline
     from eolab_app.vector.selection_source import resolve_selection
     from eolab_app.vector.sources import MountedVectorResolver
+    from eolab_app.vector_uploads import VectorUploadStore
 
     async with httpx2.AsyncClient(
         timeout=5, trust_env=False, follow_redirects=False
     ) as client:
         catalog = StacVectorCatalog(client, CATALOG_URL)
         resolver = MountedVectorResolver(SCAN_MOUNT)
-        resolved = await resolve_selection(catalog, resolver, inputs.selection)
+        resolved = await resolve_selection(
+            catalog,
+            resolver,
+            inputs.selection,
+            VectorUploadStore(UPLOAD_MOUNT, max_bytes=None),
+            inputs.uploadOwner,
+        )
         if resolved.selection != inputs.selection:
             raise SelectionUnavailableError(
-                "The catalog vector identity changed; select it again."
+                "The selected vector identity changed; select it again."
             )
         result = OutlineResult.model_validate_json(
             json.dumps(build_outline(resolved), allow_nan=False)

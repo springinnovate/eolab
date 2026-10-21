@@ -5,7 +5,7 @@ from typing import Any
 import httpx2
 
 from eolab_jobs.client import JobFailed, JobsClient
-from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.catalog_selection import VectorSelection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.selection_operation import SelectionMeasurementResult
 
@@ -21,11 +21,14 @@ class SelectionJobs:
         """
         self.jobs = jobs
 
-    async def __call__(self, selection: CatalogSelection) -> dict[str, Any]:
+    async def __call__(
+        self, selection: VectorSelection, upload_owner: str | None = None
+    ) -> dict[str, Any]:
         """Queue a feature measurement and return counts/bounds when it finishes.
 
         Args:
-            selection: Catalog source and filter, with no private path/geometry.
+            selection: Catalog or upload source and filter, with no private path.
+            upload_owner: Server-derived browser identity, kept inside Jobs.
 
         Returns:
             Feature count, vertex count and WGS 84 bounds of the selected polygons.
@@ -39,7 +42,8 @@ class SelectionJobs:
                 {
                     "operation": "vector.selection-measurement.v1",
                     "inputs": {
-                        "selection": selection.model_dump(mode="json", by_alias=True)
+                        "selection": selection.model_dump(mode="json", by_alias=True),
+                        "uploadOwner": upload_owner,
                     },
                     "priority": 0,
                     "executionTimeoutSeconds": 15,

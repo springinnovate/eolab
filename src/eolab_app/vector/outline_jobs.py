@@ -5,7 +5,7 @@ from typing import Any
 import httpx2
 
 from eolab_jobs.client import JobFailed, JobsClient
-from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.catalog_selection import VectorSelection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.outline_operation import OutlineResult
 
@@ -21,11 +21,14 @@ class OutlineJobs:
         """
         self.jobs = jobs
 
-    async def __call__(self, selection: CatalogSelection) -> dict[str, Any]:
-        """Create a simplified map outline for a catalog feature selection.
+    async def __call__(
+        self, selection: VectorSelection, upload_owner: str | None = None
+    ) -> dict[str, Any]:
+        """Create a simplified map outline for a vector feature selection.
 
         Args:
-            selection: Immutable Catalog binding and feature filter.
+            selection: Immutable catalog or upload identity and feature filter.
+            upload_owner: Server-derived browser identity, kept inside Jobs.
 
         Returns:
             Validated GeoJSON FeatureCollection and its WGS 84 bounding box.
@@ -39,7 +42,8 @@ class OutlineJobs:
                 {
                     "operation": "vector.outline.v1",
                     "inputs": {
-                        "selection": selection.model_dump(mode="json", by_alias=True)
+                        "selection": selection.model_dump(mode="json", by_alias=True),
+                        "uploadOwner": upload_owner,
                     },
                     "priority": -10,
                     "executionTimeoutSeconds": 15,

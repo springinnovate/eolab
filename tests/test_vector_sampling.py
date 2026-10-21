@@ -171,11 +171,14 @@ def test_selection_reauthorizes_after_restart_without_storage(
     async def scenario() -> None:
         """Reauthorize the descriptor after an injected measurement completes."""
 
-        async def measure(selection: CatalogSelection) -> dict[str, Any]:
+        async def measure(
+            selection: CatalogSelection, upload_owner: str | None
+        ) -> dict[str, Any]:
             """Measure the real fixture source for the requested descriptor.
 
             Args:
                 selection: Expected descriptor passed to the execution boundary.
+                upload_owner: Unused browser identity for this catalog selection.
 
             Returns:
                 Exact fixture measurements, without simulating job scheduling.

@@ -5,6 +5,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from eolab_app.catalog_selection import UploadedSelection
+from eolab_app.routes.browser_identity import get_browser_owner_hash
+from eolab_app.vector_uploads import VectorUploadError
+
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.models import (
     CatalogPixelRequest,
@@ -73,19 +77,24 @@ def create_raster_analysis_router(
             HTTPException: If private source access or same-origin checks fail.
         """
         response.headers["Cache-Control"] = "private, no-store"
-        if not any(
-            isinstance(reference, RunArtifactReference) for reference in references
-        ):
-            return {}
-        if session_owner is None:
-            raise HTTPException(
-                404,
-                "This raster result is unavailable.",
-                headers={"Cache-Control": "private, no-store"},
+        context = {}
+        if any(isinstance(reference, RunArtifactReference) for reference in references):
+            if session_owner is None:
+                raise HTTPException(
+                    404,
+                    "This raster result is unavailable.",
+                    headers={"Cache-Control": "private, no-store"},
+                )
+            context["owner"] = session_owner(request, response)
+        if any(isinstance(reference, UploadedSelection) for reference in references):
+            context["upload_owner"] = get_browser_owner_hash(
+                request, response, mutation_header="X-EOLab-Uploads"
             )
-        return {"owner": session_owner(request, response)}
+        return context
 
-    def source_error(error: RasterFeatureError | SourceFileError) -> HTTPException:
+    def source_error(
+        error: RasterFeatureError | SourceFileError | VectorUploadError,
+    ) -> HTTPException:
         """Translate a source failure without allowing private derived data to be cached.
 
         Args:
@@ -96,7 +105,7 @@ def create_raster_analysis_router(
         """
         failure = (
             HTTPException(error.status, str(error))
-            if isinstance(error, SourceFileError)
+            if isinstance(error, (SourceFileError, VectorUploadError))
             else raster_http_exception(error)
         )
         failure.headers = {
@@ -182,7 +191,7 @@ def create_raster_analysis_router(
         """Summarize one original raster and normalized sampling area.
 
         Args:
-            request: Raster source and strict whole/bounds/catalog-selection area union.
+            request: Raster source and whole, rectangular or filtered-vector area.
             http_request: Incoming request used to detect cancellation.
             response: Private response headers.
 
@@ -195,13 +204,15 @@ def create_raster_analysis_router(
 
         try:
             context = owner_context(
-                (raster_source_reference(request),), http_request, response
+                (raster_source_reference(request), request.catalog_selection),
+                http_request,
+                response,
             )
             return await run_until_http_disconnect(
                 http_request,
                 statistics_service.get(request, **context),
             )
-        except (RasterFeatureError, SourceFileError) as error:
+        except (RasterFeatureError, SourceFileError, VectorUploadError) as error:
             raise source_error(error) from error
         except HttpClientDisconnectedError as error:
             raise HTTPException(
@@ -233,13 +244,15 @@ def create_raster_analysis_router(
         """
         try:
             context = owner_context(
-                (request.x_raster, request.y_raster), http_request, response
+                (request.x_raster, request.y_raster, request.catalog_selection),
+                http_request,
+                response,
             )
             return await run_until_http_disconnect(
                 http_request,
                 statistics_service.get_paired(request, **context),
             )
-        except (RasterFeatureError, SourceFileError) as error:
+        except (RasterFeatureError, SourceFileError, VectorUploadError) as error:
             raise source_error(error) from error
         except HttpClientDisconnectedError as error:
             raise HTTPException(

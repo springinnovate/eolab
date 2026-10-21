@@ -1,11 +1,18 @@
-"""Locate catalog vector files and prepare the filter used to select features.
+"""Locate vector files and prepare the filter used to select features.
 
 VectorCatalog supplies the Item and MountedVectorResolver locates its dataset.
-The filter is validated against catalog fields. Feature readers apply it later;
-source resolution does not load polygons or inspect file mutation fingerprints.
+Private uploads are located through their owning browser's upload store. Filters
+are checked against the source fields; feature readers apply them later.
 """
 
-from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+import asyncio
+
+from eolab_app.catalog_selection import (
+    CatalogSelection,
+    ResolvedCatalogSelection,
+    UploadedSelection,
+    UploadedVectorFilterRequest,
+)
 from eolab_app.attribute_filter import ogr_predicate
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import (
@@ -15,15 +22,20 @@ from eolab_app.vector.filters import (
 )
 from eolab_app.vector.metadata import catalog_vector_fields
 from eolab_app.vector.ports import VectorCatalog
-from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector.sources import MountedVectorResolver, resolve_uploaded_vector
+from eolab_app.vector_uploads import VectorUploadError, VectorUploadStore
 
 
 async def resolve_selection(
     catalog: VectorCatalog,
     resolver: MountedVectorResolver,
-    request: CatalogVectorFilterRequest,
+    request: (
+        CatalogVectorFilterRequest | CatalogSelection | UploadedVectorFilterRequest
+    ),
+    uploads: VectorUploadStore | None = None,
+    upload_owner: str | None = None,
 ) -> ResolvedCatalogSelection:
-    """Locate a catalog vector dataset and prepare its attribute filter for reading.
+    """Locate an authorized vector dataset and prepare its attribute filter.
 
     No polygons are loaded or filtered here. The returned OGR WHERE expression
     narrows candidates during reading; polygon_features also applies the exact
@@ -33,8 +45,10 @@ async def resolve_selection(
         catalog: Reader that fetches the requested STAC Item.
         resolver: Maps the Item's data Asset to an
             allowed dataset path and native layer inside the read-only mount.
-        request: Catalog collection/item IDs and attribute filter. Callers name
-            a catalog entry, not a filesystem path; the server locates the file.
+        request: Catalog collection/item IDs or upload ID and attribute filter.
+            Callers never supply a filesystem path; the server locates the file.
+        uploads: Browser-owned storage, required for uploaded selections.
+        upload_owner: Server-derived browser identity for private uploads.
 
     Returns:
         Server-only dataset path, driver, layer/filter selection, compiled OGR
@@ -42,7 +56,27 @@ async def resolve_selection(
 
     Raises:
         VectorFeatureError: If identity, source or predicate is unavailable.
+        VectorUploadError: If the upload is unavailable to this browser.
     """
+    if isinstance(request, UploadedVectorFilterRequest):
+        if uploads is None or upload_owner is None:
+            raise VectorUploadError(
+                404, "This upload is not available to this browser."
+            )
+        metadata, source = await asyncio.to_thread(
+            resolve_uploaded_vector, uploads, upload_owner, request.uploadId
+        )
+        validated_filter = validate_filter(request.filter, metadata.fields)
+        return ResolvedCatalogSelection(
+            UploadedSelection(
+                uploadId=request.uploadId,
+                layerName=metadata.layer_name,
+                filter=validated_filter,
+            ),
+            source.source_path,
+            "GPKG",
+            ogr_predicate(validated_filter),
+        )
     item = await catalog.get_item(request)
     source = resolver.resolve(item)
     if (

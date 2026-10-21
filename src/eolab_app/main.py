@@ -201,10 +201,15 @@ def create_app(
         app_global_configuration.scan_mount_path
     )
     vector_jobs = JobsClient(jobs_client, app_global_configuration.jobs_token)
+    vector_uploads = VectorUploadStore(
+        app_global_configuration.vector_upload_data_path,
+        app_global_configuration.vector_upload_max_bytes,
+    )
     vector_selection_reader = VectorSamplingService(
         vector_catalog, vector_source_resolver,
         OutlineJobs(vector_jobs),
         selection_executor=SelectionJobs(vector_jobs),
+        uploads=vector_uploads,
     )
     processing_limits = load_processing_limits()
     # Validate shared deployment settings at API startup.
@@ -435,10 +440,6 @@ def create_app(
         creation_window_seconds=app_global_configuration.shared_layer_creation_window_seconds,
     )
     application.include_router(create_annotation_sessions_router(annotation_sessions))
-    vector_uploads = VectorUploadStore(
-        app_global_configuration.vector_upload_data_path,
-        app_global_configuration.vector_upload_max_bytes,
-    )
     application.include_router(create_vector_uploads_router(vector_uploads))
     application.include_router(
         create_uploaded_vector_router(

@@ -13,6 +13,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.responses import Response
 
 from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.main import create_app
@@ -215,7 +216,8 @@ def test_application_selects_only_through_jobs(
     payload = json.loads(calls[0].content)
     assert payload["operation"] == "vector.selection-measurement.v1"
     assert payload["inputs"] == {
-        "selection": selection.model_dump(mode="json", by_alias=True)
+        "selection": selection.model_dump(mode="json", by_alias=True),
+        "uploadOwner": None,
     }
     assert payload["priority"] > -10
     assert payload["executionTimeoutSeconds"] == 15
@@ -319,6 +321,7 @@ def test_route_disconnect_cancels_only_its_measurement(
                         filter=selection.filter,
                     ),
                     Request({"type": "http"}, receive),
+                    Response(),
                 )
             )
             await asyncio.wait_for(admitted.wait(), 5)
