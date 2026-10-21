@@ -309,7 +309,7 @@ export class ProcessingApiClient {
     async submitClip(submission) {
         const {source, requestId} = submission;
         const selected = normalizeRasterSamplingArea(submission.area);
-        if (!["selectedArea", "catalogSelection"].includes(selected.kind)) throw new Error("Select a box or catalog vector first.");
+        if (!["selectedArea", "catalogSelection"].includes(selected.kind)) throw new Error("Select a box or vector layer first.");
         await this.ensureSession();
         return validateJob(await this.request("/raster-clips", "POST", {
             ...(source.kind === "runArtifact" ? {source: processingRasterReference(source)} : processingRasterReference(source)), requestId,
