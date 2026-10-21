@@ -1,6 +1,6 @@
 """Strict single-raster calculation plans and operation-specific result values."""
 
-from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
 from dataclasses import dataclass, field, fields
 from typing import Annotated, Any, Literal, Self
 
@@ -97,7 +97,10 @@ class PixelPoint(BaseModel):
 
 
 class AggregatePlanRequest(BaseModel):
-    """One catalog or private raster, bounded expressions, and an explicit area."""
+    """One raster, bounded expressions, and an explicit box or polygon selection.
+
+    Vector selections may reference catalog layers or private uploaded GeoPackages.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     sources: Annotated[
@@ -107,7 +110,7 @@ class AggregatePlanRequest(BaseModel):
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
     ]
     selectedBounds: Wgs84Bounds | None = None
-    catalogSelection: CatalogSelection | None = None
+    catalogSelection: VectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
     targetChunkPixels: ChunkPixels | None = None
@@ -191,14 +194,14 @@ class AggregateBatchRequest(BaseModel):
 
 
 class AggregateArea(BaseModel):
-    """Exact calculation area: a box, catalog selection, uploaded polygons or whole raster."""
+    """Exact calculation area: a box, vector selection, polygons or whole raster."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["bounds", "catalogSelection", "polygons", "wholeRaster"]
     bounds: tuple[float, float, float, float] | None = None
     geometryHash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     geometries: tuple[dict[str, object], ...] = ()
-    catalogSelection: CatalogSelection | None = None
+    catalogSelection: VectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
@@ -244,15 +247,15 @@ class AggregateArea(BaseModel):
         if self.kind == "catalogSelection":
             if self.catalogSelection is None or self.geometries:
                 raise ValueError(
-                    "Catalog areas require only a catalog selection descriptor"
+                    "Vector areas require only a vector selection descriptor"
                 )
             if (
                 self.resolved is not None
                 and self.resolved.selection != self.catalogSelection
             ):
-                raise ValueError("Resolved source does not match the catalog selection")
+                raise ValueError("Resolved source does not match the vector selection")
         elif self.catalogSelection is not None or self.resolved is not None:
-            raise ValueError("Only catalog areas may carry a catalog source")
+            raise ValueError("Only vector areas may carry a vector source")
         elif self.kind == "bounds" and self.geometries:
             raise ValueError("Box areas cannot contain polygon geometry")
         return self
@@ -261,7 +264,7 @@ class AggregateArea(BaseModel):
     def serialize_area(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Serialize catalog descriptors or exact uploaded polygons for durable jobs.
+        """Serialize vector descriptors or exact polygon geometry for durable jobs.
 
         Args:
             handler: Pydantic's serialization handler.

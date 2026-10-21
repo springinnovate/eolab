@@ -371,6 +371,24 @@ class PostgresJobStore:
         with self._transaction() as cursor:
             return self._inspect_input_file(cursor, owner, run_id, artifact_id)[1]
 
+    def active_input_uploads(self) -> set[str]:
+        """Return retained upload tokens still needed by unfinished computations.
+
+        Returns:
+            Tokens belonging to queued, running or cancelling jobs. The API
+            serializes admission with upload cleanup before using this snapshot.
+
+        Raises:
+            ProcessingError: If the database cannot read the active jobs.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT token FROM processing.jobs, "
+                "LATERAL jsonb_each_text(input_uploads) AS uploads(upload_id,token) "
+                "WHERE status IN ('queued','running','cancelling')"
+            )
+            return {row["token"] for row in cursor.fetchall()}
+
     def read_retained_input(
         self, identifier: str, attempt: str, run_id: str, artifact_id: str
     ) -> tuple[str, PublishedFile]:
@@ -589,6 +607,7 @@ class PostgresJobStore:
                             serialize_retained_metadata(expected.retained_metadata),
                             retained_seconds or self.limits.metadata_ttl_seconds,
                             retained_seconds,
+                            Jsonb(expected.input_uploads),
                         )
                     )
 
@@ -622,8 +641,8 @@ class PostgresJobStore:
             with cursor.connection.pipeline():
                 if new_jobs:
                     cursor.executemany(
-                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds) "
-                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO processing.jobs(id,expires_at,status,spec,reserved_bytes,summary,operation,work_key,retained_metadata,metadata_ttl_seconds,result_ttl_seconds,input_uploads) "
+                        "VALUES (%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                         new_jobs,
                     )
                 if new_subscribers:

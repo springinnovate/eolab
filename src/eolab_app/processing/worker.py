@@ -25,10 +25,12 @@ from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
+from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
 from eolab_app.processing.downstream_models import DownstreamLimits
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
+from eolab_app.vector_uploads import VectorUploadStore
 from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_run_contracts import MODEL_OPERATION, ModelRunSpec
 from eolab_app.processing.model_runs import (
@@ -58,6 +60,7 @@ class ProcessingWorker:
         *,
         native: ReusableProcess | None = None,
         areas: CatalogSelectionReader | None = None,
+        uploads: VectorUploadStore | None = None,
         downstream_limits: DownstreamLimits | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
@@ -69,9 +72,11 @@ class ProcessingWorker:
             limits: Deployment-wide concurrency, retention and cache policy.
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
+            uploads: Storage for original uploaded vectors retained by accepted jobs.
             downstream_limits: Optional downstream job lifecycle settings.
         """
         self.areas = areas
+        self.uploads = uploads
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
@@ -86,20 +91,38 @@ class ProcessingWorker:
         ModelRegistry.load_installed()
 
     def _operation_context(
-        self, reuse_results: bool, source_checksum: str | None = None
+        self,
+        row: dict[str, Any],
+        reuse_results: bool,
+        source_checksum: str | None = None,
     ) -> OperationContext:
         """Supply existing execution capabilities to a registered raster operation.
 
         Args:
+            row: Claimed job with its retained upload references.
             reuse_results: Whether this attempt may reuse scalar results.
             source_checksum: Published checksum when using a private file.
 
         Returns:
             Operation context without browser, recipe or rendering state.
+
+        Raises:
+            ProcessingError: If retained upload reading is not configured.
         """
+        areas = self.areas
+        if row["input_uploads"]:
+            if areas is None or self.uploads is None:
+                raise ProcessingError(
+                    "uploads_unavailable",
+                    "Uploaded vector source access is unavailable.",
+                    503,
+                )
+            areas = RetainedVectorSelectionReader(
+                areas, self.uploads, row["input_uploads"]
+            )
         return OperationContext(
             self.jobs,
-            self.areas,
+            areas,
             self.limits,
             self.aggregate_limits,
             self.native,
@@ -207,7 +230,7 @@ class ProcessingWorker:
         authorized, checksum = await self._resolve_source(
             row, operation.source(calculation)
         )
-        context = self._operation_context(model is None, checksum)
+        context = self._operation_context(row, model is None, checksum)
         context.rasters.update(
             await self._resolve_additional_sources(calculation, operation)
         )
@@ -267,11 +290,11 @@ class ProcessingWorker:
         spec = calculation
         source = handler.source(spec)
         target, action, limits = handler.execution(
-            spec, self._operation_context(model is None)
+            spec, self._operation_context(row, model is None)
         )
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
-        context = self._operation_context(model is None, checksum)
+        context = self._operation_context(row, model is None, checksum)
         context.rasters.update(await self._resolve_additional_sources(spec, handler))
         native_sources, spec = await handler.execution_inputs(context, spec, authorized)
         directory = await asyncio.to_thread(
@@ -440,7 +463,7 @@ class ProcessingWorker:
             elif isinstance(error, (RasterFeatureError, SelectionUnavailableError)):
                 detail = {
                     "code": "source_unavailable",
-                    "detail": "The catalog source is unavailable. Check the layer, then submit the job again.",
+                    "detail": "The input source is unavailable. Check the layer, then submit the job again.",
                 }
             else:
                 detail = {

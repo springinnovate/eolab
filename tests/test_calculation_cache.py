@@ -463,6 +463,7 @@ def test_worker_reuses_results_after_authorization(
     now = datetime.now(timezone.utc)
     row = {
         "id": "a" * 32,
+        "input_uploads": {},
         "status": "running",
         "attempt_id": "b" * 32,
         "spec": prepared.specification,
@@ -602,6 +603,7 @@ def test_cache_hit_skips_planning_and_pins_values(
     row = {
         "id": "a" * 32,
         "attempt_id": "b" * 32,
+        "input_uploads": {},
         "spec": UnpreparedCalculation(request=request).model_dump(
             mode="json", by_alias=True
         ),

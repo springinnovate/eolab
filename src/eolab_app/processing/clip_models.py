@@ -1,6 +1,6 @@
 """Raster-clip inputs and result details layered on shared Processing contracts."""
 
-from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
@@ -32,6 +32,7 @@ class ClipInputs(BaseModel):
 
     Catalog requests use collectionId/itemId or a nested ``source`` reference.
     Private run-file requests use ``source`` with the owned artifact identity.
+    The clip area may select features from a catalog vector or private upload.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -46,7 +47,7 @@ class ClipInputs(BaseModel):
     )
 
     selectedBounds: Wgs84Bounds | None = None
-    catalogSelection: CatalogSelection | None = None
+    catalogSelection: VectorSelection | None = None
 
     @model_validator(mode="after")
     def validate_clip_inputs(self) -> "ClipInputs":
@@ -63,7 +64,7 @@ class ClipInputs(BaseModel):
         elif self.collection_id is not None or self.item_id is not None:
             raise ValueError("Choose one raster source")
         if (self.selectedBounds is None) == (self.catalogSelection is None):
-            raise ValueError("Choose exactly one histogram box or catalog selection")
+            raise ValueError("Choose exactly one map area or vector selection")
         return self
 
 
@@ -84,12 +85,12 @@ class UnpreparedClip(BaseModel):
 
 
 class ClipArea(BaseModel):
-    """Durable box or catalog selection describing the area to clip."""
+    """Durable box or vector selection describing the area to clip."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["bounds", "catalogSelection"]
     bounds: tuple[float, float, float, float]
-    catalogSelection: CatalogSelection | None = None
+    catalogSelection: VectorSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
@@ -100,7 +101,7 @@ class ClipArea(BaseModel):
             The validated operation-owned area.
 
         Raises:
-            ValueError: For inconsistent catalog or box inputs.
+            ValueError: For inconsistent vector or box inputs.
         """
         Wgs84Bounds(
             west=self.bounds[0],
@@ -111,22 +112,22 @@ class ClipArea(BaseModel):
         if self.kind == "catalogSelection":
             if self.catalogSelection is None:
                 raise ValueError(
-                    "Catalog areas require only a catalog selection descriptor"
+                    "Vector areas require only a vector selection descriptor"
                 )
             if (
                 self.resolved is not None
                 and self.resolved.selection != self.catalogSelection
             ):
-                raise ValueError("Resolved source does not match the catalog selection")
+                raise ValueError("Resolved source does not match the vector selection")
         elif self.catalogSelection is not None or self.resolved is not None:
-            raise ValueError("Only catalog areas may carry a catalog source")
+            raise ValueError("Only vector areas may carry a vector source")
         return self
 
     @model_serializer(mode="wrap")
     def serialize_area(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Omit the catalog descriptor when serializing a box.
+        """Omit the vector descriptor when serializing a box.
 
         Args:
             handler: Pydantic's serialization handler.

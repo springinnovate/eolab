@@ -64,6 +64,7 @@ def test_real_plan_worker_and_public_result(
     claimed = datetime.now(timezone.utc)
     row = {
         "id": identifier,
+        "input_uploads": {},
         "attempt_id": "b" * 32,
         "spec": queued.model_dump(mode="json", by_alias=True),
         "reserved_bytes": 0,
@@ -221,6 +222,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
     now = datetime.now(timezone.utc)
     row = {
         "id": "a" * 32,
+        "input_uploads": {},
         "attempt_id": "b" * 32,
         "spec": prepared.specification,
         "summary": prepared.summary,

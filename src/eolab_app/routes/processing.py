@@ -53,6 +53,7 @@ from eolab_app.processing.model_run_contracts import (
     ModelDeletionAction,
 )
 from eolab_app.routes.processing_events import JobEventResponse
+from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.http_disconnect import wait_for_http_disconnect
@@ -433,8 +434,8 @@ def create_processing_router(
 
         Args:
             body: The chosen recipe, inputs, parameters, label and retry ID.
-            request: The HTTP request carrying the browser's Processing session cookie.
-            response: The response receiving session-cookie and private-cache headers.
+            request: HTTP request carrying Processing and private-upload browser cookies.
+            response: Response renewing those cookies and private-cache headers.
 
         Returns:
             The new job, or the original job when the same submission is retried.
@@ -448,6 +449,9 @@ def create_processing_router(
                     request, response, session_ttl_seconds
                 ),
                 body,
+                upload_owner=get_browser_owner_hash(
+                    request, response, mutation_header="X-EOLab-Processing"
+                ),
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -657,8 +661,8 @@ def create_processing_router(
 
         Args:
             body: The catalog raster, analysis area and retry ID.
-            request: The HTTP request carrying the browser's Processing session cookie.
-            response: The response receiving session-cookie and private-cache headers.
+            request: HTTP request carrying Processing and private-upload browser cookies.
+            response: Response renewing those cookies and private-cache headers.
 
         Returns:
             The accepted job and its status URL, available after the browser disconnects.
@@ -672,6 +676,9 @@ def create_processing_router(
                     request, response, session_ttl_seconds
                 ),
                 body,
+                upload_owner=get_browser_owner_hash(
+                    request, response, mutation_header="X-EOLab-Processing"
+                ),
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -712,8 +719,8 @@ def create_processing_router(
 
         Args:
             body: The source, area, formulas and retry ID.
-            request: The HTTP request carrying the browser's Processing session cookie.
-            response: The response receiving session-cookie and private-cache headers.
+            request: HTTP request carrying Processing and private-upload browser cookies.
+            response: Response renewing those cookies and private-cache headers.
 
         Returns:
             The accepted calculation job and its status URL.
@@ -727,6 +734,9 @@ def create_processing_router(
                     request, response, session_ttl_seconds
                 ),
                 body,
+                upload_owner=get_browser_owner_hash(
+                    request, response, mutation_header="X-EOLab-Processing"
+                ),
             )
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
@@ -744,8 +754,8 @@ def create_processing_router(
 
         Args:
             body: The calculation requests to validate and submit together.
-            request: The HTTP request carrying the browser's Processing session cookie.
-            response: The response receiving session-cookie and private-cache headers.
+            request: HTTP request carrying Processing and private-upload browser cookies.
+            response: Response renewing those cookies and private-cache headers.
 
         Returns:
             One indexed job or error per item; an invalid item does not reject valid neighbors.
@@ -788,7 +798,13 @@ def create_processing_router(
                 }
         if valid:
             outcomes = await _await_service_result(
-                service.submit_calculation_batch(owner, valid)
+                service.submit_calculation_batch(
+                    owner,
+                    valid,
+                    upload_owner=get_browser_owner_hash(
+                        request, response, mutation_header="X-EOLab-Processing"
+                    ),
+                )
             )
             for index, outcome in zip(indices, outcomes, strict=True):
                 if isinstance(outcome, ProcessingError):

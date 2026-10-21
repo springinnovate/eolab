@@ -714,6 +714,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     now = datetime.now(timezone.utc)
     row = {
         "id": "a" * 32,
+        "input_uploads": {},
         "attempt_id": "b" * 32,
         "operation": "model.run.v1",
         "spec": prepared.specification,

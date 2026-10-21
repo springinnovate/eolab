@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Generic, Literal, TypeVar
 from pydantic import BaseModel, TypeAdapter
 
+from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingError
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.processing.aggregate_models import (
@@ -30,6 +31,7 @@ from eolab_app.processing.downstream_models import (
     DownstreamPlan,
     ClosedEdgeDownstreamNumericalPolicy,
     StartingMask,
+    VectorStartingMask,
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
 
@@ -80,6 +82,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         bind: Translate recipe-bound arguments into the existing request contract.
         source: Extract the operation's catalog or owned run-file reference.
         polygon: Identify an owned polygon upload that admission must copy.
+        selection: Identify the selected vector whose source admission must retain.
         queue: Capture inputs and ordinary sharing identity; model admission removes it.
         prepare: Resolve captured inputs into a native calculation plan.
         execution: Select the native target, action and execution settings.
@@ -110,6 +113,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     bind: Callable[[dict[str, Any], dict[str, Any], str, str], Request]
     source: Callable[[Request | Queued | Prepared], RasterSourceReference]
     polygon: Callable[[Request], PolygonAreaReference | None]
+    selection: Callable[[Request], VectorSelection | None]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
         [OperationContext, Queued, AuthorizedRaster],
@@ -222,6 +226,11 @@ OPERATIONS = MappingProxyType(
                 bind=downstream.bind_downstream,
                 source=downstream.get_values_source,
                 polygon=downstream.get_uploaded_polygon,
+                selection=lambda request: (
+                    request.starting_mask.selection
+                    if isinstance(request.starting_mask, VectorStartingMask)
+                    else None
+                ),
                 queue=downstream.build_downstream_submission,
                 prepare=downstream.prepare_downstream,
                 execution=downstream.select_downstream_execution,
@@ -249,6 +258,7 @@ OPERATIONS = MappingProxyType(
                 bind=raster.bind_summary,
                 source=raster.get_summary_source,
                 polygon=raster.get_summary_polygon,
+                selection=lambda request: request.catalogSelection,
                 queue=raster.build_summary_submission,
                 prepare=raster.prepare_summary,
                 execution=raster.select_summary_execution,
@@ -273,6 +283,7 @@ OPERATIONS = MappingProxyType(
                 bind=raster.bind_clip,
                 source=raster.get_clip_source,
                 polygon=raster.get_clip_polygon,
+                selection=lambda request: request.catalogSelection,
                 queue=raster.build_clip_submission,
                 prepare=raster.prepare_clip,
                 execution=raster.select_clip_execution,

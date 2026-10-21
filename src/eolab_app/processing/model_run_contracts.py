@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import (
     AggregateGrid,
     AggregateValue,
@@ -127,14 +127,14 @@ class BoundsArea(ModelSchema):
 
 
 class SelectionArea(ModelSchema):
-    """An analysis area selected from a catalog vector layer using its filter.
+    """An analysis area selected from a catalog vector or private uploaded layer.
 
     The stored selection identifies the original dataset and filter rules.
     Processing reads the matching features when preparing the run.
     """
 
     kind: Literal["catalogSelection"]
-    selection: CatalogSelection
+    selection: VectorSelection
 
 
 class PolygonArea(ModelSchema):
@@ -156,7 +156,7 @@ SummaryArea = Annotated[
 ]
 
 
-# Raster clips require an explicit box or catalog vector predicate.
+# Raster clips require an explicit box or vector predicate.
 ClipModelArea = Annotated[BoundsArea | SelectionArea, Field(discriminator="kind")]
 
 

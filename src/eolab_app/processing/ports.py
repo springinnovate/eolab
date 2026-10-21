@@ -81,6 +81,18 @@ class JobWakeup(Protocol):
 class JobStore(Protocol):
     """Persist Processing jobs and enforce ownership, execution slots and renewable leases."""
 
+    def active_input_uploads(self) -> set[str]:
+        """Return retained upload tokens still needed by unfinished computations.
+
+        Returns:
+            Tokens belonging to queued, running or cancelling jobs. The API
+            serializes admission with upload cleanup before using this snapshot.
+
+        Raises:
+            ProcessingError: If the database cannot read the active jobs.
+        """
+        ...
+
     def inspect_input_file(
         self, owner: str, run_id: str, artifact_id: str
     ) -> JobInputFile:

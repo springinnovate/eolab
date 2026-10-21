@@ -72,6 +72,7 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_results(tmp_path: P
                 now = datetime.now(timezone.utc)
                 row = dict(
                     id=identifier,
+                    input_uploads={},
                     attempt_id=str(index + 3) * 32,
                     # Retained identity is provenance, not a worker precondition.
                     spec=UnpreparedCalculation(request=request).model_dump(
