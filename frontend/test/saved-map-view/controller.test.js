@@ -1103,3 +1103,63 @@ test("unavailable private uploads are explained after refresh and when opening l
     controller.destroy();
   }
 });
+
+test("removing a restored upload while another layer loads does not discard the saved map", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const later = { ...upload, uploadId: "22222222-2222-4222-8222-222222222222", customName: "Forest" };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [upload, later] };
+  const records = [], ordered = [], view = createView(), timers = createTimers();
+  const storage = createStorage(serializeSavedMapView(saved));
+  let finishLater;
+  const waiting = new Promise(resolve => { finishLater = resolve; });
+  const controller = createController({ view, storage,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { restore() {} }, catalogVisualization: { clear() {} },
+    mapLayers: { retainedRecords: records, commitStaged() {},
+      setLegendIncluded(key) { assert.ok(records.some(record => record.entry.key === key), "only retained layers receive legend changes"); },
+      restoreOrder(keys) { ordered.push(keys); } },
+    restoreUpload: async layer => {
+      if (layer.uploadId === later.uploadId) await waiting;
+      const key = `local:upload:${layer.uploadId}`;
+      records.push({ entry: { key, item: null } });
+      return key;
+    },
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  const restoring = controller.restoreStartupView("");
+  await flushAsyncWork();
+  assert.equal(records.length, 1);
+  records.length = 0;
+  finishLater();
+  await restoring;
+  assert.equal(storage.clears, 0);
+  assert.equal(view.result.loaded, 1);
+  assert.equal(view.result.total, 2);
+  assert.match(view.result.details[0], /Wetlands was removed from the map/);
+  assert.deepEqual(ordered, [[`local:upload:${later.uploadId}`]]);
+  controller.destroy();
+});
+
+test("undoing Reset explains an upload deleted after the reset", async () => {
+  const upload = { uploadId: "11111111-1111-4111-8111-111111111111", customName: "Wetlands",
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const saved = emptySavedMap(10, 20, 6), view = createView(), timers = createTimers();
+  const records = [{ entry: { key: `local:upload:${upload.uploadId}`, item: null } }];
+  const controller = createController({ view, storage: createStorage(), initialViewport: saved.viewport,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { snapshot: () => saved.viewport, restore() {} },
+    catalogVisualization: { clear() {} }, beforeRestore() { records.length = 0; },
+    mapLayers: { retainedRecords: records, commitStaged() {} }, exportUpload: () => upload,
+    restoreUpload: async () => { throw new Error("This private upload was deleted."); },
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  await controller.resetView();
+  assert.equal(view.undoVisible, true);
+  await controller.undoReset();
+  assert.equal(view.undoVisible, false);
+  assert.equal(view.result.loaded, 0);
+  assert.equal(view.result.total, 1);
+  assert.match(view.result.details[0], /Wetlands:.*deleted/);
+  controller.destroy();
+});

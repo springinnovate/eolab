@@ -423,6 +423,7 @@ export class SavedMapViewController {
 
     /**
      * Restore and consume the validated view captured immediately before reset.
+     * Report any layers that can no longer be opened, including deleted uploads.
      *
      * @return {Promise<void>} Completion after the atomic restore transaction.
      */
@@ -439,6 +440,7 @@ export class SavedMapViewController {
             this.undoView = null;
             this.storage?.write(serializeSavedMapView(savedMapView));
             this.view.hideUndoReset();
+            if (report.loaded !== report.total || report.details.length > 0) this.view.showResults(report);
             this.rememberPending = true;
         } catch (error) {
             this.view.showError(asError(error), "undo");
@@ -519,6 +521,7 @@ export class SavedMapViewController {
      * Restore saved layers through their owners and apply the saved drawing order.
      * Private uploads and shared layers must belong to this deployment; their
      * owners enforce browser access before returning a map key.
+     * Layers removed while other sources are loading stay out of the final order.
      *
      * @param {Object} savedMapView Validated saved-map document.
      * @param {number} restoreGeneration Current restoration generation.
@@ -565,7 +568,12 @@ export class SavedMapViewController {
         const basemapWarning = savedMapView.basemap === undefined ? null : await this.basemap.restore(savedMapView.basemap);
         if (this.destroyed || restoreGeneration !== this.restoreGeneration) return null;
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        const retainedKeys = new Set(this.mapLayers.retainedRecords.map(record => record.entry.key));
         for (const [index, result] of preparations.entries()) {
+            if (result.key && !retainedKeys.has(result.key)) {
+                result.key = null;
+                result.detail = `${savedMapView.layers[index].customName ?? "A saved layer"} was removed from the map while it was opening.`;
+            }
             const key = result.key ?? result.staged?.record.entry.key;
             if (key) this.mapLayers.setLegendIncluded(key, savedMapView.layers[index].legendIncluded !== false);
         }
