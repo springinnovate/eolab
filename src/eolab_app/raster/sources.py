@@ -4,6 +4,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from eolab_app.raster.source_models import (
+    TemporalRasterSelection,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import TemporalObservation
+
+from eolab_app.raster.era5_source import get_era5_observations
+
 from eolab_app.raster.catalog_contract import GEOTIFF_MEDIA_TYPES
 from eolab_app.raster.errors import (
     RasterAssetError,
@@ -84,6 +92,25 @@ class MountedRasterResolver:
                 "The GeoTIFF Asset is outside the mounted scan source"
             )
         return source_path
+
+    def get_observations(
+        self,
+        item: dict[str, Any],
+        selection: TemporalRasterSelection | TemporalIntervalSelection,
+    ) -> tuple[TemporalObservation, ...]:
+        """Return selected published observations confined to this source mount.
+
+        Args:
+            item: Authoritative temporal Catalog Item.
+            selection: Validated variable and observation or interval.
+
+        Returns:
+            Available observations ordered by UTC label.
+
+        Raises:
+            RasterFeatureError: If the selection or archive cannot be read.
+        """
+        return get_era5_observations(item, selection, self._scan_mount_path)
 
 
 class PublishedRasterRegistry:

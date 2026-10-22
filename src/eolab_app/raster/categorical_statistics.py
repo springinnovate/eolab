@@ -1,7 +1,5 @@
 """Area-weighted numeric category distributions over bounded native samples."""
 
-from pathlib import Path
-
 import numpy
 import rasterio
 from numpy.typing import NDArray
@@ -25,7 +23,9 @@ from eolab_app.raster.sample_grid import (
     read_planned_sample_grid,
     sample_grid_policy_parameters,
 )
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.raster.source_contract import (
+    geographic_cell_edges,
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
 )
@@ -63,7 +63,7 @@ def categorical_statistics_policy_parameters() -> tuple[int, ...]:
 
 
 def estimate_sample_cell_areas_hectares(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     sample_shape: tuple[int, int],
     projected_geometries: tuple[dict[str, object], ...] | PolygonRasterizer | None,
@@ -121,19 +121,7 @@ def estimate_sample_cell_areas_hectares(
             force_over=True,
         )
         longitudes, latitudes = to_wgs84.transform(native_x, native_y, errcheck=True)
-        if not (
-            numpy.all(numpy.isfinite(longitudes))
-            and numpy.all(numpy.isfinite(latitudes))
-        ):
-            raise ValueError("Categorical ground-area coordinates must be finite")
-        if (
-            numpy.any(longitudes < -180 - 1e-8)
-            or numpy.any(longitudes > 180 + 1e-8)
-            or numpy.any(numpy.abs(latitudes) > 90 + 1e-8)
-        ):
-            raise ValueError(
-                "Categorical ground-area estimates require a continuous longitude domain from -180 to 180"
-            )
+        longitudes, latitudes = geographic_cell_edges(dataset, longitudes, latitudes)
         to_equal_area = Transformer.from_crs(
             "EPSG:4326",
             CATEGORICAL_EQUAL_AREA_CRS,
@@ -178,7 +166,7 @@ def estimate_sample_cell_areas_hectares(
 
 
 def read_raster_categorical_statistics(
-    source_path: Path,
+    source: RasterData,
     sampling_area: RasterSamplingArea,
     cancellation_requested: RasterReadCancellationCheck | None = None,
     *,
@@ -187,7 +175,7 @@ def read_raster_categorical_statistics(
     """Read native numeric categories and estimate selected ground coverage.
 
     Args:
-        source_path: Catalog-authorized, signed mounted GeoTIFF.
+        source: Authorized raster file or selected temporal observation.
         sampling_area: Validated whole, bounds or original Catalog selection.
         cancellation_requested: Optional last-waiter cancellation predicate.
         category_values: Boundary-validated, sorted distinct integer codes.
@@ -207,8 +195,8 @@ def read_raster_categorical_statistics(
     """
     require_active_raster_read(cancellation_requested)
     selected_area = None
-    with rasterio.open(source_path) as dataset:
-        require_signed_raster_dependencies(dataset, source_path)
+    with open_raster_data(source) as dataset:
+        require_signed_raster_dependencies(dataset, source)
         require_raster_analysis_georeferencing(dataset)
         if isinstance(sampling_area, SelectedBoundsSamplingArea):
             selected_area = selected_raster_area_for_wgs84_bounds(

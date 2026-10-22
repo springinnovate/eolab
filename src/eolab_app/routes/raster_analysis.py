@@ -21,7 +21,7 @@ from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.raster.source_access import RasterSourceAccess
 from eolab_app.raster.source_models import (
-    RasterSourceRequest,
+    RasterAnalysisSourceRequest,
     RasterSourceDescription,
     RasterPixelSourceRequest,
     RasterStatisticsSourceRequest,
@@ -116,17 +116,17 @@ def create_raster_analysis_router(
 
     @router.post("/sources", response_model=RasterSourceDescription)
     async def describe_raster_source(
-        body: RasterSourceRequest, request: Request, response: Response
+        body: RasterAnalysisSourceRequest, request: Request, response: Response
     ) -> dict[str, Any]:
-        """Describe original raster data and reader support for either source identity.
+        """Describe original raster data and reader support for the selected source.
 
         Args:
-            body: Path-free catalog or run-file reference.
+            body: Path-free raster file or temporal observation reference.
             request: HTTP session and cancellation context.
             response: Private response headers.
 
         Returns:
-            Original grid metadata, immutable version and format capabilities.
+            Original grid metadata, selection identity and format capabilities.
 
         Raises:
             HTTPException: If authorization, inspection or cancellation fails.

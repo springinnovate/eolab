@@ -943,6 +943,18 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
             self.started = asyncio.Event()
             self.canceled = asyncio.Event()
 
+        async def invalidate_temporal_items(
+            self, item_keys: tuple[tuple[str, str], ...]
+        ) -> None:
+            """Accept catalog refresh notifications without retaining cached results.
+
+            Args:
+                item_keys: Collection and Item IDs successfully written by the scan.
+
+            Returns:
+                None; this test double has no completed results to invalidate.
+            """
+
         async def _block(self, method: str) -> None:
             """Block the expected route method until its task is canceled.
 

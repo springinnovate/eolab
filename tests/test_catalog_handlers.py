@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from eolab_app.catalog.handlers import (
     DatasetHandler,
     DatasetHandlerRegistry,
@@ -138,3 +140,71 @@ def test_mixed_handler_results_preserve_source_progress_and_item_batching(
         item["id"]
         for item in catalog_writer.write_session.items.values()
     } == {"one-0", "multiple-0", "multiple-1", "multiple-2"}
+
+
+@pytest.mark.parametrize("write_fails", [False, True])
+def test_scan_notifies_source_consumers_only_after_successful_writes(
+    tmp_path: Path, write_fails: bool
+) -> None:
+    """Refresh dependent caches after persistence, excluding rejected metadata.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+        write_fails: Whether the catalog rejects the extracted Item batch.
+    """
+    for source_name in ("one.source", "failed.source"):
+        (tmp_path / source_name).touch()
+    registry = DatasetHandlerRegistry(
+        handlers=(
+            DatasetHandler(
+                name="cardinality",
+                discover=discover_cardinality_sources,
+                build_items=build_cardinality_items,
+            ),
+        )
+    )
+    writer = RecordingCatalogWriter(
+        RuntimeError("catalog unavailable") if write_fails else None
+    )
+    notifications: list[tuple[tuple[str, str], ...]] = []
+
+    async def items_updated(keys: tuple[tuple[str, str], ...]) -> None:
+        """Record refreshed IDs after their new metadata is readable.
+
+        Args:
+            keys: Identifiers successfully persisted by the scan.
+        """
+        assert all(key in writer.write_session.items for key in keys)
+        notifications.append(keys)
+
+    manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        writer,
+        RecordingCatalogDatabase(writer),
+        1,
+        1,
+        2,
+        dataset_handlers=registry,
+        metadata_pipeline=MetadataPipeline(
+            tmp_path, 1, 2, registry, executor_factory=ThreadPoolExecutor
+        ),
+        items_updated=items_updated,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        """Wait for the scan and its refresh notifications to finish.
+
+        Returns:
+            Terminal public scan status.
+        """
+        await manager.start()
+        while manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0)
+        return manager.status()
+
+    status = asyncio.run(run_scan())
+    assert status["state"] == ("failed" if write_fails else "completed")
+    assert notifications == (
+        [] if write_fails else [(("eolab-mounted-vectors", "one-0"),)]
+    )

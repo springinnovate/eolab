@@ -1,5 +1,5 @@
 {
-  "description": "Design examples for #813, not current endpoint requests. Coverage is synthetic: temperature has all four timestamps; precipitation omits 01:00; solar radiation has only 02:00. The missing hours illustrate variable-specific availability, not a defect observed in the real archive. Values and raster reads belong to #815.",
+  "description": "Use observationSelection as source in raster-analysis requests, or as xRaster/yRaster in paired statistics. Pixels also require longitude and latitude; statistics may include selectedBounds. The interval selections describe the internal ordered-observation reader, not an HTTP endpoint. Coverage below is synthetic: temperature has all four timestamps, precipitation omits 01:00, and solar radiation has only 02:00. Use the actual dataset coverage when choosing a time.",
   "observationSelection": {
     "collectionId": "eolab-temporal-datasets",
     "itemId": "era5-ncar",

@@ -3,6 +3,12 @@
 from pathlib import Path
 from typing import Any, Protocol
 
+from eolab_app.raster.source_models import (
+    TemporalRasterSelection,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import TemporalObservation
+
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterRequest,
@@ -14,7 +20,9 @@ class RasterCatalog(Protocol):
 
     async def get_item(
         self,
-        request: CatalogRasterRequest,
+        request: (
+            CatalogRasterRequest | TemporalRasterSelection | TemporalIntervalSelection
+        ),
     ) -> dict[str, Any]:
         """Load the authoritative Item matching a validated request.
 
@@ -25,6 +33,7 @@ class RasterCatalog(Protocol):
             Authoritative STAC Item.
         """
         ...
+
 
 class RasterPublisher(Protocol):
     """Rendering adapter required by the publication use case."""
@@ -85,6 +94,25 @@ class RasterSourceResolver(Protocol):
         """
         ...
 
+    def get_observations(
+        self,
+        item: dict[str, Any],
+        selection: TemporalRasterSelection | TemporalIntervalSelection,
+    ) -> tuple[TemporalObservation, ...]:
+        """Resolve selected published observations inside the source mount.
+
+        Args:
+            item: Authoritative temporal Item.
+            selection: Validated variable and time or interval.
+
+        Returns:
+            Ordered available observations with confined array locations.
+
+        Raises:
+            RasterFeatureError: If the selection or archive cannot be read.
+        """
+        ...
+
 
 class RasterSourceAuthorizer(Protocol):
     """Authorize mounted catalog sources for rendering-independent analysis."""
@@ -104,5 +132,22 @@ class RasterSourceAuthorizer(Protocol):
         Raises:
             RasterFeatureError: If catalog, mount, or source identity
                 validation fails.
+        """
+        ...
+
+    async def get_observations(
+        self,
+        selection: TemporalRasterSelection | TemporalIntervalSelection,
+    ) -> tuple[TemporalObservation, ...]:
+        """Authorize selected temporal observations independently of rendering.
+
+        Args:
+            selection: Validated Catalog variable and time or interval.
+
+        Returns:
+            Available observations in time order.
+
+        Raises:
+            RasterFeatureError: If Catalog, mount or selection access fails.
         """
         ...

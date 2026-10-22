@@ -2,6 +2,8 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import cast
 import re
 
 from rasterio.errors import RasterioError
@@ -16,7 +18,7 @@ from eolab_app.raster.sources import (
     MountedRasterResolver,
     PublishedRasterRegistry,
 )
-from eolab_app.raster.source_access import RasterSourceAccess, describe_raster_file
+from eolab_app.raster.source_access import RasterSourceAccess, describe_raster_data
 from eolab_app.raster.source_models import RasterSourceRequest, RunArtifactReference
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.source_files import SourceFileError
@@ -125,7 +127,7 @@ class RasterPublicationService:
             raise SourceFileError("Temporary raster publication is unavailable.", 503)
         source = await self._source_access.resolve(reference, owner)
         try:
-            metadata = await asyncio.to_thread(describe_raster_file, source.source_path)
+            metadata = await asyncio.to_thread(describe_raster_data, source.data)
         except (OSError, ValueError, RasterioError) as error:
             raise RasterConflictError(
                 "This raster could not be opened. Reopen the run and try again."
@@ -134,7 +136,7 @@ class RasterPublicationService:
             raise RasterConflictError("This raster cannot be placed on the map.")
         resource_name = f"model_{reference.job_id}_{reference.artifact_id}"
         await self._publisher.publish(
-            resource_name, source.source_path, advertised=False
+            resource_name, cast(Path, source.data), advertised=False
         )
         await self._source_access.resolve(reference, owner)
         layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"

@@ -1,0 +1,382 @@
+"""Verify admitted temporal selections through the existing raster API and refresh."""
+
+import asyncio
+from pathlib import Path
+import shutil
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+import httpx2
+import numpy
+import pytest
+import zarr
+from rasterio.windows import Window
+from zarr.codecs import ZstdCodec
+
+from eolab_app.raster.catalog import StacRasterCatalog
+from eolab_app.raster.pixel_service import RasterPixelService
+from eolab_app.raster.models import RasterStatistics
+from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
+from eolab_app.raster.reader import RasterData
+from eolab_app.raster.statistics import read_raster_statistics
+from eolab_app.sampling_area import RasterSamplingArea
+from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
+from eolab_app.raster.source_models import TemporalIntervalSelection
+from eolab_app.raster.sources import MountedRasterResolver
+from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.raster.temporal import iter_temporal_windows
+from eolab_app.routes.raster_analysis import create_raster_analysis_router
+from tests.test_catalog_temporal import (
+    ITEM_KEY,
+    PRECIPITATION,
+    TEMPERATURE,
+    VARIABLES,
+    create_scanner,
+    era5_archive,
+    scan,
+)
+
+
+def populate_month(archive: Path, variable: str, values: tuple[float, ...]) -> None:
+    """Write sparse February weather cells using the actual sharded storage format.
+
+    Args:
+        archive: Real test producer archive with published February coverage.
+        variable: Variable already recorded in SQLite.
+        values: Native values at the three available time coordinates.
+    """
+    step, unit, title = VARIABLES[variable]
+    array = zarr.create_array(
+        archive / "2000/02/era5.zarr" / variable,
+        shape=(3, 721, 1440),
+        chunks=(696, 32, 32),
+        shards=(696, 64, 64),
+        dtype="float32",
+        fill_value=numpy.nan,
+        overwrite=True,
+        compressors=[ZstdCodec(level=3)],
+        dimension_names=("time", "latitude", "longitude"),
+        attributes={"step_type": step, "units": unit, "long_name": title},
+    )
+    for index, value in enumerate(values):
+        array[index, 359:362, :3] = value
+        array[index, 359:362, -3:] = value + 2
+
+
+def test_api_reads_selections_and_refreshes_statistics(era5_archive: Path) -> None:
+    """Read two dates and variables without rendering, then refresh changed values.
+
+    Args:
+        era5_archive: Published partial months with actual per-variable gaps.
+    """
+    populate_month(era5_archive, TEMPERATURE, (10, 20, 30))
+    populate_month(era5_archive, PRECIPITATION, (1, 99, 3))
+    other_archive = era5_archive.parent / "other-weather"
+    shutil.copytree(era5_archive, other_archive)
+    descriptor = other_archive / "dataset.yaml"
+    descriptor.write_text(
+        descriptor.read_text(encoding="utf-8").replace("era5-test", "era5-other"),
+        encoding="utf-8",
+    )
+    # Each scanner refreshes one archive in the common mounted source directory.
+    scanner, writer = create_scanner(era5_archive)
+    other_scanner, other_writer = create_scanner(other_archive)
+
+    async def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Expose the scanner's current Item through the actual Catalog adapter.
+
+        Args:
+            request: Internal Catalog request.
+
+        Returns:
+            Current persisted Item, without a map or rendering service.
+        """
+        parts = request.url.path.split("/")
+        key = (parts[-3], parts[-1])
+        items = {**writer.write_session.items, **other_writer.write_session.items}
+        return httpx2.Response(200, json=items[key])
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(catalog_response))
+    sources = RasterSourceAccess(
+        CatalogRasterSourceAuthorizer(
+            StacRasterCatalog(client, "http://catalog"),
+            MountedRasterResolver(era5_archive.parent),
+        )
+    )
+    read_count = 0
+
+    def count_statistics_reads(
+        data: RasterData,
+        area: RasterSamplingArea,
+        cancellation_requested: RasterReadCancellationCheck,
+    ) -> RasterStatistics:
+        """Count native reads while executing the ordinary numerical reader.
+
+        Args:
+            data: Authorized original file or temporal observation.
+            area: Sampling area resolved by the real analysis service.
+            cancellation_requested: Shared read cancellation predicate.
+
+        Returns:
+            Statistics calculated from the fixture's actual source cells.
+        """
+        nonlocal read_count
+        read_count += 1
+        return read_raster_statistics(data, area, cancellation_requested)
+
+    statistics = RasterStatisticsService(
+        sources, 1, 20, statistics_reader=count_statistics_reads
+    )
+    scanner.items_updated = statistics.invalidate_temporal_items
+    asyncio.run(scan(scanner))
+    assert scanner.status()["errors"] == []
+    asyncio.run(scan(other_scanner))
+    assert other_scanner.status()["errors"] == []
+    app = FastAPI()
+    app.include_router(
+        create_raster_analysis_router(
+            RasterPixelService(sources, 1),
+            statistics,
+            source_access=sources,
+        )
+    )
+    source = {
+        "collectionId": ITEM_KEY[0],
+        "itemId": ITEM_KEY[1],
+        "variable": TEMPERATURE,
+        "time": "2000-02-01T00:00:00Z",
+    }
+    bounds = {"west": -0.3, "south": -0.1, "east": 0.3, "north": 0.1}
+    with TestClient(app) as api:
+        description = api.post("/api/raster-analysis/sources", json={"source": source})
+        assert description.status_code == 200, description.text
+        assert description.json()["width"] == 1440
+        assert description.json()["capabilities"]["pixels"]["supported"]
+        pixel = api.post(
+            "/api/raster-analysis/pixels",
+            json={
+                "source": source,
+                "longitude": 0,
+                "latitude": 0,
+            },
+        )
+        assert pixel.status_code == 200, pixel.text
+        assert pixel.json()["value"] == 10
+        assert pixel.json()["column"] == 720
+        request = {"source": source, "selectedBounds": bounds}
+        result = api.post("/api/raster-analysis/statistics", json=request)
+        assert result.status_code == 200, result.text
+        assert result.json()["sampleMinimum"] == 10
+        assert result.json()["sampleMaximum"] == 12
+        assert read_count == 1
+        equivalent_time = {**source, "time": "2000-01-31T16:00:00-08:00"}
+        equivalent = api.post(
+            "/api/raster-analysis/statistics",
+            json={
+                **request,
+                "source": equivalent_time,
+            },
+        )
+        assert equivalent.status_code == 200, equivalent.text
+        assert equivalent.json() == result.json()
+        assert read_count == 1
+        unrelated_request = {**request, "source": {**source, "itemId": "era5-other"}}
+        unrelated = api.post("/api/raster-analysis/statistics", json=unrelated_request)
+        assert unrelated.status_code == 200, unrelated.text
+        assert unrelated.json() == result.json()
+        assert read_count == 2
+        categorical_request = {**request, "categoryValues": [10, 12, 40, 42]}
+        categories = api.post(
+            "/api/raster-analysis/statistics", json=categorical_request
+        )
+        assert categories.status_code == 200, categories.text
+        category_areas = categories.json()["categoricalDistribution"]["areasHectares"]
+        assert category_areas[0] > 0 and category_areas[1] > 0
+        assert category_areas[2:] == [0, 0]
+        changed_time = {**source, "time": "2000-02-01T01:00:00Z"}
+        later = api.post(
+            "/api/raster-analysis/statistics", json={**request, "source": changed_time}
+        )
+        assert later.status_code == 200, later.text
+        assert later.json()["sampleMinimum"] == 20
+        east = api.post(
+            "/api/raster-analysis/statistics",
+            json={
+                **request,
+                "selectedBounds": {**bounds, "west": 0.1, "east": 0.3},
+            },
+        )
+        assert east.status_code == 200, east.text
+        assert east.json()["sampleMaximum"] == 10
+        pair_request = {
+            "xRaster": source,
+            "yRaster": changed_time,
+            "selectedBounds": bounds,
+        }
+        paired = api.post("/api/raster-analysis/paired-statistics", json=pair_request)
+        assert paired.status_code == 200, paired.text
+        assert paired.json()["xMinimum"] == 10
+        assert paired.json()["yMinimum"] == 20
+        precipitation = {**source, "variable": PRECIPITATION}
+        other = api.post(
+            "/api/raster-analysis/statistics", json={**request, "source": precipitation}
+        )
+        assert other.status_code == 200, other.text
+        assert other.json()["sampleMinimum"] == 1
+        missing = api.post(
+            "/api/raster-analysis/pixels",
+            json={
+                "source": {**precipitation, "time": "2000-02-01T01:00:00Z"},
+                "longitude": 0,
+                "latitude": 0,
+            },
+        )
+        assert missing.status_code == 409
+        assert "No observation" in missing.json()["detail"]
+        absent_cell = api.post(
+            "/api/raster-analysis/pixels",
+            json={
+                "source": source,
+                "longitude": 50,
+                "latitude": 30,
+            },
+        )
+        assert absent_cell.status_code == 200
+        assert absent_cell.json()["value"] is None
+        unknown = api.post(
+            "/api/raster-analysis/pixels",
+            json={
+                "source": {**source, "variable": "not_a_variable"},
+                "longitude": 0,
+                "latitude": 0,
+            },
+        )
+        assert unknown.status_code == 422
+        for invalid_source in (
+            {key: value for key, value in source.items() if key != "time"},
+            {**source, "time": "2000-02-01T00:00:00"},
+            {**source, "time": "not-a-date"},
+        ):
+            invalid = api.post(
+                "/api/raster-analysis/pixels",
+                json={
+                    "source": invalid_source,
+                    "longitude": 0,
+                    "latitude": 0,
+                },
+            )
+            assert invalid.status_code == 422, invalid.text
+        populate_month(era5_archive, TEMPERATURE, (40, 50, 60))
+        # Operator update -> scan -> calculate; no mutation probes during reads.
+        api.portal.call(scan, scanner)
+        assert scanner.status()["errors"] == []
+        refreshed = api.post("/api/raster-analysis/statistics", json=request)
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["sampleMinimum"] == 40
+        assert refreshed.json()["sampleMaximum"] == 42
+        refreshed_pair = api.post(
+            "/api/raster-analysis/paired-statistics", json=pair_request
+        )
+        assert refreshed_pair.status_code == 200, refreshed_pair.text
+        assert refreshed_pair.json()["xMinimum"] == 40
+        assert refreshed_pair.json()["yMinimum"] == 50
+        refreshed_categories = api.post(
+            "/api/raster-analysis/statistics", json=categorical_request
+        )
+        assert refreshed_categories.status_code == 200, refreshed_categories.text
+        new_areas = refreshed_categories.json()["categoricalDistribution"][
+            "areasHectares"
+        ]
+        assert new_areas[:2] == [0, 0]
+        assert new_areas[2:] == pytest.approx(category_areas[:2])
+        reads_before_unrelated = read_count
+        retained = api.post("/api/raster-analysis/statistics", json=unrelated_request)
+        assert retained.status_code == 200, retained.text
+        assert retained.json() == unrelated.json()
+        assert read_count == reads_before_unrelated
+        shard = era5_archive / "2000/02/era5.zarr" / TEMPERATURE / "c/0/5/0"
+        payload = shard.read_bytes()
+        shard.write_bytes(b"not-zstd" + payload[8:])
+        unreadable = api.post(
+            "/api/raster-analysis/pixels",
+            json={
+                "source": source,
+                "longitude": 0,
+                "latitude": 0,
+            },
+        )
+        assert unreadable.status_code == 409
+        assert "could not be sampled" in unreadable.json()["detail"]
+    asyncio.run(client.aclose())
+
+
+def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) -> None:
+    """Select physical support across months, keeping missing hours absent.
+
+    Args:
+        era5_archive: Two partial months with a gap in precipitation coverage.
+    """
+    populate_month(era5_archive, PRECIPITATION, (1, 99, 3))
+    scanner, writer = create_scanner(era5_archive.parent)
+    asyncio.run(scan(scanner))
+    resolver = MountedRasterResolver(era5_archive.parent)
+    selection = TemporalIntervalSelection(
+        collectionId=ITEM_KEY[0],
+        itemId=ITEM_KEY[1],
+        variable=PRECIPITATION,
+        startTime="2000-01-31T23:00:00Z",
+        endTime="2000-02-01T02:00:00Z",
+    )
+    observations = resolver.get_observations(
+        writer.write_session.items[ITEM_KEY], selection
+    )
+    assert [value.time.hour for value in observations] == [0, 2]
+    assert [
+        (value.time - value.reference_time).total_seconds() for value in observations
+    ] == [6 * 3600, 6 * 3600]
+    assert [
+        (value.interval_end - value.interval_start).total_seconds()
+        for value in observations
+    ] == [3600, 3600]
+    values = list(
+        iter_temporal_windows(
+            observations, Window(720, 360, 1, 1), maximum_decoded_bytes=None
+        )
+    )
+    assert [float(array[0, 0]) for _, _, array in values] == [1, 3]
+    instant = selection.model_dump(by_alias=True)
+    instant.update(variable=TEMPERATURE, endTime="2000-02-01T00:00:00Z")
+    selected = resolver.get_observations(
+        writer.write_session.items[ITEM_KEY], TemporalIntervalSelection(**instant)
+    )
+    assert len(selected) == 1
+    assert selected[0].time.isoformat() == "2000-01-31T23:00:00+00:00"
+    assert selected[0].reference_time is None
+
+
+def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
+    """Reject a persisted descriptor URI outside the configured source mount.
+
+    Args:
+        era5_archive: Valid archive used to construct authoritative metadata.
+    """
+    from eolab_app.raster.errors import RasterAssetError
+    from eolab_app.raster.source_models import TemporalRasterSelection
+
+    scanner, writer = create_scanner(era5_archive.parent)
+    asyncio.run(scan(scanner))
+    item = writer.write_session.items[ITEM_KEY]
+    item["assets"]["eolab:temporal-source"]["href"] = (
+        era5_archive.parent.parent / "outside.yaml"
+    ).as_uri()
+    with pytest.raises(RasterAssetError, match="outside"):
+        MountedRasterResolver(era5_archive.parent).get_observations(
+            item,
+            TemporalRasterSelection(
+                collectionId=ITEM_KEY[0],
+                itemId=ITEM_KEY[1],
+                variable=TEMPERATURE,
+                time="2000-02-01T00:00:00Z",
+            ),
+        )

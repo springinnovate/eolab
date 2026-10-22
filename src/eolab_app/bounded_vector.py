@@ -11,7 +11,7 @@ import sys
 
 from affine import Affine
 from numpy.typing import NDArray
-from rasterio.io import DatasetReader
+from eolab_app.raster.reader import RasterDataset
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
 
@@ -34,6 +34,7 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 from eolab_app.raster.bounded_window import (
+    prepare_raster_for_wgs84_bounds,
     BOUNDED_WGS84_DENSIFY_POINTS,
     NoRasterBoundsOverlapError,
     _polygon_rings,
@@ -448,7 +449,7 @@ class PolygonRasterizer:
 
     def __init__(
         self,
-        dataset: DatasetReader,
+        dataset: RasterDataset,
         filtered_vector: ResolvedCatalogSelection,
         maximum_coordinates: int | None,
         cancellation_requested: RasterReadCancellationCheck | None = None,
@@ -499,6 +500,7 @@ class PolygonRasterizer:
                 summary = selection_summary(
                     filtered_vector, cancellation_requested, limits=read_limits
                 )
+                prepare_raster_for_wgs84_bounds(dataset, summary["bbox"])
                 segments = summary["coordinates"] - summary["rings"]
                 self.densify = min(
                     BOUNDED_WGS84_DENSIFY_POINTS,
@@ -614,7 +616,12 @@ class PolygonRasterizer:
         count = sum(len(r) - 1 for r in rings) * (self.densify + 1) + len(rings)
         if self.maximum_coordinates is not None and count > self.maximum_coordinates:
             raise ValueError("A feature exceeds the transformed-coordinate buffer")
-        return project_wgs84_polygons(self.dataset, (geometry,), count)
+        return project_wgs84_polygons(
+            self.dataset,
+            (geometry,),
+            count,
+            maximum_output_coordinates=self.maximum_coordinates,
+        )
 
     def iter_projected_polygons(self) -> Iterator[dict[str, object]]:
         """Yield the prepared polygons without copying their coordinates.

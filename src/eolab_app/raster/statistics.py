@@ -2,7 +2,6 @@
 
 from eolab_app.bounded_vector import PolygonRasterizer, pixels_inside_area
 import math
-from pathlib import Path
 from typing import Literal
 
 import numpy
@@ -43,6 +42,7 @@ from eolab_app.raster.sample_grid import (
     read_source_window_sample_grid,
     sample_grid_policy_parameters,
 )
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.raster.source_contract import (
     BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
     require_raster_analysis_georeferencing,
@@ -90,7 +90,7 @@ class NoValidRasterSamplesError(ValueError):
 
 
 def selected_raster_area_for_wgs84_bounds(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     selected_bounds: CanonicalWgs84Bounds,
 ) -> SelectedRasterArea:
     """Preserve the statistics module's public bounded-window contract.
@@ -216,7 +216,7 @@ def strict_raster_value_range(
 
 
 def selected_raster_area_for_catalog_selection(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     sampling_area: CatalogSelectionSamplingArea,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> SelectedRasterArea:
@@ -246,7 +246,7 @@ def selected_raster_area_for_catalog_selection(
 
 
 def read_raster_statistics(
-    source_path: Path,
+    source: RasterData,
     sampling_area: RasterSamplingArea,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> RasterStatistics:
@@ -261,7 +261,7 @@ def read_raster_statistics(
     Both paths read source data independently of WMS publication.
 
     Args:
-        source_path: Authorized mounted GeoTIFF.
+        source: Authorized raster file or selected temporal observation.
         sampling_area: Explicit whole, selected-bounds, or resolved catalog selection.
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
@@ -280,9 +280,9 @@ def read_raster_statistics(
     """
 
     require_active_raster_read(cancellation_requested)
-    with rasterio.open(source_path) as dataset:
+    with open_raster_data(source) as dataset:
         require_active_raster_read(cancellation_requested)
-        require_signed_raster_dependencies(dataset, source_path)
+        require_signed_raster_dependencies(dataset, source)
         require_raster_analysis_georeferencing(dataset)
         if isinstance(sampling_area, SelectedBoundsSamplingArea):
             selected_area = selected_raster_area_for_wgs84_bounds(

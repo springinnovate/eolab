@@ -2,11 +2,9 @@
 
 from eolab_app.bounded_vector import pixels_inside_area, selection_summary
 import math
-from pathlib import Path
 
 import numpy
 import rasterio
-from affine import TransformNotInvertibleError
 from rasterio.transform import array_bounds, xy
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
@@ -20,6 +18,7 @@ from eolab_app.raster.bounded_window import (
     BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
     BOUNDED_WGS84_DENSIFY_POINTS,
     NoRasterBoundsOverlapError,
+    get_longitude_wrap_width,
     selected_raster_area_for_wgs84_bounds,
 )
 from eolab_app.raster.models import (
@@ -43,6 +42,7 @@ from eolab_app.raster.sample_grid import (
     read_planned_sample_grid_from_overview,
     sample_grid_policy_parameters,
 )
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.raster.source_contract import (
     BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
     require_raster_analysis_georeferencing,
@@ -103,7 +103,7 @@ def _source_window_for_positions(
 
 
 def _dataset_wgs84_bounds(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
 ) -> CanonicalWgs84Bounds:
     """Return one finite non-wrapping WGS 84 source envelope.
 
@@ -161,8 +161,8 @@ def _intersect_bounds(
 
 
 def _aligned_y_positions(
-    x_dataset: rasterio.io.DatasetReader,
-    y_dataset: rasterio.io.DatasetReader,
+    x_dataset: RasterDataset,
+    y_dataset: RasterDataset,
     x_positions: tuple[tuple[SourcePosition, ...], ...],
     selected_bounds: CanonicalWgs84Bounds,
 ) -> tuple[tuple[SourcePosition, ...], ...]:
@@ -202,16 +202,22 @@ def _aligned_y_positions(
         list(x_coordinates),
         list(y_coordinates),
     )
-    target_x, target_y = transform(
-        x_dataset.crs,
-        y_dataset.crs,
-        list(x_coordinates),
-        list(y_coordinates),
-    )
-    try:
-        inverse_y_transform = ~y_dataset.transform
-    except TransformNotInvertibleError:
-        raise ValueError("Y raster affine transform is not invertible") from None
+    if get_longitude_wrap_width(x_dataset) is not None:
+        west = selected_bounds[0]
+        longitudes = [west + (longitude - west) % 360 for longitude in longitudes]
+        target_x, target_y = transform(
+            "EPSG:4326",
+            y_dataset.crs,
+            longitudes,
+            latitudes,
+        )
+    else:
+        target_x, target_y = transform(
+            x_dataset.crs,
+            y_dataset.crs,
+            list(x_coordinates),
+            list(y_coordinates),
+        )
 
     west, south, east, north = selected_bounds
     aligned: list[tuple[SourcePosition, ...]] = []
@@ -237,9 +243,7 @@ def _aligned_y_positions(
         ):
             aligned.append(())
             continue
-        column_position, row_position = inverse_y_transform * target_coordinate
-        row = math.floor(row_position)
-        column = math.floor(column_position)
+        row, column = y_dataset.index(*target_coordinate)
         aligned.append(
             ((row, column),)
             if 0 <= row < y_dataset.height and 0 <= column < y_dataset.width
@@ -279,8 +283,8 @@ def _strict_histogram_range(
 
 
 def read_raster_paired_statistics(
-    x_source_path: Path,
-    y_source_path: Path,
+    x_source: RasterData,
+    y_source: RasterData,
     selected_bounds: CanonicalWgs84Bounds | None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
     catalog_selection: CatalogSelectionSamplingArea | None = None,
@@ -295,8 +299,8 @@ def read_raster_paired_statistics(
     The histogram receives at most 127 by 127 paired cells.
 
     Args:
-        x_source_path: Authorized mounted X-reference GeoTIFF.
-        y_source_path: Authorized mounted Y GeoTIFF.
+        x_source: Authorized file or observation supplying the reference grid.
+        y_source: Authorized file or observation to align with the reference grid.
         selected_bounds: Optional canonical WGS 84 sampling rectangle.
         catalog_selection: Optional immutable polygon selection; exclusive of bounds.
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
@@ -315,14 +319,14 @@ def read_raster_paired_statistics(
 
     require_active_raster_read(cancellation_requested)
     with (
-        rasterio.open(x_source_path) as x_dataset,
-        rasterio.open(y_source_path) as y_dataset,
+        open_raster_data(x_source) as x_dataset,
+        open_raster_data(y_source) as y_dataset,
     ):
-        for dataset, source_path in (
-            (x_dataset, x_source_path),
-            (y_dataset, y_source_path),
+        for dataset, source in (
+            (x_dataset, x_source),
+            (y_dataset, y_source),
         ):
-            require_signed_raster_dependencies(dataset, source_path)
+            require_signed_raster_dependencies(dataset, source)
             require_raster_analysis_georeferencing(dataset)
         overlap_inputs = (
             _dataset_wgs84_bounds(x_dataset),
