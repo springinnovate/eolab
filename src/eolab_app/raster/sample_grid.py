@@ -8,6 +8,8 @@ import rasterio
 from rasterio.enums import MaskFlags, Resampling
 from rasterio.windows import Window
 
+from eolab_app.raster.reader import RasterDataset
+
 from eolab_app.raster.source_contract import (
     SourceBlockIndex,
     source_work_for_blocks,
@@ -242,7 +244,7 @@ def _source_window_cell_positions(
 
 
 def _overview_read_shape(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     sample_grid_width: int,
     sample_grid_height: int,
@@ -290,7 +292,7 @@ def _overview_read_shape(
 
 
 def _read_bounded_overview(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     plan: "SampleGridPlan",
     cancellation_requested: RasterReadCancellationCheck | None,
@@ -341,7 +343,7 @@ def _read_bounded_overview(
 
 
 def _read_overview_sample_grid(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     plan: "SampleGridPlan",
     cancellation_requested: RasterReadCancellationCheck | None,
@@ -391,7 +393,7 @@ def _read_overview_sample_grid(
 
 
 def read_planned_sample_grid_from_overview(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     plan: "SampleGridPlan",
     cancellation_requested: RasterReadCancellationCheck | None,
@@ -487,7 +489,7 @@ def _block_index(
 
 
 def plan_source_window_sample_grid(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
 ) -> SampleGridPlan:
     """Plan a fixed center grid inside one bounded source-pixel window.
@@ -572,7 +574,7 @@ def _finite_block_value(
 
 
 def plan_sample_grid_for_source_positions(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     width: int,
     height: int,
     cell_positions: tuple[tuple[SourcePosition, ...], ...],
@@ -656,7 +658,7 @@ def plan_sample_grid_for_source_positions(
 
 
 def read_planned_sample_grid(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     plan: SampleGridPlan,
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray:
@@ -721,7 +723,7 @@ def read_planned_sample_grid(
 
 
 def read_source_window_sample_grid(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:

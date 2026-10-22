@@ -1,13 +1,15 @@
 """Neutral WGS 84 selection-to-source-window mechanisms."""
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import cast
 
-import rasterio
 from rasterio.warp import transform
 from rasterio.windows import Window
 
 from eolab_app.raster.models import CanonicalWgs84Bounds, SelectedRasterArea
+from eolab_app.raster.reader import RasterDataset
+from eolab_app.raster.temporal import TemporalRasterDataset
 
 BOUNDED_WGS84_DENSIFY_POINTS = 21
 BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
@@ -15,6 +17,135 @@ BOUNDED_SOURCE_WINDOW_PADDING_PIXELS = 1
 
 class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area misses a raster source grid."""
+
+
+def cyclic_longitude_period(dataset: RasterDataset) -> float | None:
+    """Return the longitude span of an admitted cyclic geographic raster.
+
+    Args:
+        dataset: Open source raster with its admitted grid.
+
+    Returns:
+        Positive longitude period, or None for noncyclic or projected grids.
+    """
+    if (
+        isinstance(dataset, TemporalRasterDataset)
+        and dataset.cyclic_x
+        and dataset.crs.is_geographic
+    ):
+        return abs(dataset.transform.a * dataset.width)
+    return None
+
+
+def prepare_raster_for_wgs84_bounds(
+    dataset: RasterDataset, selected_bounds: CanonicalWgs84Bounds
+) -> None:
+    """Place a cyclic raster's column seam outside the requested area.
+
+    The first bounds supplied to an open read handle choose its grid origin.
+    Later polygon masks retain that view. Interior and full-period selections
+    keep the original grid; other origins align with existing logical blocks.
+    Every source column occurs once. Ordinary and noncyclic rasters are unchanged.
+
+    Args:
+        dataset: Open source, before window or sample plans have been made.
+        selected_bounds: Canonical WGS84 rectangle covering the selection.
+    """
+    if cyclic_longitude_period(dataset) is None:
+        return
+    ring = densified_wgs84_bounds_ring(selected_bounds)
+    x, y = transform(
+        "EPSG:4326",
+        dataset.crs,
+        [point[0] for point in ring],
+        [point[1] for point in ring],
+    )
+    inverse = ~dataset.transform
+    columns = [(inverse * point)[0] for point in zip(x, y)]
+    left, right = min(columns), max(columns)
+    padding = BOUNDED_SOURCE_WINDOW_PADDING_PIXELS
+    if (
+        left >= padding
+        and right <= dataset.width - padding
+        or right - left >= dataset.width
+    ):
+        first_column = 0
+    else:
+        block_width = dataset.block_shapes[0][1]
+        first_column = (math.floor(left) - padding) // block_width * block_width
+    cast(TemporalRasterDataset, dataset).prepare_column_view(first_column)
+
+
+def _periodic_polygon_copies(
+    dataset: RasterDataset,
+    geometries: tuple[dict[str, object], ...],
+    maximum_output_coordinates: int | None,
+) -> tuple[dict[str, object], ...]:
+    """Place polygon copies inside one cyclic view without repeating its cells.
+
+    Args:
+        dataset: Open source whose request-local column view is already chosen.
+        geometries: Projected Polygon or MultiPolygon mappings.
+        maximum_output_coordinates: Coordinate capacity including translated
+            copies, or None for caller-supervised unlimited geometry.
+
+    Returns:
+        Polygons translated by complete longitude periods where they meet the
+        view. Rasterizing their union includes seam-crossing cell portions once.
+
+    Raises:
+        ValueError: If periodic copies exceed the caller's coordinate capacity.
+    """
+    period = cyclic_longitude_period(dataset)
+    if period is None:
+        return geometries
+    copies: list[dict[str, object]] = []
+    output_coordinates = 0
+    for geometry in geometries:
+        longitudes = [point[0] for ring in _polygon_rings(geometry) for point in ring]
+        left, right = min(longitudes), max(longitudes)
+        first = math.ceil((dataset.bounds.left - right) / period)
+        last = math.floor((dataset.bounds.right - left) / period)
+        if geometry["type"] == "Polygon":
+            polygons = (
+                cast(Sequence[Sequence[tuple[float, float]]], geometry["coordinates"]),
+            )
+        else:
+            polygons = cast(
+                Sequence[Sequence[Sequence[tuple[float, float]]]],
+                geometry["coordinates"],
+            )
+        for shift in range(first, last + 1):
+            offset = shift * period
+            if (
+                right + offset <= dataset.bounds.left
+                or left + offset >= dataset.bounds.right
+            ):
+                continue
+            output_coordinates += len(longitudes)
+            if (
+                maximum_output_coordinates is not None
+                and output_coordinates > maximum_output_coordinates
+            ):
+                raise ValueError(
+                    "Periodic polygons exceed the projected-coordinate limit"
+                )
+            if offset == 0:
+                copies.append(geometry)
+                continue
+            translated = [
+                [[(x + offset, y) for x, y in ring] for ring in polygon]
+                for polygon in polygons
+            ]
+            copies.append(
+                {
+                    "type": geometry["type"],
+                    "coordinates": (
+                        translated[0] if geometry["type"] == "Polygon" else translated
+                    ),
+                }
+            )
+    return tuple(copies)
 
 
 def densified_wgs84_bounds_ring(
@@ -51,7 +182,7 @@ def densified_wgs84_bounds_ring(
 
 
 def selected_raster_area_for_wgs84_bounds(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     selected_bounds: CanonicalWgs84Bounds,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
 ) -> SelectedRasterArea:
@@ -74,6 +205,7 @@ def selected_raster_area_for_wgs84_bounds(
         NoRasterBoundsOverlapError: If the selection misses the raster.
         ValueError: If the bounds cannot be transformed to the raster CRS.
     """
+    prepare_raster_for_wgs84_bounds(dataset, selected_bounds)
     wgs84_ring = densified_wgs84_bounds_ring(selected_bounds)
     projected_x, projected_y = coordinate_transform(
         "EPSG:4326",
@@ -89,41 +221,14 @@ def selected_raster_area_for_wgs84_bounds(
     ):
         raise ValueError("Selected bounds could not be projected")
 
-    inverse_transform = ~dataset.transform
-    pixel_ring = tuple(
-        inverse_transform * projected_coordinate
-        for projected_coordinate in projected_ring
+    geometries = _periodic_polygon_copies(
+        dataset,
+        ({"type": "Polygon", "coordinates": [projected_ring]},),
+        2 * len(projected_ring),
     )
-    padding = BOUNDED_SOURCE_WINDOW_PADDING_PIXELS
-    column_start = max(
-        0,
-        math.floor(min(point[0] for point in pixel_ring)) - padding,
-    )
-    row_start = max(
-        0,
-        math.floor(min(point[1] for point in pixel_ring)) - padding,
-    )
-    column_stop = min(
-        dataset.width,
-        math.ceil(max(point[0] for point in pixel_ring)) + padding,
-    )
-    row_stop = min(
-        dataset.height,
-        math.ceil(max(point[1] for point in pixel_ring)) + padding,
-    )
-    if column_start >= column_stop or row_start >= row_stop:
-        raise NoRasterBoundsOverlapError
     return SelectedRasterArea(
-        source_window=Window(
-            column_start,
-            row_start,
-            column_stop - column_start,
-            row_stop - row_start,
-        ),
-        projected_geometries=({
-            "type": "Polygon",
-            "coordinates": [projected_ring],
-        },),
+        source_window=_source_window_for_projected_geometries(dataset, geometries),
+        projected_geometries=geometries,
     )
 
 
@@ -216,7 +321,7 @@ def _densify_polygon_rings(
 
 
 def _source_window_for_projected_geometries(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     projected_geometries: tuple[dict[str, object], ...],
 ) -> Window:
     """Clip a projected polygon envelope to one raster's pixel grid.
@@ -270,10 +375,12 @@ def _source_window_for_projected_geometries(
 
 
 def project_wgs84_polygons(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+    *,
+    maximum_output_coordinates: int | None,
 ) -> tuple[dict[str, object], ...]:
     """Project bounded polygons without clipping their source-pixel envelope.
 
@@ -287,6 +394,8 @@ def project_wgs84_polygons(
         geometries: Validated polygonal WGS 84 GeoJSON values.
         maximum_coordinates: Hard transformation capacity owned by the caller.
         coordinate_transform: Injectable CRS transformation mechanism.
+        maximum_output_coordinates: Output-coordinate capacity including periodic
+            copies, or None when the caller permits unlimited geometry.
 
     Returns:
         Projected polygonal geometries, including those outside the raster.
@@ -353,11 +462,13 @@ def project_wgs84_polygons(
             }
         )
 
-    return tuple(projected_geometries)
+    return _periodic_polygon_copies(
+        dataset, tuple(projected_geometries), maximum_output_coordinates
+    )
 
 
 def selected_raster_area_for_wgs84_polygons(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int | None,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
@@ -379,7 +490,11 @@ def selected_raster_area_for_wgs84_polygons(
         TypeError: If a polygon mapping is malformed.
     """
     projected_tuple = project_wgs84_polygons(
-        dataset, geometries, maximum_coordinates, coordinate_transform
+        dataset,
+        geometries,
+        maximum_coordinates,
+        coordinate_transform,
+        maximum_output_coordinates=maximum_coordinates,
     )
     return SelectedRasterArea(
         source_window=_source_window_for_projected_geometries(

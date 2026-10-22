@@ -176,9 +176,17 @@ unique `id` and title, then scan. The archive appears as one temporal Catalog
 item; its folder contents are not indexed separately. Partial months are valid.
 Update files only between calculations and rescan before using the updated
 data. A failed refresh reports an error and keeps the last valid metadata;
-correct the source and complete a successful scan before continuing. Temporal
-map display and calculations are not yet enabled. The
-[ingestion tests](tests/test_catalog_temporal.py) provide a runnable small archive.
+correct the source and complete a successful scan before continuing.
+
+Temporal observations can be read through the raster-analysis API. Wrap an
+[observation selection](docs/dataset-examples/era5.selections.json) in `source`
+for `/api/raster-analysis/sources`, `/api/raster-analysis/pixels` or
+`/api/raster-analysis/statistics`; pixels also need `longitude` and `latitude`,
+and statistics accept `selectedBounds`. Paired statistics accept selections in
+`xRaster` and `yRaster`. Choose a variable and UTC time listed in the dataset
+coverage. Browser time controls and temporal model calculations are not yet
+enabled. The [API tests](tests/test_temporal_source_access.py) provide runnable
+requests against a small archive.
 
 Raster rendering currently expects prepared, georeferenced, single-band
 GeoTIFFs. EOLab does not rewrite or optimize them during scanning. Mounted

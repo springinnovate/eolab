@@ -1,13 +1,13 @@
-"""Synchronous Rasterio boundary for bounded pixel reads."""
+"""Read original raster cells at longitude and latitude coordinates."""
 
 import math
-from pathlib import Path
 
 import rasterio
 from rasterio.warp import transform
 from rasterio.windows import Window
 
 from eolab_app.raster.models import RasterPixel
+from eolab_app.raster.reader import RasterData, open_raster_data
 from eolab_app.raster.source_contract import (
     read_native_raster_window,
     require_pixel_source_structure,
@@ -15,15 +15,16 @@ from eolab_app.raster.source_contract import (
     require_signed_raster_dependencies,
 )
 
+
 def read_raster_pixel(
-    source_path: Path,
+    source: RasterData,
     longitude: float,
     latitude: float,
 ) -> RasterPixel:
     """Read one band-1 pixel at a WGS 84 position.
 
     Args:
-        source_path: Authorized original GeoTIFF, retained by the caller.
+        source: Authorized raster file or observation, retained by the caller.
         longitude: WGS 84 longitude.
         latitude: WGS 84 latitude.
 
@@ -38,9 +39,9 @@ def read_raster_pixel(
     """
     with (
         rasterio.Env(GDAL_CACHEMAX=32 * 1024**2),
-        rasterio.open(source_path, driver="GTiff") as dataset,
+        open_raster_data(source) as dataset,
     ):
-        require_signed_raster_dependencies(dataset, source_path)
+        require_signed_raster_dependencies(dataset, source)
         require_raster_analysis_georeferencing(dataset)
         require_pixel_source_structure(dataset)
         x_coordinates, y_coordinates = transform(

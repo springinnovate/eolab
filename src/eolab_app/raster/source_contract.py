@@ -1,8 +1,10 @@
 """Validate raster metadata and read native pixels within memory limits."""
 
+from __future__ import annotations
+
 import math
 from pathlib import Path
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import numpy
 from numpy.typing import NDArray
@@ -10,6 +12,9 @@ import rasterio
 from affine import TransformNotInvertibleError
 from rasterio.enums import MaskFlags
 from rasterio.windows import Window
+
+if TYPE_CHECKING:
+    from eolab_app.raster.reader import RasterData, RasterDataset
 
 # Exact reads already admit no more than 64 MiB of cumulative decoded source
 # work. Applying that established ceiling to each streamed native block bounds
@@ -24,7 +29,7 @@ RASTER_VALIDITY_POLICY = "finite-unmasked-non-nodata-v1"
 
 
 def internal_mask_block_shape(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
 ) -> tuple[int, int] | None:
     """Inspect the embedded mask's own blocks without reading pixel values.
 
@@ -108,7 +113,7 @@ def mask_invalid_raster_values(
 
 
 def _require_mask_block_memory(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     value_block_bytes: int,
     maximum_block_bytes: int = BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
 ) -> None:
@@ -134,22 +139,27 @@ def _require_mask_block_memory(
 
 
 def require_signed_raster_dependencies(
-    dataset: rasterio.io.DatasetReader,
-    source_path: Path,
+    dataset: RasterDataset,
+    source_path: RasterData,
 ) -> None:
-    """Reject GDAL sidecars outside the authorized source signature.
+    """Reject GeoTIFF sidecars outside the authorized source file.
 
     Args:
         dataset: Open raster whose GDAL dependencies are known.
-        source_path: Scanner-authorized GeoTIFF signed by the catalog.
+        source_path: Authorized file or admitted observation. Temporal array
+            dependencies are confined by its source reader.
 
     Returns:
-        None when GDAL reports only the signed GeoTIFF dependency.
+        None for an admitted observation or a GeoTIFF with embedded metadata.
 
     Raises:
         ValueError: If an external mask, overview, or auxiliary metadata file
             could influence analysis or georeferencing.
     """
+    from eolab_app.raster.temporal import TemporalObservation
+
+    if isinstance(source_path, TemporalObservation):
+        return
     signed_source = source_path.resolve(strict=False)
     dependencies = {
         Path(dataset_file).resolve(strict=False)
@@ -164,12 +174,13 @@ def require_signed_raster_dependencies(
 
 
 def require_raster_analysis_georeferencing(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
 ) -> None:
     """Require a declared CRS and finite, safely invertible source affine.
 
     Args:
-        dataset: Open raster at the statistics reader boundary.
+        dataset: Open raster at the reader boundary. Temporal observations
+            already carry the grid established by catalog admission.
 
     Returns:
         None when source coordinates can be transformed safely.
@@ -178,6 +189,10 @@ def require_raster_analysis_georeferencing(
         ValueError: If the CRS is absent or the affine is non-finite or cannot
             be inverted to finite coefficients.
     """
+    from eolab_app.raster.temporal import TemporalRasterDataset
+
+    if isinstance(dataset, TemporalRasterDataset):
+        return
     if dataset.crs is None:
         raise ValueError("Bounded raster reads require a valid source CRS")
     source_transform = dataset.transform
@@ -201,17 +216,74 @@ def require_raster_analysis_georeferencing(
         )
 
 
-def require_pixel_source_structure(dataset: rasterio.io.DatasetReader) -> None:
+def geographic_cell_edges(
+    dataset: RasterDataset,
+    longitudes: NDArray[numpy.float64],
+    latitudes: NDArray[numpy.float64],
+) -> tuple[NDArray[numpy.float64], NDArray[numpy.float64]]:
+    """Return geographic cell edges respecting the source's polar and cyclic grid.
+
+    Admitted geographic grids can have centers at the poles. Clip their cell
+    edges to the Earth, and preserve continuous longitudes for cyclic grids.
+    Other grids keep the established geographic domain requirements.
+
+    Args:
+        dataset: Open source defining the cell grid.
+        longitudes: Cell-edge longitudes returned by the coordinate transformation.
+        latitudes: Matching cell-edge latitudes in degrees.
+
+    Returns:
+        Longitude and latitude arrays suitable for geographic cell footprints.
+
+    Raises:
+        ValueError: If coordinates are nonfinite or outside an ordinary raster's
+            supported geographic domain.
+    """
+    if not (
+        numpy.all(numpy.isfinite(longitudes)) and numpy.all(numpy.isfinite(latitudes))
+    ):
+        raise ValueError("Raster cell-edge coordinates must be finite")
+    from eolab_app.raster.temporal import TemporalRasterDataset
+
+    if isinstance(dataset, TemporalRasterDataset) and dataset.crs.is_geographic:
+        latitudes = numpy.clip(latitudes, -90, 90)
+        if dataset.cyclic_x:
+            return longitudes, latitudes
+    if (
+        numpy.any(longitudes < -180 - 1e-8)
+        or numpy.any(longitudes > 180 + 1e-8)
+        or numpy.any(numpy.abs(latitudes) > 90 + 1e-8)
+    ):
+        raise ValueError(
+            "Ground-area estimates require a continuous longitude domain from -180 to 180"
+        )
+    return longitudes, latitudes
+
+
+def require_pixel_source_structure(dataset: RasterDataset) -> None:
     """Require a numeric first band whose native blocks fit the pixel reader's limit.
 
     Embedded mask blocks are bounded separately from data blocks.
 
     Args:
-        dataset: Open GeoTIFF whose file dependencies and georeferencing are checked.
+        dataset: Authorized raster file or admitted observation. Temporal
+            decoding includes every time in the intersecting storage chunk.
 
     Raises:
         ValueError: If band-one values or their decoded blocks are unsupported.
     """
+
+    from eolab_app.raster.temporal import TemporalRasterDataset
+
+    if isinstance(dataset, TemporalRasterDataset):
+        if (
+            dataset.maximum_decoded_block_bytes
+            > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
+        ):
+            raise ValueError(
+                "Raster blocks exceed the pixel reader's 64 MiB memory limit."
+            )
+        return
     if dataset.count < 1 or dataset.dtypes[0] not in {
         "uint8",
         "uint16",
@@ -223,25 +295,22 @@ def require_pixel_source_structure(dataset: rasterio.io.DatasetReader) -> None:
     }:
         raise ValueError("Pixel reading requires a numeric first raster band.")
     height, width = dataset.block_shapes[0]
-    if (
-        height * width * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
-        > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
-    ):
+    decoded_bytes = height * width * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
+    if decoded_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES:
         raise ValueError("Raster blocks exceed the pixel reader's 64 MiB memory limit.")
-    _require_mask_block_memory(
-        dataset, height * width * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
-    )
+    _require_mask_block_memory(dataset, decoded_bytes)
 
 
 def require_bounded_source_structure(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     *,
     maximum_block_bytes: int | None = BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
 ) -> None:
     """Validate band structure and signed validity metadata, with optional block limits.
 
     Args:
-        dataset: Open candidate raster dataset.
+        dataset: Open raster dataset. Temporal grid and datatype invariants
+            are trusted; its full storage chunk still counts toward the limit.
         maximum_block_bytes: Decoded block ceiling, or None to validate structure
             without restricting the native block allocation.
 
@@ -253,6 +322,17 @@ def require_bounded_source_structure(
         ValueError: If band, datatype, block, or validity structure is
             unsupported.
     """
+    from eolab_app.raster.temporal import TemporalRasterDataset
+
+    if isinstance(dataset, TemporalRasterDataset):
+        if (
+            maximum_block_bytes is not None
+            and dataset.maximum_decoded_block_bytes > maximum_block_bytes
+        ):
+            raise ValueError(
+                "Raster temporal chunks exceed the native block memory limit"
+            )
+        return
     if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
         raise ValueError("Bounded raster reads require one non-empty band")
     if not dataset.block_shapes or len(dataset.block_shapes[0]) != 2:
@@ -289,7 +369,7 @@ def require_bounded_source_structure(
 
 
 def read_native_raster_block(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     window: Window,
 ) -> numpy.ma.MaskedArray:
     """Read one exact band block with its embedded validity and NoData exclusions.
@@ -308,7 +388,7 @@ def read_native_raster_block(
 
 
 def read_native_raster_window(
-    dataset: rasterio.io.DatasetReader, window: Window
+    dataset: RasterDataset, window: Window
 ) -> numpy.ma.MaskedArray:
     """Read a caller-admitted native window with the established validity policy.
 
@@ -333,14 +413,15 @@ def read_native_raster_window(
 
 
 def source_work_for_blocks(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     block_indexes: tuple[SourceBlockIndex, ...],
 ) -> tuple[int, int]:
     """Count native data/mask reads and their conservative decoded bytes.
 
     Each data window is charged for every mask block it intersects, including
-    repeated mask blocks across windows. No GDAL cache hit is assumed. Masked
-    sources are charged full native blocks even at raster edges.
+    repeated mask blocks across windows. Temporal blocks count the complete
+    storage chunk needed for the selected time. No cache hit is assumed.
+    Masked sources are charged full native blocks even at raster edges.
 
     Args:
         dataset: Open one-band raster with native block metadata.
@@ -352,6 +433,10 @@ def source_work_for_blocks(
     Raises:
         ValueError: If embedded mask metadata cannot be verified.
     """
+    from eolab_app.raster.temporal import TemporalRasterDataset
+
+    if isinstance(dataset, TemporalRasterDataset):
+        return dataset.native_work_for_blocks(block_indexes)
     bytes_per_pixel = numpy.dtype(dataset.dtypes[0]).itemsize + 1
     mask_shape = internal_mask_block_shape(dataset)
     count = len(block_indexes)

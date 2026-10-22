@@ -1,6 +1,12 @@
 """Concrete STAC catalog adapter for raster application services."""
 
 from typing import Any
+from urllib.parse import quote
+
+from eolab_app.raster.source_models import (
+    TemporalRasterSelection,
+    TemporalIntervalSelection,
+)
 
 import httpx2
 
@@ -30,7 +36,9 @@ class StacRasterCatalog:
 
     async def get_item(
         self,
-        request: CatalogRasterRequest,
+        request: (
+            CatalogRasterRequest | TemporalRasterSelection | TemporalIntervalSelection
+        ),
     ) -> dict[str, Any]:
         """Load and validate the authoritative scanner-owned STAC Item.
 
@@ -46,7 +54,7 @@ class StacRasterCatalog:
         """
         item_url = (
             f"{self._catalog_internal_url}/collections/"
-            f"{request.collection_id}/items/{request.item_id}"
+            f"{quote(request.collection_id, safe='')}/items/{quote(request.item_id, safe='')}"
         )
         try:
             response = await self._catalog_client.get(

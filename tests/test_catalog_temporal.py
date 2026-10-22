@@ -95,11 +95,12 @@ def publish_month(archive: Path, month: int, hours: dict[str, tuple[int, ...]]) 
             step_type = VARIABLES[variable][0]
             duration = 0 if step_type == "instant" else 3600
             connection.executemany(
-                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         revision,
                         variable,
+                        start + hour * 3600,
                         start + hour * 3600,
                         start + hour * 3600 - duration,
                         start + hour * 3600,
@@ -189,7 +190,7 @@ def era5_archive(tmp_path: Path) -> Path:
             CREATE TABLE months (year INTEGER, month INTEGER, current_revision_id TEXT,
                                  PRIMARY KEY (year, month));
             CREATE TABLE coverage (
-                revision_id TEXT, variable TEXT, valid_time INTEGER,
+                revision_id TEXT, variable TEXT, valid_time INTEGER, reference_time INTEGER,
                 interval_start INTEGER, interval_end INTEGER, step_type TEXT,
                 PRIMARY KEY (revision_id, variable, valid_time));
             INSERT INTO revisions VALUES ('unfinished-month', 'preparing');

@@ -309,3 +309,24 @@ def test_publication_errors_expose_stable_category_documents(
         "category": category,
         "message": "Actionable publication guidance",
     }
+
+
+def test_temporal_analysis_source_is_not_a_rendering_request() -> None:
+    """Keep observation analysis independent of the supported WMS publications."""
+    application = FastAPI()
+    feature = create_raster_feature(_ConflictService(), PublishedRasterRegistry())
+    application.include_router(feature.router)
+
+    response = TestClient(application).post(
+        "/api/rendering/layers",
+        json={
+            "source": {
+                "collectionId": "eolab-temporal-datasets",
+                "itemId": "era5-test",
+                "variable": "air_temperature",
+                "time": "2000-01-01T00:00:00Z",
+            }
+        },
+    )
+
+    assert response.status_code == 422

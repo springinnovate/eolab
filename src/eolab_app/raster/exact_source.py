@@ -7,6 +7,8 @@ import numpy
 import rasterio
 from rasterio.windows import Window
 
+from eolab_app.raster.reader import RasterDataset
+
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     require_active_raster_read,
@@ -40,7 +42,7 @@ class ExactSourceWindowPlan:
 
 
 def plan_exact_source_window(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     source_window: Window,
 ) -> ExactSourceWindowPlan | None:
     """Plan a complete source-window read if its size fits all read limits.
@@ -106,7 +108,7 @@ def plan_exact_source_window(
 
 
 def read_exact_source_window(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     plan: ExactSourceWindowPlan,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> numpy.ma.MaskedArray:

@@ -13,7 +13,6 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 import rasterio
@@ -24,6 +23,8 @@ from eolab_app.raster.categorical_statistics import (
     categorical_statistics_policy_parameters,
     read_raster_categorical_statistics,
 )
+
+from eolab_app.raster.reader import RasterData
 
 from eolab_app.raster.errors import (
     RasterConflictError,
@@ -81,7 +82,7 @@ class _CategoricalStatisticsReader(Protocol):
 
     def __call__(
         self,
-        source_path: Path,
+        data: RasterData,
         sampling_area: RasterSamplingArea,
         cancellation_requested: RasterReadCancellationCheck,
         *,
@@ -90,7 +91,7 @@ class _CategoricalStatisticsReader(Protocol):
         """Read category coverage with the service's shared cancellation contract.
 
         Args:
-            source_path: Authorized immutable source raster.
+            data: Authorized original file or selected temporal observation.
             sampling_area: Resolved whole, bounds or Catalog selection.
             cancellation_requested: Last-waiter cancellation predicate.
             category_values: Canonically sorted numeric classification codes.
@@ -138,13 +139,13 @@ class RasterStatisticsService:
         cache_entries: int,
         catalog_selection_reader: CatalogSelectionReader | None = None,
         statistics_reader: Callable[
-            [Path, RasterSamplingArea, RasterReadCancellationCheck],
+            [RasterData, RasterSamplingArea, RasterReadCancellationCheck],
             RasterStatistics,
         ] = read_raster_statistics,
         paired_statistics_reader: Callable[
             [
-                Path,
-                Path,
+                RasterData,
+                RasterData,
                 CanonicalWgs84Bounds | None,
                 RasterReadCancellationCheck,
             ],
@@ -160,12 +161,12 @@ class RasterStatisticsService:
 
         Args:
             source_access: Scoped catalog/private source authorization.
-            read_concurrency: Maximum simultaneous Rasterio reads.
+            read_concurrency: Maximum simultaneous native raster reads.
             cache_entries: Maximum completed ordinary and paired statistics
                 documents retained in one combined cache.
             catalog_selection_reader: Resolves catalog feature selections to
                 source files and filters. Required for catalog selection requests.
-            statistics_reader: Synchronous bounded Rasterio reader boundary.
+            statistics_reader: Synchronous bounded native raster reader.
             paired_statistics_reader: Synchronous ordered-pair reader boundary.
             categorical_statistics_reader: Numeric category/area reader sharing
                 the same admission, authorization and cancellation lifecycle.
@@ -205,6 +206,29 @@ class RasterStatisticsService:
         ] = OrderedDict()
         self._inflight: dict[tuple[object, ...], _InflightStatistics] = {}
         self._state_lock = asyncio.Lock()
+
+    async def invalidate_temporal_items(
+        self, item_keys: tuple[tuple[str, str], ...]
+    ) -> None:
+        """Discard statistics using temporal datasets refreshed by a catalog scan.
+
+        The operator refreshes between calculations. Active reads are left alone;
+        this method removes completed results without changing source identity.
+
+        Args:
+            item_keys: Collection and Item IDs successfully written by the scan.
+                Every variable and observation of those temporal datasets is
+                affected, including either source in paired statistics.
+        """
+        refreshed = set(item_keys)
+        async with self._state_lock:
+            for key in tuple(self._cache):
+                identities = key[1:3] if key[0] == "paired" else key[:1]
+                if any(
+                    identity[0] == "temporal" and identity[1:3] in refreshed
+                    for identity in identities
+                ):
+                    del self._cache[key]
 
     async def get(
         self,
@@ -604,8 +628,8 @@ class RasterStatisticsService:
                 execute = read_private_raster if private else asyncio.to_thread
                 statistics = await execute(
                     partial(self._paired_statistics_reader, **options),
-                    authorized_x.source_path,
-                    authorized_y.source_path,
+                    authorized_x.data,
+                    authorized_y.data,
                     selected_bounds,
                     None if private else cancellation_requested.is_set,
                 )
@@ -711,7 +735,7 @@ class RasterStatisticsService:
                         if category_values is not None
                         else self._statistics_reader
                     ),
-                    authorized_raster.source_path,
+                    authorized_raster.data,
                     sampling_area,
                     (
                         None

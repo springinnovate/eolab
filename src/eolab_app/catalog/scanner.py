@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -58,6 +59,9 @@ class ScanManager:
         metadata_pipeline: DatasetMetadataReader | None = None,
         item_finalizer: DatasetItemFinalizer | None = None,
         reconciler: CatalogReconciler | None = None,
+        items_updated: (
+            Callable[[tuple[tuple[str, str], ...]], Awaitable[None]] | None
+        ) = None,
         error_detail_limit: int = DEFAULT_SCAN_ERROR_DETAIL_LIMIT,
     ) -> None:
         """Configure the scanner and its bounded phase collaborators.
@@ -77,6 +81,8 @@ class ScanManager:
             item_finalizer: Optional external assessment collaborator applied
                 after extraction and before persistence.
             reconciler: Optional destructive reconciliation collaborator.
+            items_updated: Optional callback receiving Collection and Item IDs
+                after each successful write, for refreshing dependent caches.
             error_detail_limit: Maximum individual failure details retained in
                 the public scan status.
 
@@ -103,6 +109,7 @@ class ScanManager:
             active_dataset_handlers,
         )
         self.item_finalizer = item_finalizer
+        self.items_updated = items_updated
         self.reconciler = reconciler or MissingItemReconciler(
             source_root,
             catalog_database,
@@ -516,7 +523,7 @@ class ScanManager:
         items: list[dict[str, Any]],
         existing_item_keys: set[tuple[str, str]],
     ) -> None:
-        """Write one batch and classify its successfully cataloged Items.
+        """Write one batch, classify persisted Items, and notify source consumers.
 
         Args:
             catalog_session: Open STAC write session.
@@ -524,7 +531,7 @@ class ScanManager:
             existing_item_keys: Catalog inventory captured before the scan.
 
         Raises:
-            Exception: Propagates catalog writer failures.
+            Exception: Propagates catalog writer or post-write callback failures.
         """
         phase_started = perf_counter()
         try:
@@ -538,6 +545,10 @@ class ScanManager:
             (item["collection"], item["id"]) in existing_item_keys
             for item in items
         )
+        if self.items_updated is not None:
+            await self.items_updated(
+                tuple((item["collection"], item["id"]) for item in items)
+            )
 
     async def _reconcile_missing_items(self) -> int:
         """Run destructive reconciliation and record phase duration.

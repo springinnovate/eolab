@@ -1,5 +1,13 @@
 """Catalog-owned source authorization for rendering-independent analysis."""
 
+import asyncio
+
+from eolab_app.raster.source_models import (
+    TemporalRasterSelection,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import TemporalObservation
+
 from eolab_app.raster.catalog_metadata import cataloged_source_signature
 from eolab_app.raster.models import (
     AuthorizedRaster,
@@ -51,3 +59,23 @@ class CatalogRasterSourceAuthorizer:
             source_signature=cataloged_source_signature(item),
         )
         return authorized_raster
+
+    async def get_observations(
+        self,
+        selection: TemporalRasterSelection | TemporalIntervalSelection,
+    ) -> tuple[TemporalObservation, ...]:
+        """Return available observations for an authorized temporal selection.
+
+        Args:
+            selection: Catalog identity, variable and observation or interval.
+
+        Returns:
+            Ordered observation metadata and confined storage locations.
+
+        Raises:
+            RasterFeatureError: If the Catalog, archive or selection is unavailable.
+        """
+        item = await self._catalog.get_item(selection)
+        return await asyncio.to_thread(
+            self._source_resolver.get_observations, item, selection
+        )

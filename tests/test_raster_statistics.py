@@ -1,6 +1,7 @@
 """Test rendering-independent raster statistics and service contracts."""
 
 import asyncio
+import math
 from pathlib import Path
 
 import numpy
@@ -210,6 +211,19 @@ class _NativeStatisticsDataset:
             *_: Ignored exception context.
         """
         return None
+
+    def index(self, x: float, y: float) -> tuple[int, int]:
+        """Return the source cell containing a point in this dataset's CRS.
+
+        Args:
+            x: Horizontal source coordinate.
+            y: Vertical source coordinate.
+
+        Returns:
+            Zero-based row and column, including positions outside the grid.
+        """
+        column, row = ~self.transform * (x, y)
+        return math.floor(row), math.floor(column)
 
     def overviews(self, band: int) -> list[int]:
         """Report no overviews for this native-block source.

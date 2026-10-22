@@ -2,10 +2,10 @@
 
 import asyncio
 from collections.abc import Callable
-from pathlib import Path
 
 import rasterio
 
+from eolab_app.raster.reader import RasterData
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     CatalogPixelRequest,
@@ -21,6 +21,7 @@ from eolab_app.raster.source_models import (
     raster_source_reference,
 )
 
+
 class RasterPixelService:
     """Authorize and schedule rendering-independent pixel reads."""
 
@@ -28,13 +29,15 @@ class RasterPixelService:
         self,
         source_access: RasterSourceAccess,
         read_concurrency: int,
-        pixel_reader: Callable[[Path, float, float], RasterPixel] = (read_raster_pixel),
+        pixel_reader: Callable[[RasterData, float, float], RasterPixel] = (
+            read_raster_pixel
+        ),
     ) -> None:
         """Create a bounded pixel-read service.
 
         Args:
             source_access: Scoped catalog/private source authorization.
-            read_concurrency: Maximum simultaneous Rasterio reads.
+            read_concurrency: Maximum simultaneous native raster reads.
             pixel_reader: Synchronous function that reads one pixel from an authorized raster.
         """
 
@@ -64,7 +67,7 @@ class RasterPixelService:
 
         pixel = await asyncio.to_thread(
             self._pixel_reader,
-            authorized_raster.source_path,
+            authorized_raster.data,
             request.longitude,
             request.latitude,
         )

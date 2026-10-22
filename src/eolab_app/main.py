@@ -529,6 +529,7 @@ def create_app(
         item_finalizer=CompositeDatasetItemFinalizer((
             vector_assessment_finalizer,
         )),
+        items_updated=raster_statistics_service.invalidate_temporal_items,
         reconciler=MissingItemReconciler(
             app_global_configuration.scan_mount_path,
             catalog_database,

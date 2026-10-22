@@ -166,12 +166,19 @@ class TemporalRasterDataset:
         _, self.height, self.width = self._array.shape
         self.dtypes = (self._array.dtype.name,)
         self.transform = observation.transform
+        self.cyclic_x = observation.cyclic_x
+        self._column_offset = observation.column_offset
+        self._column_view_prepared = False
         self.crs = observation.crs
         self.nodata = observation.nodata
         self.nodatavals = (self.nodata,)
         self.mask_flag_enums = (
             [MaskFlags.all_valid if self.nodata is None else MaskFlags.nodata],
         )
+        self._update_grid_metadata()
+
+    def _update_grid_metadata(self) -> None:
+        """Update the view bounds and logical blocks after a column rotation."""
         corners = [
             self.transform * (column, row)
             for column, row in (
@@ -184,9 +191,27 @@ class TemporalRasterDataset:
         x, y = zip(*corners)
         self.bounds = BoundingBox(min(x), min(y), max(x), max(y))
         height, width = self._array.chunks[1:]
-        if observation.column_offset:
-            width = math.gcd(width, observation.column_offset, self.width)
+        if self._column_offset:
+            width = math.gcd(width, self._column_offset, self.width)
         self.block_shapes = ((height, width),)
+
+    def prepare_column_view(self, first_column: int) -> None:
+        """Choose this read handle's column origin before making window plans.
+
+        Rotate a cyclic grid by an integer number of columns without resampling
+        or repeating source cells. The first selection owns the view; later
+        polygon masks use that same affine and block grid.
+
+        Args:
+            first_column: Column in the original view that will become column
+                zero. It may lie outside the original period.
+        """
+        if self._column_view_prepared:
+            return
+        self._column_view_prepared = True
+        self.transform = self.transform * Affine.translation(first_column, 0)
+        self._column_offset = (self._column_offset + first_column) % self.width
+        self._update_grid_metadata()
 
     def __enter__(self) -> Self:
         """Return the open observation for a scoped native read."""
@@ -242,7 +267,7 @@ class TemporalRasterDataset:
             coordinates outside the grid retain out-of-range indexes.
         """
         column, row = ~self.transform * (x, y)
-        if self._observation.cyclic_x:
+        if self.cyclic_x:
             column %= self.width
         return math.floor(row), math.floor(column)
 
@@ -290,7 +315,7 @@ class TemporalRasterDataset:
             OSError: If the actual source read fails.
         """
         rows, columns = window.toslices()
-        start = (columns.start + self._observation.column_offset) % self.width
+        start = (columns.start + self._column_offset) % self.width
         stop = start + columns.stop - columns.start
         try:
             values = self._array[

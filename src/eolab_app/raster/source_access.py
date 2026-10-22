@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import sys
 from typing import Any
 
@@ -27,7 +26,13 @@ from eolab_app.raster.source_contract import (
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
 )
-from eolab_app.raster.source_models import RasterSourceReference
+from eolab_app.raster.source_models import (
+    RasterAnalysisSourceReference,
+    TemporalRasterSelection,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import TemporalObservation
+from eolab_app.raster.reader import RasterData, open_raster_data
 from eolab_app.source_files import LeasedSourceFiles, SourceFileError
 
 
@@ -36,13 +41,13 @@ class RasterReadSource:
     """Original raster data available inside an authorized source-access scope.
 
     Attributes:
-        source_path: Confined path consumed only by native readers.
-        cache_identity: Immutable identity including private access context where needed.
-        version: Public immutable version, without ownership credentials or paths.
+        data: Confined file or observation consumed only by native readers.
+        cache_identity: Source selection identity, including private access when needed.
+        version: Public source selection identity, without credentials or paths.
         private: Whether this raster is a session-owned run file.
     """
 
-    source_path: Path
+    data: RasterData
     cache_identity: tuple[object, ...]
     version: str
     private: bool = False
@@ -106,11 +111,11 @@ async def read_private_raster(reader: Callable[..., Any], *arguments: Any) -> An
     return result
 
 
-def describe_raster_file(path: Path) -> dict[str, Any]:
+def describe_raster_data(data: RasterData) -> dict[str, Any]:
     """Inspect original raster metadata and report the current readers' supported operations.
 
     Args:
-        path: Authorized original GeoTIFF path retained for this read.
+        data: Authorized original file or selected temporal observation.
 
     Returns:
         Path-free grid metadata and pixel/statistics capability explanations.
@@ -119,13 +124,14 @@ def describe_raster_file(path: Path) -> dict[str, Any]:
 
     Raises:
         ValueError: If georeferencing or signed file dependencies are unsupported.
+        OSError: If native source metadata cannot be read.
         RasterioError: If native metadata cannot be read.
     """
     with (
         rasterio.Env(GDAL_CACHEMAX=32 * 1024**2),
-        rasterio.open(path, driver="GTiff") as dataset,
+        open_raster_data(data) as dataset,
     ):
-        require_signed_raster_dependencies(dataset, path)
+        require_signed_raster_dependencies(dataset, data)
         require_raster_analysis_georeferencing(dataset)
         try:
             require_pixel_source_structure(dataset)
@@ -172,7 +178,7 @@ class RasterSourceAccess:
         """Configure source access for catalog rasters and private run files.
 
         Args:
-            catalog: Authorizes catalog rasters by resolving their source files.
+            catalog: Resolves admitted raster files and temporal observations.
             files: Optional private immutable-file access composed by the application.
         """
         self.catalog, self.files = catalog, files
@@ -180,12 +186,12 @@ class RasterSourceAccess:
 
     @asynccontextmanager
     async def open(
-        self, reference: RasterSourceReference, owner: str | None = None
+        self, reference: RasterAnalysisSourceReference, owner: str | None = None
     ) -> AsyncIterator[RasterReadSource]:
-        """Resolve a source and retain its original file for the caller's complete read.
+        """Return original raster data, retaining private files for the complete read.
 
         Args:
-            reference: Validated catalog or opaque run/file identity.
+            reference: Validated file identity or temporal observation selection.
             owner: Server-derived session hash required only for private references.
 
         Yields:
@@ -196,7 +202,7 @@ class RasterSourceAccess:
             SourceFileError: If private source access is unavailable or changes.
             Exception: If the owning authority rejects access.
         """
-        if isinstance(reference, CatalogRasterRequest):
+        if isinstance(reference, (CatalogRasterRequest, TemporalRasterSelection)):
             yield await self.resolve(reference, owner)
             return
         if self.files is None or owner is None:
@@ -223,21 +229,32 @@ class RasterSourceAccess:
             )
 
     async def resolve(
-        self, reference: RasterSourceReference, owner: str | None = None
+        self, reference: RasterAnalysisSourceReference, owner: str | None = None
     ) -> RasterReadSource:
         """Authorize an original raster for the ordinary short-read pipeline.
 
         Args:
-            reference: Validated catalog or run/file identity.
+            reference: Validated file identity or temporal observation selection.
             owner: Server-derived session hash for a private output.
 
         Returns:
-            Original file and immutable identity, without a retention lease.
+            Original file or observation and its selection identity, without a retention lease.
 
         Raises:
             RasterFeatureError: If catalog authorization or the format fails.
             SourceFileError: If ownership, expiry or file resolution fails.
         """
+        if isinstance(reference, TemporalRasterSelection):
+            (observation,) = await self.catalog.get_observations(reference)
+            identity = (
+                "temporal",
+                reference.collection_id,
+                reference.item_id,
+                reference.variable,
+                reference.time.isoformat(),
+            )
+            version = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+            return RasterReadSource(observation, identity, version)
         if isinstance(reference, CatalogRasterRequest):
             source = await self.catalog.authorize(reference)
             identity = (
@@ -273,16 +290,16 @@ class RasterSourceAccess:
         )
 
     async def describe(
-        self, reference: RasterSourceReference, owner: str | None = None
+        self, reference: RasterAnalysisSourceReference, owner: str | None = None
     ) -> dict[str, Any]:
         """Return original metadata and capabilities without exposing source paths.
 
         Args:
-            reference: Requested catalog or private raster identity.
+            reference: Requested file identity or temporal observation selection.
             owner: Server-derived private session hash when required.
 
         Returns:
-            Source reference, immutable version, grid metadata and current reader support.
+            Source reference, selection version, grid metadata and current reader support.
 
         Raises:
             RasterFeatureError: On unsupported or unavailable raster content.
@@ -294,9 +311,7 @@ class RasterSourceAccess:
             )
         async with self._metadata_slots, self.open(reference, owner) as source:
             try:
-                metadata = await read_private_raster(
-                    describe_raster_file, source.source_path
-                )
+                metadata = await read_private_raster(describe_raster_data, source.data)
             except ValueError as error:
                 raise RasterConflictError(str(error)) from error
             return {
@@ -304,3 +319,21 @@ class RasterSourceAccess:
                 "version": source.version,
                 **metadata,
             }
+
+    async def get_observations(
+        self,
+        selection: TemporalIntervalSelection,
+    ) -> tuple[TemporalObservation, ...]:
+        """Return ordered observations and their time support for a requested period.
+
+        Args:
+            selection: Path-free dataset, variable and requested period.
+
+        Returns:
+            Ordered available observations, retaining their original time support.
+            Gaps remain absent; the caller decides how to summarize them.
+
+        Raises:
+            RasterFeatureError: If the Catalog or selected source cannot be read.
+        """
+        return await self.catalog.get_observations(selection)

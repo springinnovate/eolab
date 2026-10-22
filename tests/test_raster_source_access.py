@@ -71,7 +71,7 @@ def test_missing_geographic_extent_does_not_disable_numerical_capabilities(
         raise ValueError("No geographic extent")
 
     monkeypatch.setattr(source_access, "transform_bounds_to_wgs84", unavailable)
-    result = source_access.describe_raster_file(write_source(tmp_path / "source.tif"))
+    result = source_access.describe_raster_data(write_source(tmp_path / "source.tif"))
     assert result["bounds"] is None
     assert result["capabilities"]["pixels"]["supported"]
     assert result["capabilities"]["statistics"]["supported"]

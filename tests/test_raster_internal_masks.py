@@ -26,7 +26,7 @@ from eolab_app.raster.exact_source import (
 )
 from eolab_app.raster.pixel import read_raster_pixel
 from eolab_app.raster.read_cancellation import RasterReadCancelled
-from eolab_app.raster.source_access import describe_raster_file
+from eolab_app.raster.source_access import describe_raster_data
 from eolab_app.raster.statistics import (
     NoValidRasterSamplesError,
     read_raster_statistics,
@@ -202,7 +202,7 @@ def test_exact_pixels_and_partial_blocks_share_all_validity_exclusions(
         assert np.array_equal(
             sample.compressed(), values[14:35, 30:37][expected[14:35, 30:37]]
         )
-    assert describe_raster_file(path)["capabilities"]["statistics"]["supported"]
+    assert describe_raster_data(path)["capabilities"]["statistics"]["supported"]
 
 
 @pytest.mark.parametrize("overviews", ["none", "average", "stale"])
