@@ -19,6 +19,10 @@ from eolab_app.raster.source_models import (
 from eolab_app.raster.temporal import TemporalObservation
 
 
+# Producer sentinel for observations without a forecast initialization time.
+MISSING_REFERENCE_TIME: int = -(1 << 63)
+
+
 def get_era5_observations(
     item: dict[str, Any],
     selection: TemporalRasterSelection | TemporalIntervalSelection,
@@ -30,6 +34,7 @@ def get_era5_observations(
     published coverage. Read its actual per-variable coverage to distinguish
     missing observations from present observations containing NaN cells. The
     operator keeps the archive unchanged between refresh and calculation.
+    Non-forecast observations retain reference_time=None.
 
     Args:
         item: Authoritative Catalog Item for the requested dataset.
@@ -116,7 +121,11 @@ def get_era5_observations(
                         array_path=array_path,
                         time_index=indices[revision][time],
                         time=datetime.fromtimestamp(time, timezone.utc),
-                        reference_time=datetime.fromtimestamp(reference, timezone.utc),
+                        reference_time=(
+                            None
+                            if reference == MISSING_REFERENCE_TIME
+                            else datetime.fromtimestamp(reference, timezone.utc)
+                        ),
                         interval_start=datetime.fromtimestamp(start, timezone.utc),
                         interval_end=datetime.fromtimestamp(end, timezone.utc),
                         transform=Affine(0.25, 0, -180.125, 0, -0.25, 90.125),

@@ -73,7 +73,8 @@ def publish_month(archive: Path, month: int, hours: dict[str, tuple[int, ...]]) 
 
     Coordinate values are stored, but weather pixels are deliberately absent.
     As in the producer, the time axis is the union of available observation
-    labels and weather chunks span a calendar month.
+    labels and weather chunks span a calendar month. Non-forecast fields have no
+    forecast origin; forecast fields use a six-hour lead.
 
     Args:
         archive: Directory containing the test producer catalog.
@@ -101,7 +102,11 @@ def publish_month(archive: Path, month: int, hours: dict[str, tuple[int, ...]]) 
                         revision,
                         variable,
                         start + hour * 3600,
-                        start + hour * 3600,
+                        (
+                            int(numpy.iinfo(numpy.int64).min)
+                            if step_type == "instant"
+                            else start + hour * 3600 - 6 * 3600
+                        ),
                         start + hour * 3600 - duration,
                         start + hour * 3600,
                         step_type,

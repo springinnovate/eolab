@@ -333,6 +333,9 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
     )
     assert [value.time.hour for value in observations] == [0, 2]
     assert [
+        (value.time - value.reference_time).total_seconds() for value in observations
+    ] == [6 * 3600, 6 * 3600]
+    assert [
         (value.interval_end - value.interval_start).total_seconds()
         for value in observations
     ] == [3600, 3600]
@@ -349,6 +352,7 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
     )
     assert len(selected) == 1
     assert selected[0].time.isoformat() == "2000-01-31T23:00:00+00:00"
+    assert selected[0].reference_time is None
 
 
 def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
