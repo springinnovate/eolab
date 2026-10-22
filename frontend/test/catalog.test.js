@@ -1393,5 +1393,5 @@ test("temporal Catalog details show observation labels and summarize monthly sou
   assert.equal(metadata["Observation times (UTC)"], "2024-01-01T00:00:00Z – 2024-01-02T00:00:00Z");
   assert.equal(metadata.Variables, "2 metre temperature (t2m; K); Total precipitation (tp; m)");
   assert.equal(metadata["Months with data"], "1200");
-  assert.deepEqual(details.assets, []);
+  assert.equal(details.assets, null);
 });

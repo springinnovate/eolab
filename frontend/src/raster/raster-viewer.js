@@ -4408,9 +4408,11 @@ export function initializeRasterViewer(
      */
     function temporalRaster(item, selection, available) {
         const variable = item.properties["cube:variables"][selection.variable];
+        const timeLabel = new Date(selection.time).toLocaleString(undefined, {timeZone: "UTC", year: "numeric",
+            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
         return {
             source: {collectionId: item.collection, itemId: item.id, ...selection},
-            label: `${item.properties.title ?? item.id} · ${selection.variable} · ${selection.time}`,
+            label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
             capabilities: {pixels: available, statistics: available, calculations: false, modelInput: false},

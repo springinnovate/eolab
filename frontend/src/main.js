@@ -487,6 +487,10 @@ function renderCatalogItemInspector(
         );
     }
 
+    // Announce the selected Item to assistive technologies.
+    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
+    if (inspector.assets === null) return;
+
     // Introduce the Item's Asset records or their empty state.
     const assetsHeading = document.createElement("h4");
     assetsHeading.textContent = "Assets";
@@ -539,8 +543,6 @@ function renderCatalogItemInspector(
         inspectorContent.append(assetCard);
     }
 
-    // Announce the selected Item to assistive technologies.
-    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
 }
 
 /**

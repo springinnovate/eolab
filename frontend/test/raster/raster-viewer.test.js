@@ -4957,6 +4957,7 @@ test("temporal time changes retain the row and style while late publication cann
         const record = fixture.mapLayers.retainedRecords[0];
         assert.equal(fixture.wmsLayers.length, 0, "pending row creates no WMS requests");
         assert.equal(record.state.item.source.time, "2020-01-01T00:00:00Z");
+        assert.match(record.entry.label, /^Weather · Temperature · .*00:00 UTC$/);
         assert.equal(record.state.item.capabilities.statistics, true, "analysis does not wait for WMS");
         const appearance = structuredClone(record.adapter.exportSavedState(record));
         appearance.continuous.definition.minimum = -20;

@@ -697,7 +697,8 @@ export function findPaginationLink(itemCollection, relations) {
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
  * @param {string} scanDisplayPathPrefix User-facing root for mounted files.
- * @return {Object} Text-only metadata grouped for inspector rendering.
+ * @return {{title:string,description:string|null,metadata:Object[],fields:Object[],assets:Object[]|null}}
+ * Text-only inspector metadata; null assets means their summary is already in metadata.
  */
 export function buildCatalogItemDetails(
     item,
@@ -774,7 +775,7 @@ export function buildCatalogItemDetails(
     metadata.push(...vectorDetails.metadata);
     const fields = vectorDetails.fields;
 
-    const assets = isTemporal ? [] : Object.entries(item.assets).map(([assetKey, asset]) => {
+    const assets = isTemporal ? null : Object.entries(item.assets).map(([assetKey, asset]) => {
         const isMountedFile =
             datasetType !== undefined && asset.href.startsWith("file:");
         let location = asset.href;
