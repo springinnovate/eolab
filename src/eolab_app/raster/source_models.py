@@ -82,10 +82,10 @@ RasterAnalysisSourceReference = RasterSourceReference | TemporalRasterSelection
 
 
 class RasterSourceRequest(BaseModel):
-    """Request a catalog GeoTIFF or owned run file by identity."""
+    """Request WMS publication of a catalog raster, run file or observation."""
 
     model_config = ConfigDict(extra="forbid")
-    source: RasterSourceReference
+    source: RasterSourceReference | TemporalRasterSelection
 
 
 class RasterAnalysisSourceRequest(BaseModel):

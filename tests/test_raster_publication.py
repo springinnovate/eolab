@@ -759,3 +759,49 @@ def test_error_excerpt_is_bounded_single_line_and_redacts_secrets() -> None:
     assert "\n" not in excerpt
     assert len(excerpt) <= GEOSERVER_ERROR_EXCERPT_LIMIT + 1
     assert excerpt.endswith("…")
+
+
+def test_temporary_discovery_includes_slices_and_excludes_catalog_stores() -> None:
+    """Discover both cleanup namespaces without selecting persistent catalog layers."""
+    model_name = f"model_{'a' * 32}_{'b' * 32}"
+    slice_name = f"slice_{'c' * 32}"
+
+    def list_stores(request: httpx2.Request) -> httpx2.Response:
+        """Return GeoServer's coverage-store list through its real REST boundary.
+
+        Args:
+            request: Adapter request for the workspace's coverage stores.
+
+        Returns:
+            Catalog, model-output and temporal-slice store metadata.
+        """
+        assert request.method == "GET"
+        assert (
+            request.url.path == "/geoserver/rest/workspaces/eolab/coveragestores.json"
+        )
+        return httpx2.Response(
+            200,
+            json={
+                "coverageStores": {
+                    "coverageStore": [
+                        {"name": name}
+                        for name in (RESOURCE_NAME, model_name, slice_name)
+                    ]
+                }
+            },
+        )
+
+    async def discover() -> tuple[str, ...]:
+        """Read temporary publication names from the controlled GeoServer response.
+
+        Returns:
+            Names selected by the actual GeoServer adapter.
+        """
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(list_stores)
+        ) as client:
+            return await GeoServerRasterPublisher(
+                client, "http://geoserver:8080/geoserver"
+            ).temporary_layers()
+
+    assert asyncio.run(discover()) == (model_name, slice_name)

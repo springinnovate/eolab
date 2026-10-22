@@ -35,7 +35,8 @@ VECTOR_STYLE_PATHS = {
 SCAN_SOURCE_URL_CHECK_NAME = "eolab-scan-source"
 MOUNTED_SOURCE_URL_PATTERN = (
     r"^file:///(?:scan-source/.*|processing-data/results/[a-f0-9]{32}/"
-    r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(?i:tif|tiff))$"
+    r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(?i:tif|tiff)|"
+    r"raster-slices/slice_[a-f0-9]{32}\.tif)$"
 )
 ADMIN_PASSWORD_PATTERN = re.compile(r"[A-Za-z0-9._-]{16,}")
 GEOWEBCACHE_CONFIGURATION_PATH = Path(__file__).with_name("gwc-gs.xml")
@@ -212,7 +213,7 @@ def initialize_geoserver(
                 "name": SCAN_SOURCE_URL_CHECK_NAME,
                 "description": (
                     "Allow GeoServer to publish files from EOLab's "
-                    "read-only scan mount and published result rasters"
+                    "read-only scan mount, published results and cached temporal slices"
                 ),
                 "enabled": True,
                 "regex": MOUNTED_SOURCE_URL_PATTERN,

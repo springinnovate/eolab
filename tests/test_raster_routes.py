@@ -1,6 +1,9 @@
 """Test raster HTTP delivery and application-error translation."""
 
+import asyncio
+
 from fastapi import FastAPI
+from starlette.types import Message, Scope
 from fastapi.testclient import TestClient
 import pytest
 
@@ -11,6 +14,8 @@ from eolab_app.raster.errors import (
     RasterPublicationFailureCategory,
 )
 from eolab_app.raster.sources import PublishedRasterRegistry
+from eolab_app.raster.models import CatalogRasterRequest, PublishedRaster
+from eolab_app.raster.source_models import RasterSourceRequest
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.rasters import create_raster_feature
@@ -311,22 +316,88 @@ def test_publication_errors_expose_stable_category_documents(
     }
 
 
-def test_temporal_analysis_source_is_not_a_rendering_request() -> None:
-    """Keep observation analysis independent of the supported WMS publications."""
-    application = FastAPI()
-    feature = create_raster_feature(_ConflictService(), PublishedRasterRegistry())
-    application.include_router(feature.router)
+def test_publication_disconnect_cancels_work_before_responding() -> None:
+    """Cancel temporal publication when its requesting HTTP connection closes."""
 
-    response = TestClient(application).post(
-        "/api/rendering/layers",
-        json={
-            "source": {
-                "collectionId": "eolab-temporal-datasets",
-                "itemId": "era5-test",
-                "variable": "air_temperature",
-                "time": "2000-01-01T00:00:00Z",
+    async def exercise() -> None:
+        """Disconnect an accepted observation request and await publication cleanup."""
+        started = asyncio.Event()
+        canceled = asyncio.Event()
+
+        class PendingPublication:
+            """Keep publication pending until its caller cancels it."""
+
+            async def publish(
+                self, request: CatalogRasterRequest | RasterSourceRequest
+            ) -> PublishedRaster:
+                """Start work and record when cancellation has finished cleanup.
+
+                Args:
+                    request: Source accepted by the real publication route.
+
+                Returns:
+                    No result; the test disconnects while publication is pending.
+
+                Raises:
+                    asyncio.CancelledError: When the HTTP client disconnects.
+                """
+                started.set()
+                try:
+                    return await asyncio.Future[PublishedRaster]()
+                finally:
+                    canceled.set()
+
+        application = FastAPI()
+        application.include_router(
+            create_raster_feature(
+                PendingPublication(), PublishedRasterRegistry()
+            ).router
+        )
+        messages: asyncio.Queue[Message] = asyncio.Queue()
+        await messages.put(
+            {
+                "type": "http.request",
+                "body": (
+                    b'{"source":{"collectionId":"eolab-temporal-datasets",'
+                    b'"itemId":"era5-test","variable":"air_temperature",'
+                    b'"time":"2000-01-01T00:00:00Z"}}'
+                ),
+                "more_body": False,
             }
-        },
-    )
+        )
+        responses: list[Message] = []
 
-    assert response.status_code == 422
+        async def send(message: Message) -> None:
+            """Record ASGI responses after the connection closes.
+
+            Args:
+                message: Response message from the real application route.
+            """
+            responses.append(message)
+
+        scope: Scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/rendering/layers",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        }
+        route = asyncio.create_task(application(scope, messages.get, send))
+        await asyncio.wait_for(started.wait(), 2)
+        await messages.put({"type": "http.disconnect"})
+        await asyncio.wait_for(route, 2)
+
+        assert canceled.is_set()
+        assert (
+            next(
+                message["status"]
+                for message in responses
+                if message["type"] == "http.response.start"
+            )
+            == 499
+        )
+
+    asyncio.run(exercise())

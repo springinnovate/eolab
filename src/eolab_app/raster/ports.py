@@ -54,10 +54,10 @@ class RasterPublisher(Protocol):
         ...
 
     async def temporary_layers(self) -> tuple[str, ...]:
-        """List server-owned temporary publication names for lifecycle reconciliation.
+        """List model-output and temporal-slice publications for cleanup.
 
         Returns:
-            Unqualified names reserved for temporary output publication.
+            Unqualified names in the reserved model_ and slice_ namespaces.
 
         Raises:
             RasterUpstreamError: If GeoServer cannot list its resources.
