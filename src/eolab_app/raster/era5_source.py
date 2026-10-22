@@ -18,7 +18,6 @@ from eolab_app.raster.source_models import (
 )
 from eolab_app.raster.temporal import TemporalObservation
 
-
 # Producer sentinel for observations without a forecast initialization time.
 MISSING_REFERENCE_TIME: int = -(1 << 63)
 
