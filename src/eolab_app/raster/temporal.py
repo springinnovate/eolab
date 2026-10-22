@@ -1,4 +1,4 @@
-"""Read native cells from admitted ERA5 observations without loading a cube."""
+"""Read native windows from admitted Zarr time stacks without loading a cube."""
 
 import math
 from collections.abc import Iterator
@@ -24,6 +24,7 @@ from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     require_active_raster_read,
 )
+from eolab_app.raster.source_contract import mask_invalid_raster_values
 
 
 @dataclass(frozen=True)
@@ -32,21 +33,35 @@ class TemporalObservation:
 
     Attributes:
         root: Authorized archive directory that confines every source read.
-        array_path: Monthly variable array inside that archive.
-        time_index: Observation position in the monthly time coordinate.
+        array_path: Numeric Zarr v3 array with axes ordered as time, row, column.
+        time_index: Selected position along the array's time axis.
         time: UTC observation label used by public selections.
-        reference_time: UTC forecast origin recorded by the producer.
+        reference_time: UTC forecast origin, or None for non-forecast observations.
         interval_start: Beginning of the observation's physical support.
         interval_end: End of its support; equals start for an instant.
+        transform: Affine mapping output column/row edges to source CRS coordinates.
+        crs: Coordinate reference system of that grid.
+        nodata: Invalid cell value, or None when every finite value is valid.
+            Zarr's storage fill value is not necessarily NoData.
+        column_offset: Source column exposed as output column zero; subsequent
+            columns wrap at the array width. It is in [0, width); zero preserves
+            source column order.
+        cyclic_x: Whether point coordinates repeat across the grid's full width.
+            False leaves points outside regional grids out of bounds.
     """
 
     root: Path
     array_path: Path
     time_index: int
     time: datetime
-    reference_time: datetime
+    reference_time: datetime | None
     interval_start: datetime
     interval_end: datetime
+    transform: Affine
+    crs: CRS
+    nodata: float | int | None
+    column_offset: int = 0
+    cyclic_x: bool = False
 
 
 class _ConfinedStore(LocalStore):
@@ -56,7 +71,7 @@ class _ConfinedStore(LocalStore):
         """Open a read-only store inside an already authorized archive.
 
         Args:
-            array_path: Monthly variable array to read.
+            array_path: Variable array to read.
             archive_root: Resolved archive directory retained by source access.
         """
         super().__init__(array_path, read_only=True)
@@ -123,24 +138,17 @@ class _ConfinedStore(LocalStore):
 
 
 class TemporalRasterDataset:
-    """Expose one ERA5 observation to the ordinary native raster readers.
+    """Expose one admitted Zarr observation to the native raster readers.
 
-    The virtual grid rotates the producer's longitude columns by 720 cells,
-    giving cell centers from -180 to 179.75 degrees without resampling. Its
-    logical blocks never cross a physical chunk boundary after the rotation.
-    Source work includes the complete monthly temporal chunk needed by Zarr.
+    Arrays have time, row and column axes and a regular affine spatial grid.
+    Admission supplies georeferencing, validity and optional column rotation;
+    shape, dtype and chunks come from the array. Values retain their native dtype
+    without resampling or scale/offset conversion. Logical blocks stay within
+    physical chunks, including when columns wrap. Each read charges the full
+    temporal chunk that Zarr must decode for the selected observation.
     """
 
     count: int = 1
-    width: int = 1440
-    height: int = 721
-    dtypes: tuple[str, ...] = ("float32",)
-    mask_flag_enums: tuple[list[MaskFlags], ...] = ([MaskFlags.nodata],)
-    nodata: float = float("nan")
-    nodatavals: tuple[float, ...] = (nodata,)
-    transform: Affine = Affine(0.25, 0, -180.125, 0, -0.25, 90.125)
-    crs: CRS = CRS.from_epsg(4326)
-    bounds: BoundingBox = BoundingBox(-180.125, -90.125, 179.875, 90.125)
 
     def __init__(self, observation: TemporalObservation) -> None:
         """Open the selected array read-only without loading its pixel values.
@@ -155,8 +163,30 @@ class TemporalRasterDataset:
         self._observation = observation
         self._store = _ConfinedStore(observation.array_path, observation.root)
         self._array = zarr.open_array(self._store, mode="r", zarr_format=3)
-        _, height, width = self._array.chunks
-        self.block_shapes = ((height, math.gcd(width, 720)),)
+        _, self.height, self.width = self._array.shape
+        self.dtypes = (self._array.dtype.name,)
+        self.transform = observation.transform
+        self.crs = observation.crs
+        self.nodata = observation.nodata
+        self.nodatavals = (self.nodata,)
+        self.mask_flag_enums = (
+            [MaskFlags.all_valid if self.nodata is None else MaskFlags.nodata],
+        )
+        corners = [
+            self.transform * (column, row)
+            for column, row in (
+                (0, 0),
+                (self.width, 0),
+                (0, self.height),
+                (self.width, self.height),
+            )
+        ]
+        x, y = zip(*corners)
+        self.bounds = BoundingBox(min(x), min(y), max(x), max(y))
+        height, width = self._array.chunks[1:]
+        if observation.column_offset:
+            width = math.gcd(width, observation.column_offset, self.width)
+        self.block_shapes = ((height, width),)
 
     def __enter__(self) -> Self:
         """Return the open observation for a scoped native read."""
@@ -179,7 +209,7 @@ class TemporalRasterDataset:
 
     @property
     def maximum_decoded_block_bytes(self) -> int:
-        """Return monthly chunk bytes plus the returned values and validity."""
+        """Return temporal chunk bytes plus the returned values and validity."""
         return math.prod(self._array.chunks) * self._array.dtype.itemsize + math.prod(
             self.block_shapes[0]
         ) * (self._array.dtype.itemsize + 1)
@@ -187,7 +217,7 @@ class TemporalRasterDataset:
     def native_work_for_blocks(
         self, block_indexes: tuple[tuple[int, int], ...]
     ) -> tuple[int, int]:
-        """Charge every logical block for its full monthly chunk decode.
+        """Charge every logical block for its full temporal chunk decode.
 
         Adjacent logical blocks can touch the same physical chunk, but no cache
         hit is assumed. Reading both blocks therefore counts both decodes.
@@ -201,17 +231,19 @@ class TemporalRasterDataset:
         return len(block_indexes), len(block_indexes) * self.maximum_decoded_block_bytes
 
     def index(self, x: float, y: float) -> tuple[int, int]:
-        """Return the native row and column containing a geographic point.
+        """Return the native row and column containing a point in the source CRS.
 
         Args:
-            x: Longitude in degrees; equivalent turns address the same cell.
-            y: Latitude in degrees.
+            x: Horizontal coordinate in the source CRS.
+            y: Vertical coordinate in the source CRS.
 
         Returns:
-            Integer row and column, with an out-of-range row beyond the poles.
+            Integer row and column. Only cyclic grids wrap columns; other
+            coordinates outside the grid retain out-of-range indexes.
         """
-        longitude = (x + 180.125) % 360 - 180.125
-        column, row = ~self.transform * (longitude, y)
+        column, row = ~self.transform * (x, y)
+        if self._observation.cyclic_x:
+            column %= self.width
         return math.floor(row), math.floor(column)
 
     def block_window(self, band: int, row: int, column: int) -> Window:
@@ -242,23 +274,23 @@ class TemporalRasterDataset:
 
     def read(
         self, band: int, *, window: Window, masked: bool = False
-    ) -> NDArray[numpy.float32] | numpy.ma.MaskedArray:
+    ) -> NDArray[numpy.generic] | numpy.ma.MaskedArray:
         """Read a caller-admitted native window at the selected observation.
 
         Args:
             band: The established single band, 1.
             window: Integral window within the virtual raster.
-            masked: Whether to mask nonfinite cells in the returned values.
+            masked: Whether to mask nonfinite and declared NoData cells.
 
         Returns:
-            Two-dimensional native values in west-to-east column order.
+            Two-dimensional native values in the admitted output grid order.
 
         Raises:
             ValueError: If a shard is corrupt or escapes the archive.
             OSError: If the actual source read fails.
         """
         rows, columns = window.toslices()
-        start = (columns.start + 720) % self.width
+        start = (columns.start + self._observation.column_offset) % self.width
         stop = start + columns.stop - columns.start
         try:
             values = self._array[
@@ -276,7 +308,7 @@ class TemporalRasterDataset:
                 )
         except RuntimeError as error:
             raise OSError("A temporal data chunk could not be decoded.") from error
-        return numpy.ma.masked_invalid(values, copy=False) if masked else values
+        return mask_invalid_raster_values(values, self.nodata) if masked else values
 
 
 def iter_temporal_windows(
