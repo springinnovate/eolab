@@ -177,7 +177,7 @@ export class CatalogMapActions {
      * @param {(item:Object)=>Promise<Object|null>} commands.show Publish the prepared Item; null means canceled.
      * @param {(item:Object)=>void} commands.remove Remove with the existing Undo behavior.
      * @param {(item:Object|null)=>number[][]|null} commands.getBounds Read usable map corners.
-     * @param {(key:string)=>void} commands.openStyle Open the editor for a composite identity.
+     * @param {(key:string,item:Object)=>void} commands.openStyle Open the editor for a Catalog layer or the first temporal view.
      * @param {(bounds:number[][])=>void} commands.zoomToBounds Fit the viewport using existing map options.
      * @param {(item:Object,visualization:{kind:"raster"|"vector",metadata:Object|undefined}|null)=>void} commands.onPrepared Refresh matching selected details after assessment, before publication.
      * @param {(item:Object,kind:"raster"|"vector")=>void} commands.onRemoved Preserve selected analysis after removal, before feedback.
@@ -246,7 +246,8 @@ export class CatalogMapActions {
     async toggle(item) {
         const visualization = getCatalogVisualization(item);
         if (visualization === null || this.#pending.get(item) !== null) return;
-        const datasetNoun = visualization.kind === "raster" ? "Raster" : "Vector layer";
+        const datasetNoun = visualization.metadata?.temporal ? "First dataset view"
+            : visualization.kind === "raster" ? "Raster" : "Vector layer";
         if (this.commands.contains(item)) {
             this.commands.remove(item);
             this.commands.onRemoved(item, visualization.kind);
@@ -260,7 +261,9 @@ export class CatalogMapActions {
             "Adding to map...",
             visualization.kind === "vector"
                 ? "Checking whether this vector layer can be rendered."
-                : "Publishing this prepared raster."
+                : visualization.metadata?.temporal
+                    ? "Opening a variable and observation time from this dataset."
+                    : "Publishing this prepared raster."
         );
         this.commands.onChange();
         try {
@@ -291,14 +294,14 @@ export class CatalogMapActions {
     }
 
     /**
-     * Open the editor for a retained, nonpending Item without changing selection.
+     * Open the editor for a Catalog layer or its first temporal view without changing selection.
      * @param {Object|null} item Item requested by a row or inspector shortcut.
      * @return {void}
      */
     style(item) {
         if (item === null || !this.commands.contains(item) ||
             this.#pending.get(item) !== null) return;
-        this.commands.openStyle(getCatalogItemKey(item));
+        this.commands.openStyle(getCatalogItemKey(item), item);
     }
 
     /**

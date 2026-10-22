@@ -54,6 +54,7 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {Object|null} [statistics] Validated statistics for the full chart.
  * @property {Object} [style] Committed continuous raster style.
  * @property {boolean} [canRetry] Offer retry after a recoverable failure.
+ * @property {boolean} canCalculate Offer Processing statistics and download actions for this source.
  */
 
 /**
@@ -531,7 +532,7 @@ export class RasterHistogramControlsView {
             summary.errorMessage ?? "", summary.unavailableMessage,
             summary.valueLabel ?? "Raster value", summary.categorical,
             Boolean(summary.automatic), summary.statistics, summary.style,
-            Boolean(summary.canRetry),
+            Boolean(summary.canRetry), summary.canCalculate,
         ]);
     }
 
@@ -616,34 +617,36 @@ export class RasterHistogramControlsView {
         style.setAttribute("aria-label", `Style ${summary.label}`);
         this.#bindSummaryAction(card, style, "onStyleHistogram");
         actions.append(style);
-        const download = this.documentContext.createElement("button");
-        download.type = "button";
-        download.className = "secondary-button raster-histogram-download";
-        download.title = "Download clip";
-        const downloadIcon = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
-        downloadIcon.setAttribute("viewBox", "0 0 24 24");
-        downloadIcon.setAttribute("width", "16");
-        downloadIcon.setAttribute("height", "16");
-        downloadIcon.setAttribute("aria-hidden", "true");
-        downloadIcon.setAttribute("focusable", "false");
-        const downloadPath = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "path");
-        downloadPath.setAttribute("d", "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5");
-        downloadPath.setAttribute("fill", "none");
-        downloadPath.setAttribute("stroke", "currentColor");
-        downloadPath.setAttribute("stroke-width", "1.75");
-        downloadPath.setAttribute("stroke-linecap", "round");
-        downloadPath.setAttribute("stroke-linejoin", "round");
-        downloadIcon.append(downloadPath);
-        download.append(downloadIcon);
-        download.setAttribute("aria-label", `Download clip of ${summary.label}`);
-        this.#bindSummaryAction(card, download, "onDownloadHistogram");
-        const calculate = this.documentContext.createElement("button");
-        calculate.type = "button";
-        calculate.className = "secondary-button";
-        calculate.textContent = "Calculate statistics for this area";
-        calculate.setAttribute("aria-label", "Calculate statistics for " + summary.label + " over this area");
-        this.#bindSummaryAction(card, calculate, "onCalculateHistogram");
-        actions.append(calculate, download);
+        if (summary.canCalculate) {
+            const download = this.documentContext.createElement("button");
+            download.type = "button";
+            download.className = "secondary-button raster-histogram-download";
+            download.title = "Download clip";
+            const downloadIcon = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
+            downloadIcon.setAttribute("viewBox", "0 0 24 24");
+            downloadIcon.setAttribute("width", "16");
+            downloadIcon.setAttribute("height", "16");
+            downloadIcon.setAttribute("aria-hidden", "true");
+            downloadIcon.setAttribute("focusable", "false");
+            const downloadPath = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "path");
+            downloadPath.setAttribute("d", "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5");
+            downloadPath.setAttribute("fill", "none");
+            downloadPath.setAttribute("stroke", "currentColor");
+            downloadPath.setAttribute("stroke-width", "1.75");
+            downloadPath.setAttribute("stroke-linecap", "round");
+            downloadPath.setAttribute("stroke-linejoin", "round");
+            downloadIcon.append(downloadPath);
+            download.append(downloadIcon);
+            download.setAttribute("aria-label", `Download clip of ${summary.label}`);
+            this.#bindSummaryAction(card, download, "onDownloadHistogram");
+            const calculate = this.documentContext.createElement("button");
+            calculate.type = "button";
+            calculate.className = "secondary-button";
+            calculate.textContent = "Calculate statistics for this area";
+            calculate.setAttribute("aria-label", "Calculate statistics for " + summary.label + " over this area");
+            this.#bindSummaryAction(card, calculate, "onCalculateHistogram");
+            actions.append(calculate, download);
+        }
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");

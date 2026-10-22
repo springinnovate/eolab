@@ -114,7 +114,8 @@ export function createCatalogResultView({
          * and optional {message,isError} feedback for this Item only.
          * @return {void}
          */
-        update({ supported, retained, canZoom, pendingAction, feedback }) {
+        update({ visualization, supported, retained, canZoom, pendingAction, feedback }) {
+            const isTemporal = visualization?.metadata?.temporal === true;
             onMap.hidden = !retained;
             mapButton.hidden = !supported;
             mapButton.disabled = pendingAction !== null;
@@ -129,10 +130,10 @@ export function createCatalogResultView({
             mapButton.textContent = pendingAction !== null
                 ? pendingAction.buttonText.startsWith("Adding")
                     ? "Adding..." : pendingAction.buttonText
-                : retained ? "Remove" : "Add to map";
+                : retained ? isTemporal ? "Remove first view" : "Remove" : "Add to map";
             const actionLabel = pendingAction !== null
                 ? pendingAction.buttonText
-                : retained ? "Remove from map" : "Add to map";
+                : retained ? isTemporal ? "Remove first view" : "Remove from map" : "Add to map";
             mapButton.setAttribute("aria-label", `${actionLabel}: ${presentation.fullTitle}`);
             const message = pendingAction?.statusText ?? feedback?.message ?? "";
             status.classList.toggle("visually-hidden", pendingAction !== null || feedback?.isError !== true);

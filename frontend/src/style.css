@@ -871,6 +871,13 @@ h5 {
 }
 .raster-layer-row .map-layer-remove-button:hover { color: var(--status-danger); }
 .raster-layer-error { grid-column: 1 / -1; margin: 4px 0; overflow-wrap: anywhere; }
+.temporal-layer-controls { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 6px; min-width: 0; }
+.temporal-layer-controls label { display: grid; gap: 3px; min-width: 0; color: var(--text-2); font-size: 0.7rem; }
+.temporal-layer-variable { grid-column: 1 / -1; }
+.temporal-layer-controls select { width: 100%; min-width: 0; padding: 5px; font-size: 0.75rem; }
+.temporal-layer-controls p { grid-column: 1 / -1; margin: 0; color: var(--text-2); font-size: 0.7rem; overflow-wrap: anywhere; }
+.temporal-layer-controls p.is-error { color: var(--status-danger); }
+.temporal-layer-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 
 .map-layer-legend {
   grid-column: 1 / -1;

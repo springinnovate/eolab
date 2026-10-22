@@ -227,12 +227,12 @@ export async function loadRasterPairedStatistics(
     );
 }
 
-/** Preserve the catalog wire form while using opaque references for other sources.
+/** Build analysis fields for a Catalog raster or an explicit source selection.
  * @param {Object} value Catalog Item or source descriptor.
  * @return {Object} Path-free analysis request fields.
  * @throws {TypeError} If the source identity is invalid.
  */
 function analysisSourceBody(value) {
     const source = rasterSourceReference(value);
-    return source.kind === "runArtifact" ? {source} : {...source};
+    return source.kind === "runArtifact" || source.variable !== undefined ? {source} : {...source};
 }

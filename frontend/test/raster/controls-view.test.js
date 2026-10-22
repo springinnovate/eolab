@@ -362,6 +362,7 @@ test("RasterControlsView delegates retained histogram summaries", () => {
     view.renderLayerHistograms([
         {
             key: "retained-raster",
+            canCalculate: true,
             label: "retained-raster.tif",
             state: "ready",
             scope: "Whole raster",

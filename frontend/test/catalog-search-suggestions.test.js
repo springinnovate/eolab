@@ -109,7 +109,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["type", "type", "date"],
+    ["type", "type", "type", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -126,11 +126,11 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
   });
   assert.deepEqual(
     getCatalogSearchSuggestions("forest ty", 9).map((filter) => filter.field),
-    ["type", "type"],
+    ["type", "type", "type"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("datatype", 8).map((filter) => filter.token),
-    ["type:raster", "type:vector"],
+    ["type:raster", "type:vector", "type:temporal"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("forest date:202", 15).map(
@@ -170,7 +170,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   fixture.input.dispatchEvent(new Event("focus"));
   assert.equal(fixture.panel.hidden, false);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "true");
-  assert.equal(fixture.list.children.length, 2);
+  assert.equal(fixture.list.children.length, 3);
 
   fixture.input.dispatchEvent(keyboardEvent("ArrowDown"));
   assert.equal(
@@ -186,7 +186,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   assert.equal(inputEvents, 1);
 });
 
-test("Raster and vector type suggestions have unique accessible options", () => {
+test("Raster, vector and temporal type suggestions have unique accessible options", () => {
   const fixture = createSuggestionFixture();
   let inputEvents = 0;
   fixture.input.addEventListener("input", () => inputEvents += 1);
@@ -200,6 +200,7 @@ test("Raster and vector type suggestions have unique accessible options", () => 
     [
       "catalog-search-suggestion-type-raster",
       "catalog-search-suggestion-type-vector",
+      "catalog-search-suggestion-type-temporal",
     ],
   );
   fixture.list.children[1].dispatchEvent(new Event("click"));
@@ -213,7 +214,7 @@ test("Incomplete date help leaves the caret ready without running a search", () 
   fixture.input.addEventListener("input", () => inputEvents += 1);
   fixture.input.dispatchEvent(new Event("focus"));
 
-  fixture.list.children[2].dispatchEvent(new Event("click"));
+  fixture.list.children[3].dispatchEvent(new Event("click"));
 
   assert.equal(fixture.input.value, "date:");
   assert.equal(fixture.input.selectionStart, 5);

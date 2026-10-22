@@ -67,7 +67,7 @@ async function renderingRequestError(response, action) {
 }
 
 /**
- * Publish a catalog or temporary GeoTIFF through the ordinary tile renderer.
+ * Publish a catalog raster, temporal observation or temporary GeoTIFF as ordinary map tiles.
  *
  * @param {Object} item Catalog item or original-source descriptor.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]

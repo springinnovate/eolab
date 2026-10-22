@@ -135,3 +135,23 @@ test("catalog user removal requests Undo while internal removal keeps its existi
     assert.equal(calls[1][0], "user");
     assert.equal(typeof calls[1][1], "string");
 });
+
+
+test("temporal Catalog actions use the raster viewer's independent dataset views", async () => {
+    const item = { collection: "eolab-temporal-datasets", id: "era5" };
+    const calls = [];
+    const viewer = {
+        showTemporal: async source => { calls.push(["show", source]); return "first view"; },
+        containsTemporal: source => { calls.push(["contains", source]); return true; },
+        removeTemporal: (source, allowUndo) => calls.push(["remove", source, allowUndo]),
+    };
+    const coordinator = new CatalogVisualizationCoordinator(viewer, {}, {});
+    assert.equal(await coordinator.prepare(item), item);
+    assert.equal(await coordinator.show(item), "first view");
+    assert.equal(coordinator.contains(item), true);
+    coordinator.remove(item, true);
+    coordinator.remove(item);
+    assert.deepEqual(calls, [
+        ["show", item], ["contains", item], ["remove", item, true], ["remove", item, false],
+    ]);
+});

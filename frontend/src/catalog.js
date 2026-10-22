@@ -14,6 +14,8 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
+/** @type {string} Catalog collection for admitted raster time series. */
+export const TEMPORAL_COLLECTION_ID = "eolab-temporal-datasets";
 
 /**
  * User-facing Catalog field filters accepted by `buildCatalogSearch`.
@@ -55,6 +57,16 @@ export const CATALOG_SEARCH_FILTERS = Object.freeze([
         collectionId: MOUNTED_VECTOR_COLLECTION_ID
     }),
     Object.freeze({
+        field: "type",
+        token: "type:temporal",
+        value: "temporal",
+        label: "Raster time series",
+        description: "Raster datasets with variables and observation times.",
+        keywords: Object.freeze(["type", "datatype", "temporal", "time", "series"]),
+        searchImmediately: true,
+        collectionId: TEMPORAL_COLLECTION_ID
+    }),
+    Object.freeze({
         field: "date",
         token: "date:",
         value: null,
@@ -75,16 +87,18 @@ const CATALOG_SEARCH_FILTERS_BY_FIELD = new Map(
 const VECTOR_RENDERING_POLICY = "vector-v1";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
-    [MOUNTED_VECTOR_COLLECTION_ID, "Vector"]
+    [MOUNTED_VECTOR_COLLECTION_ID, "Vector"],
+    [TEMPORAL_COLLECTION_ID, "Raster time series"]
 ]);
 
 /**
- * Return whether one Item is a prepared mounted GeoTIFF.
+ * Identify a mounted GeoTIFF or a raster dataset with observation times.
  *
  * @param {Object|null} item Selected STAC Item.
- * @return {Object|null} An empty raster descriptor or null for a non-raster.
+ * @return {{temporal?:boolean}|null} Raster metadata identifying time series, or null for a non-raster.
  */
 export function getRasterVisualization(item) {
+    if (item?.collection === TEMPORAL_COLLECTION_ID) return { temporal: true };
     if (item?.collection !== MOUNTED_GEOTIFF_COLLECTION_ID) {
         return null;
     }
@@ -574,7 +588,7 @@ export function buildCatalogSearch(searchText) {
             );
             if (typeFilter === undefined) {
                 throw new CatalogSearchSyntaxError(
-                    "Use type:raster or type:vector."
+                    "Use type:raster, type:vector, or type:temporal."
                 );
             }
             if (datasetCollectionId !== null) {
@@ -677,7 +691,8 @@ export function findPaginationLink(itemCollection, relations) {
 /**
  * Builds display details for a STAC Item, including its identity, datetime or
  * datetime range, geometry, bounding box, projection, raster dimensions,
- * Assets, vector fields, and raster bands.
+ * assets, vector fields, and raster bands. Temporal datasets show their variables,
+ * observation-label extent and month count instead of individual monthly assets.
  *
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
@@ -704,7 +719,23 @@ export function buildCatalogItemDetails(
     if (datasetType !== undefined) {
         metadata.push({ label: "Dataset type", value: datasetType });
     }
-    if (properties.datetime === null) {
+    const isTemporal = item.collection === TEMPORAL_COLLECTION_ID;
+    if (isTemporal) {
+        metadata.push({
+            label: "Observation times (UTC)",
+            value: properties["cube:dimensions"].time.extent.join(" – ")
+        }, {
+            label: "Variables",
+            value: Object.entries(properties["cube:variables"]).map(
+                ([name, variable]) => `${variable.description} (${name}; ${variable.unit})`
+            ).join("; ")
+        }, {
+            label: "Months with data",
+            value: String(Object.values(item.assets).filter(
+                (asset) => asset.roles.includes("data")
+            ).length)
+        });
+    } else if (properties.datetime === null) {
         metadata.push({
             label: "Item datetime range",
             value: `${properties.start_datetime} – ${properties.end_datetime}`
@@ -743,7 +774,7 @@ export function buildCatalogItemDetails(
     metadata.push(...vectorDetails.metadata);
     const fields = vectorDetails.fields;
 
-    const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
+    const assets = isTemporal ? [] : Object.entries(item.assets).map(([assetKey, asset]) => {
         const isMountedFile =
             datasetType !== undefined && asset.href.startsWith("file:");
         let location = asset.href;

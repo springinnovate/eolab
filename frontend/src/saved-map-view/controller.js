@@ -15,7 +15,7 @@ import {
 const RESTORE_CONCURRENCY = 4;
 const REMEMBER_DEBOUNCE_MILLISECONDS = 350;
 
-/** Save map settings and restore catalog, uploaded and shared layers through their owners. */
+/** Save map settings and restore catalog, temporal, uploaded and shared layers through their owners. */
 export class SavedMapViewController {
     /**
      * Connect map save, share and restore controls to layer owners and browser services.
@@ -41,6 +41,8 @@ export class SavedMapViewController {
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {(record:Object)=>Object|null} configuration.exportUpload Export an upload identifier and map appearance, or null for another layer kind.
      * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreUpload Open this browser's upload with its saved appearance and return its map key, or null after supersession.
+     * @param {(record:Object)=>Object|null} configuration.exportTemporal Export a temporal selection and raster appearance, or null for another layer kind.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} configuration.restoreTemporal Retain an independent temporal row with saved appearance; return its key, including unavailable observations shown with a row error, or null after supersession.
      * @param {Object|null} [configuration.publicationApi] Same-site named-map API client.
      * @param {string|null} [configuration.namedMapSlug] URL name to load instead of fragments or private autosave.
      * @param {boolean} [configuration.editPublishedMap=false] Load an authenticated draft and save explicitly at its fixed URL.
@@ -70,6 +72,8 @@ export class SavedMapViewController {
         restoreAnnotation = async () => { throw new Error("Shared layers are unavailable."); },
         exportUpload,
         restoreUpload,
+        exportTemporal,
+        restoreTemporal,
         publicationApi = null,
         namedMapSlug = null,
         editPublishedMap = false,
@@ -109,6 +113,8 @@ export class SavedMapViewController {
         this.restoreAnnotation = restoreAnnotation;
         this.exportUpload = exportUpload;
         this.restoreUpload = restoreUpload;
+        this.exportTemporal = exportTemporal;
+        this.restoreTemporal = restoreTemporal;
         this.publicationApi = publicationApi;
         this.namedMapSlug = namedMapSlug;
         this.editPublishedMap = editPublishedMap;
@@ -473,9 +479,9 @@ export class SavedMapViewController {
         const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
         const layers = records.map((record) => {
-            const layer = record.entry.item === null
+            const layer = this.exportTemporal(record) ?? (record.entry.item === null
                 ? this.exportUpload(record) ?? this.exportAnnotation(record)
-                : this.#exportLayer(record);
+                : this.#exportLayer(record));
             return layer === null ? null : { ...layer, ...(record.entry.legendIncluded === false ? { legendIncluded: false } : {}) };
         });
         return createSavedMapView({
@@ -535,6 +541,14 @@ export class SavedMapViewController {
             savedMapView.layers,
             RESTORE_CONCURRENCY,
             async (layer) => {
+                if (layer.temporalSource) {
+                    try {
+                        const key = await this.restoreTemporal(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                        return { key, staged: null, detail: null };
+                    } catch (error) {
+                        return { staged: null, detail: `${layer.customName ?? layer.temporalSource.variable}: ${asError(error).message}` };
+                    }
+                }
                 if (layer.uploadId) {
                     try {
                         if (savedMapView.viewer.origin !== this.viewerOrigin) {

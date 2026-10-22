@@ -228,6 +228,53 @@ class MapLayer(MapStyledLayer):
     catalogItem: MapCatalogItem
 
 
+class MapTemporalSource(MapDocumentPart):
+    """Catalog variable and exact observation time to reopen in a saved map."""
+
+    collectionId: CatalogIdentity
+    itemId: CatalogIdentity
+    variable: CatalogIdentity
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def normalize_observation_time(cls, value: str) -> str:
+        """Return an explicitly zoned observation timestamp in UTC.
+
+        Args:
+            value: Observation time recorded in the map document.
+
+        Returns:
+            UTC timestamp with millisecond precision.
+
+        Raises:
+            ValueError: If the timestamp is invalid or lacks a timezone.
+        """
+        date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if date.tzinfo is None:
+            raise ValueError("Observation time must include a timezone.")
+        return (
+            date.astimezone(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+
+
+class MapTemporalLayer(MapDocumentPart):
+    """One independent view of a Catalog observation and its raster appearance.
+
+    Repeated selections represent separate map rows, even at the same time.
+    Runtime row identifiers and disposable rendering publications are not saved.
+    """
+
+    temporalSource: MapTemporalSource
+    customName: Title | None = None
+    visible: bool
+    legendIncluded: bool = True
+    opacity: Annotated[float, Field(ge=0, le=1)]
+    style: MapRasterStyle
+
+
 class MapUploadLayer(MapStyledLayer):
     """Private upload identity and appearance, without access credentials or data.
 
@@ -289,7 +336,7 @@ class MapLegendAppearance(MapDocumentPart):
 class SavedMapView(MapDocumentPart):
     """Portable map JSON with optional legend visibility and collapse preferences.
 
-    Version three includes a basemap provider and can reference private uploads.
+    Version three includes a basemap provider, private uploads and temporal views.
     Older maps without mapLegend open with the legend visible and expanded.
     """
 
@@ -301,7 +348,8 @@ class SavedMapView(MapDocumentPart):
     basemap: Literal["detailed", "carto", "maptiler", "outlines", "none"] | None = None
     mapLegend: MapLegendAppearance | None = None
     layers: Annotated[
-        list[MapLayer | MapUploadLayer | MapAnnotationLayer], Field(max_length=50)
+        list[MapLayer | MapUploadLayer | MapAnnotationLayer | MapTemporalLayer],
+        Field(max_length=50),
     ]
 
     @field_validator("createdAt")
@@ -347,7 +395,10 @@ class SavedMapView(MapDocumentPart):
             raise ValueError("Map legend preferences must be an object when supplied.")
         identities = []
         for layer in self.layers:
-            if isinstance(layer, MapAnnotationLayer):
+            if isinstance(layer, MapTemporalLayer):
+                if self.schemaVersion != 3:
+                    raise ValueError("Temporal layers require saved-map version three.")
+            elif isinstance(layer, MapAnnotationLayer):
                 if self.schemaVersion == 1:
                     raise ValueError(
                         "Shared annotations require saved-map version two."

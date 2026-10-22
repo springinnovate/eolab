@@ -11,12 +11,14 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
 /**
- * Create a test controller with no upload layers unless the test supplies them.
+ * Create a test controller without uploaded or temporal layers unless supplied.
  * @param {Object} configuration Test-owned view, layer and persistence adapters.
  * @return {SavedMapViewController} Controller connected to those test adapters.
  */
 function createController(configuration) {
   return new SavedMapViewController({
+    exportTemporal: () => null,
+    restoreTemporal: async () => { throw new Error("This test did not provide a temporal layer to restore."); },
     exportUpload: () => null,
     restoreUpload: async () => { throw new Error("This test did not provide an upload to restore."); },
     ...configuration,
@@ -1162,4 +1164,81 @@ test("undoing Reset explains an upload deleted after the reset", async () => {
   assert.equal(view.result.total, 1);
   assert.match(view.result.details[0], /Wetlands:.*deleted/);
   controller.destroy();
+});
+
+
+test("temporal views restore independently in mixed map order and retain unavailable selections", async () => {
+  const style = { kind: "raster", appearanceVersion: 1, mode: "continuous",
+    continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
+    categorical: null };
+  const temporal = { temporalSource: { collectionId: "eolab-temporal-datasets", itemId: "era5",
+    variable: "air_temperature", time: "2020-01-15T12:00:00.000Z" },
+    customName: "First", visible: true, opacity: 0.6, legendIncluded: false, style };
+  const catalog = { catalogItem: { collection: "vectors", id: "roads" }, visible: false,
+    opacity: 0.8, style: { kind: "vector", definition: {} } };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [temporal, catalog,
+    { ...structuredClone(temporal), customName: "Second", opacity: 0.3 }] };
+  const records = [], view = createView(), order = [];
+  const controller = createController({ view,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { snapshot: () => saved.viewport, restore() {} },
+    mapLayers: { retainedRecords: records,
+      commitStaged(staged) { records.push(...staged.map(value => value.record)); },
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; },
+      restoreOrder(keys) { order.push(keys); records.sort((a, b) => keys.indexOf(a.entry.key) - keys.indexOf(b.entry.key)); } },
+    catalogItems: { get: async identity => identity },
+    catalogVisualization: { clear() { records.length = 0; }, prepare: async item => item,
+      stage: async (item, presentation) => ({ record: { entry: { key: "catalog", item, ...presentation },
+        adapter: { applySavedState() {}, exportSavedState: () => catalog.style } } }) },
+    exportTemporal: record => record.savedTemporal ?? null,
+    restoreTemporal: async (layer, isCurrent) => {
+      assert.equal(isCurrent(), true);
+      const key = `local:temporal:${layer.customName}`;
+      records.push({ entry: { key, item: null }, savedTemporal: layer,
+        error: layer.customName === "Second" ? "This observation is unavailable." : null });
+      return key;
+    },
+  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
+    maximumInputBytes: 512 * 1024,
+  }));
+  assert.equal(view.result.loaded, 3);
+  assert.deepEqual(order, [["local:temporal:First", "catalog", "local:temporal:Second"]]);
+  assert.match(records[2].error, /unavailable/);
+  await controller.copyMapLink();
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  assert.deepEqual(copied.layers, saved.layers);
+  controller.destroy();
+});
+
+test("superseded temporal restoration cannot add a late row or commit its saved view", async () => {
+  const view = createView();
+  let begin, release;
+  const started = new Promise(resolve => { begin = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const saved = { ...emptySavedMap(0, 0, 3), layers: [{
+    temporalSource: { collectionId: "eolab-temporal-datasets", itemId: "era5",
+      variable: "air_temperature", time: "2020-01-15T12:00:00.000Z" },
+    visible: true, opacity: 1,
+    style: { kind: "raster", appearanceVersion: 1, mode: "continuous",
+      continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
+      categorical: null },
+  }] };
+  const controller = createController({ view,
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    viewport: { restore: () => assert.fail("superseded viewport restored") },
+    catalogVisualization: { clear() {} },
+    mapLayers: { retainedRecords: [], commitStaged() { assert.fail("superseded view committed"); } },
+    restoreTemporal: async (_layer, isCurrent) => {
+      begin(); await waiting;
+      assert.equal(isCurrent(), false);
+      return null;
+    },
+  });
+  const opening = controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
+    maximumInputBytes: 512 * 1024,
+  }));
+  await started;
+  controller.destroy(); release(); await opening;
+  assert.equal(view.result, null);
 });

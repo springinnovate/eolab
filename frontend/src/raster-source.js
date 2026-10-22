@@ -6,8 +6,8 @@ import { getCatalogItemKey } from "./catalog-item-identity.js";
  * Capabilities describe supported operations; each server request still authorizes
  * the source and checks its lifetime, validity and resource limits independently.
  * @typedef {Object} RasterDescriptor
- * @property {{collectionId:string,itemId:string}|{kind:"runArtifact",jobId:string,artifactId:string}} source Path-free original identity.
- * @property {string} version Immutable source checksum.
+ * @property {{collectionId:string,itemId:string}|{collectionId:string,itemId:string,variable:string,time:string}|{kind:"runArtifact",jobId:string,artifactId:string}} source Path-free original identity.
+ * @property {string} [version] Server source identity when metadata has been requested.
  * @property {string} label Readable file name.
  * @property {number[]} bbox Original extent in WGS84 west/south/east/north order.
  * @property {{id:string,label:string}} [group] Originating run identity and display name.
@@ -16,7 +16,7 @@ import { getCatalogItemKey } from "./catalog-item-identity.js";
 
 /** Copy a source identity from a raster descriptor, catalog Item or API reference.
  * @param {Object} value Source-bearing presentation or identity.
- * @return {Readonly<Object>} Validated catalog or owned run-file reference.
+ * @return {Readonly<Object>} Validated catalog, temporal observation or owned run-file reference.
  * @throws {TypeError} If the source identity is missing or malformed.
  */
 export function rasterSourceReference(value) {
@@ -32,6 +32,9 @@ export function rasterSourceReference(value) {
     if (![collectionId, itemId].every(id => typeof id === "string" && id.length > 0 && id.length <= 512)) {
         throw new TypeError("Choose a raster.");
     }
+    if (source.variable !== undefined) {
+        return Object.freeze({collectionId, itemId, variable: source.variable, time: source.time});
+    }
     return Object.freeze({collectionId, itemId});
 }
 
@@ -42,8 +45,9 @@ export function rasterSourceReference(value) {
  */
 export function rasterSourceKey(value) {
     const source = rasterSourceReference(value);
-    return source.kind === "runArtifact" ? `local:artifact:${source.jobId}:${source.artifactId}` :
-        getCatalogItemKey({collection: source.collectionId, id: source.itemId});
+    if (source.kind === "runArtifact") return `local:artifact:${source.jobId}:${source.artifactId}`;
+    return source.variable === undefined ? getCatalogItemKey({collection: source.collectionId, id: source.itemId}) :
+        JSON.stringify([source.collectionId, source.itemId, source.variable, source.time]);
 }
 
 /** Capture a raster input and its readable label without display state or paths.
