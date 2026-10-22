@@ -19,14 +19,20 @@ class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area misses a raster source grid."""
 
 
-def cyclic_longitude_period(dataset: RasterDataset) -> float | None:
-    """Return the longitude span of an admitted cyclic geographic raster.
+def get_longitude_wrap_width(dataset: RasterDataset) -> float | None:
+    """Return the longitude shift that maps back to the same raster columns.
+
+    For example, shifting longitude by 360 degrees returns to the same column
+    on a global grid. Window selection, polygon masks and paired reads share
+    this decision so they handle the east/west edge consistently.
 
     Args:
         dataset: Open source raster with its admitted grid.
 
     Returns:
-        Positive longitude period, or None for noncyclic or projected grids.
+        One full grid width in the source CRS's angular units (360 degrees
+        for a global longitude grid), or None when this raster does not wrap
+        across its east/west edge.
     """
     if (
         isinstance(dataset, TemporalRasterDataset)
@@ -51,7 +57,7 @@ def prepare_raster_for_wgs84_bounds(
         dataset: Open source, before window or sample plans have been made.
         selected_bounds: Canonical WGS84 rectangle covering the selection.
     """
-    if cyclic_longitude_period(dataset) is None:
+    if get_longitude_wrap_width(dataset) is None:
         return
     ring = densified_wgs84_bounds_ring(selected_bounds)
     x, y = transform(
@@ -96,7 +102,7 @@ def _periodic_polygon_copies(
     Raises:
         ValueError: If periodic copies exceed the caller's coordinate capacity.
     """
-    period = cyclic_longitude_period(dataset)
+    period = get_longitude_wrap_width(dataset)
     if period is None:
         return geometries
     copies: list[dict[str, object]] = []

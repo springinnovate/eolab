@@ -18,7 +18,7 @@ from eolab_app.raster.bounded_window import (
     BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
     BOUNDED_WGS84_DENSIFY_POINTS,
     NoRasterBoundsOverlapError,
-    cyclic_longitude_period,
+    get_longitude_wrap_width,
     selected_raster_area_for_wgs84_bounds,
 )
 from eolab_app.raster.models import (
@@ -202,7 +202,7 @@ def _aligned_y_positions(
         list(x_coordinates),
         list(y_coordinates),
     )
-    if cyclic_longitude_period(x_dataset) is not None:
+    if get_longitude_wrap_width(x_dataset) is not None:
         west = selected_bounds[0]
         longitudes = [west + (longitude - west) % 360 for longitude in longitudes]
         target_x, target_y = transform(
