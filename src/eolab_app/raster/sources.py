@@ -7,10 +7,12 @@ from urllib.parse import unquote, urlsplit
 from eolab_app.raster.source_models import (
     TemporalRasterSelection,
     TemporalIntervalSelection,
+    TemporalTimeChoices,
+    TemporalTimeQuery,
 )
 from eolab_app.raster.temporal import TemporalObservation
 
-from eolab_app.raster.era5_source import get_era5_observations
+from eolab_app.raster.era5_source import get_era5_observations, get_era5_time_choices
 
 from eolab_app.raster.catalog_contract import GEOTIFF_MEDIA_TYPES
 from eolab_app.raster.errors import (
@@ -111,6 +113,23 @@ class MountedRasterResolver:
             RasterFeatureError: If the selection or archive cannot be read.
         """
         return get_era5_observations(item, selection, self._scan_mount_path)
+
+    def get_time_choices(
+        self, item: dict[str, Any], query: TemporalTimeQuery
+    ) -> TemporalTimeChoices:
+        """List a variable's actual observation labels from its confined archive.
+
+        Args:
+            item: Authoritative temporal Catalog Item.
+            query: Variable and optional requested UTC month.
+
+        Returns:
+            Available months and the selected month's actual timestamps.
+
+        Raises:
+            RasterFeatureError: If the variable or source metadata is unavailable.
+        """
+        return get_era5_time_choices(item, query, self._scan_mount_path)
 
 
 class PublishedRasterRegistry:

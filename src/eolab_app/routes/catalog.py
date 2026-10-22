@@ -5,10 +5,17 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import psycopg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from eolab_app.catalog.public_metadata import copy_public_catalog_metadata
+from eolab_app.raster.errors import RasterFeatureError
+from eolab_app.raster.source_models import TemporalTimeChoices, TemporalTimeQuery
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
+)
+from eolab_app.routes.raster_http import raster_http_exception
 
 LOGGER = logging.getLogger(__name__)
 
@@ -17,6 +24,9 @@ RandomCatalogItemLookup = Callable[
     [dict[str, Any], tuple[str, str] | None],
     Awaitable[dict[str, Any] | None],
 ]
+
+
+TemporalTimeLookup = Callable[[TemporalTimeQuery], Awaitable[TemporalTimeChoices]]
 
 
 class CatalogItemIdentity(BaseModel):
@@ -54,8 +64,17 @@ class CatalogSurpriseRequest(BaseModel):
 
 def create_catalog_router(
     random_item_lookup: RandomCatalogItemLookup,
+    temporal_time_lookup: TemporalTimeLookup,
 ) -> APIRouter:
-    """Create the filtered random-discovery endpoint."""
+    """Create Catalog discovery endpoints without rendering dependencies.
+
+    Args:
+        random_item_lookup: Authoritative filtered random Item lookup.
+        temporal_time_lookup: Authorized observation-label lookup from source metadata.
+
+    Returns:
+        Router for random discovery and exact temporal choices.
+    """
     router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
     @router.post("/surprise")
@@ -94,5 +113,36 @@ def create_catalog_router(
                 detail="No Catalog Items match the active filters",
             )
         return {"item": copy_public_catalog_metadata(item)}
+
+    @router.post("/temporal-times", response_model=TemporalTimeChoices)
+    async def get_temporal_times(
+        body: TemporalTimeQuery, request: Request, response: Response
+    ) -> TemporalTimeChoices:
+        """Return available months and actual UTC labels for one variable.
+
+        Args:
+            body: Catalog variable and optional requested month.
+            request: HTTP cancellation context.
+            response: Response receiving no-store headers for explicit refresh.
+
+        Returns:
+            Exact choices without synthesizing missing observations.
+
+        Raises:
+            HTTPException: If Catalog or source access fails, or the client disconnects.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return await run_until_http_disconnect(request, temporal_time_lookup(body))
+        except RasterFeatureError as error:
+            failure = raster_http_exception(error)
+            failure.headers = {**(failure.headers or {}), "Cache-Control": "no-store"}
+            raise failure from error
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(
+                499,
+                "The observation time request was canceled",
+                headers={"Cache-Control": "no-store"},
+            ) from error
 
     return router

@@ -487,7 +487,10 @@ def create_app(
         create_saved_maps_admin_router(saved_maps, app_global_configuration.admin_password)
     )
     application.include_router(
-        create_catalog_router(catalog_database.random_matching_item)
+        create_catalog_router(
+            catalog_database.random_matching_item,
+            raster_source_authorizer.get_time_choices,
+        )
     )
     application.include_router(
         create_raster_analysis_router(

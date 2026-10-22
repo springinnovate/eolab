@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 import shutil
+from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,16 +28,18 @@ from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.raster.temporal import iter_temporal_windows
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
+from eolab_app.routes.catalog import create_catalog_router
 from tests.test_catalog_temporal import (
     ITEM_KEY,
     PRECIPITATION,
+    RADIATION,
     TEMPERATURE,
     VARIABLES,
     create_scanner,
     era5_archive,
+    publish_month,
     scan,
 )
-
 
 def populate_month(archive: Path, variable: str, values: tuple[float, ...]) -> None:
     """Write sparse February weather cells using the actual sharded storage format.
@@ -380,3 +383,143 @@ def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
                 time="2000-02-01T00:00:00Z",
             ),
         )
+
+
+def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
+    era5_archive: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discover exact variable labels from coverage without a renderer or Zarr reads.
+
+    Args:
+        era5_archive: Two published partial months with variable-specific gaps.
+        monkeypatch: Prevent discovery from opening native weather arrays.
+    """
+    scanner, writer = create_scanner(era5_archive.parent)
+    asyncio.run(scan(scanner))
+
+    async def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the scanner's current authoritative Item through STAC.
+
+        Args:
+            request: Catalog request identifying the dataset.
+
+        Returns:
+            Current Item, or HTTP 404 for an unknown dataset.
+        """
+        parts = request.url.path.split("/")
+        item = writer.write_session.items.get((parts[-3], parts[-1]))
+        return httpx2.Response(404) if item is None else httpx2.Response(200, json=item)
+
+    def reject_zarr_read(*args: object, **kwargs: object) -> None:
+        """Fail if listing labels attempts a native array read.
+
+        Args:
+            args: Unexpected positional array arguments.
+            kwargs: Unexpected named array arguments.
+
+        Raises:
+            AssertionError: Always, because this request only needs SQLite coverage.
+        """
+        raise AssertionError("Time discovery must not open Zarr arrays")
+
+    monkeypatch.setattr(zarr, "open_array", reject_zarr_read)
+    catalog_client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(catalog_response)
+    )
+    authorizer = CatalogRasterSourceAuthorizer(
+        StacRasterCatalog(catalog_client, "http://catalog"),
+        MountedRasterResolver(era5_archive.parent),
+    )
+    application = FastAPI()
+    application.include_router(
+        create_catalog_router(AsyncMock(), authorizer.get_time_choices)
+    )
+    query = {
+        "collectionId": ITEM_KEY[0],
+        "itemId": ITEM_KEY[1],
+        "variable": PRECIPITATION,
+    }
+    with TestClient(application) as api:
+        latest = api.post("/api/catalog/temporal-times", json=query)
+        assert latest.status_code == 200, latest.text
+        assert latest.headers["Cache-Control"] == "no-store"
+        assert latest.json() == {
+            "months": ["2000-01", "2000-02"],
+            "month": "2000-02",
+            "times": ["2000-02-01T00:00:00.000Z", "2000-02-01T02:00:00.000Z"],
+        }
+        assert str(era5_archive) not in latest.text
+        january = api.post(
+            "/api/catalog/temporal-times", json={**query, "month": "2000-01"}
+        )
+        # February's midnight accumulation covers January's final hour, but its
+        # observation label belongs only to February's selectable coordinates.
+        assert january.json()["times"] == ["2000-01-31T22:00:00.000Z"]
+        temperature = api.post(
+            "/api/catalog/temporal-times", json={**query, "variable": TEMPERATURE}
+        )
+        assert temperature.json()["times"] == [
+            "2000-02-01T00:00:00.000Z",
+            "2000-02-01T01:00:00.000Z",
+            "2000-02-01T02:00:00.000Z",
+        ]
+        radiation = api.post(
+            "/api/catalog/temporal-times", json={**query, "variable": RADIATION}
+        )
+        assert radiation.json()["months"] == ["2000-02"]
+        absent = api.post(
+            "/api/catalog/temporal-times", json={**query, "month": "2000-03"}
+        )
+        assert absent.json() == {
+            "months": ["2000-01", "2000-02"],
+            "month": "2000-03",
+            "times": [],
+        }
+        for invalid_month in ("2000-13", "200001", "2000-1", "2000-W01"):
+            invalid = api.post(
+                "/api/catalog/temporal-times", json={**query, "month": invalid_month}
+            )
+            assert invalid.status_code == 422
+        unknown = api.post(
+            "/api/catalog/temporal-times", json={**query, "variable": "unknown"}
+        )
+        assert unknown.status_code == 422
+        missing = api.post(
+            "/api/catalog/temporal-times", json={**query, "itemId": "unknown"}
+        )
+        assert missing.status_code == 404
+
+        # Operator update -> explicit scan -> read new choices. Retain an explicit
+        # month, and exclude observations belonging only to superseded revisions.
+        publish_month(
+            era5_archive, 2, {TEMPERATURE: (0,), PRECIPITATION: (0,), RADIATION: (0,)}
+        )
+        publish_month(era5_archive, 3, {TEMPERATURE: (0,), PRECIPITATION: (0,)})
+        api.portal.call(scan, scanner)
+        assert scanner.status()["errors"] == []
+        refreshed = api.post(
+            "/api/catalog/temporal-times", json={**query, "month": "2000-02"}
+        )
+        assert refreshed.json() == {
+            "months": ["2000-01", "2000-02", "2000-03"],
+            "month": "2000-02",
+            "times": ["2000-02-01T00:00:00.000Z"],
+        }
+        assert (
+            api.post("/api/catalog/temporal-times", json=query).json()["month"]
+            == "2000-03"
+        )
+        (era5_archive / "catalog.sqlite").unlink()
+        unreadable = api.post("/api/catalog/temporal-times", json=query)
+        assert unreadable.status_code == 409
+        assert unreadable.json() == {
+            "detail": "The temporal dataset metadata could not be read."
+        }
+        assert unreadable.headers["Cache-Control"] == "no-store"
+        writer.write_session.items[ITEM_KEY]["assets"]["eolab:temporal-source"][
+            "href"
+        ] = (era5_archive.parent.parent / "outside.yaml").as_uri()
+        outside = api.post("/api/catalog/temporal-times", json=query)
+        assert outside.status_code == 422
+        assert str(era5_archive.parent) not in outside.text
+    asyncio.run(catalog_client.aclose())
