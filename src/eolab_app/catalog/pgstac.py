@@ -8,6 +8,7 @@ import psycopg
 
 from eolab_app.catalog.collections import (
     MOUNTED_GEOTIFF_COLLECTION_ID,
+    TEMPORAL_COLLECTION_ID,
 )
 from eolab_app.catalog.models import CatalogItemSource
 
@@ -198,9 +199,10 @@ def catalog_item_source(
     Raises:
         ValueError: If a required source Asset is missing.
     """
-    if (
-        collection == MOUNTED_GEOTIFF_COLLECTION_ID
-        or item_id.startswith(("geopackage-", "geojson-"))
+    if collection == TEMPORAL_COLLECTION_ID:
+        required_asset_keys = ("eolab:temporal-source",)
+    elif collection == MOUNTED_GEOTIFF_COLLECTION_ID or item_id.startswith(
+        ("geopackage-", "geojson-")
     ):
         required_asset_keys = ("data",)
     elif item_id.startswith("zipped-shapefile-"):

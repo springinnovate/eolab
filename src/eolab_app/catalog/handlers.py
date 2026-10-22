@@ -23,6 +23,10 @@ from eolab_app.catalog.shapefile import (
     build_stac_item as build_shapefile_stac_item,
     discover_shapefile_datasets,
 )
+from eolab_app.catalog.temporal import (
+    build_temporal_items,
+    prepare_temporal_candidate,
+)
 from eolab_app.catalog.zipped_shapefile import (
     build_stac_items as build_zipped_shapefile_stac_items,
 )
@@ -56,10 +60,13 @@ class HandlerDiscovery:
         matches: Logical datasets recognized in the current directory.
         pruned_directory_names: Child directory names claimed as datasets whose
             descendants must not be independently discovered.
+        owns_directory: Whether this handler owns the whole current directory,
+            including its sibling files and all descendants.
     """
 
     matches: tuple[DatasetMatch, ...] = ()
     pruned_directory_names: frozenset[str] = frozenset()
+    owns_directory: bool = False
 
 
 DatasetDiscoverer = Callable[
@@ -69,6 +76,10 @@ DatasetDiscoverer = Callable[
 DatasetItemBuilder = Callable[
     [Path, DatasetCandidate],
     tuple[DatasetItem, ...],
+]
+DatasetCandidatePreparer = Callable[
+    [Path, DatasetCandidate],
+    DatasetCandidate,
 ]
 
 
@@ -80,11 +91,14 @@ class DatasetHandler:
         name: Stable registry key stored on discovered candidates.
         discover: Recognizes datasets in one already-listed directory.
         build_items: Extracts zero or more STAC Items from one candidate.
+        prepare_candidate: Optional descriptor reader that declares the Item
+            identity before metadata workers and catalog writes.
     """
 
     name: str
     discover: DatasetDiscoverer
     build_items: DatasetItemBuilder
+    prepare_candidate: DatasetCandidatePreparer | None = None
 
 
 @dataclass(frozen=True)
@@ -118,7 +132,7 @@ class DatasetHandlerRegistry:
         directory_names: tuple[str, ...],
         file_names: tuple[str, ...],
     ) -> tuple[list[DatasetCandidate], frozenset[str]]:
-        """Run every handler against one deterministic directory listing.
+        """Recognize datasets, allowing an owning handler to claim a directory.
 
         Args:
             directory_path: Directory currently visited by the filesystem walk.
@@ -152,6 +166,15 @@ class DatasetHandlerRegistry:
                     f"{unknown_names}"
                 )
             pruned_directory_names.update(discovery.pruned_directory_names)
+            if discovery.owns_directory:
+                return [
+                    DatasetCandidate(
+                        path=match.path,
+                        handler_name=handler.name,
+                        component_paths=match.component_paths,
+                    )
+                    for match in discovery.matches
+                ], frozenset(directory_names)
             for match in discovery.matches:
                 if match.path in candidate_paths:
                     raise ValueError(
@@ -164,6 +187,34 @@ class DatasetHandlerRegistry:
                     component_paths=match.component_paths,
                 ))
         return candidates, frozenset(pruned_directory_names)
+
+    def prepare_candidate(
+        self,
+        source_root: Path,
+        candidate: DatasetCandidate,
+    ) -> DatasetCandidate:
+        """Read a dataset's declared Item identity and metadata before catalog writes.
+
+        Args:
+            source_root: Root directory mounted for scanning.
+            candidate: Dataset recognized by this registry.
+
+        Returns:
+            Prepared candidate, or the original when no preparation is needed.
+
+        Raises:
+            KeyError: If the candidate names an unknown handler.
+            DatasetBuildError: If the source admission metadata cannot be read.
+        """
+        for handler in self.handlers:
+            if handler.name == candidate.handler_name:
+                if handler.prepare_candidate is None:
+                    return candidate
+                try:
+                    return handler.prepare_candidate(source_root, candidate)
+                except Exception as error:
+                    raise DatasetBuildError(str(error)) from error
+        raise KeyError(f"Unknown dataset handler: {candidate.handler_name}")
 
     def build_items(
         self,
@@ -190,6 +241,31 @@ class DatasetHandlerRegistry:
                 except Exception as error:
                     raise DatasetBuildError(str(error)) from error
         raise KeyError(f"Unknown dataset handler: {candidate.handler_name}")
+
+
+def discover_temporal_datasets(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Claim a dataset descriptor and everything beneath its directory.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directories, owned with the descriptor.
+        file_names: Sorted child file names.
+
+    Returns:
+        One descriptor match when ``dataset.yaml`` exists, without reading it.
+        Malformed descriptors retain ownership and fail during preparation.
+    """
+    del directory_names
+    if "dataset.yaml" not in file_names:
+        return HandlerDiscovery()
+    return HandlerDiscovery(
+        matches=(DatasetMatch(directory_path / "dataset.yaml"),),
+        owns_directory=True,
+    )
 
 
 def discover_geotiff_datasets(
@@ -468,10 +544,16 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
     """Create the explicit registry for supported mounted formats.
 
     Returns:
-        Registry containing GeoTIFF, GeoPackage, mounted Shapefile,
-        ZIP/Shapefile, GeoJSON, and File Geodatabase handlers.
+        Registry containing temporal datasets, GeoTIFF, GeoPackage, mounted
+        Shapefile, ZIP/Shapefile, GeoJSON, and File Geodatabase handlers.
     """
     return DatasetHandlerRegistry(handlers=(
+        DatasetHandler(
+            name="era5-ncar-zarr",
+            discover=discover_temporal_datasets,
+            build_items=build_temporal_items,
+            prepare_candidate=prepare_temporal_candidate,
+        ),
         DatasetHandler(
             name="geotiff",
             discover=discover_geotiff_datasets,

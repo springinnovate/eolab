@@ -8,6 +8,7 @@ import psycopg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from eolab_app.catalog.public_metadata import copy_public_catalog_metadata
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +60,18 @@ def create_catalog_router(
 
     @router.post("/surprise")
     async def surprise_me(request: CatalogSurpriseRequest) -> dict[str, Any]:
-        """Return one random Item matching the active Catalog filters."""
+        """Return a matching random Item without private source locations.
+
+        Args:
+            request: Active Catalog filters and an optional Item to exclude.
+
+        Returns:
+            Public Item metadata under the literal key ``"item"``.
+
+        Raises:
+            HTTPException: If the filters are invalid, no Item matches, or the
+                database is unavailable.
+        """
         excluded_item = None
         if request.exclude is not None:
             excluded_item = (
@@ -81,6 +93,6 @@ def create_catalog_router(
                 status_code=404,
                 detail="No Catalog Items match the active filters",
             )
-        return {"item": item}
+        return {"item": copy_public_catalog_metadata(item)}
 
     return router

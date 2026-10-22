@@ -164,6 +164,15 @@ class ScanManager:
                 reconciliation_task = asyncio.create_task(
                     self._reconcile_missing_items()
                 )
+                if any(
+                    candidate.item_key is not None for candidate in dataset_candidates
+                ):
+                    # A stable ID may move directories. Finish removal of its old
+                    # entry before writing it again, then check retained owners.
+                    await reconciliation_task
+                    dataset_candidates = await self._reject_claimed_item_ids(
+                        dataset_candidates
+                    )
                 await self._extract_and_write_items(
                     catalog_session,
                     dataset_candidates,
@@ -177,6 +186,49 @@ class ScanManager:
             await self._record_scan_failure(error, reconciliation_task)
         finally:
             self._finish_status()
+
+    async def _reject_claimed_item_ids(
+        self, candidates: list[DatasetCandidate]
+    ) -> list[DatasetCandidate]:
+        """Keep declared IDs from overwriting other retained source directories.
+
+        Args:
+            candidates: Discovered datasets with locally unique declared IDs.
+
+        Returns:
+            Candidates whose IDs are unclaimed or belong to the same source.
+            Conflicts are recorded as dataset errors. Reconciliation must have
+            finished so removed sources no longer claim their old IDs.
+
+        Raises:
+            Exception: If the catalog source inventory cannot be read.
+        """
+        declared = {
+            candidate.item_key: candidate
+            for candidate in candidates
+            if candidate.item_key is not None
+        }
+        collections = tuple(sorted({key[0] for key in declared}))
+        rejected: set[tuple[str, str]] = set()
+        async for page in self.catalog_database.scanner_item_pages(
+            collections, self.item_batch_size
+        ):
+            for source in page:
+                key = (source.collection, source.item_id)
+                candidate = declared.get(key)
+                if (
+                    candidate is not None
+                    and candidate.path.absolute().as_uri() not in source.asset_hrefs
+                ):
+                    self._record_dataset_error(
+                        candidate.path,
+                        f"Catalog Item {'/'.join(key)} already belongs to another "
+                        "dataset directory; choose a unique descriptor id",
+                    )
+                    rejected.add(key)
+        return [
+            candidate for candidate in candidates if candidate.item_key not in rejected
+        ]
 
     async def _inventory_catalog(self) -> set[tuple[str, str]]:
         """Capture scanner-owned Item identities before catalog writes.
