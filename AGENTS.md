@@ -214,6 +214,15 @@ before/after mutation checks for those datasets. Preserve source identity,
 authorization, path confinement, actual read errors, output publication integrity,
 expiry, cleanup and cancellation.
 
+Temporal datasets (#812–#819) use the agreed update → refresh → calculate
+workflow: operators may add or replace observations between calculations and
+keep the files unchanged while calculations use them. Partial months are valid.
+Explicit refresh updates admitted availability and affected caches while keeping
+the logical dataset identity. Completed run outputs remain immutable. Trust this
+operating contract; do not add mutation probes, source version pinning, historical
+copies or dataset locks to enforce it. Implement this lifecycle in its approved
+stages; a browser Catalog reload alone does not currently refresh source caches.
+
 Processing calculations intentionally have no application-imposed ceiling on
 cells, feature/coordinate counts, memory, disk use, or total planning/execution
 time. Attempt the requested calculation; do not add preflight data scans or

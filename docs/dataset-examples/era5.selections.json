@@ -1,0 +1,49 @@
+{
+  "description": "Design examples for #813, not current endpoint requests. Coverage is synthetic: temperature has all four timestamps; precipitation omits 01:00; solar radiation has only 02:00. The missing hours illustrate variable-specific availability, not a defect observed in the real archive. Values and raster reads belong to #815.",
+  "observationSelection": {
+    "collectionId": "eolab-temporal-datasets",
+    "itemId": "era5-ncar",
+    "variable": "2_metre_temperature",
+    "time": "2000-02-01T00:00:00Z"
+  },
+  "intervalSelection": {
+    "collectionId": "eolab-temporal-datasets",
+    "itemId": "era5-ncar",
+    "variable": "mean_total_precipitation_rate",
+    "startTime": "2000-01-31T23:00:00Z",
+    "endTime": "2000-02-01T02:00:00Z"
+  },
+  "instantIntervalSelection": {
+    "collectionId": "eolab-temporal-datasets",
+    "itemId": "era5-ncar",
+    "variable": "2_metre_temperature",
+    "startTime": "2000-01-31T23:00:00Z",
+    "endTime": "2000-02-01T00:00:00Z"
+  },
+  "availableObservations": {
+    "2_metre_temperature": [
+      {"time": "2000-01-31T23:00:00Z", "intervalStart": "2000-01-31T23:00:00Z", "intervalEnd": "2000-01-31T23:00:00Z"},
+      {"time": "2000-02-01T00:00:00Z", "intervalStart": "2000-02-01T00:00:00Z", "intervalEnd": "2000-02-01T00:00:00Z"},
+      {"time": "2000-02-01T01:00:00Z", "intervalStart": "2000-02-01T01:00:00Z", "intervalEnd": "2000-02-01T01:00:00Z"},
+      {"time": "2000-02-01T02:00:00Z", "intervalStart": "2000-02-01T02:00:00Z", "intervalEnd": "2000-02-01T02:00:00Z"}
+    ],
+    "mean_total_precipitation_rate": [
+      {"time": "2000-01-31T23:00:00Z", "intervalStart": "2000-01-31T22:00:00Z", "intervalEnd": "2000-01-31T23:00:00Z"},
+      {"time": "2000-02-01T00:00:00Z", "intervalStart": "2000-01-31T23:00:00Z", "intervalEnd": "2000-02-01T00:00:00Z"},
+      {"time": "2000-02-01T02:00:00Z", "intervalStart": "2000-02-01T01:00:00Z", "intervalEnd": "2000-02-01T02:00:00Z"}
+    ],
+    "surface_solar_radiation_downwards": [
+      {"time": "2000-02-01T02:00:00Z", "intervalStart": "2000-02-01T01:00:00Z", "intervalEnd": "2000-02-01T02:00:00Z"}
+    ]
+  },
+  "instantIntervalExpectation": {
+    "description": "Instantaneous observations use start <= time < end. January's asset extent ends at 23:00 but its observation at 23:00 still belongs to this request; asset extents are only coarse search bounds.",
+    "observationTimes": ["2000-01-31T23:00:00Z"]
+  },
+  "intervalExpectation": {
+    "description": "The requested period is start-inclusive and end-exclusive. For interval-supported data, select observations whose support overlaps that period, retaining their original interval bounds. The first precipitation observation ends at the requested start and is excluded; the last ends at the requested end and contributes its preceding hour. Missing 00:00–01:00 coverage stays missing, not zero.",
+    "observationTimes": ["2000-02-01T00:00:00Z", "2000-02-01T02:00:00Z"],
+    "requestedDurationSeconds": 10800,
+    "availableDurationSeconds": 7200
+  }
+}
