@@ -1,4 +1,14 @@
-"""Validate raster metadata and read native pixels within memory limits."""
+"""Read native pixels using the calling reader's block and validity limits.
+
+Interactive pixel and statistics requests limit decoded native blocks to
+64 MiB. A temporal chunk includes every stored time that Zarr must decode,
+even when a request selects just one observation. The checks here account
+for that native read cost; admitted temporal grid metadata is trusted.
+
+Processing passes ``maximum_block_bytes=None`` to validate supported inputs
+without a block-size ceiling. These helpers do not limit an entire Processing
+calculation's cells, memory, disk use or execution time.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +26,7 @@ from rasterio.windows import Window
 if TYPE_CHECKING:
     from eolab_app.raster.reader import RasterData, RasterDataset
 
-# Exact reads already admit no more than 64 MiB of cumulative decoded source
+# Interactive exact reads admit no more than 64 MiB of decoded source
 # work. Applying that established ceiling to each streamed native block bounds
 # the reader's largest one-at-a-time value-plus-validity allocation without
 # rejecting safe long, narrow strips solely because one edge is long.
@@ -276,13 +286,7 @@ def require_pixel_source_structure(dataset: RasterDataset) -> None:
     from eolab_app.raster.temporal import TemporalRasterDataset
 
     if isinstance(dataset, TemporalRasterDataset):
-        if (
-            dataset.maximum_decoded_block_bytes
-            > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
-        ):
-            raise ValueError(
-                "Raster blocks exceed the pixel reader's 64 MiB memory limit."
-            )
+        require_bounded_source_structure(dataset)
         return
     if dataset.count < 1 or dataset.dtypes[0] not in {
         "uint8",
