@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy
 import rasterio
+import zarr
 
 from eolab_app.raster.geographic_bounds import (
     normalize_wgs84_bounds,
@@ -23,7 +24,9 @@ def write_temporal_geotiff(
     Read one output tile at a time through the temporal reader, preserving the
     selected observation's native grid, dtype and NoData value. An internal mask
     also marks nonfinite cells invalid. The caller owns the output directory,
-    execution limits and removal of partial or expired files.
+    execution limits and removal of partial or expired files. Run this writer in
+    a fresh worker process; its four Zarr worker threads fit the publication worker's
+    address-space budget.
 
     Args:
         observation: Admitted variable and time selection to publish.
@@ -37,7 +40,10 @@ def write_temporal_geotiff(
         OSError: If source reads or output writes fail.
         rasterio.errors.RasterioError: If GDAL cannot create or write the GeoTIFF.
     """
-    with TemporalRasterDataset(observation) as source:
+    with (
+        zarr.config.set({"threading.max_workers": 4}),
+        TemporalRasterDataset(observation) as source,
+    ):
         bounds = normalize_wgs84_bounds(
             transform_bounds_to_wgs84(source.crs, tuple(source.bounds))
         )
