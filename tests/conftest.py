@@ -69,6 +69,7 @@ def configured_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
             environment_variable_value,
         )
     monkeypatch.setenv("VECTOR_UPLOAD_DATA_PATH", str(tmp_path / "vector-uploads"))
+    monkeypatch.setenv("RASTER_SLICE_CACHE_PATH", str(tmp_path / "raster-slices"))
 
 
 @pytest.fixture

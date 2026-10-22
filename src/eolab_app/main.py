@@ -45,6 +45,7 @@ from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import (
     RasterPublicationService,
+    is_temporal_raster_layer,
     temporary_raster_source,
 )
 from eolab_app.raster.source_authorization import (
@@ -257,6 +258,8 @@ def create_app(
         published_rasters,
         source_access=raster_sources,
         source_available=processing_service.model_artifact_is_available,
+        slice_cache_path=app_global_configuration.raster_slice_cache_path,
+        slice_cache_entries=app_global_configuration.raster_slice_cache_entries,
     )
     raster_feature = create_raster_feature(
         raster_publication,
@@ -321,7 +324,7 @@ def create_app(
             raise
 
     async def reconcile_output_publications() -> None:
-        """Retry temporary GeoServer cleanup independently of model execution.
+        """Retry obsolete model-result and temporal display cleanup.
 
         Runs every thirty seconds while the API is alive. Private WMS access
         checks expiry on every request, including when cleanup is unavailable.
@@ -506,6 +509,16 @@ def create_app(
             session_ttl_seconds=processing_session_ttl,
         )
     )
+
+    async def refresh_temporal_items(item_keys: tuple[tuple[str, str], ...]) -> None:
+        """Invalidate analysis and display caches after explicit Catalog writes.
+
+        Args:
+            item_keys: Collection and Item IDs successfully written by the scan.
+        """
+        await raster_statistics_service.invalidate_temporal_items(item_keys)
+        await raster_publication.invalidate_temporal_items(item_keys)
+
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -529,7 +542,7 @@ def create_app(
         item_finalizer=CompositeDatasetItemFinalizer((
             vector_assessment_finalizer,
         )),
-        items_updated=raster_statistics_service.invalidate_temporal_items,
+        items_updated=refresh_temporal_items,
         reconciler=MissingItemReconciler(
             app_global_configuration.scan_mount_path,
             catalog_database,
@@ -570,6 +583,7 @@ def create_app(
             authorize_layers=authorize_map_layers,
             hidden_layer=lambda name: (
                 temporary_raster_source(name) is not None
+                or is_temporal_raster_layer(name)
                 or published_vectors.get_upload_id(name) is not None
             ),
         )

@@ -145,7 +145,7 @@ class GeoServerRasterPublisher:
         """Read temporary coverage-store names, including interrupted publications.
 
         Returns:
-            Names in the reserved model-output namespace; callers validate IDs.
+            Names in the model_ and slice_ namespaces; callers validate IDs.
 
         Raises:
             RasterPublicationError: If resource discovery fails.
@@ -167,7 +167,9 @@ class GeoServerRasterPublisher:
         ):
             raise ValueError("GeoServer returned invalid coverage-store metadata")
         return tuple(
-            entry["name"] for entry in names if entry["name"].startswith("model_")
+            entry["name"]
+            for entry in names
+            if entry["name"].startswith(("model_", "slice_"))
         )
 
     async def remove(self, resource_name: str) -> None:

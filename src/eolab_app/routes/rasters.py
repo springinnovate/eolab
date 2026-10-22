@@ -1,4 +1,4 @@
-"""HTTP routes for publishing catalog and model-result rasters as WMS layers."""
+"""HTTP routes for publishing raster sources as WMS layers."""
 
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -13,8 +13,13 @@ from eolab_app.raster.models import (
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.routes.raster_http import raster_http_exception
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
+)
 from eolab_app.raster.source_models import RasterSourceRequest, RunArtifactReference
 from eolab_app.source_files import SourceFileError
+
 
 @dataclass(frozen=True)
 class RasterFeature:
@@ -55,18 +60,18 @@ def create_raster_feature(
         http_request: Request,
         response: Response,
     ) -> PublishedRaster:
-        """Publish an authorized catalog or model-result GeoTIFF as a WMS layer.
+        """Publish an authorized raster source while its HTTP client remains connected.
 
         Args:
-            request: Catalog identity or a session-owned model-result reference.
-            http_request: HTTP session and same-origin request context.
+            request: Catalog raster, session-owned run file or temporal observation.
+            http_request: HTTP session and connection cancellation context.
             response: Private response headers for temporary publications.
 
         Returns:
             Published WMS layer identity and raster bounds.
 
         Raises:
-            HTTPException: If source authorization or GeoServer publication fails.
+            HTTPException: If source authorization, publication or cancellation fails.
         """
         try:
             owner = None
@@ -78,9 +83,16 @@ def create_raster_feature(
                         "Temporary raster publication is unavailable.", 503
                     )
                 owner = session_owner(http_request, response)
-            if owner is None:
-                return await publication_service.publish(request)
-            return await publication_service.publish(request, owner)
+            operation = (
+                publication_service.publish(request)
+                if owner is None
+                else publication_service.publish(request, owner)
+            )
+            return await run_until_http_disconnect(http_request, operation)
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(
+                499, "The raster publication request was canceled"
+            ) from error
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
         except SourceFileError as error:

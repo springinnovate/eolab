@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import yaml
 
 COMPOSE_PATH = Path(__file__).parents[1] / "docker-compose.yml"
 ENV_EXAMPLE_PATH = Path(__file__).parents[1] / ".env.example"
@@ -132,6 +133,42 @@ def test_raster_capacity_is_deployer_configurable() -> None:
         '${EOLAB_COMPOSITE_TILE_CACHE_BYTES:-134217728}"'
         in compose
     )
+
+
+def test_temporal_slice_volume_belongs_to_rendering() -> None:
+    """Share disposable slices with GeoServer without exposing them to Processing."""
+    compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    services = compose["services"]
+    assert "raster-slices:/raster-slices" in services["app"]["volumes"]
+    assert {
+        "type": "volume",
+        "source": "raster-slices",
+        "target": "/raster-slices",
+        "read_only": True,
+        "volume": {"nocopy": True},
+    } in services["geoserver"]["volumes"]
+    assert all(
+        "raster-slices" not in str(mount)
+        for mount in services["processing-worker"]["volumes"]
+    )
+    assert compose["volumes"]["raster-slices"]["name"] == (
+        "${EOLAB_RASTER_SLICE_CACHE_VOLUME_NAME:-eolab-raster-slices}"
+    )
+    assert "RASTER_SLICE_CACHE_PATH=/raster-slices" in services["app"]["environment"]
+    assert (
+        "RASTER_SLICE_CACHE_ENTRIES=${EOLAB_RASTER_SLICE_CACHE_ENTRIES-8}"
+        in services["app"]["environment"]
+    )
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile.app").read_text(encoding="utf-8")
+    assert "mkdir -p /processing-data /vector-uploads /raster-slices" in dockerfile
+    assert (
+        "chown -R eolab:eolab /app /processing-data /vector-uploads /raster-slices"
+        in dockerfile
+    )
+    assert "USER eolab" in dockerfile
+    example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+    assert "EOLAB_RASTER_SLICE_CACHE_VOLUME_NAME=eolab-raster-slices" in example
+    assert "EOLAB_RASTER_SLICE_CACHE_ENTRIES=8" in example
 
 
 def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
