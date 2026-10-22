@@ -934,7 +934,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     }
     assert second_status["catalogItemsWritten"] == 1
     assert second_status["catalogItemsAlreadyPresent"] == 1
-    assert len(catalog_writer.write_session.collections) == 2
+    assert len(catalog_writer.write_session.collections) == 3
     assert len(catalog_writer.write_session.items) == 1
     assert catalog_database.search_count_cache_invalidations == 2
 
@@ -1054,6 +1054,7 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
     assert set(catalog_writer.write_session.collections) == {
         "eolab-mounted-geotiffs",
         "eolab-mounted-vectors",
+        "eolab-temporal-datasets",
     }
     assert {
         item["collection"]

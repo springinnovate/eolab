@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from eolab_app.catalog.handlers import DatasetHandlerRegistry
+from eolab_app.catalog.handlers import DatasetBuildError, DatasetHandlerRegistry
 from eolab_app.catalog.models import DatasetCandidate, ScanError
 
 
@@ -29,11 +29,12 @@ class FilesystemDatasetDiscovery:
         self.dataset_handlers = dataset_handlers
 
     def discover(self) -> tuple[list[DatasetCandidate], list[ScanError]]:
-        """Find datasets without stopping on unreadable directories.
+        """Find datasets and reject conflicting declared Item identities.
 
         Returns:
-            Supported datasets in deterministic traversal order, together
-            with directory-walk failures keyed by mount-relative path.
+            Prepared datasets in deterministic traversal order, together
+            with traversal, admission, and duplicate-identity failures keyed
+            by mount-relative path.
 
         Raises:
             ValueError: If an unreadable directory reported by ``os.walk`` is
@@ -81,4 +82,42 @@ class FilesystemDatasetDiscovery:
                 self.source_root
             ).as_posix()
         )
-        return dataset_candidates, errors
+        prepared_candidates: list[DatasetCandidate] = []
+        paths_by_item_key: dict[tuple[str, str], list[Path]] = {}
+        for candidate in dataset_candidates:
+            try:
+                prepared = self.dataset_handlers.prepare_candidate(
+                    self.source_root, candidate
+                )
+            except DatasetBuildError as error:
+                errors.append(
+                    {
+                        "path": candidate.path.relative_to(self.source_root).as_posix(),
+                        "error": str(error),
+                    }
+                )
+                continue
+            prepared_candidates.append(prepared)
+            if prepared.item_key is not None:
+                paths_by_item_key.setdefault(prepared.item_key, []).append(
+                    prepared.path
+                )
+        duplicate_keys = {
+            key for key, paths in paths_by_item_key.items() if len(paths) > 1
+        }
+        for item_key in sorted(duplicate_keys):
+            for path in paths_by_item_key[item_key]:
+                errors.append(
+                    {
+                        "path": path.relative_to(self.source_root).as_posix(),
+                        "error": (
+                            "Multiple datasets declare the same catalog Item: "
+                            f"{'/'.join(item_key)}"
+                        ),
+                    }
+                )
+        return [
+            candidate
+            for candidate in prepared_candidates
+            if candidate.item_key not in duplicate_keys
+        ], errors

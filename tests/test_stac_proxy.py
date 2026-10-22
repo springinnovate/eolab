@@ -2,11 +2,114 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx2
+import pytest
 from fastapi.testclient import TestClient
 
 from eolab_app.main import create_app
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "projected"),
+    [
+        ("GET", "/stac/collections/eolab-temporal-datasets/items/era5", False),
+        ("GET", "/stac/search", False),
+        ("POST", "/stac/search", True),
+    ],
+)
+def test_stac_proxy_omits_private_temporal_source(
+    configured_environment: None,
+    version_file_path: Path,
+    method: str,
+    path: str,
+    projected: bool,
+) -> None:
+    """Keep descriptor paths private in Item reads and projected search results."""
+    private_path = "file:///private/mounted-weather/dataset.yaml"
+    public_asset = {
+        "href": "urn:eolab:temporal:era5:2000-01",
+        "type": "application/vnd.zarr; version=3",
+    }
+    item: dict[str, Any] = {
+        "assets": {
+            "eolab:temporal-source": {"href": private_path},
+            "2000-01": public_asset,
+        }
+    }
+    if not projected:
+        item.update(
+            {
+                "type": "Feature",
+                "id": "era5",
+                "collection": "eolab-temporal-datasets",
+                "properties": {"eolab:source": "preserved public metadata"},
+            }
+        )
+    is_search = path.endswith("/search")
+    payload = (
+        {"type": "FeatureCollection", "features": [item], "numberMatched": 1}
+        if is_search
+        else item
+    )
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the same internal source metadata for reads and searches."""
+        return httpx2.Response(
+            200,
+            json=payload,
+            headers={"Content-Type": "application/geo+json"},
+        )
+
+    async def exact_count(search_request_body: bytes, number_matched: int) -> bool:
+        """Keep the search count header independent of metadata projection."""
+        assert number_matched == 1
+        return False
+
+    client = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            number_matched_estimate_lookup=exact_count,
+        )
+    )
+    request_options = {"json": {"fields": {"include": ["assets"]}}} if projected else {}
+    response = client.request(method, path, **request_options)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/geo+json"
+    assert private_path not in response.text
+    assert "eolab:temporal-source" not in response.text
+    public_item = response.json()["features"][0] if is_search else response.json()
+    assert public_item["assets"] == {"2000-01": public_asset}
+    if not projected:
+        assert public_item["properties"] == item["properties"]
+    if method == "POST":
+        assert response.headers["x-eolab-number-matched-estimated"] == "false"
+    assert item["assets"]["eolab:temporal-source"]["href"] == private_path
+
+
+def test_stac_proxy_preserves_non_json_error(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Preserve an upstream plain-text failure rather than parsing it as metadata."""
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Represent an upstream proxy error outside the STAC JSON contract."""
+        return httpx2.Response(503, text="catalog temporarily unavailable")
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+        )
+    ).get("/stac/search")
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.text == "catalog temporarily unavailable"
 
 
 def test_stac_proxy_forwards_public_read_request(

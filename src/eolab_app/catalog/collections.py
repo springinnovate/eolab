@@ -6,6 +6,7 @@ from eolab_app.catalog.geotiff import MOUNTED_GEOTIFF_COLLECTION_ID
 
 
 MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors"
+TEMPORAL_COLLECTION_ID = "eolab-temporal-datasets"
 
 GEOTIFF_COLLECTION: dict[str, Any] = {
     "type": "Collection",
@@ -44,7 +45,24 @@ SHAPEFILE_COLLECTION: dict[str, Any] = {
     "links": [],
 }
 
-SCAN_COLLECTIONS = (GEOTIFF_COLLECTION, SHAPEFILE_COLLECTION)
+TEMPORAL_COLLECTION: dict[str, Any] = {
+    "type": "Collection",
+    "stac_version": "1.0.0",
+    "id": TEMPORAL_COLLECTION_ID,
+    "title": "Temporal raster datasets",
+    "description": (
+        "Time-indexed raster datasets discovered in the configured EOLab scan "
+        "source. Each Item describes one dataset and its available observations."
+    ),
+    "license": "other",
+    "extent": {
+        "spatial": {"bbox": [[-180, -90, 180, 90]]},
+        "temporal": {"interval": [[None, None]]},
+    },
+    "links": [],
+}
+
+SCAN_COLLECTIONS = (GEOTIFF_COLLECTION, SHAPEFILE_COLLECTION, TEMPORAL_COLLECTION)
 SCAN_COLLECTION_IDENTIFIERS = tuple(
     collection["id"] for collection in SCAN_COLLECTIONS
 )

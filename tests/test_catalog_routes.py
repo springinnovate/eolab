@@ -26,6 +26,38 @@ def catalog_client(random_item_lookup: Any) -> TestClient:
     return TestClient(application)
 
 
+def test_surprise_route_omits_private_temporal_source() -> None:
+    """Return temporal metadata without exposing the server's descriptor path."""
+    private_path = "file:///private/mounted-weather/dataset.yaml"
+    item = {
+        **CATALOG_ITEM,
+        "id": "era5",
+        "collection": "eolab-temporal-datasets",
+        "assets": {
+            "eolab:temporal-source": {"href": private_path},
+            "2000-01": {"href": "urn:eolab:temporal:era5:2000-01"},
+        },
+    }
+
+    async def random_item_lookup(
+        search: dict[str, Any],
+        excluded_item: tuple[str, str] | None,
+    ) -> dict[str, Any]:
+        """Return internal temporal metadata from the Catalog lookup."""
+        return item
+
+    response = catalog_client(random_item_lookup).post(
+        "/api/catalog/surprise", json={"search": {}}
+    )
+
+    assert response.status_code == 200
+    assert private_path not in response.text
+    assert response.json()["item"]["assets"] == {
+        "2000-01": {"href": "urn:eolab:temporal:era5:2000-01"}
+    }
+    assert item["assets"]["eolab:temporal-source"]["href"] == private_path
+
+
 def test_surprise_route_forwards_active_filter_and_exclusion() -> None:
     """Use the exact active STAC filter and avoid the current selection."""
     calls: list[tuple[dict[str, Any], tuple[str, str] | None]] = []

@@ -169,6 +169,17 @@ whose mounted source files have disappeared. The source mount remains
 read-only; EOLab stores Catalog metadata and generated GeoServer configuration
 elsewhere.
 
+For an ERA5 NCAR archive, copy the archive with its `catalog.sqlite` and
+`YYYY/MM/era5.zarr` stores into the mount. Put this
+[dataset.yaml example](docs/dataset-examples/dataset.yaml) at its root, choose a
+unique `id` and title, then scan. The archive appears as one temporal Catalog
+item; its folder contents are not indexed separately. Partial months are valid.
+Update files only between calculations and rescan before using the updated
+data. A failed refresh reports an error and keeps the last valid metadata;
+correct the source and complete a successful scan before continuing. Temporal
+map display and calculations are not yet enabled. The
+[ingestion tests](tests/test_catalog_temporal.py) provide a runnable small archive.
+
 Raster rendering currently expects prepared, georeferenced, single-band
 GeoTIFFs. EOLab does not rewrite or optimize them during scanning. Mounted
 Shapefiles and spatial GeoPackage layers can be added to the map. Other

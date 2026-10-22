@@ -38,11 +38,16 @@ class DatasetCandidate:
         path: Primary dataset path.
         handler_name: Stable key of the handler that recognized the dataset.
         component_paths: Companion files belonging to a multipart dataset.
+        item_key: Declared Collection and Item identity, when supplied by the
+            source rather than derived during metadata extraction.
+        metadata: Handler-owned, prepared metadata passed unchanged to its builder.
     """
 
     path: Path
     handler_name: str
     component_paths: tuple[Path, ...] = ()
+    item_key: tuple[str, str] | None = None
+    metadata: object = None
 
     def __post_init__(self) -> None:
         """Validate explicit handler dispatch metadata.

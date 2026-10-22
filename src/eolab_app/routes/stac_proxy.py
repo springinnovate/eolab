@@ -1,10 +1,12 @@
 """Restricted public HTTP proxy for the internal read-only STAC API."""
 
+import json
 from collections.abc import Awaitable, Callable
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from eolab_app.catalog.public_metadata import copy_public_catalog_metadata
 
 NumberMatchedEstimateLookup = Callable[[bytes, int], Awaitable[bool]]
 
@@ -49,7 +51,8 @@ def create_stac_proxy_router(
             catalog_path: Path below the STAC landing page.
 
         Returns:
-            Unmodified STAC response body, status, and content type.
+            STAC metadata without private temporal source locations, retaining
+            the upstream status and content type. Non-JSON bodies pass through.
 
         Raises:
             HTTPException: If a write is attempted or the catalog is
@@ -93,8 +96,14 @@ def create_stac_proxy_router(
             ) from error
 
         response_headers = {}
+        response_body = catalog_response.content
         if response_content_type := catalog_response.headers.get("content-type"):
             response_headers["content-type"] = response_content_type
+            media_type = response_content_type.partition(";")[0]
+            if media_type == "application/json" or media_type.endswith("+json"):
+                response_body = json.dumps(
+                    copy_public_catalog_metadata(catalog_response.json())
+                ).encode("utf-8")
         if (
             catalog_response.is_success
             and request.method == "POST"
@@ -108,7 +117,7 @@ def create_stac_proxy_router(
                 )
             ).lower()
         return Response(
-            content=catalog_response.content,
+            content=response_body,
             status_code=catalog_response.status_code,
             headers=response_headers,
         )
