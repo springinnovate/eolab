@@ -2,6 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
+import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour } from "./temporal-inputs.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
@@ -173,7 +174,8 @@ export class ModelsController {
         if (key) await this.loadTemporalDates(undefined, true);
     }
 
-    /** Load date guidance for a variable while preserving the user's period boundaries.
+    /** Choose a variable and its supported statistic, then load date guidance.
+     * Selecting a precipitation rate visibly rounds existing boundaries to whole UTC hours.
      * @param {string} variable Catalog variable identifier from the setup control.
      * @return {Promise<void>} Completion after monthly guidance or a visible discovery error.
      */
@@ -181,7 +183,24 @@ export class ModelsController {
         const temporal = this.state.draft?.temporal;
         if (!temporal || this.state.submitting) return;
         Object.assign(temporal, {variable, choices: null, error: "", datesError: ""});
+        this.configureTemporalVariable(this.state.draft);
         await this.loadTemporalDates();
+    }
+
+    /** Set a supported statistic and date precision when a variable is chosen.
+     * Refreshing guidance and copying a saved run preserve their existing choices instead.
+     * @param {Object} draft Current temporal model setup with its chosen variable.
+     * @return {void}
+     */
+    configureTemporalVariable(draft) {
+        const temporal = draft.temporal, variable = temporal.item.properties["cube:variables"][temporal.variable];
+        const statistics = getTemporalStatistics(variable);
+        if (statistics.length && !statistics.some(choice => choice.value === draft.reduction.reducer))
+            draft.reduction.reducer = statistics[0].value;
+        if (supportsPrecipitationTotal(variable)) {
+            temporal.startTime = snapTemporalHour(temporal.startTime);
+            temporal.endTime = snapTemporalHour(temporal.endTime);
+        }
     }
 
     /** Read one month's actual dates, optionally reloading the current Catalog metadata.
@@ -207,12 +226,15 @@ export class ModelsController {
                 temporal.item = item;
                 if (!temporal.variable) {
                     const variables = Object.entries(item.properties["cube:variables"])
-                        .filter(([, value]) => value["eolab:time_support"] === "instantaneous");
-                    if (variables.length === 1) temporal.variable = variables[0][0];
+                        .filter(([, value]) => getTemporalStatistics(value).length);
+                    if (variables.length === 1) {
+                        temporal.variable = variables[0][0];
+                        this.configureTemporalVariable(draft);
+                    }
                 }
             }
             const variable = temporal.item.properties["cube:variables"][temporal.variable];
-            if (!variable || variable["eolab:time_support"] !== "instantaneous") { temporal.choices = null; return; }
+            if (!getTemporalStatistics(variable).length) { temporal.choices = null; return; }
             try {
                 const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
                 if (isCurrent()) temporal.choices = choices;

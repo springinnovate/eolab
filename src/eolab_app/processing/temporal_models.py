@@ -1,7 +1,7 @@
 """Describe a temporal period map, its native grid and completed raster files."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -21,15 +21,26 @@ from eolab_app.raster.source_models import TemporalIntervalSelection
 
 
 class TemporalReduction(BaseModel):
-    """One equal-weight statistic over valid observations at each cell.
+    """Select an observation statistic or precipitation total at each cell.
 
-    Standard deviation is the population statistic. Percentiles use exact linear
-    interpolation between ordered values; percentile is required only for that
-    reducer. Sums retain the variable's units and do not integrate over time.
+    Statistics give valid observations equal weight. Standard deviation is the
+    population statistic; percentiles use exact linear interpolation and require
+    a percentile value. Sum retains the source units without integration.
+    Precipitation total integrates mean rates in kg m**-2 s**-1 over their recorded
+    intervals and returns millimetres of water equivalent.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    reducer: Literal["sum", "mean", "min", "max", "median", "percentile", "stdev"]
+    reducer: Literal[
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "median",
+        "percentile",
+        "stdev",
+        "precipitation_total",
+    ]
     percentile: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)] | None = None
 
     @model_validator(mode="wrap")
@@ -70,10 +81,10 @@ class TemporalMapRequest(BaseModel):
 
     @model_validator(mode="wrap")
     @classmethod
-    def require_one_area(
+    def require_area_and_period(
         cls, value: Any, handler: ModelWrapValidatorHandler[Self]
     ) -> Self:
-        """Require one area at the request and persisted-job boundary.
+        """Require one area and whole UTC hours for precipitation totals.
 
         Args:
             value: Input dictionary or an already validated request.
@@ -83,12 +94,14 @@ class TemporalMapRequest(BaseModel):
             The validated request.
 
         Raises:
-            ValueError: If the request does not choose exactly one area.
+            ValueError: If the request lacks exactly one area or a precipitation
+                total uses a partial-hour boundary.
         """
         request = handler(value)
+        if request is value:
+            return request
         if (
-            request is not value
-            and sum(
+            sum(
                 area is not None
                 for area in (
                     request.selectedBounds,
@@ -102,6 +115,11 @@ class TemporalMapRequest(BaseModel):
             raise ValueError(
                 "Choose one box, vector selection, polygon area, or whole raster"
             )
+        if request.reduction.reducer == "precipitation_total":
+            for boundary in (request.source.start_time, request.source.end_time):
+                utc = boundary.astimezone(timezone.utc)
+                if utc.minute or utc.second or utc.microsecond:
+                    raise ValueError("Precipitation totals require whole UTC hours")
         return request
 
 
@@ -142,6 +160,7 @@ class TemporalMapSpec(BaseModel):
 
     The authorized observations and their file locations stay in worker memory.
     Detailed observation labels and support intervals belong in provenance.json.
+    unit describes the output values; original units remain in source metadata.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

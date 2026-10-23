@@ -31,8 +31,8 @@ class TemporalMapNumericalPolicy(BaseModel):
     grid: Literal["native"] = "native"
     resampling: Literal["none"] = "none"
     numericInclusion: Literal["cell_center"] = "cell_center"
-    timeSupport: Literal["instantaneous"] = "instantaneous"
-    weighting: Literal["equal_observation"] = "equal_observation"
+    timeSupport: Literal["instantaneous", "mean_rate"] = "instantaneous"
+    weighting: Literal["equal_observation", "interval_duration"] = "equal_observation"
     nodata: Literal["exclude_source_nodata_and_nonfinite"] = (
         "exclude_source_nodata_and_nonfinite"
     )
@@ -129,7 +129,7 @@ async def prepare_temporal_map(
     queued: QueuedTemporalMap,
     source: ResolvedTemporalInterval,
 ) -> PreparedJobPlan:
-    """Prepare the selected area and native output grid for instantaneous data.
+    """Prepare a native period map after matching the statistic to source metadata.
 
     Args:
         context: Existing worker execution and vector-selection capabilities.
@@ -140,14 +140,22 @@ async def prepare_temporal_map(
         Path-free execution plan with actual observation coverage and output units.
 
     Raises:
-        ProcessingError: If this variable is not instantaneous, no observations
-            overlap, or the selected area cannot be prepared.
+        ProcessingError: If the statistic does not support this variable's units
+            or time support, no observations overlap, or area preparation fails.
     """
-    if source.time_support != "instantaneous":
+    total = queued.request.reduction.reducer == "precipitation_total"
+    if total:
+        if source.time_support != "mean_rate" or source.unit != "kg m**-2 s**-1":
+            raise ProcessingError(
+                "unsupported_precipitation_source",
+                "Precipitation total requires mean rates in kg m**-2 s**-1. "
+                "Choose a precipitation-rate variable with those units.",
+            )
+    elif source.time_support != "instantaneous":
         raise ProcessingError(
             "unsupported_time_support",
-            "Period maps currently support instantaneous measurements. "
-            "Rate and accumulated variables require a separate calculation.",
+            "This statistic requires instantaneous measurements. "
+            "Use Precipitation total for mean precipitation rates in kg m**-2 s**-1.",
         )
     if not source.observations:
         raise ProcessingError(
@@ -192,7 +200,7 @@ async def prepare_temporal_map(
         reduction=request.reduction,
         area=area,
         grid=grid,
-        unit=source.unit,
+        unit="mm" if total else source.unit,
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
@@ -264,7 +272,10 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
     Returns:
         Scientific rules retained in the existing Run YAML.
     """
+    total = spec.reduction.reducer == "precipitation_total"
     return TemporalMapNumericalPolicy(
+        timeSupport="mean_rate" if total else "instantaneous",
+        weighting="interval_duration" if total else "equal_observation",
         reduction=spec.reduction,
         unit=spec.unit,
         observationCount=spec.observationCount,
