@@ -42,6 +42,7 @@ from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
+from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import (
     RasterPublicationService,
@@ -64,6 +65,7 @@ from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
+from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.rasters import create_raster_feature
 from eolab_app.routes.processing import (
     create_processing_router,
@@ -322,6 +324,27 @@ def create_app(
                 "Cache-Control": "private, no-store",
             }
             raise
+
+    @asynccontextmanager
+    async def use_map_layers(layer_names: tuple[str, ...]) -> AsyncIterator[None]:
+        """Prepare map layers and retain their files until the upstream request finishes.
+
+        Args:
+            layer_names: Authorized layer identities requested by a rendering route.
+
+        Yields:
+            None while the route may read the layers through GeoServer.
+
+        Raises:
+            HTTPException: If source access or publication cannot prepare a layer.
+        """
+        try:
+            async with raster_publication.use_layers(layer_names):
+                yield
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
+        except SourceFileError as error:
+            raise HTTPException(error.status, str(error)) from error
 
     async def reconcile_output_publications() -> None:
         """Retry obsolete model-result and temporal display cleanup.
@@ -584,6 +607,7 @@ def create_app(
             get_map_request_tracker,
             render_queue,
             authorize_layers=authorize_map_layers,
+            use_layers=use_map_layers,
             hidden_layer=lambda name: (
                 temporary_raster_source(name) is not None
                 or is_temporal_raster_layer(name)
@@ -602,6 +626,7 @@ def create_app(
             render_queue,
             app_global_configuration.composite_tile_cache_bytes,
             authorize_layers=authorize_map_layers,
+            use_layers=use_map_layers,
         )
     )
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from xml.etree import ElementTree
 
 import httpx2
@@ -231,6 +232,9 @@ def create_wms_proxy_router(
         Callable[[tuple[str, ...], Request], Awaitable[bool]] | None
     ) = None,
     hidden_layer: Callable[[str], bool] | None = None,
+    use_layers: (
+        Callable[[tuple[str, ...]], AbstractAsyncContextManager[None]] | None
+    ) = None,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
 
@@ -242,6 +246,8 @@ def create_wms_proxy_router(
         render_queue: GetMap capacity shared with composite map tiles.
         authorize_layers: Current-session source-access check supplied by composition.
         hidden_layer: Identifies private publications omitted from public capabilities.
+        use_layers: Prepare and retain layer resources for an upstream request.
+            Called inside the render queue so resources outlive browser cancellation.
 
     Returns:
         Router exposing only EOLab's validated WMS contract.
@@ -275,6 +281,7 @@ def create_wms_proxy_router(
                 detail="The public WMS endpoint accepts only GET requests",
             )
         query_entries, layer_name, operation = validated_public_wms_query(request)
+        layer_names = (layer_name,) if layer_name is not None else ()
         private = bool(
             layer_name
             and authorize_layers
@@ -340,25 +347,27 @@ def create_wms_proxy_router(
                     ]
                 )
                 async def load_map() -> httpx2.Response:
-                    """Send trusted inline styles in a body instead of an oversized URL.
+                    """Retain layer resources while sending the authorized map request.
 
                     Returns:
                         Completed upstream response under the shared render queue.
 
                     Raises:
                         httpx2.RequestError: If GeoServer cannot be reached.
+                        HTTPException: If layer resources can no longer be prepared.
                     """
-                    if any(name.lower() == "sld_body" for name, _ in query_entries):
-                        return await geoserver_client.post(
+                    async with use_layers(layer_names) if use_layers else nullcontext():
+                        if any(name.lower() == "sld_body" for name, _ in query_entries):
+                            return await geoserver_client.post(
+                                f"{internal_geoserver_url}/eolab/wms",
+                                data=dict(query_entries),
+                                headers=forwarded_headers,
+                            )
+                        return await geoserver_client.get(
                             f"{internal_geoserver_url}/eolab/wms",
-                            data=dict(query_entries),
+                            params=query_entries,
                             headers=forwarded_headers,
                         )
-                    return await geoserver_client.get(
-                        f"{internal_geoserver_url}/eolab/wms",
-                        params=query_entries,
-                        headers=forwarded_headers,
-                    )
 
                 result = await forward_geoserver_get_map(
                     request,
@@ -372,11 +381,12 @@ def create_wms_proxy_router(
                     result.headers["Cache-Control"] = "private, no-store"
                 return result
             else:
-                geoserver_response = await geoserver_client.get(
-                    f"{internal_geoserver_url}/eolab/wms",
-                    params=query_entries,
-                    headers=forwarded_headers,
-                )
+                async with use_layers(layer_names) if use_layers else nullcontext():
+                    geoserver_response = await geoserver_client.get(
+                        f"{internal_geoserver_url}/eolab/wms",
+                        params=query_entries,
+                        headers=forwarded_headers,
+                    )
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,

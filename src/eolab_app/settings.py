@@ -159,7 +159,8 @@ class Settings:
         raster_statistics_read_concurrency: Maximum concurrent statistics reads.
         raster_statistics_cache_entries: Completed statistics cache capacity.
         raster_slice_cache_path: Rendering-only GeoTIFF cache shared with GeoServer.
-        raster_slice_cache_entries: Maximum recent temporal observations retained.
+        raster_slice_cache_entries: Maximum idle temporal GeoTIFFs retained; files in
+            active renders are additional and become eligible for eviction on release.
         raster_statistics_queue_capacity: Additional distinct histogram reads allowed to wait.
         raster_statistics_queue_wait_seconds: Maximum histogram wait before reading starts.
         raster_statistics_max_waiters: Maximum callers awaiting histogram results, including duplicates.

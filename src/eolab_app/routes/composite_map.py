@@ -5,6 +5,7 @@ import math
 import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 
 import httpx2
@@ -376,6 +377,9 @@ def create_composite_map_router(
     authorize_layers: (
         Callable[[tuple[str, ...], Request], Awaitable[bool]] | None
     ) = None,
+    use_layers: (
+        Callable[[tuple[str, ...]], AbstractAsyncContextManager[None]] | None
+    ) = None,
 ) -> APIRouter:
     """Create the plan-registration and composite tile delivery boundary.
 
@@ -387,6 +391,8 @@ def create_composite_map_router(
         render_queue: GetMap capacity shared with the direct WMS route.
         maximum_tile_cache_bytes: Maximum process-local composite response bytes.
         authorize_layers: Current-session authorization before plan or tile delivery.
+        use_layers: Prepare and retain layer resources during an upstream render.
+            Cached tiles do not acquire resources; queued work acquires them on dispatch.
 
     Returns:
         Router serving safe render plans and their GeoServer-composed PNGs.
@@ -478,39 +484,45 @@ def create_composite_map_router(
         )
 
         async def load_tile() -> httpx2.Response:
-            """Render this cache miss through the existing GeoServer boundary.
+            """Retain the plan's layer resources while GeoServer renders a cache miss.
 
             Returns:
                 Completed internal GeoServer response.
+
+            Raises:
+                httpx2.RequestError: If GeoServer cannot be reached.
+                HTTPException: If layer resources can no longer be prepared.
             """
-            if any(value is not None for value in plan.interpolations):
+            layer_names = tuple(layer.layer_name for layer in plan.request.layers)
+            async with use_layers(layer_names) if use_layers else nullcontext():
+                if any(value is not None for value in plan.interpolations):
+                    return await geoserver_client.post(
+                        internal_wms_url,
+                        data=build_get_map_form(
+                            plan.sld_document,
+                            bbox,
+                            width,
+                            height,
+                            spatial_reference,
+                            plan.interpolations,
+                        ),
+                        headers=geoserver_forward_headers(request),
+                    )
+                get_map_document = build_get_map_document(
+                    plan.sld_document,
+                    bbox,
+                    width,
+                    height,
+                    spatial_reference,
+                )
                 return await geoserver_client.post(
                     internal_wms_url,
-                    data=build_get_map_form(
-                        plan.sld_document,
-                        bbox,
-                        width,
-                        height,
-                        spatial_reference,
-                        plan.interpolations,
+                    content=get_map_document,
+                    headers=geoserver_forward_headers(
+                        request,
+                        content_type="application/xml",
                     ),
-                    headers=geoserver_forward_headers(request),
                 )
-            get_map_document = build_get_map_document(
-                plan.sld_document,
-                bbox,
-                width,
-                height,
-                spatial_reference,
-            )
-            return await geoserver_client.post(
-                internal_wms_url,
-                content=get_map_document,
-                headers=geoserver_forward_headers(
-                    request,
-                    content_type="application/xml",
-                ),
-            )
 
         result = await forward_geoserver_get_map(
             request,
