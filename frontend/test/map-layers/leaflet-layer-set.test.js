@@ -9,7 +9,10 @@ function createLayer() {
     const container = { style: {} };
     return {
         redrawCount: 0,
+        loading: false,
+        isLoading() { return this.loading; },
         addTo(map) {
+            this.loading = true;
             map.attached.add(this);
             return this;
         },
@@ -31,9 +34,11 @@ function createLayer() {
             handlers.get(event)?.delete(handler);
         },
         emit(event) {
+            if (event === "load") this.loading = false;
             for (const handler of handlers.get(event) ?? []) handler();
         },
         redraw() {
+            this.loading = true;
             this.redrawCount += 1;
             return this;
         },
@@ -65,6 +70,14 @@ test("Leaflet layer set owns attachment, opacity, order, and cleanup", () => {
     assert.equal(top.opacity, 0.4);
     assert.ok(top.zIndex > bottom.zIndex);
     assert.throws(() => layers.setOrder(["top", "top"]), Error);
+
+    const replacement = createLayer();
+    layers.replace("top", replacement);
+    assert.equal(map.attached.has(top), false);
+    assert.equal(map.attached.has(replacement), true);
+    assert.equal(replacement.opacity, 0.4);
+    assert.ok(replacement.zIndex > bottom.zIndex);
+    assert.deepEqual(layers.order, ["top", "bottom"]);
 
     layers.clear();
 
@@ -256,4 +269,36 @@ test("local layers interleave with source grids and never enter a server composi
     layers.render(descriptors.map(entry => entry.key === "local" ? {...entry, visible: false} : entry));
     assert.equal(map.attached.size, 0);
     assert.deepEqual(composites.at(-1), [{layerName: "eolab:raster", opacity: 1}]);
+});
+
+
+test("replacing one paired frame reveals it without waiting for an unchanged loaded grid", () => {
+    const map = {attached: new Set(), removeLayer(layer) { this.attached.delete(layer); }};
+    const layers = new LeafletLayerSet(map, {update() {}, clear() {}});
+    const first = createLayer(), unchanged = createLayer();
+    layers.add("first", first, {visible: true, opacity: .4});
+    layers.add("unchanged", unchanged, {visible: true, opacity: .6});
+    const rendering = [
+        {key: "first", visible: true, opacity: .4, descriptor: {layerName: "old"}},
+        {key: "unchanged", visible: true, opacity: .6, descriptor: {layerName: "unchanged"}},
+    ];
+    layers.render(rendering);
+    layers.setIndividualRendering(["first", "unchanged"]);
+    first.emit("load"); unchanged.emit("load");
+    assert.equal(unchanged.isLoading(), false);
+    const pending = createLayer();
+    layers.replace("first", pending);
+    layers.render([{...rendering[0], descriptor: null}, rendering[1]]);
+    const current = createLayer();
+    layers.replace("first", current);
+    layers.render([{...rendering[0], descriptor: {layerName: "new"}}, rendering[1]]);
+    assert.equal(current.container.style.visibility, "hidden");
+    current.emit("load");
+    assert.equal(current.container.style.visibility, "");
+    assert.equal(unchanged.container.style.visibility, "");
+    assert.equal(current.opacity, .4);
+    assert.equal(unchanged.opacity, .6);
+    assert.equal(map.attached.has(first), false);
+    assert.equal(map.attached.has(pending), false);
+    layers.clear();
 });

@@ -219,3 +219,34 @@ test("saved raster appearance rejects mixed envelopes, invalid edit state and un
   candidate.layers[0].style = { kind: "raster", definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom" };
   assert.throws(() => parseSavedMapView(JSON.stringify(candidate)), /missing or unsupported fields/);
 });
+
+
+test("temporal views preserve explicit observations and independent appearance without rendering identities", () => {
+  const candidate = savedMapCandidate();
+  const layer = {
+    temporalSource: { collectionId: "eolab-temporal-datasets", itemId: "era5", variable: "air_temperature",
+      time: "2020-01-15T04:00:00-08:00" },
+    customName: "Temperature", visible: true, opacity: 0.6, legendIncluded: false,
+    style: candidate.layers[0].style,
+  };
+  candidate.layers = [layer, { ...structuredClone(layer), customName: "Comparison", opacity: 0.3 }];
+  const parsed = parseSavedMapView(serializeSavedMapView(createSavedMapView(candidate)));
+  for (const expected of candidate.layers) expected.temporalSource.time = "2020-01-15T12:00:00.000Z";
+  assert.deepEqual(parsed.layers, candidate.layers);
+  for (const time of [null, "bad date", "2020-01-15T12:00:00"]) {
+    const invalid = structuredClone(candidate);
+    invalid.layers[0].temporalSource.time = time;
+    assert.throws(() => createSavedMapView(invalid), /timestamp with a timezone/);
+  }
+  for (const field of ["path", "publication", "viewId"]) {
+    const invalid = structuredClone(candidate);
+    invalid.layers[0].temporalSource[field] = "not saved";
+    assert.throws(() => createSavedMapView(invalid), /unsupported fields/);
+  }
+  const invalidStyle = structuredClone(candidate);
+  invalidStyle.layers[0].style = { kind: "vector", definition: {} };
+  assert.throws(() => createSavedMapView(invalidStyle), /raster style/);
+  const invalidFilter = structuredClone(candidate);
+  invalidFilter.layers[0].filter = {};
+  assert.throws(() => createSavedMapView(invalidFilter), /unsupported fields/);
+});

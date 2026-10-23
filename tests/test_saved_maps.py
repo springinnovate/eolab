@@ -43,6 +43,60 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_temporal_views_preserve_explicit_selections_and_independent_appearance() -> (
+    None
+):
+    """Round-trip repeated observations without accepting paths or rendering state."""
+    candidate = map_request()
+    candidate["view"].update(schemaVersion=3, basemap="detailed")
+    layer = {
+        "temporalSource": {
+            "collectionId": "eolab-temporal-datasets",
+            "itemId": "era5",
+            "variable": "air_temperature",
+            "time": "2020-01-15T04:00:00-08:00",
+        },
+        "customName": "Temperature",
+        "visible": True,
+        "opacity": 0.6,
+        "legendIncluded": False,
+        "style": deepcopy(VIEW["layers"][0]["style"]),
+    }
+    candidate["view"]["layers"] = [layer, deepcopy(layer)]
+    candidate["view"]["layers"][1].update(customName="Comparison", opacity=0.3)
+    document = CreateSavedMap.model_validate(candidate).model_dump(
+        mode="json", exclude_unset=True
+    )
+    for expected in candidate["view"]["layers"]:
+        expected["temporalSource"]["time"] = "2020-01-15T12:00:00.000Z"
+    assert document == candidate
+    assert (
+        CreateSavedMap.model_validate_json(json.dumps(document)).model_dump(
+            mode="json", exclude_unset=True
+        )
+        == document
+    )
+
+    for replacement in (None, "bad date", "2020-01-15T12:00:00"):
+        invalid = deepcopy(candidate)
+        invalid["view"]["layers"][0]["temporalSource"]["time"] = replacement
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+    for field in ("path", "publication", "viewId"):
+        invalid = deepcopy(candidate)
+        invalid["view"]["layers"][0]["temporalSource"][field] = "not saved"
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["layers"][0]["style"] = {"kind": "vector", "definition": {}}
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(invalid)
+    invalid = deepcopy(candidate)
+    invalid["view"]["layers"][0]["filter"] = {}
+    with pytest.raises(ValidationError):
+        CreateSavedMap.model_validate(invalid)
+
+
 def test_private_upload_reference_contract() -> None:
     """Preserve upload identifiers and appearance without accepting source data or access credentials."""
     candidate = map_request()

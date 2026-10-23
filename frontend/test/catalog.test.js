@@ -14,6 +14,7 @@ import {
   CatalogSurpriseClient,
   MOUNTED_GEOTIFF_COLLECTION_ID,
   MOUNTED_VECTOR_COLLECTION_ID,
+  TEMPORAL_COLLECTION_ID,
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
@@ -141,9 +142,12 @@ test("buildCatalogSearch combines each literal search term with AND", () => {
   });
 });
 
-test("buildCatalogSearch filters mounted raster and vector Items", () => {
+test("buildCatalogSearch filters mounted raster, vector and temporal Items", () => {
   assert.deepEqual(catalogFilter(" TYPE:RASTER "), rasterTypeFilter);
   assert.deepEqual(catalogFilter("type:vector"), vectorTypeFilter);
+  assert.deepEqual(catalogFilter("type:temporal"), {
+    op: "=", args: [{ property: "collection" }, TEMPORAL_COLLECTION_ID],
+  });
   assert.deepEqual(
     buildCatalogSearch(
       "barley type:raster date:2020-01-01..2020-03-31",
@@ -269,7 +273,7 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
   }
 });
 
-test("Catalog search help presents raster and vector type filters", () => {
+test("Catalog search help presents raster, vector and temporal type filters", () => {
   const catalogMarkup = readFileSync(
     new URL("../index.html", import.meta.url),
     "utf8",
@@ -277,7 +281,7 @@ test("Catalog search help presents raster and vector type filters", () => {
 
   assert.match(
     catalogMarkup,
-    /type:raster, type:vector, or date:YYYY-MM-DD/,
+    /type:raster, type:vector, type:temporal, or date:YYYY-MM-DD/,
   );
   assert.match(
     catalogMarkup,
@@ -1356,4 +1360,38 @@ test("CatalogFootprintController distinguishes selection and preview", () => {
 
   controller.clear();
   assert.deepEqual(removedLayers, [layers[1], layers[0]]);
+});
+
+
+test("temporal Catalog details show observation labels and summarize monthly sources", () => {
+  const item = {
+    id: "era5", collection: TEMPORAL_COLLECTION_ID,
+    geometry: { type: "Polygon", coordinates: [] }, bbox: [-180, -90, 180, 90],
+    properties: {
+      title: "ERA5 weather", datetime: null,
+      start_datetime: "2023-12-31T23:00:00Z", end_datetime: "2024-01-02T00:00:00Z",
+      "cube:dimensions": {
+        time: { type: "temporal", extent: ["2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z"] },
+      },
+      "cube:variables": {
+        t2m: { description: "2 metre temperature", unit: "K" },
+        tp: { description: "Total precipitation", unit: "m" },
+      },
+    },
+    assets: {
+      "eolab:temporal-source": { href: "file:///data/era5/dataset.yaml", roles: ["metadata"] },
+      ...Object.fromEntries(Array.from({ length: 1200 }, (_, index) => [
+        `${1900 + Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}`,
+        { href: `urn:eolab:temporal:era5:${index}`, roles: ["data"] },
+      ])),
+    },
+  };
+  assert.deepEqual(getRasterVisualization(item), { temporal: true });
+  const details = buildCatalogItemDetails(item, [], "/data");
+  const metadata = Object.fromEntries(details.metadata.map(({ label, value }) => [label, value]));
+  assert.equal(metadata["Dataset type"], "Raster time series");
+  assert.equal(metadata["Observation times (UTC)"], "2024-01-01T00:00:00Z – 2024-01-02T00:00:00Z");
+  assert.equal(metadata.Variables, "2 metre temperature (t2m; K); Total precipitation (tp; m)");
+  assert.equal(metadata["Months with data"], "1200");
+  assert.equal(details.assets, null);
 });

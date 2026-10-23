@@ -1,6 +1,7 @@
 """Path-free raster references and requests shared by catalog and private sources."""
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from pydantic import (
@@ -35,6 +36,50 @@ class TemporalVariableSelection(BaseModel):
     collection_id: Literal["eolab-temporal-datasets"] = Field(alias="collectionId")
     item_id: str = Field(alias="itemId", strict=True, pattern=r"\S")
     variable: str = Field(strict=True, min_length=1)
+
+
+class TemporalTimeQuery(TemporalVariableSelection):
+    """Request a variable's available timestamps in one UTC calendar month.
+
+    Omit month to request the latest published month containing this variable.
+    An explicit month remains selected even when it contains no observations.
+    """
+
+    month: str | None = Field(default=None, strict=True)
+
+    @field_validator("month")
+    @classmethod
+    def require_calendar_month(cls, value: str | None) -> str | None:
+        """Require a real UTC month written as YYYY-MM when supplied.
+
+        Args:
+            value: Optional user-supplied month.
+
+        Returns:
+            The unchanged month or None for the latest available month.
+
+        Raises:
+            ValueError: If the month is not a valid YYYY-MM calendar month.
+        """
+        if value is not None:
+            date.fromisoformat(f"{value}-01")
+        return value
+
+
+@dataclass(frozen=True)
+class TemporalTimeChoices:
+    """Describe available months and exact observation labels for one variable.
+
+    Attributes:
+        months: Published UTC months containing this variable, in increasing order.
+        month: Requested month, or the latest available month when none was supplied.
+        times: Actual UTC labels within month, preserving gaps, in ISO format
+            with milliseconds and a trailing Z.
+    """
+
+    months: tuple[str, ...]
+    month: str
+    times: tuple[str, ...]
 
 
 class TemporalRasterSelection(TemporalVariableSelection):

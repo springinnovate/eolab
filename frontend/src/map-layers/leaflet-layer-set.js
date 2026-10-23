@@ -144,6 +144,24 @@ export class LeafletLayerSet {
     }
 
     /**
+     * Replace one source layer while preserving its visibility, opacity and order.
+     * The controller supplies updated rendering descriptors immediately afterward.
+     * @param {string} key Retained map-layer key.
+     * @param {Object} layer Replacement Leaflet-compatible layer.
+     * @return {void}
+     */
+    replace(key, layer) {
+        const { visible, opacity } = this.#require(key);
+        const order = [...this.order];
+        const rendering = this.rendering;
+        this.remove(key);
+        this.add(key, layer, { visible, opacity });
+        this.rendering = rendering;
+        this.activeIndividualRenderingSignature = null;
+        this.setOrder(order);
+    }
+
+    /**
      * Return whether one retained layer is attached to the map.
      *
      * @param {string} key Stable map-layer key.
@@ -434,7 +452,8 @@ export class LeafletLayerSet {
     }
 
     /**
-     * Stage selected source grids and reveal them after every grid loads.
+     * Reveal selected source grids after their current tile requests finish.
+     * An attached, complete grid needs no new load event when its partner changes.
      *
      * @return {void}
      */
@@ -501,6 +520,7 @@ export class LeafletLayerSet {
             } else {
                 record.layer.once?.("load", onLoad);
             }
+            if (!record.layer.isLoading()) onLoad();
         }
     }
 

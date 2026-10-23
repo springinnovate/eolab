@@ -5,6 +5,8 @@ import asyncio
 from eolab_app.raster.source_models import (
     TemporalRasterSelection,
     TemporalIntervalSelection,
+    TemporalTimeChoices,
+    TemporalTimeQuery,
 )
 from eolab_app.raster.temporal import TemporalObservation
 
@@ -78,4 +80,21 @@ class CatalogRasterSourceAuthorizer:
         item = await self._catalog.get_item(selection)
         return await asyncio.to_thread(
             self._source_resolver.get_observations, item, selection
+        )
+
+    async def get_time_choices(self, query: TemporalTimeQuery) -> TemporalTimeChoices:
+        """Return actual time choices for an authoritative Catalog variable.
+
+        Args:
+            query: Dataset identity, variable and optional UTC month.
+
+        Returns:
+            Available months and exact timestamps for the selected month.
+
+        Raises:
+            RasterFeatureError: If the Catalog, archive or variable is unavailable.
+        """
+        item = await self._catalog.get_item(query)
+        return await asyncio.to_thread(
+            self._source_resolver.get_time_choices, item, query
         )

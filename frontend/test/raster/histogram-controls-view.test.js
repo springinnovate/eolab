@@ -198,7 +198,7 @@ test("unchanged cards retain chart observers; changed cards and unbinding releas
     const { ResizeObserver, instances } = createFakeResizeObservers();
     doc.defaultView = { ResizeObserver };
     const view = new RasterHistogramControlsView(doc);
-    const summary = { key: "first", label: "drought.tif", scope: "Whole raster",
+    const summary = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
         statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
     view.renderLayerHistograms([summary], "first");
@@ -206,7 +206,7 @@ test("unchanged cards retain chart observers; changed cards and unbinding releas
     view.renderLayerHistograms([summary], "first");
     assert.equal(instances.length, 1);
     assert.equal(instances[0].disconnected, false);
-    view.renderLayerHistograms([{ ...summary, scope: "200 km map sample" }], "first");
+    view.renderLayerHistograms([{ ...summary, canCalculate: true, scope: "200 km map sample" }], "first");
     assert.equal(instances[0].disconnected, true);
     instances[0].resize(391);
     assert.equal(replaced.children.length, 0);
@@ -220,7 +220,7 @@ test("pending and failed summaries do not present cached charts as the current s
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);
     const summary = {
-        key: "first", label: "drought.tif", scope: "200 km map sample",
+        key: "first", label: "drought.tif", canCalculate: true, scope: "200 km map sample",
         automatic: true, counts: [1, 4, 2], statistics: RASTER_STATISTICS,
         style: DEFAULT_RASTER_STYLE, valueLabel: "Raster value (%)",
     };
@@ -259,7 +259,7 @@ test("unavailable presentation replaces continuous charts without changing lifec
     for (const automatic of [false, true]) {
         for (const state of ["idle", "loading", "ready", "error"]) {
             const summary = Object.freeze({
-                key: "landcover", label: "landcover.tif", scope: "Whole raster",
+                key: "landcover", label: "landcover.tif", canCalculate: true, scope: "Whole raster",
                 automatic, state, counts: RASTER_STATISTICS.histogram.counts,
                 statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE,
                 unavailableMessage,
@@ -293,7 +293,7 @@ test("unavailable presentation releases previous chart observers and can resume 
     doc.defaultView = { ResizeObserver };
     const view = new RasterHistogramControlsView(doc);
     const summary = {
-        key: "landcover", label: "landcover.tif", scope: "Whole raster",
+        key: "landcover", label: "landcover.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
         statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE,
     };
@@ -348,14 +348,14 @@ test("histogram adapter owns labeled per-raster summaries without double binding
             key: "first",
             label: "first-raster.tif",
             state: "ready",
-            scope: "200 km map sample",
+            canCalculate: true, scope: "200 km map sample",
             counts: [1, 4, 2],
         },
         {
             key: "second",
             label: "second-raster.tif",
             state: "loading",
-            scope: "200 km map sample",
+            canCalculate: true, scope: "200 km map sample",
             counts: null,
         },
     ];
@@ -442,7 +442,7 @@ test("axis edits redraw only the local chart and persist through a new sample", 
 test("another raster completing preserves a pending axis edit and its focused controls", async () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);
-    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+    const first = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
         statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
     const second = { ...first, key: "second", label: "rain.tif", state: "loading" };
@@ -475,7 +475,7 @@ test("card reordering preserves action focus; removing the focused card moves fo
     const view = new RasterHistogramControlsView(doc);
     const styled = [];
     view.bind({ onStyleHistogram: key => styled.push(key) });
-    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+    const first = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: [1, 2, 3] };
     const second = { ...first, key: "second", label: "rain.tif" };
     view.renderLayerHistograms([first, second], "first");
@@ -511,12 +511,12 @@ test("categorical expansion and focus survive another result, then continuous an
     const { ResizeObserver, instances } = createFakeResizeObservers();
     doc.defaultView = { ResizeObserver };
     const view = new RasterHistogramControlsView(doc);
-    const first = { key: "land", label: "landcover.tif", scope: "Whole raster",
+    const first = { key: "land", label: "landcover.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: null,
         categorical: { validHectares: 15, nodataHectares: 0, sampledPixelCount: 15,
             rows: Array.from({ length: 15 }, (_, code) => ({ code, label: `Class ${code}`,
                 hectares: 1, percentage: 100 / 15, color: "#ffffff", opacity: 1 })) } };
-    const second = { key: "second", label: "rain.tif", scope: "Whole raster",
+    const second = { key: "second", label: "rain.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "loading", counts: null };
     view.renderLayerHistograms([first, second], "land");
     const list = doc.querySelector("#raster-histogram-list");
@@ -549,7 +549,7 @@ test("categorical expansion and focus survive another result, then continuous an
 test("invalid axis drafts survive unrelated updates; removal and unbinding cancel pending edits", async () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);
-    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+    const first = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
         statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
     view.renderLayerHistograms([first], "first");
@@ -589,7 +589,7 @@ test("changed sample, units, style, scope and retry state refresh only that card
     const view = new RasterHistogramControlsView(doc);
     const retries = [];
     view.bind({ onRetryHistogram: key => retries.push(key) });
-    const first = { key: "first", label: "drought.tif", scope: "Whole raster",
+    const first = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
         automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
         statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
     const second = { ...first, key: "second", label: "rain.tif" };
@@ -597,7 +597,7 @@ test("changed sample, units, style, scope and retry state refresh only that card
     const untouched = view.summaryCards.get("second");
     let previous = view.summaryCards.get("first");
     for (const change of [
-        { scope: "200 km map sample" },
+        { canCalculate: true, scope: "200 km map sample" },
         { label: "Renamed raster" },
         { valueLabel: "Rainfall (mm)" },
         { style: { ...DEFAULT_RASTER_STYLE, minimumColor: "#000000" } },
@@ -619,5 +619,28 @@ test("changed sample, units, style, scope and retry state refresh only that card
     assert.deepEqual(retries, ["first"]);
     assert.throws(() => view.renderLayerHistograms([first, first], "first"), /keys must be unique/);
     assert.ok(view.summaryCards.get("second") === untouched);
+    view.unbind();
+});
+
+
+test("histogram Processing actions follow the source capability while interactive controls remain", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const summary = {
+        key: "weather", label: "Temperature", state: "ready", scope: "Whole raster",
+        counts: [1, 3, 2], canCalculate: false,
+    };
+    view.renderLayerHistograms([summary], "weather");
+    const list = doc.querySelector("#raster-histogram-list");
+    assert.deepEqual(list.children[0].children.at(-1).children.map(button => button.getAttribute("aria-label")), [
+        "Style Temperature",
+    ]);
+    assert.equal(list.children[0].children[0].getAttribute("aria-label"), "Show detailed histogram for Temperature");
+    view.renderLayerHistograms([{ ...summary, canCalculate: true }], "weather");
+    assert.deepEqual(list.children[0].children.at(-1).children.map(button => button.getAttribute("aria-label")), [
+        "Style Temperature", "Calculate statistics for Temperature over this area", "Download clip of Temperature",
+    ]);
+    view.renderLayerHistograms([summary], "weather");
+    assert.equal(list.children[0].children.at(-1).children.length, 1);
     view.unbind();
 });

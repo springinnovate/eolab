@@ -56,7 +56,7 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Publish a dataset and add it to the map's layer list.
+     * Add a dataset to Map layers, opening its first view for a temporal raster.
      *
      * @param {Object} item Selected supported and prepared STAC Item.
      * @return {Promise<Object|null>} Publication or null after invalidation.
@@ -64,6 +64,7 @@ export class CatalogVisualizationCoordinator {
      */
     show(item) {
         const descriptor = this.#requireDescriptor(item);
+        if (descriptor.metadata?.temporal) return this.rasterViewer.showTemporal(item);
         return descriptor.kind === "raster"
             ? this.rasterViewer.show(item)
             : this.mapLayerController.show(item, this.vectorMapLayerAdapter);
@@ -122,23 +123,28 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Return whether one Item is retained in the mixed layer stack.
+     * Return whether a Catalog layer or any view of a temporal dataset is retained.
      *
      * @param {Object} item Catalog STAC Item.
      * @return {boolean} Whether the Item is retained.
      */
     contains(item) {
+        if (this.describe(item)?.metadata?.temporal) return this.rasterViewer.containsTemporal(item);
         return this.mapLayerController.contains(item);
     }
 
     /**
-     * Remove one retained Item from the mixed layer stack.
+     * Remove a Catalog layer or the first retained view of a temporal dataset.
      *
      * @param {Object} item Retained Catalog STAC Item.
      * @param {boolean} [allowUndo=false] Whether this is an explicit user removal.
      * @return {void}
      */
     remove(item, allowUndo = false) {
+        if (this.describe(item)?.metadata?.temporal) {
+            this.rasterViewer.removeTemporal(item, allowUndo);
+            return;
+        }
         if (allowUndo) this.mapLayerController.removeWithUndo(getCatalogItemKey(item));
         else this.mapLayerController.remove(item);
     }

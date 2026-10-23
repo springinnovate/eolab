@@ -164,6 +164,7 @@ function pairedStatistics() {
 }
 
 const PRESENTATION = {
+  xItem: {}, yItem: {},
   paletteName: "orangeBlue",
   xLabel: "temperature.tif",
   yLabel: "moisture.tif",
@@ -599,4 +600,22 @@ test("2D log axes align cells, marginal hover bands and markers without new anal
   assert.equal(frequency.maximum.input.disabled, true);
   view.clearStatistics();
   assert.equal(view.axesHost.children.length, 0);
+});
+
+
+test("paired Processing actions follow each axis source without hiding the comparison", () => {
+  const doc = new FakeBivariateDocument();
+  const view = new BivariateRasterControlsView(doc);
+  const temporal = { capabilities: { calculations: false } };
+  view.renderMode({ active: true, ...PRESENTATION, xItem: temporal });
+  for (const action of ["calculate", "download"]) {
+    assert.equal(doc.querySelector(`#${action}-bivariate-x`).hidden, true);
+    assert.equal(doc.querySelector(`#${action}-bivariate-y`).hidden, false);
+  }
+  assert.equal(doc.querySelector("#raster-bivariate-statistics").hidden, false);
+  view.renderMode({ active: true, ...PRESENTATION, yItem: temporal });
+  for (const action of ["calculate", "download"]) {
+    assert.equal(doc.querySelector(`#${action}-bivariate-x`).hidden, false);
+    assert.equal(doc.querySelector(`#${action}-bivariate-y`).hidden, true);
+  }
 });

@@ -129,7 +129,7 @@ function harness({ selectedItem = null, prepare = async (item) => item,
     show: visualization.show,
     remove: item => visualization.remove(item, true),
     getBounds: getCatalogItemMapBounds,
-    openStyle: key => calls.push(["style", key]),
+    openStyle: (key, item) => calls.push(["style", key, item]),
     zoomToBounds: bounds => calls.push(["zoom", bounds, { padding: [24, 24], maxZoom: 9 }]),
     onPrepared: (item, currentVisualization) => {
       transitions.push(["prepared", item, currentVisualization]);
@@ -212,7 +212,7 @@ test("row and details Style reuse the editor with composite identity and no map 
   assert.equal(h.styleButton.disabled, false);
   h.addRow(first).styleButton.dispatchEvent(new Event("click"));
   h.styleButton.dispatchEvent(new Event("click"));
-  assert.deepEqual(h.calls, [["style", getCatalogItemKey(first)], ["style", getCatalogItemKey(second)]]);
+  assert.deepEqual(h.calls, [["style", getCatalogItemKey(first), first], ["style", getCatalogItemKey(second), second]]);
   assert.equal(h.state.selectedItem, second);
   assert.equal(h.row.state.retained, true);
 });
@@ -536,4 +536,24 @@ test("unsupported Items and canceled publication never claim to be on map", asyn
   assert.equal(canceled.state.feedback, null);
   assert.equal(canceled.state.pendingAction, null);
   assert.equal(h.calls.some(([call]) => call === "open-rendering"), false);
+});
+
+
+test("temporal Catalog controls explain which view they remove and pass the dataset to Style", async () => {
+  const item = { collection: "eolab-temporal-datasets", id: "era5", properties: { title: "ERA5" } };
+  const completion = deferred();
+  const h = harness({ selectedItem: item, show: () => completion.promise });
+  const attempt = h.run();
+  assert.equal(h.actionStatus.textContent, "Opening a variable and observation time from this dataset.");
+  completion.resolve({ layerName: "eolab:observation" });
+  await attempt;
+  assert.equal(h.layerButton.textContent, "Remove first view");
+  assert.equal(h.row.mapButton.textContent, "Remove first view");
+  assert.match(h.row.mapButton.getAttribute("aria-label"), /^Remove first view:/);
+  assert.match(h.status.textContent, /Add another view.*Map layers/);
+  h.styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.calls.at(-1), ["style", getCatalogItemKey(item), item]);
+  h.row.mapButton.dispatchEvent(new Event("click"));
+  await h.lastAction;
+  assert.equal(h.actionStatus.textContent, "First dataset view removed from the map.");
 });

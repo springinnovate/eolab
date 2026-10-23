@@ -42,6 +42,7 @@ function fixture() {
     for (const key of ["a", "annotation", "b"]) {
         const layer = Object.assign(evented(), {
             additions: 0,
+            isLoading: () => true,
             addTo() { this.additions++; map.attached.add(this); },
             setOpacity() {}, setZIndex() {},
             getTileSize: () => ({ x: 256, y: 256 }),

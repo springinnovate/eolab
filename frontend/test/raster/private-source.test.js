@@ -4,6 +4,7 @@ import { rasterSourceKey, rasterSourceReference, labeledRasterSource } from "../
 import { sampleRasterPixel, loadRasterStatistics, loadRasterPairedStatistics } from "../../src/raster/analysis-api.js";
 import { describeRasterSource } from "../../src/raster/source-api.js";
 import { publishRasterSource } from "../../src/raster/api.js";
+import { loadTemporalTimes } from "../../src/raster/temporal-api.js";
 import { calculationIntent, CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { PendingSubmissionStorage } from "../../src/processing/pending-submission.js";
 import { RasterSeriesCalculations } from "../../src/processing/raster-series-calculations.js";
@@ -78,4 +79,28 @@ test("ordinary calculation, stack and clip recovery retain private identities wi
     const stack = new RasterSeriesCalculations({requests: {}});
     stack.updateCalculationInputs([{key: rasterSourceKey(raster), ...raster}], area, "Sampling area", [{id:1,label:"Total",expression:"sum(a)"}]);
     assert.deepEqual(stack.getRasterReference(stack.sources[0]), labeled);
+});
+
+
+test("temporal selection identity reaches ordinary publication and original-source analysis", async () => {
+    const temporal = {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature", time: "2020-01-01T00:00:00Z"};
+    const descriptor = {source: temporal, label: "Temperature"};
+    assert.deepEqual(rasterSourceReference(descriptor), temporal);
+    assert.notEqual(rasterSourceKey(descriptor), rasterSourceKey({...temporal, time: "2020-01-01T01:00:00Z"}));
+    const requests = [];
+    const fetcher = async (url, options) => {
+        requests.push({url, body: JSON.parse(options.body)});
+        return new Response(JSON.stringify(url.endsWith("/statistics") ? RASTER_STATISTICS : {value: 2}));
+    };
+    await publishRasterSource(descriptor, fetcher);
+    await sampleRasterPixel(descriptor, {longitude: 0, latitude: 0}, undefined, fetcher);
+    await loadRasterStatistics(descriptor, {kind: "wholeRaster"}, undefined, fetcher);
+    for (const request of requests) assert.deepEqual(request.body.source, temporal);
+});
+
+
+test("temporal date discovery reports proxy failures without showing HTML or JSON parser errors", async context => {
+    context.mock.method(globalThis, "fetch", async () => new Response("<html>Bad gateway</html>", {status: 502, headers: {"Content-Type": "text/html"}}));
+    await assert.rejects(loadTemporalTimes({collection: "weather", id: "era5"}, "temperature"),
+        /Available dates could not be loaded \(502\). Try again\./);
 });

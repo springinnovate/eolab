@@ -462,6 +462,8 @@ export class BivariateRasterControlsView {
      * Render mode state, a compact titled identity, and the coordinated legend.
      *
      * @param {Object} state Viewer-owned mode presentation state.
+     * @param {Object} state.xItem X-axis source and its optional calculation capability.
+     * @param {Object} state.yItem Y-axis source and its optional calculation capability.
      * @return {void}
      */
     renderMode(state) {
@@ -479,6 +481,7 @@ export class BivariateRasterControlsView {
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
         for (const { axis, button, calculate } of this.downloadButtons) {
+            button.hidden = state[`${axis}Item`].capabilities?.calculations === false;
             button.textContent = calculate ? `Calculator · ${axis.toUpperCase()}` : `Download ${axis.toUpperCase()} clip`;
             button.setAttribute("aria-label", `${calculate ? "Raster calculator of" : "Download clip of"} ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
         }

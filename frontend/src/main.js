@@ -487,6 +487,10 @@ function renderCatalogItemInspector(
         );
     }
 
+    // Announce the selected Item to assistive technologies.
+    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
+    if (inspector.assets === null) return;
+
     // Introduce the Item's Asset records or their empty state.
     const assetsHeading = document.createElement("h4");
     assetsHeading.textContent = "Assets";
@@ -539,8 +543,6 @@ function renderCatalogItemInspector(
         inspectorContent.append(assetCard);
     }
 
-    // Announce the selected Item to assistive technologies.
-    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
 }
 
 /**
@@ -659,12 +661,12 @@ async function initializeCatalog(
         show: item => catalogVisualization.show(item),
         remove: item => catalogVisualization.remove(item, true),
         getBounds: getCatalogItemMapBounds,
-        openStyle: key => layerStyleEditor.open(key),
+        openStyle: (key, item) => layerStyleEditor.open(rasterVisualization.temporalLayerKey(item) ?? key),
         zoomToBounds: bounds => leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 }),
         onPrepared: (item, visualization) => {
             if (!catalogItemsMatch(catalogState.selectedItem, item)) return;
             catalogMapActions.applyAssessment(catalogState.selectedItem);
-            if (visualization?.kind === "raster") {
+            if (visualization?.kind === "raster" && !visualization.metadata.temporal) {
                 rasterVisualization.activateAnalysis(catalogState.selectedItem);
             }
             renderCatalogItemInspector(
@@ -674,7 +676,7 @@ async function initializeCatalog(
             );
         },
         onRemoved: (item, kind) => {
-            if (kind === "raster" && catalogItemsMatch(catalogState.selectedItem, item)) {
+            if (kind === "raster" && !getCatalogVisualization(item).metadata.temporal && catalogItemsMatch(catalogState.selectedItem, item)) {
                 rasterVisualization.activateAnalysis(item);
             }
         },
@@ -806,7 +808,8 @@ async function initializeCatalog(
         restoreRemovedLayer: async (snapshot, isCurrent) => snapshot.local?.kind === "model-output-preview"
             ? outputLayers.restore(snapshot, isCurrent).then(() => {
                 if (isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
-            }) : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
+            }) : snapshot.local?.kind === "temporal" ? restoreRemovedTemporal(snapshot, isCurrent)
+            : snapshot.local?.kind === "uploaded-vector" ? restoreUploadedVector(snapshot, isCurrent)
             : snapshot.item === null ? annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
@@ -929,11 +932,13 @@ async function initializeCatalog(
             if (rasterClickSelected) mapInspection.setClickResult("histogram", snapshot);
         },
         onStyleRequested: (key) => layerStyleEditor?.open(key),
+        onTemporalInfo: inspectRetainedMapLayer,
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
     }, {
         mapLayerController,
         cursorValuesView: new RasterCursorValuesView(),
+        getTemporalItem: identity => catalogItemClient.get(identity),
     });
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
         onFilterChange: () => mapLayerController.render(),
@@ -1264,6 +1269,22 @@ async function initializeCatalog(
         vectorMapLayerAdapter
     );
     const catalogItemClient = new SavedMapViewCatalogClient(catalogUrl);
+    /** Restore a removed temporal view with its original key, position and style.
+     * @param {Object} snapshot Removed map-layer snapshot.
+     * @param {()=>boolean} isCurrent Whether this Undo still applies.
+     * @return {Promise<void>} Completion after the view is retained.
+     * @throws {Error} If its Catalog dataset cannot be retrieved.
+     */
+    async function restoreRemovedTemporal(snapshot, isCurrent) {
+        const layer = snapshot.local.layer;
+        const {collectionId, itemId, variable, time} = layer.temporalSource;
+        const item = await catalogItemClient.get({collection: collectionId, id: itemId});
+        const record = await rasterVisualization.showTemporal(item, {variable, time}, {
+            key: snapshot.key, appearance: layer.style, visible: layer.visible,
+            opacity: layer.opacity, customName: layer.customName, isCurrent,
+        });
+        if (record && isCurrent()) mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
+    }
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
         viewport: createSavedMapLeafletViewport(leafletMap),
@@ -1308,6 +1329,12 @@ async function initializeCatalog(
             };
         },
         restoreUpload: restoreSavedUpload,
+        exportTemporal: record => rasterVisualization.exportTemporal(record),
+        restoreTemporal: async (layer, isCurrent) => {
+            const {collectionId, itemId} = layer.temporalSource;
+            const item = await catalogItemClient.get({collection: collectionId, id: itemId});
+            return rasterVisualization.restoreTemporal(layer, item, isCurrent);
+        },
         exportAnnotation: record => {
             if (record.adapter === vectorMapLayerAdapter) return null;
             if (record.entry.key.startsWith("local:artifact:")) return null;
@@ -1622,7 +1649,8 @@ async function initializeCatalog(
             catalogState.collectionsDocument.collections,
             appGlobalConfiguration.scanDisplayPathPrefix
         );
-        if (getCatalogVisualization(item)?.kind !== "raster") {
+        const visualization = getCatalogVisualization(item);
+        if (visualization?.kind !== "raster" || visualization.metadata.temporal) {
             rasterVisualization.deactivateAnalysis(null);
         } else {
             rasterVisualization.activateAnalysis(item);
@@ -1876,6 +1904,14 @@ async function initializeCatalog(
         }
     );
 
+    /** Reload Catalog results and explicitly refresh retained temporal choices.
+     * Server scans admit changed observations; this reload reads that availability.
+     * @return {Promise<void>} Completion after results and retained views refresh.
+     */
+    async function refreshCatalogDatasets() {
+        await loadCatalog(true);
+        await rasterVisualization.refreshTemporalLayers();
+    }
     const scheduleCatalogSearch = createDebouncedAction(
         loadCatalog.bind(null, false),
         CATALOG_SEARCH_DEBOUNCE_MILLISECONDS,
@@ -1928,10 +1964,7 @@ async function initializeCatalog(
             }
         }
     });
-    refreshCatalogButton.addEventListener(
-        "click",
-        loadCatalog.bind(null, true)
-    );
+    refreshCatalogButton.addEventListener("click", refreshCatalogDatasets);
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
      * Fit the map to one retained layer through its authoritative Catalog Item.
@@ -2004,7 +2037,7 @@ async function initializeCatalog(
         void catalogMapActions.toggle(catalogState.selectedItem);
     });
     if (!isSharedViewer) await loadCatalog(true);
-    return loadCatalog.bind(null, true);
+    return refreshCatalogDatasets;
 }
 
 /**

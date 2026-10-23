@@ -16,6 +16,7 @@ import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-c
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { buildRasterStyleEnvironment } from "../../src/raster/wms.js";
 import { normalizeCategoricalRasterStyle } from "../../src/raster/categorical-style.js";
 import { createSavedMapView, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 import {
@@ -205,6 +206,7 @@ function createFakeLeaflet() {
         wmsLayers,
         rectangleLayers,
         leaflet: {
+            layerGroup: () => createFakeLayer({kind: "empty"}),
             tileLayer: {
                 wms(url, options) {
                     const layer = createFakeLayer({
@@ -4912,4 +4914,228 @@ test("updating output names preserves raster rendering and custom labels", async
     assert.equal(record.state.label, "My output");
     assert.equal(h.mapLayers.snapshots()[0].group.label, "Final run");
     h.destroy();
+});
+
+/** Build a temporal Item with two variables whose values have different units.
+ * @return {Object} Admitted public Catalog metadata.
+ */
+function temporalItem() {
+    return {collection: "eolab-temporal-datasets", id: "weather", bbox: [-180, -90, 180, 90], properties: {
+        title: "Weather", "cube:variables": {temperature: {description: "Temperature", unit: "K"}, rain: {description: "Rain", unit: "m"}},
+        "cube:dimensions": {time: {extent: ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"]}},
+    }};
+}
+
+/** Exercise temporal rows through the real retained-layer and analysis owners.
+ * @param {Object} [dependencies={}] Boundary replacements for the tested behavior.
+ * @return {Object} Ordinary viewer fixture plus captured temporal controls.
+ */
+function temporalFixture(dependencies = {}) {
+    const temporalViews = [];
+    const fixture = visibleLayerFixture(undefined, {
+        loadTimes: async () => ({months: ["2020-01"], month: "2020-01", times: ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"]}),
+        getTemporalItem: async () => temporalItem(),
+        temporalControlsFactory: handlers => {
+            const view = {element: {}, handlers, render(value) { this.state = value; }, destroy() {this.destroyed = true;}};
+            temporalViews.push(view);
+            return view;
+        },
+        publishRaster: async raster => ({layerName: `eolab:${raster.source.variable}-${raster.source.time}`, bbox: raster.bbox}),
+        ...dependencies,
+    });
+    return {...fixture, temporalViews};
+}
+
+test("temporal time changes retain the row and style while late publication cannot replace the new frame", async () => {
+    const requests = [];
+    const fixture = temporalFixture({publishRaster: (raster, _fetch, signal) => {
+        const deferred = createDeferred(); requests.push({raster, signal, ...deferred}); return deferred.promise;
+    }});
+    try {
+        const first = fixture.viewer.showTemporal(temporalItem());
+        await flushPromises();
+        const record = fixture.mapLayers.retainedRecords[0];
+        assert.equal(fixture.wmsLayers.length, 0, "pending row creates no WMS requests");
+        assert.equal(record.state.item.source.time, "2020-01-01T00:00:00Z");
+        assert.match(record.entry.label, /^Weather · Temperature · .*00:00 UTC$/);
+        assert.equal(record.state.item.capabilities.statistics, true, "analysis does not wait for WMS");
+        const appearance = structuredClone(record.adapter.exportSavedState(record));
+        appearance.continuous.definition.minimum = -20;
+        appearance.continuous.definition.midpoint = 0;
+        appearance.continuous.definition.maximum = 20;
+        appearance.continuous.styleWasEdited = true;
+        record.adapter.applySavedState(record, appearance);
+        fixture.mapLayers.setOpacity(record.entry.key, .45);
+        const changed = fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        assert.equal(requests[0].signal.aborted, true);
+        requests[1].resolve({layerName: "eolab:new", bbox: record.state.item.bbox});
+        await changed;
+        requests[0].resolve({layerName: "eolab:old", bbox: record.state.item.bbox});
+        await first;
+        assert.equal(fixture.mapLayers.retainedRecords.length, 1);
+        assert.equal(fixture.mapLayers.retainedRecords[0], record);
+        assert.equal(record.publication.layerName, "eolab:new");
+        assert.equal(record.entry.opacity, .45);
+        assert.equal(record.state.rasterStyle.minimum, -20);
+        assert.equal(record.state.rasterStyle.maximum, 20);
+        assert.equal(fixture.viewer.exportTemporal(record).temporalSource.time, "2020-01-01T02:00:00Z");
+    } finally {fixture.destroy();}
+});
+
+test("independent temporal views preserve explicit saved selections and reset ranges when units change", async () => {
+    const fixture = temporalFixture();
+    try {
+        const first = await fixture.viewer.showTemporal(temporalItem());
+        await flushPromises();
+        const second = await fixture.temporalViews[0].handlers.onAddView();
+        assert.notEqual(first.entry.key, second.entry.key);
+        assert.equal(fixture.mapLayers.retainedRecords.length, 2);
+        await fixture.temporalViews[1].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        assert.equal(first.state.item.source.time, "2020-01-01T00:00:00Z");
+        assert.equal(second.state.item.source.time, "2020-01-01T02:00:00Z");
+        const saved = fixture.viewer.exportTemporal(second);
+        const restoredKey = await fixture.viewer.restoreTemporal(saved, temporalItem(), () => true);
+        assert.notEqual(restoredKey, second.entry.key);
+        assert.equal(fixture.mapLayers.getRecord(restoredKey).state.item.source.time, saved.temporalSource.time);
+        const appearance = structuredClone(first.adapter.exportSavedState(first));
+        appearance.continuous.definition.minimum = 100;
+        appearance.continuous.definition.midpoint = 200;
+        appearance.continuous.definition.maximum = 300;
+        appearance.continuous.styleWasEdited = true;
+        first.adapter.applySavedState(first, appearance);
+        await fixture.temporalViews[0].handlers.onVariableChange("rain");
+        await flushPromises();
+        assert.equal(first.state.item.source.variable, "rain");
+        assert.equal(first.state.rasterStyleWasEdited, false);
+        assert.notEqual(first.state.rasterStyle.minimum, 100);
+        assert.equal(second.state.item.source.variable, "temperature");
+        assert.equal(first.state.item.capabilities.calculations, false);
+    } finally {fixture.destroy();}
+});
+
+test("refresh keeps a removed observation explicit and retry recovers publication without losing the row", async () => {
+    let times = ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"];
+    let failPublication = false;
+    const fixture = temporalFixture({
+        loadTimes: async () => ({months: ["2020-01"], month: "2020-01", times}),
+        publishRaster: async raster => {
+            if (failPublication) throw new Error("GeoServer unavailable");
+            return {layerName: "eolab:frame", bbox: raster.bbox};
+        },
+    });
+    try {
+        const record = await fixture.viewer.showTemporal(temporalItem(), {variable: "temperature", time: times[1]});
+        times = times.slice(0, 1);
+        await fixture.viewer.refreshTemporalLayers();
+        assert.equal(record.state.item.source.time, "2020-01-01T02:00:00Z");
+        assert.equal(record.publication, null);
+        assert.equal(record.state.item.capabilities.statistics, false);
+        assert.match(fixture.temporalViews[0].state.error, /no longer available/);
+        failPublication = true;
+        await fixture.temporalViews[0].handlers.onTimeChange(times[0]);
+        assert.equal(record.state.item.capabilities.statistics, true);
+        assert.match(fixture.temporalViews[0].state.error, /GeoServer unavailable/);
+        failPublication = false;
+        await fixture.temporalViews[0].handlers.onRetry();
+        assert.equal(record.publication.layerName, "eolab:frame");
+        assert.equal(fixture.temporalViews[0].state.error, null);
+    } finally {fixture.destroy();}
+});
+
+test("removing a temporal row cancels pending publication and cannot resurrect it", async () => {
+    const publication = createDeferred();
+    let signal;
+    const fixture = temporalFixture({publishRaster: (_raster, _fetch, requestSignal) => {signal = requestSignal; return publication.promise;}});
+    try {
+        const shown = fixture.viewer.showTemporal(temporalItem());
+        await flushPromises();
+        fixture.viewer.removeTemporal(temporalItem());
+        assert.equal(signal.aborted, true);
+        publication.resolve({layerName: "eolab:late", bbox: [-180, -90, 180, 90]});
+        assert.equal(await shown, null);
+        assert.equal(fixture.mapLayers.retainedRecords.length, 0);
+        assert.equal(fixture.temporalViews[0].destroyed, true);
+    } finally {fixture.destroy();}
+});
+
+
+test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
+    const statistics = [], pixels = [];
+    const fixture = temporalFixture({
+        loadStatistics: (item, area, signal) => {const deferred = createDeferred(); statistics.push({item, area, signal, ...deferred}); return deferred.promise;},
+        samplePixel: (item, _point, signal) => {const deferred = createDeferred(); pixels.push({item, signal, ...deferred}); return deferred.promise;},
+    });
+    try {
+        const record = await fixture.viewer.showTemporal(temporalItem());
+        fixture.viewer.exploreAt({lng: 1, lat: 1});
+        await flushPromises();
+        const obsoleteStatistics = [...statistics], oldPixel = pixels[0];
+        await fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        const current = statistics.at(-1);
+        assert.ok(obsoleteStatistics.every(request => request.signal.aborted));
+        assert.equal(oldPixel.signal.aborted, true);
+        assert.equal(current.item.source.time, "2020-01-01T02:00:00Z");
+        current.resolve({...createLayerStatistics(current.item, selectedBoundsFromArea(current.area)), mean: 222});
+        for (const request of obsoleteStatistics) request.resolve({...createLayerStatistics(request.item, selectedBoundsFromArea(request.area)), mean: 111});
+        oldPixel.resolve({inBounds: true, value: 111});
+        await flushPromises();
+        assert.equal(record.state.analysis.rasterStatistics.mean, 222);
+        assert.equal(fixture.controlsView.pointSamples, null);
+        fixture.viewer.exploreAt({lng: 1, lat: 1});
+        await flushPromises();
+        assert.equal(pixels.at(-1).item.source.time, "2020-01-01T02:00:00Z");
+        pixels.at(-1).resolve({inBounds: true, value: 222});
+        await flushPromises();
+        assert.equal(fixture.controlsView.pointSamples.samples[0].value, 222);
+    } finally {fixture.destroy();}
+});
+
+test("temporal timestamp changes preserve automatic ranges and refresh an active paired analysis", async () => {
+    const paired = [];
+    const fixture = temporalFixture({loadPairedStatistics: (xItem, yItem, _area, signal) => {
+        const deferred = createDeferred(); paired.push({xItem, yItem, signal, ...deferred}); return deferred.promise;
+    }});
+    try {
+        const first = await fixture.viewer.showTemporal(temporalItem());
+        await fixture.viewer.showTemporal(temporalItem());
+        await flushPromises();
+        const range = {...first.state.rasterStyle};
+        fixture.controlsView.handlers.onBivariateModeChange("bivariate");
+        await flushPromises();
+        assert.equal(paired.length, 1);
+        await fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        assert.equal(paired[0].signal.aborted, true);
+        assert.equal(fixture.controlsView.bivariateMode.active, true);
+        assert.equal(paired.length, 2);
+        assert.equal(paired[1].yItem.source.time, "2020-01-01T02:00:00Z");
+        const replacement = fixture.mapLayers.getLeafletLayer(first.entry.key);
+        assert.equal(replacement.wmsParams.env, buildRasterStyleEnvironment(fixture.controlsView.bivariateMode.yStyle));
+        assert.equal(replacement.opacity, 1);
+        paired[1].resolve({...pairedStatistics(), marker: "current"});
+        paired[0].resolve({...pairedStatistics(), marker: "obsolete"});
+        await flushPromises();
+        assert.equal(fixture.controlsView.pairedStatistics.marker, "current");
+        assert.deepEqual(first.state.rasterStyle, range);
+    } finally {fixture.destroy();}
+});
+
+
+test("temporal histogram presentation preserves analysis but excludes Processing actions", async () => {
+    const fixture = temporalFixture({
+        publishRaster: async item => ({layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90]}),
+        loadPairedStatistics: async () => pairedStatistics(),
+    });
+    try {
+        const temporal = await fixture.viewer.showTemporal(temporalItem());
+        await fixture.viewer.show(createRasterItem("ordinary"));
+        await flushPromises();
+        const summaries = fixture.controlsView.layerHistograms;
+        assert.equal(summaries.find(summary => summary.key === temporal.entry.key).canCalculate, false);
+        assert.equal(summaries.find(summary => summary.key !== temporal.entry.key).canCalculate, true);
+        assert.equal(summaries.find(summary => summary.key === temporal.entry.key).state, "ready");
+        fixture.controlsView.handlers.onBivariateModeChange("bivariate");
+        await flushPromises();
+        const {xItem, yItem} = fixture.controlsView.pairedPresentation;
+        assert.equal([xItem, yItem].filter(item => item.capabilities?.calculations === false).length, 1);
+    } finally { fixture.destroy(); }
 });

@@ -4,8 +4,7 @@ from typing import Any
 from urllib.parse import quote
 
 from eolab_app.raster.source_models import (
-    TemporalRasterSelection,
-    TemporalIntervalSelection,
+    TemporalVariableSelection,
 )
 
 import httpx2
@@ -36,9 +35,7 @@ class StacRasterCatalog:
 
     async def get_item(
         self,
-        request: (
-            CatalogRasterRequest | TemporalRasterSelection | TemporalIntervalSelection
-        ),
+        request: CatalogRasterRequest | TemporalVariableSelection,
     ) -> dict[str, Any]:
         """Load and validate the authoritative scanner-owned STAC Item.
 

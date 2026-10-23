@@ -1,7 +1,14 @@
-"""Resolve admitted ERA5 selections using published producer coverage."""
+"""Read ERA5-NCAR archive metadata through the temporal-source contracts.
+
+This adapter knows the downloader's SQLite catalog, monthly Zarr paths and
+quarter-degree global grid. It returns observation locations and available dates
+for the shared temporal reader and Catalog API. Variable names and dates come
+from the archive; another storage layout would need its own admission and adapter.
+"""
 
 import sqlite3
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +22,9 @@ from eolab_app.raster.errors import RasterAssetError, RasterConflictError
 from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
     TemporalRasterSelection,
+    TemporalTimeChoices,
+    TemporalTimeQuery,
+    TemporalVariableSelection,
 )
 from eolab_app.raster.temporal import TemporalObservation
 
@@ -22,31 +32,23 @@ from eolab_app.raster.temporal import TemporalObservation
 MISSING_REFERENCE_TIME: int = -(1 << 63)
 
 
-def get_era5_observations(
-    item: dict[str, Any],
-    selection: TemporalRasterSelection | TemporalIntervalSelection,
-    mount: Path,
-) -> tuple[TemporalObservation, ...]:
-    """Return selected ERA5 observations, their time support and confined arrays.
-
-    Catalog admission establishes this producer's grid, variable metadata and
-    published coverage. Read its actual per-variable coverage to distinguish
-    missing observations from present observations containing NaN cells. The
-    operator keeps the archive unchanged between refresh and calculation.
-    Non-forecast observations retain reference_time=None.
+@contextmanager
+def open_era5_catalog(
+    item: dict[str, Any], selection: TemporalVariableSelection, mount: Path
+) -> Iterator[tuple[Path, sqlite3.Connection]]:
+    """Open the selected variable's producer catalog inside its authorized mount.
 
     Args:
-        item: Authoritative Catalog Item for the requested dataset.
-        selection: Validated variable and observation label or requested period.
-        mount: Source mount enclosing the admitted descriptor and archive.
+        item: Authoritative admitted temporal Catalog Item.
+        selection: Validated dataset identity and variable.
+        mount: Source mount enclosing the descriptor and archive.
 
-    Returns:
-        Observations in increasing label order. Intervals may have gaps or be
-        empty; an exact observation request returns one observation.
+    Yields:
+        Confined archive directory and a read-only SQLite connection.
 
     Raises:
         RasterAssetError: If the variable is unknown or a source escapes its mount.
-        RasterConflictError: If an observation is absent or metadata cannot be read.
+        RasterConflictError: If the descriptor, catalog or returned metadata cannot be read.
     """
     variables = item["properties"]["cube:variables"]
     if selection.variable not in variables:
@@ -76,70 +78,154 @@ def get_era5_observations(
         with closing(
             sqlite3.connect(f"{catalog.as_uri()}?mode=ro", uri=True)
         ) as connection:
-            if isinstance(selection, TemporalRasterSelection):
-                condition = "c.valid_time = ?"
-                parameters = (selection.time.timestamp(),)
-            elif variables[selection.variable]["eolab:time_support"] == "instantaneous":
-                condition = "c.valid_time >= ? AND c.valid_time < ?"
-                parameters = (
-                    selection.start_time.timestamp(),
-                    selection.end_time.timestamp(),
-                )
-            else:
-                condition = "c.interval_start < ? AND c.interval_end > ?"
-                parameters = (
-                    selection.end_time.timestamp(),
-                    selection.start_time.timestamp(),
-                )
-            rows = connection.execute(
-                "SELECT m.year, m.month, c.valid_time, c.reference_time, "
-                "c.interval_start, c.interval_end, c.revision_id "
-                "FROM months m JOIN coverage c ON c.revision_id = m.current_revision_id "
-                f"WHERE c.variable = ? AND {condition} ORDER BY c.valid_time",
-                (selection.variable, *parameters),
-            ).fetchall()
-            indices: dict[str, dict[int, int]] = {}
-            observations: list[TemporalObservation] = []
-            for year, month, time, reference, start, end, revision in rows:
-                if revision not in indices:
-                    labels = connection.execute(
-                        "SELECT DISTINCT valid_time FROM coverage WHERE revision_id = ? ORDER BY valid_time",
-                        (revision,),
-                    ).fetchall()
-                    indices[revision] = {
-                        label: index for index, (label,) in enumerate(labels)
-                    }
-                array_path = (
-                    root / f"{year:04d}/{month:02d}/era5.zarr" / selection.variable
-                ).resolve()
-                if not array_path.is_relative_to(root):
-                    raise RasterAssetError("The selected array is outside its archive.")
-                observations.append(
-                    TemporalObservation(
-                        root=root,
-                        array_path=array_path,
-                        time_index=indices[revision][time],
-                        time=datetime.fromtimestamp(time, timezone.utc),
-                        reference_time=(
-                            None
-                            if reference == MISSING_REFERENCE_TIME
-                            else datetime.fromtimestamp(reference, timezone.utc)
-                        ),
-                        interval_start=datetime.fromtimestamp(start, timezone.utc),
-                        interval_end=datetime.fromtimestamp(end, timezone.utc),
-                        transform=Affine(0.25, 0, -180.125, 0, -0.25, 90.125),
-                        crs=CRS.from_epsg(4326),
-                        nodata=float("nan"),
-                        column_offset=720,
-                        cyclic_x=True,
-                    )
-                )
+            yield root, connection
     except (OSError, sqlite3.Error, yaml.YAMLError, ValueError, OverflowError) as error:
         raise RasterConflictError(
             "The temporal dataset metadata could not be read."
         ) from error
+
+
+def get_era5_observations(
+    item: dict[str, Any],
+    selection: TemporalRasterSelection | TemporalIntervalSelection,
+    mount: Path,
+) -> tuple[TemporalObservation, ...]:
+    """Return selected ERA5 observations, their time support and confined arrays.
+
+    Catalog admission establishes this producer's grid, variable metadata and
+    published coverage. Read its actual per-variable coverage to distinguish
+    missing observations from present observations containing NaN cells. The
+    operator keeps the archive unchanged between refresh and calculation.
+    Non-forecast observations retain reference_time=None.
+
+    Args:
+        item: Authoritative Catalog Item for the requested dataset.
+        selection: Validated variable and observation label or requested period.
+        mount: Source mount enclosing the admitted descriptor and archive.
+
+    Returns:
+        Observations in increasing label order. Intervals may have gaps or be
+        empty; an exact observation request returns one observation.
+
+    Raises:
+        RasterAssetError: If the variable is unknown or a source escapes its mount.
+        RasterConflictError: If an observation is absent or metadata cannot be read.
+    """
+    variables = item["properties"]["cube:variables"]
+    with open_era5_catalog(item, selection, mount) as (root, connection):
+        if isinstance(selection, TemporalRasterSelection):
+            condition = "c.valid_time = ?"
+            parameters = (selection.time.timestamp(),)
+        elif variables[selection.variable]["eolab:time_support"] == "instantaneous":
+            condition = "c.valid_time >= ? AND c.valid_time < ?"
+            parameters = (
+                selection.start_time.timestamp(),
+                selection.end_time.timestamp(),
+            )
+        else:
+            condition = "c.interval_start < ? AND c.interval_end > ?"
+            parameters = (
+                selection.end_time.timestamp(),
+                selection.start_time.timestamp(),
+            )
+        rows = connection.execute(
+            "SELECT m.year, m.month, c.valid_time, c.reference_time, "
+            "c.interval_start, c.interval_end, c.revision_id "
+            "FROM months m JOIN coverage c ON c.revision_id = m.current_revision_id "
+            f"WHERE c.variable = ? AND {condition} ORDER BY c.valid_time",
+            (selection.variable, *parameters),
+        ).fetchall()
+        indices: dict[str, dict[int, int]] = {}
+        observations: list[TemporalObservation] = []
+        for year, month, time, reference, start, end, revision in rows:
+            if revision not in indices:
+                labels = connection.execute(
+                    "SELECT DISTINCT valid_time FROM coverage WHERE revision_id = ? ORDER BY valid_time",
+                    (revision,),
+                ).fetchall()
+                indices[revision] = {
+                    label: index for index, (label,) in enumerate(labels)
+                }
+            array_path = (
+                root / f"{year:04d}/{month:02d}/era5.zarr" / selection.variable
+            ).resolve()
+            if not array_path.is_relative_to(root):
+                raise RasterAssetError("The selected array is outside its archive.")
+            observations.append(
+                TemporalObservation(
+                    root=root,
+                    array_path=array_path,
+                    time_index=indices[revision][time],
+                    time=datetime.fromtimestamp(time, timezone.utc),
+                    reference_time=(
+                        None
+                        if reference == MISSING_REFERENCE_TIME
+                        else datetime.fromtimestamp(reference, timezone.utc)
+                    ),
+                    interval_start=datetime.fromtimestamp(start, timezone.utc),
+                    interval_end=datetime.fromtimestamp(end, timezone.utc),
+                    transform=Affine(0.25, 0, -180.125, 0, -0.25, 90.125),
+                    crs=CRS.from_epsg(4326),
+                    nodata=float("nan"),
+                    column_offset=720,
+                    cyclic_x=True,
+                )
+            )
     if isinstance(selection, TemporalRasterSelection) and not observations:
         raise RasterConflictError(
             "No observation is available for this variable at the selected time."
         )
     return tuple(observations)
+
+
+def get_era5_time_choices(
+    item: dict[str, Any], query: TemporalTimeQuery, mount: Path
+) -> TemporalTimeChoices:
+    """List published months and exact observation labels without opening Zarr.
+
+    Read labels from current producer coverage, including partial months and
+    variable-specific gaps. These are observation labels, not the physical
+    intervals used by accumulated and averaged variables.
+
+    Args:
+        item: Authoritative temporal Catalog Item.
+        query: Variable and optional requested UTC month.
+        mount: Configured source mount enclosing the archive.
+
+    Returns:
+        Available months and ordered labels for the requested or latest month.
+        An explicit unavailable month returns no times without changing month.
+
+    Raises:
+        RasterAssetError: If the variable is unknown or a source escapes its mount.
+        RasterConflictError: If metadata cannot be read or the variable has no observations.
+    """
+    with open_era5_catalog(item, query, mount) as (_, connection):
+        months = tuple(
+            f"{year:04d}-{month:02d}"
+            for year, month in connection.execute(
+                "SELECT m.year, m.month FROM months m WHERE EXISTS ("
+                "SELECT 1 FROM coverage c WHERE c.revision_id = m.current_revision_id "
+                "AND c.variable = ?) ORDER BY m.year, m.month",
+                (query.variable,),
+            )
+        )
+        if not months:
+            raise RasterConflictError(
+                "No observations are available for this variable."
+            )
+        selected_month = query.month if query.month is not None else months[-1]
+        year, month = map(int, selected_month.split("-"))
+        times = tuple(
+            datetime.fromtimestamp(time, timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+            for (time,) in connection.execute(
+                "SELECT c.valid_time FROM months m "
+                "JOIN coverage c ON c.revision_id = m.current_revision_id "
+                "WHERE m.year = ? AND m.month = ? AND c.variable = ? "
+                "ORDER BY c.valid_time",
+                (year, month, query.variable),
+            )
+        )
+    return TemporalTimeChoices(months, selected_month, times)

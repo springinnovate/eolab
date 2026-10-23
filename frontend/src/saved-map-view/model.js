@@ -136,6 +136,9 @@ function validateSavedMapView(candidate) {
             if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared layers require saved-map version two.");
             return validateAnnotationReference(layer);
         }
+        if (Object.hasOwn(layer, "temporalSource") && candidate.schemaVersion !== 3) {
+            throw new SavedMapViewValidationError("Temporal layers require saved-map version three.");
+        }
         if (Object.hasOwn(layer, "uploadId") && candidate.schemaVersion !== 3) {
             throw new SavedMapViewValidationError("Uploaded layers require saved-map version three.");
         }
@@ -143,6 +146,7 @@ function validateSavedMapView(candidate) {
     });
     const identities = new Set();
     for (const layer of layers) {
+        if (layer.temporalSource) continue;
         const key = layer.sharedAnnotation ? `annotation:${layer.sharedAnnotation.id}`
             : layer.uploadId ? `upload:${layer.uploadId}` : JSON.stringify([
             layer.catalogItem.collection,
@@ -197,7 +201,7 @@ function validateAnnotationReference(candidate) {
 }
 
 /**
- * Validate a catalog or private-upload reference and its saved appearance.
+ * Validate a catalog, temporal or private-upload reference and its saved appearance.
  * Upload identifiers locate data; they never grant another browser access.
  *
  * @param {unknown} candidate Untrusted layer value.
@@ -207,12 +211,13 @@ function validateAnnotationReference(candidate) {
 function validateLayer(candidate) {
     requirePlainObject(candidate, "Saved layer");
     const isUpload = Object.hasOwn(candidate, "uploadId");
+    const isTemporal = Object.hasOwn(candidate, "temporalSource");
     requireExactKeys(
         candidate,
-        [isUpload ? "uploadId" : "catalogItem", "visible", "opacity", "style",
+        [isTemporal ? "temporalSource" : isUpload ? "uploadId" : "catalogItem", "visible", "opacity", "style",
             ...(Object.hasOwn(candidate, "legendIncluded") ? ["legendIncluded"] : []),
             ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
-            ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
+            ...(!isTemporal && Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
     );
     let customName;
@@ -226,7 +231,21 @@ function validateLayer(candidate) {
         }
     }
     let identity;
-    if (isUpload) {
+    if (isTemporal) {
+        const source = candidate.temporalSource;
+        requirePlainObject(source, "Temporal source");
+        requireExactKeys(source, ["collectionId", "itemId", "variable", "time"], "Temporal source");
+        if (typeof source.time !== "string" || !/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(source.time) ||
+            !Number.isFinite(Date.parse(source.time))) {
+            throw new SavedMapViewValidationError("Observation time must be a valid timestamp with a timezone.");
+        }
+        identity = { temporalSource: Object.freeze({
+            collectionId: requireBoundedString(source.collectionId, MAX_IDENTITY_LENGTH, "Catalog Collection id"),
+            itemId: requireBoundedString(source.itemId, MAX_IDENTITY_LENGTH, "Catalog Item id"),
+            variable: requireBoundedString(source.variable, MAX_IDENTITY_LENGTH, "Variable"),
+            time: new Date(source.time).toISOString(),
+        }) };
+    } else if (isUpload) {
         if (typeof candidate.uploadId !== "string" ||
             !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(candidate.uploadId)) {
             throw new SavedMapViewValidationError("Uploaded layer identifier is invalid.");
@@ -259,6 +278,9 @@ function validateLayer(candidate) {
     }
     if (isUpload && candidate.style.kind !== "vector") {
         throw new SavedMapViewValidationError("Uploaded layers require a vector style.");
+    }
+    if (isTemporal && candidate.style.kind !== "raster") {
+        throw new SavedMapViewValidationError("Temporal layers require a raster style.");
     }
     validateSavedStyleStructure(candidate.style);
     if (Object.hasOwn(candidate, "filter")) {

@@ -169,7 +169,12 @@ whose mounted source files have disappeared. The source mount remains
 read-only; EOLab stores Catalog metadata and generated GeoServer configuration
 elsewhere.
 
-For an ERA5 NCAR archive, copy the archive with its `catalog.sqlite` and
+Temporal archive ingestion currently supports the ERA5 NCAR downloader's
+SQLite catalog and monthly Zarr layout, rather than arbitrary Zarr stores.
+Variable names and observation dates come from the archive metadata; the
+temporal map controls and raster reader use storage-independent selections.
+
+Copy an ERA5 NCAR archive with its `catalog.sqlite` and
 `YYYY/MM/era5.zarr` stores into the mount. Put this
 [dataset.yaml example](docs/dataset-examples/dataset.yaml) at its root, choose a
 unique `id` and title, then scan. The archive appears as one temporal Catalog
@@ -184,12 +189,15 @@ for `/api/raster-analysis/sources`, `/api/raster-analysis/pixels` or
 `/api/raster-analysis/statistics`; pixels also need `longitude` and `latitude`,
 and statistics accept `selectedBounds`. Paired statistics accept selections in
 `xRaster` and `yRaster`. Choose a variable and UTC time listed in the dataset
-coverage. Browser time controls and temporal model calculations are not yet
+coverage. In the browser, add the temporal Catalog item to the map and choose a
+variable, month and UTC time in its Map layers row. **Add another view** lets you
+compare observations independently. Temporal model calculations are not yet
 enabled. The [API tests](tests/test_temporal_source_access.py) provide runnable
 requests against a small archive.
 
-Raster rendering currently expects prepared, georeferenced, single-band
-GeoTIFFs. EOLab does not rewrite or optimize them during scanning. Mounted
+Rendering mounted rasters expects prepared, georeferenced, single-band GeoTIFFs.
+EOLab does not rewrite or optimize them during scanning. Temporal map views use
+temporary GeoTIFFs created on demand from the selected observations. Mounted
 Shapefiles and spatial GeoPackage layers can be added to the map. Other
 recognized vector containers may be searchable in the Catalog even when they
 are not yet renderable.

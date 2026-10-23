@@ -6,6 +6,9 @@ from typing import Any, Protocol
 from eolab_app.raster.source_models import (
     TemporalRasterSelection,
     TemporalIntervalSelection,
+    TemporalTimeChoices,
+    TemporalTimeQuery,
+    TemporalVariableSelection,
 )
 from eolab_app.raster.temporal import TemporalObservation
 
@@ -20,9 +23,7 @@ class RasterCatalog(Protocol):
 
     async def get_item(
         self,
-        request: (
-            CatalogRasterRequest | TemporalRasterSelection | TemporalIntervalSelection
-        ),
+        request: CatalogRasterRequest | TemporalVariableSelection,
     ) -> dict[str, Any]:
         """Load the authoritative Item matching a validated request.
 
@@ -110,6 +111,23 @@ class RasterSourceResolver(Protocol):
 
         Raises:
             RasterFeatureError: If the selection or archive cannot be read.
+        """
+        ...
+
+    def get_time_choices(
+        self, item: dict[str, Any], query: TemporalTimeQuery
+    ) -> TemporalTimeChoices:
+        """List actual observation labels for an admitted variable and UTC month.
+
+        Args:
+            item: Authoritative temporal Catalog Item.
+            query: Variable and optional requested UTC month.
+
+        Returns:
+            Available months and timestamps within the selected month.
+
+        Raises:
+            RasterFeatureError: If the variable or source metadata is unavailable.
         """
         ...
 

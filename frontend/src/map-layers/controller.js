@@ -1035,6 +1035,18 @@ export class MapLayerController {
     }
 
     /**
+     * Rebuild a retained layer after its owner changes the source or publication.
+     * Keep its row, appearance, visibility and drawing position.
+     * @param {string} key Retained map-layer key.
+     * @return {void}
+     */
+    replaceLayer(key) {
+        const record = this.#requireRecord(key);
+        this.leafletLayers.replace(key, this.#createLayer(record));
+        this.render();
+    }
+
+    /**
      * Build presentation-ready snapshots for the layer-list view.
      *
      * @return {Object[]} Retained layers in top-first order.
