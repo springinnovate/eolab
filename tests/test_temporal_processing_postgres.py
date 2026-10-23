@@ -317,7 +317,7 @@ def test_precipitation_total_publishes_mm_and_preserves_input_units(
     invalid = deepcopy(request)
     invalid["inputs"]["source"]["startTime"] = "2000-01-31T23:30:00Z"
     response = client.post("/api/processing/model-runs", json=invalid, headers=HEADERS)
-    assert response.status_code == 400, response.text
+    assert response.status_code == 422, response.text
     job = submit_period(client, request)
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
