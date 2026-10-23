@@ -203,6 +203,7 @@ def _reduce_ordered_values(
 def _reduce_window(
     interval: ResolvedTemporalInterval,
     reduction: TemporalReduction,
+    conversion_factor: float,
     window: Window,
     column_rotation: int,
     scratch: Path,
@@ -210,8 +211,10 @@ def _reduce_window(
     """Reduce one spatial tile while excluding each observation's missing cells.
 
     Args:
-        interval: Authorized instantaneous observations in increasing label order.
-        reduction: Equal-weight statistic and optional percentile.
+        interval: Authorized observations in increasing label order.
+        reduction: Equal-weight statistic or integrated precipitation total.
+        conversion_factor: Model-configured multiplier after rate times seconds;
+            unused by instantaneous statistics.
         window: Integral native tile in the planned longitude view.
         column_rotation: Source-column shift shared by every observation.
         scratch: Attempt-owned temporary file for exact order statistics.
@@ -237,12 +240,19 @@ def _reduce_window(
     variance_sum = (
         np.zeros(shape, dtype="float64") if reduction.reducer == "stdev" else None
     )
-    for values in _read_observations(interval, window, column_rotation):
+    for observation, values in zip(
+        interval.observations, _read_observations(interval, window, column_rotation)
+    ):
         valid = ~np.ma.getmaskarray(values)
         current = values.data[valid].astype("float64")
         previous_counts = counts[valid]
         counts[valid] += 1
-        if reduction.reducer == "sum":
+        if reduction.reducer == "precipitation_total":
+            seconds = (
+                observation.interval_end - observation.interval_start
+            ).total_seconds()
+            result[valid] += current * seconds * conversion_factor
+        elif reduction.reducer == "sum":
             result[valid] += current
         elif reduction.reducer in {"mean", "stdev"}:
             delta = current - result[valid]
@@ -348,7 +358,7 @@ def create_temporal_map(
     """Write one period-statistic COG, its count COG and observation provenance.
 
     Args:
-        interval: Authorized instantaneous observations kept unchanged during this run.
+        interval: Authorized observations kept unchanged during this run.
         spec: Accepted native-grid plan and path-free source/area choices.
         directory: Private attempt directory owned and cleaned by Processing.
         limits: Existing Processing lifecycle and geometry settings.
@@ -425,6 +435,7 @@ def create_temporal_map(
                         values, counts = _reduce_window(
                             interval,
                             spec.reduction,
+                            spec.conversionFactor,
                             window,
                             grid.columnRotation,
                             directory / "ordered-values.bin",
@@ -479,7 +490,16 @@ def create_temporal_map(
             }
             for item in interval.observations
         ],
-        "weighting": "equal observations",
+        "inputUnit": interval.unit,
+        "availableDurationSeconds": sum(
+            (item.interval_end - item.interval_start).total_seconds()
+            for item in interval.observations
+        ),
+        "weighting": (
+            "interval duration"
+            if spec.reduction.reducer == "precipitation_total"
+            else "equal observations"
+        ),
         "allTouched": False,
         "standardDeviation": "population",
         "percentileMethod": "linear",

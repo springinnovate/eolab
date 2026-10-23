@@ -31,8 +31,8 @@ class TemporalMapNumericalPolicy(BaseModel):
     grid: Literal["native"] = "native"
     resampling: Literal["none"] = "none"
     numericInclusion: Literal["cell_center"] = "cell_center"
-    timeSupport: Literal["instantaneous"] = "instantaneous"
-    weighting: Literal["equal_observation"] = "equal_observation"
+    timeSupport: Literal["instantaneous", "mean_rate"] = "instantaneous"
+    weighting: Literal["equal_observation", "interval_duration"] = "equal_observation"
     nodata: Literal["exclude_source_nodata_and_nonfinite"] = (
         "exclude_source_nodata_and_nonfinite"
     )
@@ -53,7 +53,8 @@ def bind_temporal_map(
     """Capture a recipe's dataset period, statistic and existing analysis area.
 
     Args:
-        inputs: Source, reduction and area checked against the recipe's input types.
+        inputs: Source, reduction and area checked against the recipe's input types,
+            plus the model's validated precipitation conversion.
         parameters: Empty mapping required by this operation's recipe.
         request_id: Submission retry identifier retained by the model-run service.
         label: Run name retained by the model-run service.
@@ -67,6 +68,7 @@ def bind_temporal_map(
     return TemporalMapRequest(
         source=inputs["source"],
         reduction=inputs["reduction"],
+        precipitation=inputs["precipitation"],
         **bind_area_arguments(inputs["area"]),
     )
 
@@ -129,7 +131,10 @@ async def prepare_temporal_map(
     queued: QueuedTemporalMap,
     source: ResolvedTemporalInterval,
 ) -> PreparedJobPlan:
-    """Prepare the selected area and native output grid for instantaneous data.
+    """Prepare a native period map after matching the statistic to source metadata.
+
+    Ordinary statistics retain the source units. Precipitation totals use the
+    model's configured source units, output units and conversion factor.
 
     Args:
         context: Existing worker execution and vector-selection capabilities.
@@ -140,14 +145,27 @@ async def prepare_temporal_map(
         Path-free execution plan with actual observation coverage and output units.
 
     Raises:
-        ProcessingError: If this variable is not instantaneous, no observations
-            overlap, or the selected area cannot be prepared.
+        ProcessingError: If the statistic does not support this variable's units
+            or time support, no observations overlap, or area preparation fails.
     """
-    if source.time_support != "instantaneous":
+    output_unit = source.unit
+    conversion_factor = 1.0
+    precipitation = queued.request.precipitation
+    if queued.request.reduction.reducer == "precipitation_total":
+        if source.time_support != "mean_rate" or source.unit != precipitation.inputUnit:
+            raise ProcessingError(
+                "unsupported_precipitation_source",
+                f"Precipitation total requires mean rates in {precipitation.inputUnit}. "
+                "Choose a precipitation-rate variable with those units.",
+            )
+        output_unit = precipitation.outputUnit
+        conversion_factor = precipitation.factor
+    elif source.time_support != "instantaneous":
         raise ProcessingError(
             "unsupported_time_support",
-            "Period maps currently support instantaneous measurements. "
-            "Rate and accumulated variables require a separate calculation.",
+            "This statistic requires instantaneous measurements. "
+            "Use Precipitation total for mean precipitation rates in "
+            f"{precipitation.inputUnit}.",
         )
     if not source.observations:
         raise ProcessingError(
@@ -192,7 +210,8 @@ async def prepare_temporal_map(
         reduction=request.reduction,
         area=area,
         grid=grid,
-        unit=source.unit,
+        unit=output_unit,
+        conversionFactor=conversion_factor,
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
@@ -264,7 +283,10 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
     Returns:
         Scientific rules retained in the existing Run YAML.
     """
+    total = spec.reduction.reducer == "precipitation_total"
     return TemporalMapNumericalPolicy(
+        timeSupport="mean_rate" if total else "instantaneous",
+        weighting="interval_duration" if total else "equal_observation",
         reduction=spec.reduction,
         unit=spec.unit,
         observationCount=spec.observationCount,

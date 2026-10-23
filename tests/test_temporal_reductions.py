@@ -17,10 +17,13 @@ import zarr
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.polygon_areas import PolygonSummaryInput
 from eolab_app.processing.temporal_models import (
+    PrecipitationConversion,
     TemporalMapArtifact,
+    TemporalMapRequest,
     TemporalMapSpec,
     TemporalReduction,
 )
+from eolab_app.processing.temporal_operation import describe_temporal_policy
 from eolab_app.processing.temporal_reduce import create_temporal_map, plan_temporal_map
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
@@ -78,6 +81,7 @@ def _calculate(
     reduction: TemporalReduction,
     area: AggregateArea,
     directory: Path,
+    conversion: PrecipitationConversion | None = None,
 ) -> tuple[TemporalMapSpec, TemporalMapArtifact]:
     """Plan and execute a real period-map operation in one private attempt.
 
@@ -86,9 +90,15 @@ def _calculate(
         reduction: Requested statistic.
         area: Validated spatial area.
         directory: New attempt output directory.
+        conversion: Model units and factor for an integrated precipitation total.
 
     Returns:
         Native plan and completed artifact metadata.
+
+    Raises:
+        OSError: If source or output files cannot be read or written.
+        ProcessingError: If planning, numerical calculation or output validation fails.
+        ValueError: If native source decoding fails.
     """
     directory.mkdir()
     limits = RasterAggregateLimits()
@@ -98,13 +108,18 @@ def _calculate(
             collectionId="eolab-temporal-datasets",
             itemId="weather",
             variable="temperature",
-            startTime=interval.observations[0].time,
-            endTime=interval.observations[-1].time + timedelta(hours=1),
+            startTime=interval.observations[0].interval_start,
+            endTime=(
+                interval.observations[-1].interval_end
+                if reduction.reducer == "precipitation_total"
+                else interval.observations[-1].time + timedelta(hours=1)
+            ),
         ),
         reduction=reduction,
         area=area,
         grid=grid,
-        unit=interval.unit,
+        unit=conversion.outputUnit if conversion else interval.unit,
+        conversionFactor=conversion.factor if conversion else 1.0,
         observationCount=len(interval.observations),
         firstObservation=interval.observations[0].time,
         lastObservation=interval.observations[-1].time,
@@ -361,3 +376,122 @@ def test_corrupt_native_chunk_fails_and_removes_ordered_scratch(
     assert not (directory / "ordered-values.bin").exists()
     assert not (directory / "result.tif").exists()
     assert not (directory / "count.tif").exists()
+
+
+@pytest.mark.parametrize(
+    "conversion",
+    [
+        PrecipitationConversion(inputUnit="kg m**-2 s**-1", outputUnit="mm", factor=1),
+        PrecipitationConversion(inputUnit="m s**-1", outputUnit="cm", factor=100),
+    ],
+)
+def test_precipitation_total_uses_recorded_durations_and_valid_cells(
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    conversion: PrecipitationConversion,
+) -> None:
+    """Integrate actual interval lengths without filling gaps or discarding zero rates.
+
+    Args:
+        interval: Native values with NaN and explicit NoData on a regional grid.
+        tmp_path: Isolated output directory.
+        conversion: Source units, output units and factor configured by the model.
+    """
+    origin = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    rates = replace(
+        interval,
+        time_support="mean_rate",
+        unit=conversion.inputUnit,
+        observations=tuple(
+            replace(
+                observation,
+                time=origin + timedelta(hours=end),
+                interval_start=origin + timedelta(hours=start),
+                interval_end=origin + timedelta(hours=end),
+            )
+            for observation, (start, end) in zip(
+                interval.observations, ((0, 1), (1, 3), (5, 6))
+            )
+        ),
+    )
+    zarr.open_array(rates.observations[0].array_path, mode="r+")[0, 0, 1] = 0
+    directory = tmp_path / "precipitation"
+    spec, artifact = _calculate(
+        rates,
+        TemporalReduction(reducer="precipitation_total"),
+        AggregateArea(kind="wholeRaster"),
+        directory,
+        conversion,
+    )
+    with (
+        rasterio.open(directory / "result.tif") as total,
+        rasterio.open(directory / "count.tif") as count,
+    ):
+        np.testing.assert_allclose(
+            total.read(1),
+            np.array([[43200, 21600, np.nan, 57600], [np.nan, 28800, 100800, 50400]])
+            * conversion.factor,
+            equal_nan=True,
+        )
+        np.testing.assert_array_equal(count.read(1), [[3, 2, 0, 2], [0, 2, 3, 2]])
+        assert total.units == (conversion.outputUnit,)
+        assert count.units == ("observations",)
+        assert artifact.valid_pixels == 6
+    policy = describe_temporal_policy(spec)
+    assert policy.timeSupport == "mean_rate"
+    assert policy.weighting == "interval_duration"
+    assert policy.unit == conversion.outputUnit
+    provenance = json.loads((directory / "provenance.json").read_text())
+    assert provenance["inputUnit"] == conversion.inputUnit
+    assert provenance["unit"] == conversion.outputUnit
+    assert provenance["conversionFactor"] == conversion.factor
+    assert provenance["availableDurationSeconds"] == 4 * 3600
+    assert provenance["weighting"] == "interval duration"
+    assert [
+        (item["intervalStart"], item["intervalEnd"])
+        for item in provenance["observations"]
+    ] == [
+        (item.interval_start.isoformat(), item.interval_end.isoformat())
+        for item in rates.observations
+    ]
+
+
+def test_precipitation_total_requires_whole_utc_hours_at_request_boundary() -> None:
+    """Reject partial UTC hours without rounding persisted or API inputs silently."""
+    source = {
+        "collectionId": "eolab-temporal-datasets",
+        "itemId": "weather",
+        "variable": "rainfall",
+        "startTime": "2000-01-01T00:00:00Z",
+        "endTime": "2000-01-01T06:00:00Z",
+    }
+    conversion = PrecipitationConversion(
+        inputUnit="kg m**-2 s**-1", outputUnit="mm", factor=1
+    )
+    for name, value in (
+        ("startTime", "2000-01-01T00:30:00Z"),
+        ("endTime", "2000-01-01T06:00:01Z"),
+        ("endTime", "2000-01-01T06:00:00.000001Z"),
+    ):
+        with pytest.raises(ValidationError, match="whole UTC hours"):
+            TemporalMapRequest(
+                source={**source, name: value},
+                reduction={"reducer": "precipitation_total"},
+                precipitation=conversion,
+                wholeRaster=True,
+            )
+    # The boundary is a UTC hour even when its supplied offset has half hours.
+    request = TemporalMapRequest(
+        source={**source, "startTime": "2000-01-01T05:30:00+05:30"},
+        reduction={"reducer": "precipitation_total"},
+        precipitation=conversion,
+        wholeRaster=True,
+    )
+    assert request.source.start_time.astimezone(timezone.utc).hour == 0
+    # Ordinary instantaneous statistics retain arbitrary half-open periods.
+    TemporalMapRequest(
+        source={**source, "startTime": "2000-01-01T00:30:00Z"},
+        reduction={"reducer": "mean"},
+        precipitation=conversion,
+        wholeRaster=True,
+    )

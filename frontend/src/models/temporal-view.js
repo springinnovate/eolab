@@ -1,6 +1,6 @@
 /** Present temporal period and statistic choices inside the existing Models form. */
 import { modelSourceKey } from "./inputs.js";
-import { TEMPORAL_STATISTICS, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
+import { getTemporalStatistics, supportsPrecipitationTotal, snapTemporalHour, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
 
 /** Format an available observation label without using the browser's timezone.
  * @param {string} time Catalog timestamp.
@@ -45,10 +45,15 @@ export class TemporalModelInputsView {
             input.type = "datetime-local"; input.step = "any"; input.required = true;
             input.setAttribute("aria-describedby", "models-temporal-period-help models-temporal-status");
             input.addEventListener("input", () => handlers.onTemporalEdit({[name]: input.value}));
+            for (const event of ["change", "blur"]) input.addEventListener(event, () => {
+                if (!this.precipitation) return;
+                input.value = snapTemporalHour(input.value);
+                handlers.onTemporalEdit({[name]: input.value});
+            });
             this.sourceRoot.append(field(`models-temporal-${name}`, caption, input));
         }
-        const periodHelp = element("p", "These dates define the calculation period. Changing the observation displayed on the map does not change them.", "models-help");
-        periodHelp.id = "models-temporal-period-help";
+        this.periodHelp = element("p", "", "models-help");
+        this.periodHelp.id = "models-temporal-period-help";
         this.status = element("p", "", "models-help"); this.status.id = "models-temporal-status";
         this.status.setAttribute("role", "status");
         this.availability = element("details", "", "models-details");
@@ -59,9 +64,9 @@ export class TemporalModelInputsView {
         this.useMonth = button("Use this month", handlers.onUseTemporalMonth, "models-action");
         this.refresh = button("Refresh dates", handlers.onRefreshTemporal, "models-action");
         const actions = element("div", "", "models-actions"); actions.append(this.useMonth, this.refresh);
-        this.availability.append(field("models-temporal-month", "Browse month", this.month), this.coverage, actions,
-            element("p", "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. Missing observations are omitted from the calculation.", "models-help"));
-        this.sourceRoot.append(periodHelp, this.status, this.availability);
+        this.availabilityHelp = element("p", "", "models-help");
+        this.availability.append(field("models-temporal-month", "Browse month", this.month), this.coverage, actions, this.availabilityHelp);
+        this.sourceRoot.append(this.periodHelp, this.status, this.availability);
         this.reductionRoot = element("div", "", "models-vector");
         this.statistic = element("select");
         this.statistic.addEventListener("change", () => handlers.onEdit({reduction: {...this.reduction, reducer: this.statistic.value}}));
@@ -90,12 +95,23 @@ export class TemporalModelInputsView {
                 temporal.item.properties.title : dataset.label}))], temporal.datasetKey);
         const variables = Object.entries(temporal.item?.properties["cube:variables"] ?? {});
         this.options(this.variable, [{value: "", label: "Choose a variable…"}, ...variables.map(([id, value]) => ({value: id,
-            label: `${value.description} (${value.unit})${value["eolab:time_support"] === "instantaneous" ? "" : " — not supported"}`,
-            disabled: value["eolab:time_support"] !== "instantaneous"}))], temporal.variable);
+            label: `${value.description} (${value.unit})${getTemporalStatistics(value, temporal.precipitation).length ? "" : " — not supported"}`,
+            disabled: !getTemporalStatistics(value, temporal.precipitation).length}))], temporal.variable);
         this.variable.disabled = !temporal.item;
-        this.support.hidden = !variables.some(([, value]) => value["eolab:time_support"] !== "instantaneous");
-        this.support.textContent = "Period maps support instantaneous measurements. Rates and accumulated values are not supported yet.";
-        for (const name of ["startTime", "endTime"]) if (this.document.activeElement !== this[name]) this[name].value = temporal[name];
+        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value, temporal.precipitation).length);
+        this.support.textContent = `Period maps support instantaneous measurements and mean precipitation rates in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
+        const variable = temporal.item?.properties["cube:variables"][temporal.variable];
+        const precipitation = supportsPrecipitationTotal(variable, temporal.precipitation), precisionChanged = precipitation !== this.precipitation;
+        this.precipitation = precipitation;
+        for (const name of ["startTime", "endTime"]) {
+            this[name].step = precipitation ? "3600" : "any";
+            if (precisionChanged || this.document.activeElement !== this[name]) this[name].value = temporal[name];
+        }
+        this.periodHelp.textContent = precipitation ?
+            "Total precipitation between these dates. Dates round to the nearest whole UTC hour when you finish editing; 30 minutes rounds forward. The calculation uses the dates shown." :
+            "These dates define the calculation period. Changing the observation displayed on the map does not change them.";
+        this.availabilityHelp.textContent = "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
+            (precipitation ? "These are observation labels, not the boundaries of the intervals they represent. Missing intervals are omitted from the total." : "Missing observations are omitted from the calculation.");
         const selectionError = temporalSelectionError(temporal);
         this.status.textContent = selectionError; this.status.hidden = !selectionError;
         this.sourceRoot.setAttribute("aria-busy", String(temporal.loading));
@@ -108,7 +124,7 @@ export class TemporalModelInputsView {
         this.coverage.textContent = temporal.loading ? "Loading available observations…" : temporal.datesError ? temporal.datesError : !choices ? "Choose a variable to see available observations." :
             choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${choices.month}. First: ${observationLabel(choices.times[0])}. Last: ${observationLabel(choices.times.at(-1))}.` :
                 "No observations are available in this month. Choose another month or enter a different period.";
-        this.options(this.statistic, TEMPORAL_STATISTICS, reduction.reducer);
+        this.options(this.statistic, getTemporalStatistics(variable, temporal.precipitation), reduction.reducer);
         this.percentileField.hidden = reduction.reducer !== "percentile";
         this.percentile.disabled = reduction.reducer !== "percentile";
         if (this.document.activeElement !== this.percentile) this.percentile.value = reduction.percentile ?? "";
@@ -118,8 +134,10 @@ export class TemporalModelInputsView {
         const convention = reduction.reducer === "stdev" ? " Standard deviation uses the population formula." :
             reduction.reducer === "percentile" || reduction.reducer === "median" ? " Percentiles use linear interpolation between ordered values." :
                 reduction.reducer === "sum" ? " The sum adds observations without multiplying by elapsed time." : "";
-        const unit = temporal.item?.properties["cube:variables"][temporal.variable]?.unit;
-        this.reductionHelp.textContent = `Each valid observation has equal weight; missing values are omitted.${unit ? ` Result units: ${unit}.` : ""}${convention} A second map counts valid observations at each pixel.`;
+        const unit = variable?.unit;
+        this.reductionHelp.textContent = precipitation ?
+            `Each precipitation rate in ${temporal.precipitation.inputUnit} is multiplied by its interval duration in seconds and converted to ${temporal.precipitation.outputUnit}. Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel.` :
+            `Each valid observation has equal weight; missing values are omitted.${unit ? ` Result units: ${unit}.` : ""}${convention} A second map counts valid observations at each pixel.`;
         return selectionError || reductionError;
     }
 }

@@ -18,6 +18,7 @@ import zarr
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.service import ProcessingService
@@ -295,3 +296,138 @@ def test_period_map_rejects_rate_variables_without_publishing(
     assert "instantaneous" in failed["error"]["detail"].lower()
     assert failed["result"] is None
     assert failed["artifacts"]["files"] == []
+
+
+@pytest.mark.parametrize(
+    "conversion",
+    [None, {"inputUnit": "m s**-1", "outputUnit": "cm", "factor": 100.0}],
+)
+def test_precipitation_total_uses_model_conversion_and_preserves_input_units(
+    temporal_boundary: TemporalBoundary,
+    store: PostgresJobStore,
+    conversion: dict[str, Any] | None,
+) -> None:
+    """Publish totals using the recipe's conversion, preserving gaps and validity.
+
+    Args:
+        temporal_boundary: Real temporal source, HTTP service and native worker.
+        store: Disposable PostgreSQL lifecycle storage.
+        conversion: Alternate model conversion, or None for the installed recipe.
+    """
+    client, worker, service, archive, scanner = temporal_boundary
+    definition = service.model_registry.get("temporal-period-map", "1.0.0")
+    if conversion is not None:
+        document = definition.to_document()
+        document["steps"][0]["inputs"]["precipitation"]["value"] = conversion
+        definition = ModelDefinition.model_validate(document)
+        service.model_registry = ModelRegistry((definition,))
+        for month in ("01", "02"):
+            zarr.open_array(
+                archive / f"2000/{month}/era5.zarr" / PRECIPITATION, mode="r+"
+            ).attrs["units"] = conversion["inputUnit"]
+        assert client.portal.call(scan, scanner)["errors"] == []
+    configured = definition.to_document()["steps"][0]["inputs"]["precipitation"][
+        "value"
+    ]
+    array = zarr.open_array(archive / "2000/02/era5.zarr" / PRECIPITATION, mode="r+")
+    array[0, 360, 0] = 0
+    array[2, 360, 0] = numpy.nan
+    array[:, 360, 1] = numpy.nan
+    request = period_request(client, PRECIPITATION)
+    request["inputs"]["source"]["startTime"] = "2000-01-31T23:00:00Z"
+    request["inputs"]["reduction"] = {"reducer": "precipitation_total"}
+    invalid = deepcopy(request)
+    invalid["inputs"]["source"]["startTime"] = "2000-01-31T23:30:00Z"
+    response = client.post("/api/processing/model-runs", json=invalid, headers=HEADERS)
+    assert response.status_code == 422, response.text
+    job = submit_period(client, request)
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    assert ready["result"]["temporalCoverage"] == {
+        "unit": configured["outputUnit"],
+        "observationCount": 2,
+        "firstObservation": "2000-02-01T00:00:00Z",
+        "lastObservation": "2000-02-01T02:00:00Z",
+    }
+    rasters = {
+        item["name"]: item
+        for item in ready["artifacts"]["files"]
+        if item["mediaType"] == "image/tiff"
+    }
+    assert set(rasters) == {"raster", "count"}
+    for name, expected, unit in (
+        (
+            "raster",
+            [8 * 3600 * configured["factor"], 0, numpy.nan],
+            configured["outputUnit"],
+        ),
+        ("count", [2, 1, 0], "observations"),
+    ):
+        with (
+            MemoryFile(client.get(rasters[name]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            samples = [
+                value[0] for value in raster.sample([(-0.25, 0), (0, 0), (0.25, 0)])
+            ]
+            numpy.testing.assert_allclose(samples, expected, equal_nan=True)
+            assert raster.units == (unit,)
+    exported = parse_yaml(
+        client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
+    )
+    assert exported["invocation"]["inputs"] == request["inputs"]
+    assert (
+        exported["invocation"]["model"]["definition"]["steps"][0]["inputs"][
+            "precipitation"
+        ]["value"]
+        == configured
+    )
+    assert exported["execution"]["sources"]["source"]["unit"] == configured["inputUnit"]
+    policy = exported["execution"]["numericalPolicy"]
+    assert policy["timeSupport"] == "mean_rate"
+    assert policy["weighting"] == "interval_duration"
+    assert policy["unit"] == configured["outputUnit"]
+    provenance = client.get(ready["result"]["provenanceUrl"]).json()
+    assert provenance["inputUnit"] == configured["inputUnit"]
+    assert provenance["unit"] == configured["outputUnit"]
+    assert provenance["conversionFactor"] == configured["factor"]
+    assert provenance["availableDurationSeconds"] == 7200
+    assert [item["time"] for item in provenance["observations"]] == [
+        "2000-02-01T00:00:00+00:00",
+        "2000-02-01T02:00:00+00:00",
+    ]
+
+
+@pytest.mark.parametrize(
+    "variable,unit", [(TEMPERATURE, None), (PRECIPITATION, "m s**-1")]
+)
+def test_precipitation_total_rejects_unsupported_source_metadata(
+    temporal_boundary: TemporalBoundary,
+    store: PostgresJobStore,
+    variable: str,
+    unit: str | None,
+) -> None:
+    """Require a mean rate in the supported units before creating output files.
+
+    Args:
+        temporal_boundary: Real source metadata, HTTP and native worker.
+        store: Disposable PostgreSQL lifecycle storage.
+        variable: Instantaneous or rate source to submit as precipitation.
+        unit: Unsupported units to publish before admission, when supplied.
+    """
+    client, worker, _, archive, scanner = temporal_boundary
+    if unit is not None:
+        for month in ("01", "02"):
+            zarr.open_array(
+                archive / f"2000/{month}/era5.zarr" / variable, mode="r+"
+            ).attrs["units"] = unit
+        assert client.portal.call(scan, scanner)["errors"] == []
+    request = period_request(client, variable)
+    request["inputs"]["reduction"] = {"reducer": "precipitation_total"}
+    job = submit_period(client, request)
+    assert client.portal.call(worker.run_once)
+    failed = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert failed["status"] == "failed", failed
+    assert failed["error"]["code"] == "unsupported_precipitation_source"
+    assert failed["result"] is None and failed["artifacts"]["files"] == []

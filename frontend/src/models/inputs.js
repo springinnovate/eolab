@@ -116,7 +116,7 @@ export function createModelDraft(model, context, id) {
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
         maskRaster: null,
-        temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? []) : null,
+        temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], model.steps[0].inputs.precipitation.value) : null,
         reduction: modelHasInput(model, "temporal_reduction") ? {reducer: "mean", percentile: 90} : null,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };

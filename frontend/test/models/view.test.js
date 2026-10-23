@@ -475,7 +475,9 @@ function temporalFixture() {
         observations: {type: "temporal_interval", label: "Dataset and period"},
         region: {type: "summary_area", label: "Analysis area"},
         statistic: {type: "temporal_reduction", label: "Period statistic"},
-    }};
+    }, steps: [{id: "calculate", operation: "another.period-implementation.v2", inputs: {
+        precipitation: {value: {inputUnit: "kg m**-2 s**-1", outputUnit: "mm", factor: 1}},
+    }}]};
     const dataset = {collectionId: "eolab-temporal-datasets", itemId: "vegetation", label: "Vegetation observations"};
     const draft = createModelDraft(recipe, {temporalDatasets: [dataset], area}, "temporal-draft");
     Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "vegetation_index",
@@ -506,7 +508,7 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
     assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
     assert.equal(controls.variable.children[2].disabled, true);
-    assert.match(controls.support.textContent, /Rates and accumulated values are not supported/);
+    assert.match(controls.support.textContent, /Other rates and accumulated values are not supported/);
     assert.equal(Boolean(controls.availability.open), false);
     assert.match(controls.coverage.textContent, /^3 observations in 2020-01/);
     assert.match(controls.coverage.textContent, /UTC/);
@@ -561,6 +563,31 @@ test("temporal validation and statistic settings remain local to the relevant co
     assert.equal(h.view.setup.run.disabled, false);
     h.draft.temporal.error = "The selected dataset is no longer in Map layers."; h.view.render(h.state);
     assert.match(controls.status.textContent, /no longer in Map layers/); assert.equal(h.view.setup.run.disabled, true);
+});
+
+test("precipitation controls explain duration totals and round changed dates visibly across calendar boundaries", () => {
+    const h = temporalFixture(), controls = h.controls;
+    h.draft.temporal.item.properties["cube:variables"].precipitation.unit = "kg m**-2 s**-1";
+    h.draft.temporal.variable = "precipitation"; h.draft.reduction.reducer = "precipitation_total";
+    h.view.render(h.state);
+    assert.equal(controls.variable.children[2].disabled, false);
+    assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (mm)"]);
+    assert.equal(controls.startTime.step, "3600"); assert.equal(controls.endTime.step, "3600");
+    assert.match(controls.periodHelp.textContent, /30 minutes rounds forward/);
+    assert.match(controls.availabilityHelp.textContent, /observation labels, not the boundaries/);
+    assert.match(controls.reductionHelp.textContent, /interval duration in seconds/);
+    assert.match(controls.reductionHelp.textContent, /converted to mm/);
+    assert.match(controls.reductionHelp.textContent, /omitted, not filled with zero/);
+    assert.match(controls.reductionHelp.textContent, /counts valid available observations/);
+    controls.endTime.focus(); controls.endTime.value = "2020-02-29T23:30";
+    controls.endTime.dispatchEvent(new Event("change"));
+    assert.equal(controls.endTime.value, "2020-03-01T00:00");
+    assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {endTime: "2020-03-01T00:00"}]);
+    controls.startTime.focus(); controls.startTime.value = "2019-12-31T23:29:59.999";
+    controls.startTime.dispatchEvent(new Event("blur"));
+    assert.equal(controls.startTime.value, "2019-12-31T23:00");
+    assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2019-12-31T23:00"}]);
+    assert.equal(h.actions.some(([action]) => action === "Submit"), false);
 });
 
 test("saved temporal run inputs describe the captured interval and statistic independently of map changes", () => {

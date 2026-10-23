@@ -55,7 +55,6 @@ from eolab_app.processing.artifact_manifest import (
 )
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.raster.temporal import ResolvedTemporalInterval
-from eolab_app.raster.source_models import TemporalIntervalSelection
 
 
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
@@ -526,8 +525,6 @@ def record_model_preparation(
         }
     )
     execution["sources"][raster_name]["grid"] = spec.grid.model_dump(mode="json")
-    if isinstance(operation.source(spec), TemporalIntervalSelection):
-        execution["sources"][raster_name]["unit"] = spec.unit
     export_yaml(metadata, run=True)
     return replace(
         prepared,
