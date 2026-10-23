@@ -6,7 +6,15 @@ import { calculationValue } from "../processing/calculation-result-view.js";
 const RESULT_STATES = {no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
     invalid_arithmetic: "The expression has no defined numeric result.", overflow: "The result exceeded the supported numeric range."};
 
-/** Build a raster file card from validated output metadata.
+/** Format an observation's saved timestamp with an explicit UTC timezone.
+ * @param {string} timestamp Validated ISO observation timestamp.
+ * @return {string} UTC date and time for the completed run.
+ */
+function formatObservationTime(timestamp) {
+    return new Date(timestamp).toISOString().replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
+}
+
+/** Build a raster file card and its saved temporal coverage, when applicable.
  * @param {Object} result Raster output.
  * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
  * @return {HTMLElement[]} Result cards.
@@ -17,6 +25,15 @@ function rasterCards(result, element) {
     card.append(element("strong", result.label), filename,
         element("span", `${result.grid.width.toLocaleString()} × ${result.grid.height.toLocaleString()} pixels · ${result.validPixels.toLocaleString()} valid pixels`),
         element("span", `${formatDownloadBytes(result.bytes)} · GeoTIFF`));
+    if (result.temporalCoverage !== undefined) {
+        const coverage = result.temporalCoverage;
+        card.append(
+            element("span", `Units: ${coverage.unit}`),
+            element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
+            element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
+            element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
+            element("p", "Missing values are excluded at each pixel. The count map shows how many valid observations contributed there.", "models-help"));
+    }
     return [card];
 }
 

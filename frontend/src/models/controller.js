@@ -14,6 +14,8 @@ export class ModelsController {
      * @param {Object} dependencies.jobs Existing shared Processing job observer.
      * @param {Object} dependencies.view Models view.
      * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
+     * @param {(identity:{collectionId:string,itemId:string})=>Promise<Object>} dependencies.getTemporalItem Read the selected dataset's current Catalog metadata.
+     * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
      * @param {()=>void} dependencies.closeVectorFilter Close the composed inline editor.
@@ -29,11 +31,12 @@ export class ModelsController {
      * @param {Object} [dependencies.clock=globalThis] Timeout scheduler for deletion notices.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getTemporalItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
+        Object.assign(this, {getTemporalItem, loadTemporalTimes});
         this.outputState = outputState;
         this.onRunChange = onRunChange;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
@@ -41,12 +44,20 @@ export class ModelsController {
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
-        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0;
+        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0; this.temporalRevision = 0;
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
+            onTemporalDataset: key => void this.chooseTemporalDataset(key),
+            onTemporalVariable: variable => void this.chooseTemporalVariable(variable),
+            onTemporalMonth: month => void this.loadTemporalDates(month),
+            onRefreshTemporal: () => void this.loadTemporalDates(undefined, true),
+            onUseTemporalMonth: () => this.useTemporalMonth(),
+            onTemporalEdit: change => {
+                Object.assign(this.state.draft.temporal, change); this.editDraft({});
+            },
             onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
@@ -104,7 +115,7 @@ export class ModelsController {
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
                 Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source"].includes(input.type)));
+                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction"].includes(input.type)));
         }
         catch (error) { this.state.error = `Model library unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -123,9 +134,11 @@ export class ModelsController {
     chooseModel(model) {
         this.closeVectorFilter();
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
+        this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
+        if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
         if (draft.area?.kind === "catalogSelection") {
             const key = modelSourceKey(draft.area.selection);
             draft.areaMode = "vector";
@@ -145,6 +158,87 @@ export class ModelsController {
         for (const job of this.runSnapshots.values()) this.rememberRun(job);
         this.jobs.schedule();
         this.state.error = ""; this.render();
+    }
+
+    /** Load a chosen dataset without inheriting the map's displayed variable or date.
+     * @param {string} key Dataset choice identity, or empty to clear it.
+     * @return {Promise<void>} Completion after Catalog metadata is available or its error is displayed.
+     */
+    async chooseTemporalDataset(key) {
+        const temporal = this.state.draft?.temporal;
+        if (!temporal || this.state.submitting) return;
+        this.temporalAbort?.abort(); this.temporalRevision += 1;
+        Object.assign(temporal, {datasetKey: key, item: null, variable: "", choices: null, loading: false, error: "", datesError: ""});
+        this.state.error = ""; this.render();
+        if (key) await this.loadTemporalDates(undefined, true);
+    }
+
+    /** Load date guidance for a variable while preserving the user's period boundaries.
+     * @param {string} variable Catalog variable identifier from the setup control.
+     * @return {Promise<void>} Completion after monthly guidance or a visible discovery error.
+     */
+    async chooseTemporalVariable(variable) {
+        const temporal = this.state.draft?.temporal;
+        if (!temporal || this.state.submitting) return;
+        Object.assign(temporal, {variable, choices: null, error: "", datesError: ""});
+        await this.loadTemporalDates();
+    }
+
+    /** Read one month's actual dates, optionally reloading the current Catalog metadata.
+     * This guidance does not preflight the requested interval or submit a calculation.
+     * Refresh preserves the chosen variable and period, including removed choices that
+     * need the user's attention. Superseded replies cannot change a later draft.
+     * @param {string} [month] UTC month to inspect; omission asks for the latest available month.
+     * @param {boolean} [reloadItem=false] Whether to reload Catalog metadata before reading dates.
+     * @return {Promise<void>} Completion after the guidance or read error is shown.
+     */
+    async loadTemporalDates(month, reloadItem = false) {
+        const draft = this.state.draft, temporal = draft?.temporal;
+        if (!temporal?.datasetKey || this.state.submitting) return;
+        const source = temporal.datasets.find(value => modelSourceKey(value) === temporal.datasetKey);
+        this.temporalAbort?.abort(); const revision = ++this.temporalRevision;
+        const abort = new AbortController(); this.temporalAbort = abort;
+        const isCurrent = () => !this.destroyed && this.state.draft === draft && this.temporalRevision === revision;
+        temporal.loading = true; temporal.error = ""; temporal.datesError = ""; this.render();
+        try {
+            if (reloadItem) {
+                const item = await this.getTemporalItem(source);
+                if (!isCurrent()) return;
+                temporal.item = item;
+                if (!temporal.variable) {
+                    const variables = Object.entries(item.properties["cube:variables"])
+                        .filter(([, value]) => value["eolab:time_support"] === "instantaneous");
+                    if (variables.length === 1) temporal.variable = variables[0][0];
+                }
+            }
+            const variable = temporal.item.properties["cube:variables"][temporal.variable];
+            if (!variable || variable["eolab:time_support"] !== "instantaneous") { temporal.choices = null; return; }
+            try {
+                const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
+                if (isCurrent()) temporal.choices = choices;
+            } catch (error) {
+                if (isCurrent() && !abort.signal.aborted) {
+                    temporal.choices = null;
+                    temporal.datesError = `Available dates could not be loaded: ${error.message} You can still enter a period.`;
+                }
+            }
+        } catch (error) {
+            if (isCurrent()) temporal.error = `Dataset could not be loaded: ${error.message} Refresh to try again.`;
+        } finally { if (isCurrent()) { temporal.loading = false; this.render(); } }
+    }
+
+    /** Replace the period only after the user explicitly chooses the displayed month.
+     * Missing dates within that calendar month remain valid; the calculation uses
+     * available observations and publishes each pixel's valid-observation count.
+     * @return {void}
+     */
+    useTemporalMonth() {
+        const temporal = this.state.draft?.temporal;
+        if (!temporal?.choices || this.state.submitting) return;
+        const startTime = `${temporal.choices.month}-01T00:00`;
+        const end = new Date(`${startTime}Z`); end.setUTCMonth(end.getUTCMonth() + 1);
+        Object.assign(temporal, {startTime, endTime: end.toISOString().slice(0, 16)});
+        this.editDraft({});
     }
 
     /** Choose whether setup uses the live map area, vector features or a fixed area.
@@ -313,6 +407,14 @@ export class ModelsController {
         const draft = this.state.draft;
         if (!draft || this.destroyed || this.state.submitting || this.state.pending) return;
         const context = this.inputContext(draft.model);
+        if (draft.temporal) {
+            draft.temporal.datasets = structuredClone(context.temporalDatasets ?? []);
+            if (draft.temporal.datasetKey && !draft.temporal.datasets.some(source => modelSourceKey(source) === draft.temporal.datasetKey)) {
+                this.temporalAbort?.abort(); this.temporalRevision += 1;
+                Object.assign(draft.temporal, {datasetKey: "", item: null, choices: null, loading: false,
+                    error: "Add the temporal dataset to Map layers, or choose another dataset."});
+            }
+        }
         draft.sources = structuredClone(context.rasters ?? []);
         const selected = draft.raster;
         draft.raster = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
@@ -613,6 +715,7 @@ export class ModelsController {
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This exact model version is no longer installed. Its YAML remains available until metadata expires."; this.render(); return; }
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
+        this.temporalAbort?.abort(); this.temporalRevision += 1;
         const draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
@@ -622,6 +725,12 @@ export class ModelsController {
                 draft.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ?? {...value, label: value.itemId};
                 if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = value.kind === "runArtifact" ? {...value, label: "Raster from original run", available: false} : null;
                 draft.sourceReason = "Copied from the original run; choose another raster to change it.";
+            } else if (input.type === "temporal_interval") {
+                const value = saved.inputs[name];
+                Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,
+                    startTime: new Date(value.startTime).toISOString().slice(0, -1), endTime: new Date(value.endTime).toISOString().slice(0, -1)});
+            } else if (input.type === "temporal_reduction") {
+                draft.reduction = {...draft.reduction, ...saved.inputs[name]};
             } else if (input.type === "mask_source" && saved.inputs[name].kind === "catalogRaster") {
                 draft.area = null; draft.areaMode = "raster";
                 draft.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(saved.inputs[name].source)) ?? null;
@@ -643,6 +752,7 @@ export class ModelsController {
         }
         this.refreshMapLayers();
         this.render(); this.view.focusHeading();
+        if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);
     }
 
     /** Show the reusable YAML for the current draft or accepted run.
@@ -673,6 +783,7 @@ export class ModelsController {
     destroy() {
         this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.selectionRevision += 1; this.selectionAbort?.abort();
+        this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.clock.clearTimeout(this.deletionTimer);
         this.unsubscribe(); for (const id of this.tracked) this.jobs.tracked.delete(id); this.view.destroy();
     }

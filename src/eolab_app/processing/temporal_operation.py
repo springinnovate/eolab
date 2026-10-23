@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -274,20 +274,34 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
 
 
 def describe_temporal_result(
-    summary: dict[str, Any], artifact: dict[str, Any]
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
+    numerical_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Describe the completed period map using the ordinary raster result contract.
+    """Describe a completed period map and its recorded observation coverage.
 
     Args:
         summary: Prepared native grid retained by the model-run service.
         artifact: Published operation file metadata.
+        numerical_policy: Recorded calculation settings. Period-map metadata
+            remains available for the same lifetime as its completed result.
 
     Returns:
         Raster result fields used by the existing result cards and map actions.
     """
+    policy = cast(dict[str, Any], numerical_policy)
     return {
         "grid": summary["grid"],
         "validPixels": artifact["valid_pixels"],
+        "temporalCoverage": {
+            name: policy[name]
+            for name in (
+                "unit",
+                "observationCount",
+                "firstObservation",
+                "lastObservation",
+            )
+        },
     }
 
 

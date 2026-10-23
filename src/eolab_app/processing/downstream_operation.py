@@ -287,13 +287,16 @@ def describe_downstream_policy(
 
 
 def describe_downstream_result(
-    summary: dict[str, Any], artifact: dict[str, Any]
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
+    numerical_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Expose completed downstream summary rows through the shared statistics contract.
 
     Args:
         summary: Captured operation metadata.
         artifact: Published primary statistics file and numerical rows.
+        numerical_policy: Recorded calculation settings, or None after metadata expiry.
 
     Returns:
         Scalar rows; every run performs its own calculation.

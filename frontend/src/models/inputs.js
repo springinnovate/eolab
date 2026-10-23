@@ -1,5 +1,6 @@
 /** Build model drafts from available source identities and explicit analysis areas. */
 import { normalizeCalculationArea } from "../processing/calculation-area.js";
+import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } from "./temporal-inputs.js";
 
 /** Check whether a model declares an input of the requested type.
  * @param {Object} model Installed recipe.
@@ -98,12 +99,13 @@ export function createModelDraft(model, context, id) {
     const visibleCatalogRasters = catalogRasters.filter(source => source.visible);
     const suggestedRaster = visibleCatalogRasters.length === 1 ? visibleCatalogRasters[0] : catalogRasters.length === 1 ? catalogRasters[0] : null;
     const usesStartingMask = modelHasInput(model, "mask_source");
+    const usesTemporal = modelHasInput(model, "temporal_interval");
     let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
     let selectionError = "";
     if (usesStartingMask) {
         area = null; areaMode = "vector";
-    } else if (!modelSupportsArea(model, area)) {
+    } else if (!modelSupportsArea(model, area) || usesTemporal && !context.area) {
         areaMode = "viewport"; area = null;
         try { area = modelViewportArea(context.viewportBounds); }
         catch (error) { selectionError = error.message; }
@@ -114,6 +116,8 @@ export function createModelDraft(model, context, id) {
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
         maskRaster: null,
+        temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? []) : null,
+        reduction: modelHasInput(model, "temporal_reduction") ? {reducer: "mean", percentile: 90} : null,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };
 }
@@ -127,10 +131,12 @@ export function createModelDraft(model, context, id) {
  */
 export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new Date().getTimezoneOffset()) {
     if (!draft.label.trim() || [...draft.label.trim()].length > 80) throw new Error("Name this run using 1–80 characters.");
-    if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
-        throw new Error("Choose a raster from Map layers or a completed run.");
-    if (draft.raster.available === false || draft.raster.kind === "runArtifact" && Date.parse(draft.raster.expiresAt) <= Date.now())
-        throw new Error("This raster result is no longer available. Choose another input.");
+    if (modelHasInput(draft.model, "raster") || modelHasInput(draft.model, "catalog_raster")) {
+        if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
+            throw new Error("Choose a raster from Map layers or a completed run.");
+        if (draft.raster.available === false || draft.raster.kind === "runArtifact" && Date.parse(draft.raster.expiresAt) <= Date.now())
+            throw new Error("This raster result is no longer available. Choose another input.");
+    }
     if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
         throw new Error("Add the selected vector layer to Map layers before running this model.");
     if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
@@ -147,6 +153,8 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
         if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = draft.raster.kind === "runArtifact" ?
             {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
+        else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal);
+        else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
         else if (input.type === "mask_source") inputs[name] = draft.areaMode === "raster" ?
             {kind: "catalogRaster", source: {collectionId: draft.maskRaster.collectionId, itemId: draft.maskRaster.itemId}} : structuredClone(draft.area);

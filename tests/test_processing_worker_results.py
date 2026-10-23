@@ -297,6 +297,7 @@ def test_model_worker_executes_native_results_and_exports_yaml(
                 output.read(1)[mask], values[y : y + height, x : x + width][mask]
             )
         assert document.execution.outcome.raster.sha256 == artifact.sha256
+        assert "temporalCoverage" not in response.model_dump(mode="json")["result"]
         ready["retained_metadata"] = None
         assert (
             ModelJobResponse.model_validate(serialize_processing_job(ready)).result.kind

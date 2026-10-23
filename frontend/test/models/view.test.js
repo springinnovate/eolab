@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ModelsView, describeModelProgress } from "../../src/models/view.js";
-import { createModelDraft } from "../../src/models/inputs.js";
+import { createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
 
@@ -11,7 +11,7 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete"]
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
         .map(name => [`on${name}`, value => actions.push([name, value])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
@@ -463,4 +463,121 @@ test("result cards use captured YAML labels for unfamiliar models", () => {
         const first = h.view.run.result.children[0];
         assert.equal(output.kind === "raster" ? first.children[0].textContent : first.textContent, "Habitat output <script>");
     }
+});
+
+
+/** Render a temporal recipe with real draft construction and admitted Catalog metadata.
+ * @return {Object} Existing view harness with a complete period independent of map imagery.
+ */
+function temporalFixture() {
+    const h = fixture();
+    const recipe = {...model, id: "vegetation-period", title: "Vegetation over a period", parameters: {}, inputs: {
+        observations: {type: "temporal_interval", label: "Dataset and period"},
+        region: {type: "summary_area", label: "Analysis area"},
+        statistic: {type: "temporal_reduction", label: "Period statistic"},
+    }};
+    const dataset = {collectionId: "eolab-temporal-datasets", itemId: "vegetation", label: "Vegetation observations"};
+    const draft = createModelDraft(recipe, {temporalDatasets: [dataset], area}, "temporal-draft");
+    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "vegetation_index",
+        startTime: "2020-01-01T00:00", endTime: "2020-02-01T00:00",
+        item: {collection: dataset.collectionId, id: dataset.itemId, properties: {title: "Vegetation observations", "cube:variables": {
+            vegetation_index: {description: "Vegetation index", unit: "1", "eolab:time_support": "instantaneous"},
+            precipitation: {description: "Precipitation rate", unit: "kg m-2 s-1", "eolab:time_support": "mean_rate"},
+        }}}, choices: {months: ["2020-01", "2020-02"], month: "2020-01",
+            times: ["2020-01-01T04:30:00.000Z", "2020-01-02T09:15:00.000Z", "2020-01-04T16:45:00.000Z"]}});
+    h.state.draft = draft; h.view.render(h.state);
+    return {...h, draft, controls: h.view.setup.temporal};
+}
+
+test("temporal recipes show UTC period fields and reuse area choices without an ordinary raster", () => {
+    const h = temporalFixture(), controls = h.controls;
+    assert.equal(h.view.setup.form.contains(h.view.setup.source), false);
+    assert.equal(h.view.setup.resultActions.hidden, true);
+    assert.equal(h.view.setup.run.textContent, "Run analysis");
+    assert.equal(h.view.setup.run.disabled, false);
+    assert.deepEqual(h.view.setup.areaMode.children.map(option => option.textContent),
+        ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
+    assert.match(h.view.setup.mapHelp.textContent, /Run analysis/);
+    assert.equal(controls.startTime.type, "datetime-local"); assert.equal(controls.startTime.step, "any");
+    assert.equal(controls.endTime.type, "datetime-local"); assert.equal(controls.endTime.step, "any");
+    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC, included)");
+    assert.equal(controls.endTime.parentNode.textContent, "End (UTC, excluded)");
+    assert.equal(controls.statistic.parentNode.textContent, "Period statistic");
+    assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
+    assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
+    assert.equal(controls.variable.children[2].disabled, true);
+    assert.match(controls.support.textContent, /Rates and accumulated values are not supported/);
+    assert.equal(Boolean(controls.availability.open), false);
+    assert.match(controls.coverage.textContent, /^3 observations in 2020-01/);
+    assert.match(controls.coverage.textContent, /UTC/);
+    assert.match(controls.reductionHelp.textContent, /Result units: 1/);
+    assert.match(controls.reductionHelp.textContent, /second map counts valid observations/);
+    assert.equal(controls.percentileField.hidden, true); assert.equal(controls.percentile.disabled, true);
+});
+
+test("temporal edits and availability actions preserve focused dates and never submit a run", () => {
+    const h = temporalFixture(), controls = h.controls;
+    controls.availability.open = true;
+    controls.startTime.focus(); controls.startTime.value = "2020-01-01T03:27:41.250";
+    controls.startTime.dispatchEvent(new Event("input"));
+    assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2020-01-01T03:27:41.250"}]);
+    h.draft.temporal.loading = true; h.view.render(h.state);
+    assert.equal(h.view.setup.temporal, controls); assert.equal(h.doc.activeElement, controls.startTime);
+    assert.equal(controls.startTime.value, "2020-01-01T03:27:41.250");
+    assert.equal(controls.availability.open, true); assert.equal(controls.refresh.disabled, true);
+    assert.equal(controls.sourceRoot.getAttribute("aria-busy"), "true");
+    h.draft.temporal.loading = false; h.view.render(h.state);
+    controls.month.value = "2020-02"; controls.month.dispatchEvent(new Event("change"));
+    controls.useMonth.dispatchEvent(new Event("click")); controls.refresh.dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.slice(-3).map(([action]) => action), ["TemporalMonth", "UseTemporalMonth", "RefreshTemporal"]);
+    assert.equal(h.actions.at(-3)[1], "2020-02");
+    assert.equal(h.draft.temporal.endTime, "2020-02-01T00:00");
+    assert.equal(h.actions.some(([action]) => action === "Submit"), false);
+    h.view.setup.form.dispatchEvent(new Event("submit", {cancelable: true}));
+    assert.equal(h.actions.at(-1)[0], "Submit");
+});
+
+test("temporal validation and statistic settings remain local to the relevant controls", () => {
+    const h = temporalFixture(), controls = h.controls;
+    controls.statistic.value = "percentile"; controls.statistic.dispatchEvent(new Event("change"));
+    assert.deepEqual(h.actions.at(-1), ["Edit", {reduction: {reducer: "percentile", percentile: 90}}]);
+    h.draft.reduction.reducer = "percentile"; h.view.render(h.state);
+    assert.equal(controls.percentileField.hidden, false); assert.equal(controls.percentile.disabled, false);
+    controls.percentile.value = "97.5"; controls.percentile.dispatchEvent(new Event("input"));
+    assert.deepEqual(h.actions.at(-1), ["Edit", {reduction: {reducer: "percentile", percentile: 97.5}}]);
+    h.draft.reduction.percentile = 101; h.view.render(h.state);
+    assert.match(controls.reductionStatus.textContent, /0 to 100/); assert.equal(h.view.setup.run.disabled, true);
+    h.draft.reduction = {reducer: "stdev", percentile: 101}; h.view.render(h.state);
+    assert.equal(controls.percentileField.hidden, true); assert.equal(controls.reductionStatus.hidden, true);
+    assert.match(controls.reductionHelp.textContent, /population formula/); assert.equal(h.view.setup.run.disabled, false);
+    h.draft.temporal.endTime = h.draft.temporal.startTime; h.view.render(h.state);
+    assert.match(controls.status.textContent, /end must be later/); assert.equal(h.view.setup.run.disabled, true);
+    h.draft.temporal.endTime = "2020-02-01T00:00";
+    h.draft.temporal.choices = {months: ["2020-01"], month: "2020-01", times: []}; h.view.render(h.state);
+    assert.match(controls.coverage.textContent, /No observations are available in this month/);
+    assert.equal(controls.useMonth.disabled, true); assert.equal(h.view.setup.run.disabled, false);
+    h.draft.temporal.datesError = "Available dates could not be loaded. Try again."; h.view.render(h.state);
+    assert.match(controls.coverage.textContent, /Available dates could not be loaded/);
+    assert.equal(h.view.setup.run.disabled, false);
+    h.draft.temporal.error = "The selected dataset is no longer in Map layers."; h.view.render(h.state);
+    assert.match(controls.status.textContent, /no longer in Map layers/); assert.equal(h.view.setup.run.disabled, true);
+});
+
+test("saved temporal run inputs describe the captured interval and statistic independently of map changes", () => {
+    const h = temporalFixture();
+    const period = {collectionId: "eolab-temporal-datasets", itemId: "vegetation", variable: "vegetation_index",
+        startTime: "2020-01-01T03:27:41.250Z", endTime: "2020-01-04T18:00:00.000Z"};
+    h.state.page = "run"; h.state.selectedRun = job().jobId; h.state.runs = [job({model: h.draft.model})];
+    h.state.invocation = {model: {...h.draft.model, definition: h.draft.model}, parameters: {},
+        inputs: {observations: period, region: area, statistic: {reducer: "percentile", percentile: 97.5}}};
+    h.view.render(h.state);
+    const details = h.view.run.inputsBody.children[0].children;
+    assert.match(details[1].textContent, /vegetation_index/);
+    assert.match(details[1].textContent, /2020-01-01T03:27:41.250Z \(included\)/);
+    assert.match(details[1].textContent, /2020-01-04T18:00:00.000Z \(excluded\)/);
+    assert.equal(details[5].textContent, "Percentile 97.5");
+    h.draft.temporal.variable = "precipitation"; h.draft.temporal.startTime = "2025-01-01T00:00";
+    h.view.render(h.state);
+    assert.equal(h.view.run.inputsBody.children[0].children[1], details[1]);
+    assert.match(details[1].textContent, /vegetation_index/);
 });

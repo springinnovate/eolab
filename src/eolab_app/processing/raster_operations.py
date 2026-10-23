@@ -584,13 +584,16 @@ def select_clip_execution(
 
 
 def describe_summary_result(
-    summary: dict[str, Any], artifact: dict[str, Any]
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
+    numerical_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Describe scalar results produced by a completed summary operation.
 
     Args:
         summary: Persisted public operation metadata.
         artifact: Completed summary file and calculated values.
+        numerical_policy: Recorded calculation settings, or None after metadata expiry.
 
     Returns:
         Result-type fields, without file links or lifecycle decisions.
@@ -599,13 +602,16 @@ def describe_summary_result(
 
 
 def describe_clip_result(
-    summary: dict[str, Any], artifact: dict[str, Any]
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
+    numerical_policy: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Describe the raster produced by a completed clip operation.
 
     Args:
         summary: Persisted public output grid, independent of YAML retention.
         artifact: Completed clip file and validity count.
+        numerical_policy: Recorded calculation settings, or None after metadata expiry.
 
     Returns:
         Raster-type fields, without file links or lifecycle decisions.

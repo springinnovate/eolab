@@ -171,6 +171,12 @@ def test_period_map_outputs_are_owned_reusable_rasters(
     assert client.portal.call(worker.run_once)
     ready = client.get(f"/api/processing/jobs/{identifier}").json()
     assert ready["status"] == "ready", ready
+    assert ready["result"]["temporalCoverage"] == {
+        "unit": "K",
+        "observationCount": 2,
+        "firstObservation": "2000-02-01T00:00:00Z",
+        "lastObservation": "2000-02-01T01:00:00Z",
+    }
     rasters = {
         file["name"]: file
         for file in ready["artifacts"]["files"]
@@ -250,6 +256,10 @@ def test_new_run_reads_refreshed_values_without_changing_completed_outputs(
     original = client.get(first["result"]["url"]).content
     array = zarr.open_array(archive / "2000/02/era5.zarr" / TEMPERATURE, mode="r+")
     array[:2, 360, 0] = [40, 60]
+    for month in ("01", "02"):
+        zarr.open_array(
+            archive / f"2000/{month}/era5.zarr" / TEMPERATURE, mode="r+"
+        ).attrs["units"] = "degC"
     assert client.portal.call(scan, scanner)["errors"] == []
     second_request = deepcopy(request)
     second_request["requestId"] = uuid4().hex
@@ -257,12 +267,15 @@ def test_new_run_reads_refreshed_values_without_changing_completed_outputs(
     assert client.portal.call(worker.run_once)
     second = client.get(f"/api/processing/jobs/{second['jobId']}").json()
     assert second["status"] == "ready", second
+    assert second["result"]["temporalCoverage"]["unit"] == "degC"
     with (
         MemoryFile(client.get(second["result"]["url"]).content) as memory,
         memory.open() as raster,
     ):
         assert next(raster.sample([(0, 0)]))[0] == 50
     assert client.get(first["result"]["url"]).content == original
+    saved = client.get(f"/api/processing/jobs/{first['jobId']}").json()
+    assert saved["result"]["temporalCoverage"] == first["result"]["temporalCoverage"]
 
 
 def test_period_map_rejects_rate_variables_without_publishing(

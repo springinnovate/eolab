@@ -98,7 +98,9 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         prepare: Resolve captured inputs into a native calculation plan.
         execution: Select the native target, action and execution settings.
         policy: Report effective numerical settings from a prepared plan.
-        result: Describe completed result values and grid metadata.
+        result: Describe completed values and grid metadata using the saved
+            summary, published artifact and recorded numerical policy, when
+            that metadata remains available.
         outcome: Describe retained scientific metadata in Run YAML.
         cached: Optional cache reader; None means the operation always computes results.
         reusable: Optional cache-value extractor; None disables result-cache writes.
@@ -137,7 +139,9 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         tuple[Callable[..., None], str, Any],
     ]
     policy: Callable[[Prepared], BaseModel]
-    result: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+    result: Callable[
+        [dict[str, Any], dict[str, Any], dict[str, Any] | None], dict[str, Any]
+    ]
     outcome: Callable[[dict[str, Any]], dict[str, Any]]
     cached: (
         Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]] | None
