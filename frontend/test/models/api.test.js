@@ -180,3 +180,16 @@ test("more than 64 distinct run files are accepted and the last file is still va
         await assert.rejects(h.api.getJob(job().jobId), /result file details|result file download address/);
     }
 });
+
+test("period-map result coverage survives API validation and rejects malformed saved coverage", async () => {
+    const temporalCoverage = {unit: "K", observationCount: 3,
+        firstObservation: "2000-01-01T00:00:00Z", lastObservation: "2000-01-03T12:00:00Z"};
+    const result = {...clipResult, temporalCoverage};
+    const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
+    assert.deepEqual((await h.api.getJob(job().jobId)).result.temporalCoverage, temporalCoverage);
+    for (const coverage of [null, {...temporalCoverage, observationCount: 0},
+        {...temporalCoverage, lastObservation: "not-a-date"}]) {
+        result.temporalCoverage = coverage;
+        await assert.rejects(h.api.getJob(job().jobId), /invalid temporal coverage/);
+    }
+});

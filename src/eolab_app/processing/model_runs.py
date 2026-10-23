@@ -57,6 +57,7 @@ from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.raster.source_models import TemporalIntervalSelection
 
+
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
     """Describe a run with its editable name and fixed local creation timestamp.
 
@@ -493,7 +494,8 @@ def record_model_preparation(
 
     Returns:
         The model job plan with preparation details ready to save. Raster result
-        grids also enter the public summary, which outlives saved YAML metadata.
+        grids also enter the public summary. Saved YAML metadata remains
+        available for the same lifetime as completed model results.
         The original recipe and selected inputs remain unchanged.
 
     Raises:
@@ -549,7 +551,8 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
         Running progress includes an installed operation's stage description when
         available. Unknown phases or unavailable operations omit the description;
         the response schema validates the resulting progress before delivery.
-        Expired results have no download links.
+        Completed results use their recorded numerical policy; expired results
+        have no download links.
 
     Raises:
         ProcessingError: If a completed result's operation or format is unsupported.
@@ -595,6 +598,7 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
                 500,
             )
         output = summary["output"]
+        metadata = row["retained_metadata"]
         result = {
             **output,
             "url": f"/api/processing/jobs/{row['id']}/result",
@@ -605,7 +609,15 @@ def serialize_model_job(row: dict[str, Any]) -> dict[str, Any]:
             ),
             "bytes": artifact["size"],
             "sha256": artifact["sha256"],
-            **operation.result(summary, artifact),
+            **operation.result(
+                summary,
+                artifact,
+                (
+                    metadata["execution"]["numericalPolicy"]
+                    if metadata is not None
+                    else None
+                ),
+            ),
         }
     return {
         "jobId": identifier,

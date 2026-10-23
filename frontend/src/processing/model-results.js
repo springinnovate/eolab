@@ -19,10 +19,12 @@ export function validateCalculationRows(rows) {
     }
 }
 
-/** Check a raster result's dimensions, georeferencing and valid-pixel count.
+/** Check a raster result's grid, valid pixels and saved temporal coverage.
+ * Temporal coverage describes the observations used by a period map; ordinary
+ * raster results omit it.
  * @param {Object} result Raster output from the Processing API.
  * @return {void}
- * @throws {Error} If dimensions, georeferencing or validity counts are invalid.
+ * @throws {Error} If the grid, validity count or temporal coverage is invalid.
  */
 function validateRasterResult(result) {
     const grid = result.grid;
@@ -31,6 +33,13 @@ function validateRasterResult(result) {
         !Array.isArray(grid.transform) || grid.transform.length !== 6 || !grid.transform.every(Number.isFinite) ||
         !Number.isSafeInteger(result.validPixels) || result.validPixels < 0 || result.validPixels > grid.width * grid.height ||
         result.rows !== undefined) throw new Error("Processing returned invalid raster result details.");
+    const coverage = result.temporalCoverage;
+    if (coverage !== undefined && (!coverage || typeof coverage.unit !== "string" ||
+        !Number.isSafeInteger(coverage.observationCount) || coverage.observationCount < 1 ||
+        !["firstObservation", "lastObservation"].every(key =>
+            typeof coverage[key] === "string" && Number.isFinite(Date.parse(coverage[key]))))) {
+        throw new Error("Processing returned invalid temporal coverage.");
+    }
 }
 
 /** Check formula results and whether the server reused a cached calculation.

@@ -30,6 +30,8 @@ function fixture(overrides = {}, viewOverride = null) {
     const view = viewOverride ?? {bind: value => { handlers = value; }, render: () => {}, focusHeading: () => {}, destroy: () => {}, getVectorFilterHost: () => ({id: "inline-host"})};
     const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)};
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
+        getTemporalItem: source => api.getTemporalItem(source),
+        loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
         prepareVector: async () => ({selection, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); },
         closeVectorFilter: () => filterRequests.at(-1)?.close(),
         applyMapFilter: async (source, filter) => {
@@ -41,18 +43,152 @@ function fixture(overrides = {}, viewOverride = null) {
     return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers};
 }
 
-test("model setup omits temporal recipes while retaining their run history", async () => {
+const periodModel = {...model, id: "regional-period-statistic", parameters: {}, inputs: {
+    weather: {type: "temporal_interval", label: "Dataset and period"},
+    region: {type: "summary_area", label: "Analysis area"},
+    statistic: {type: "temporal_reduction", label: "Statistic"},
+}, steps: [{id: "calculate", operation: "another.period-implementation.v2"}]};
+const temporalDataset = {collectionId: "eolab-temporal-datasets", itemId: "observations", label: "Weather observations"};
+const temporalItem = {collection: temporalDataset.collectionId, id: temporalDataset.itemId, properties: {
+    title: "Weather observations", "cube:variables": {
+        temperature: {description: "Air temperature", unit: "K", "eolab:time_support": "instantaneous"},
+        rain: {description: "Rainfall rate", unit: "mm/day", "eolab:time_support": "mean_rate"},
+    },
+}};
+const temporalChoices = {months: ["2000-01", "2000-03"], month: "2000-01",
+    times: ["2000-01-01T00:00:00Z", "2000-01-02T12:30:00Z"]};
+
+/** Open a temporal draft through the real controller with controlled Catalog replies.
+ * @param {Object} [overrides={}] Catalog or Processing API replacements.
+ * @return {Promise<Object>} Existing controller fixture with a loaded temporal source.
+ */
+async function periodFixture(overrides = {}) {
+    const h = fixture({getTemporalItem: async () => structuredClone(temporalItem),
+        loadTemporalTimes: async () => structuredClone(temporalChoices), ...overrides});
+    h.context.rasters = [];
+    h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
+    h.controller.chooseModel(periodModel);
+    await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
+    return h;
+}
+
+test("temporal setup captures typed inputs in UTC without raster publication or automatic jobs", async () => {
+    const h = await periodFixture(), draft = h.controller.state.draft;
+    assert.equal(draft.raster, null);
+    assert.equal(draft.temporal.variable, "temperature");
+    h.handlers.onTemporalEdit({startTime: "2000-01-01T00:00", endTime: "2000-01-02T13:00"});
+    h.controller.editDraft({reduction: {reducer: "percentile", percentile: 95}});
+    assert.equal(h.submitted.length, 0);
+    const request = captureModelSubmission(draft, "e".repeat(32), -420);
+    assert.deepEqual(request.inputs.weather, {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
+        variable: "temperature", startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-01-02T13:00:00.000Z"});
+    assert.deepEqual(request.inputs.statistic, {reducer: "percentile", percentile: 95});
+    assert.deepEqual(request.inputs.region, area);
+    await h.controller.submit();
+    assert.equal(h.submitted.length, 1);
+    h.context.temporalDatasets[0] = {...temporalDataset, time: "2000-03-01T00:00:00Z", variable: "rain", visible: false};
+    h.controller.refreshMapLayers();
+    assert.deepEqual(h.submitted[0].inputs, request.inputs);
+    h.controller.destroy();
+});
+
+test("refresh and map changes preserve the analysis interval; Use this month replaces it explicitly", async () => {
+    let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
+    const h = await periodFixture({getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
+    const draft = h.controller.state.draft;
+    h.handlers.onTemporalEdit({startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
+    dates = {months: ["2000-03"], month: "2000-03", times: ["2000-03-12T00:00:00Z"]};
+    h.context.temporalDatasets[0] = {...temporalDataset, variable: "rain", visible: false};
+    h.controller.refreshMapLayers();
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(draft.temporal.variable, "temperature");
+    assert.equal(draft.temporal.startTime, "2000-01-01T01:15");
+    assert.equal(draft.temporal.endTime, "2000-03-04T20:00");
+    h.controller.useTemporalMonth();
+    assert.equal(draft.temporal.startTime, "2000-03-01T00:00");
+    assert.equal(draft.temporal.endTime, "2000-04-01T00:00");
+    assert.equal(h.submitted.length, 0);
+    delete item.properties["cube:variables"].temperature;
+    await h.controller.loadTemporalDates(undefined, true);
+    assert.equal(draft.temporal.variable, "temperature");
+    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /Choose a variable/);
+    h.context.temporalDatasets = [];
+    h.controller.refreshMapLayers();
+    assert.equal(draft.temporal.item, null);
+    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /Add a temporal dataset from Catalog/);
+    h.controller.destroy();
+});
+
+test("availability replies preserve typed dates and cannot change a later model draft", async () => {
+    const h = await periodFixture();
+    let finishDates;
+    h.api.loadTemporalTimes = () => new Promise(resolve => { finishDates = resolve; });
+    const pending = h.controller.loadTemporalDates("2000-03");
+    h.handlers.onTemporalEdit({startTime: "2000-03-01T00:00", endTime: "2000-03-15T00:00"});
+    finishDates(temporalChoices); await pending;
+    assert.equal(h.controller.state.draft.temporal.loading, false);
+    assert.equal(h.controller.state.draft.temporal.endTime, "2000-03-15T00:00");
+    const obsolete = h.controller.loadTemporalDates();
+    h.controller.chooseModel(model);
+    finishDates(temporalChoices); await obsolete;
+    assert.equal(h.controller.state.draft.temporal, null);
+    assert.equal(h.controller.state.draft.model.id, model.id);
+    h.controller.destroy();
+});
+
+test("temporal controls explain unsupported choices and date guidance does not authorize work", async () => {
+    const h = await periodFixture(), draft = h.controller.state.draft;
+    h.handlers.onTemporalEdit({startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
+    await h.controller.chooseTemporalVariable("rain");
+    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /instantaneous measurements/);
+    h.api.loadTemporalTimes = async () => { throw new Error("Offline"); };
+    await h.controller.chooseTemporalVariable("temperature");
+    assert.match(draft.temporal.datesError, /You can still enter a period/);
+    assert.doesNotThrow(() => captureModelSubmission(draft, "e".repeat(32)));
+    h.handlers.onTemporalEdit({endTime: "2000-01-01T00:00"});
+    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /end must be later/);
+    h.handlers.onTemporalEdit({endTime: "2000-02-01T00:00"});
+    h.controller.editDraft({reduction: {reducer: "percentile", percentile: 101}});
+    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /percentile from 0 to 100/);
+    h.controller.editDraft({reduction: {reducer: "mean", percentile: 101}});
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.statistic, {reducer: "mean"});
+    h.controller.destroy();
+});
+
+test("copying a temporal run preserves its original period, statistic and fixed area", async () => {
+    const h = await periodFixture();
+    const saved = {model: periodModel, label: "Original period", parameters: {}, inputs: {
+        weather: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "temperature",
+            startTime: "2000-01-01T00:00:00Z", endTime: "2000-01-03T00:00:00Z"},
+        statistic: {reducer: "percentile", percentile: 75}, region: area,
+    }};
+    h.controller.state.library = [periodModel]; h.controller.state.invocation = saved;
+    await h.controller.duplicateRun();
+    const draft = h.controller.state.draft;
+    assert.equal(draft.areaMode, "captured");
+    h.context.area = {kind: "wholeRaster"};
+    h.controller.refreshMapArea();
+    const request = captureModelSubmission(draft, "e".repeat(32));
+    assert.equal(request.inputs.weather.endTime, "2000-01-03T00:00:00.000Z");
+    assert.deepEqual(request.inputs.statistic, saved.inputs.statistic);
+    assert.deepEqual(request.inputs.region, area);
+    assert.equal(h.submitted.length, 0);
+    h.controller.destroy();
+});
+
+test("model setup supports temporal input types and omits unknown controls while retaining run history", async () => {
     const temporal = {...model, id: "temporal-period-map", inputs: {
         source: {type: "temporal_interval", label: "Dataset and period"},
         area: model.inputs.area,
         reduction: {type: "temporal_reduction", label: "Statistic"},
     }};
     const run = job({model: temporal});
-    const h = fixture({discoverModels: async () => [model, temporal, clipModel],
+    const unknown = {...model, id: "future-recipe", inputs: {unknown: {type: "unknown_input", label: "Unknown"}}};
+    const h = fixture({discoverModels: async () => [model, temporal, clipModel, unknown],
         listModelRuns: async () => ({jobs: [run], nextCursor: null})});
     await h.controller.loadLibrary();
     await h.controller.loadRuns();
-    assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, clipModel.id]);
+    assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, temporal.id, clipModel.id]);
     assert.equal(h.controller.state.runs[0].jobId, run.jobId);
     h.controller.chooseModel(model);
     assert.equal(h.controller.state.page, "setup");

@@ -1,7 +1,14 @@
 """Scientific result types shared by models, independent of their algorithms."""
 
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    model_validator,
+)
 from eolab_app.processing.aggregate_models import AggregateValue
 from eolab_app.processing.models import JobResultResponse
 
@@ -32,6 +39,24 @@ class ModelResultFile(JobResultResponse):
     role: Literal["result"]
 
 
+class TemporalResultCoverage(BaseModel):
+    """Describe the observations used to calculate a completed period map.
+
+    Attributes:
+        unit: Unit of the resulting values recorded when the run was prepared.
+        observationCount: Number of available observations in the requested period;
+            individual pixels may have fewer valid values, shown by the count raster.
+        firstObservation: UTC label of the first available observation used.
+        lastObservation: UTC label of the last available observation used.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    unit: str
+    observationCount: Annotated[int, Field(gt=0)]
+    firstObservation: AwareDatetime
+    lastObservation: AwareDatetime
+
+
 class ModelRasterResult(ModelResultFile):
     """A raster output produced by any registered operation supporting GeoTIFF."""
 
@@ -40,6 +65,9 @@ class ModelRasterResult(ModelResultFile):
     presentation: Literal["map"]
     grid: RasterResultGrid
     validPixels: Annotated[int, Field(ge=0)]
+    temporalCoverage: TemporalResultCoverage | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def check_valid_pixels(self) -> "ModelRasterResult":

@@ -3,6 +3,8 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { renderModelResult, renderModelFiles, updateModelFileActions } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
+import { TemporalModelInputsView } from "./temporal-view.js";
+import { describeTemporalInterval, describeTemporalReduction } from "./temporal-inputs.js";
 
 /** Show the creation time in the timezone captured when this run was started.
  * @param {Object} job Model run with its fixed naming timestamp.
@@ -152,11 +154,15 @@ export class ModelsView {
             sourceReason: "Choose a raster from Map layers."}));
         const reason = this.element("p", "", "models-help"); reason.id = "models-source-reason"; source.setAttribute("aria-describedby", reason.id);
         const sourceField = this.field("models-raster", Object.values(draft.model.inputs).find(input => ["raster", "catalog_raster"].includes(input.type))?.label ?? "Raster", source);
-        if (!usesStartingMask) fields.append(sourceField, reason);
+        if (!usesStartingMask && !draft.temporal) fields.append(sourceField, reason);
         const resultActions = this.element("div", "", "models-actions");
         const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns, "models-action");
         const olderResults = this.button("Load older results", this.handlers.onMore, "models-action");
-        resultActions.append(refreshResults, olderResults); if (!usesStartingMask) fields.append(resultActions);
+        resultActions.append(refreshResults, olderResults); if (!usesStartingMask && !draft.temporal) fields.append(resultActions);
+        const temporal = draft.temporal ? new TemporalModelInputsView({element: this.element.bind(this), field: this.field.bind(this),
+            button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers,
+            Object.values(draft.model.inputs).find(input => input.type === "temporal_reduction").label) : null;
+        if (temporal) fields.append(temporal.sourceRoot);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
         fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => ["summary_area", "clip_area", "mask_source"].includes(input.type))?.label ?? "Analysis area", areaMode));
@@ -187,6 +193,7 @@ export class ModelsView {
         fields.append(vectorGroup, areaDescription, mapHelp);
         const maskHelp = usesStartingMask ? this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help") : null;
         if (maskHelp) fields.append(maskHelp, sourceField, reason, resultActions);
+        if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
             const input = this.element(parameter.type === "summary_expression" ? "textarea" : "input");
@@ -199,15 +206,16 @@ export class ModelsView {
             if (usesStartingMask && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
             if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
         }
-        const run = this.button("Run model", () => {}, "models-primary"); run.type = "submit";
-        const hint = this.element("p", "Run model uses the choices shown here. You can keep using the map while it runs. To stop it, choose Cancel run.", "models-help");
+        const runLabel = temporal ? "Run analysis" : "Run model";
+        const run = this.button(runLabel, () => {}, "models-primary"); run.type = "submit";
+        const hint = this.element("p", `${runLabel} uses the choices shown here. You can keep using the map while it runs. To stop it, choose Cancel run.`, "models-help");
         fields.append(hint, run); form.append(fields);
         form.addEventListener("submit", event => { event.preventDefault(); this.handlers.onSubmit(); });
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
         this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
             parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus, resultActions, refreshResults, olderResults,
-            maskGroup, maskRaster};
+            maskGroup, maskRaster, temporal};
     }
 
     /** Provide an inline location for the independently owned vector filter editor.
@@ -237,6 +245,8 @@ export class ModelsView {
         const draft = state.draft; if (!draft) return;
         if (this.setup?.id !== draft.id) this.buildSetup(draft);
         const setupControls = this.setup;
+        const temporalError = setupControls.temporal?.render(draft.temporal, draft.reduction) ?? "";
+        const runLabel = draft.temporal ? "Run analysis" : "Run model";
         const usesStartingMask = modelHasInput(draft.model, "mask_source");
         setupControls.fields.disabled = state.submitting;
         if (this.document.activeElement !== setupControls.label) setupControls.label.value = draft.label;
@@ -246,7 +256,7 @@ export class ModelsView {
             disabled: source.available === false,
             label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
         setupControls.reason.textContent = draft.sourceReason;
-        setupControls.resultActions.hidden = !acceptsResults;
+        setupControls.resultActions.hidden = Boolean(draft.temporal) || !acceptsResults;
         setupControls.refreshResults.disabled = Boolean(state.historyLoading); setupControls.refreshResults.textContent = state.historyLoading ? "Loading results…" : "Refresh results";
         setupControls.olderResults.hidden = !state.nextCursor; setupControls.olderResults.disabled = Boolean(state.historyLoading);
         const areaChoices = usesStartingMask ? [{value: "vector", label: "Vector layer"}, {value: "raster", label: "Raster cells greater than zero"}] :
@@ -266,9 +276,9 @@ export class ModelsView {
         this.options(setupControls.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
         setupControls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(draft.areaMode);
         setupControls.mapHelp.textContent = ({
-            viewport: "Uses the visible map area when you choose Run model. Pan or zoom to change it.",
-            samplingArea: "Uses the sampling area shown in Raster distributions. Click the map to move the box. Run model uses its latest position and size.",
-            mapPolygons: "Uses the polygons selected on the map when you choose Run model.",
+            viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
+            samplingArea: `Uses the sampling area shown in Raster distributions. Click the map to move the box. ${runLabel} uses its latest position and size.`,
+            mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[draft.areaMode] ?? "";
         const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
@@ -286,10 +296,11 @@ export class ModelsView {
         setupControls.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
             `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source"].includes(input.type));
+        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction"].includes(input.type));
         const areaReady = usesStartingMask && draft.areaMode === "raster" ? Boolean(draft.maskRaster) : Boolean(draft.area);
-        setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !draft.raster || draft.raster.available === false || !supported;
-        setupControls.run.textContent = state.submitting ? "Submitting…" : "Run model";
+        const sourceReady = draft.temporal ? !temporalError : Boolean(draft.raster) && draft.raster.available !== false;
+        setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !sourceReady || !supported;
+        setupControls.run.textContent = state.submitting ? "Submitting…" : runLabel;
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         setupControls.details.run.hidden = true;
         setupControls.details.message.textContent = supported ? `Model version ${draft.model.version}. Results are temporary.` : "This model requires input controls not yet available in this interface.";
@@ -441,7 +452,9 @@ export class ModelsView {
                 const sourceLabel = value.kind === "runArtifact" ? `${state.runs.find(run => run.jobId === value.jobId)?.label ?? "Previous run"} · Raster result` : `${value.collectionId} / ${value.itemId}`;
                 const description = input.type === "mask_source" && value.kind === "catalogRaster" ?
                     `${value.source.collectionId} / ${value.source.itemId} · valid cells greater than zero` :
-                    ["raster", "catalog_raster"].includes(input.type) ? sourceLabel : describeModelArea(value);
+                    ["raster", "catalog_raster"].includes(input.type) ? sourceLabel :
+                        input.type === "temporal_interval" ? describeTemporalInterval(value) :
+                            input.type === "temporal_reduction" ? describeTemporalReduction(value) : describeModelArea(value);
                 list.append(this.element("dt", input.label), this.element("dd", description));
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) list.append(this.element("dt", parameter.label),

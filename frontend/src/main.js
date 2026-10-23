@@ -28,6 +28,7 @@ import {
     formatScanStatusSummary,
     getCatalogVisualization,
     MOUNTED_DATASET_TYPES,
+    TEMPORAL_COLLECTION_ID,
 } from "./catalog.js";
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { AnnotationPanelView } from "./annotations/panel-view.js";
@@ -74,6 +75,7 @@ import {
 } from "./catalog-map-actions.js";
 import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { loadTemporalTimes } from "./raster/temporal-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
 import { RasterSeriesView } from "./raster/series-view.js";
@@ -1066,6 +1068,8 @@ async function initializeCatalog(
         });
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
+        loadTemporalTimes,
         showOutput: (job, file) => outputLayers.show(job, file),
         outputState: (jobId, artifactId, file) => outputLayers.state(jobId, artifactId, file),
         /** Capture run displays before their source access is revoked.
@@ -1095,13 +1099,16 @@ async function initializeCatalog(
             if (job.status === "deleted") mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.jobId === job.jobId);
         },
         /** Supply original-source choices and current map areas independently of rendering.
-         * @return {Object} Independent raster, vector, selected area and visible map bounds.
+         * @return {Object} Independent raster, temporal dataset, vector, selected area and visible map bounds.
          */
         getContext: () => {
             const viewport = leafletMap.getBounds();
+            const layers = mapLayerController.snapshots();
             return {
-                rasters: mapLayerController.snapshots().filter(layer => layer.capabilities?.modelInput)
+                rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
+                temporalDatasets: [...new Map(layers.filter(layer => layer.source?.collectionId === TEMPORAL_COLLECTION_ID)
+                    .map(({source}) => [source.itemId, {collectionId: source.collectionId, itemId: source.itemId, label: source.itemId}])).values()],
                 vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
@@ -1910,7 +1917,7 @@ async function initializeCatalog(
      */
     async function refreshCatalogDatasets() {
         await loadCatalog(true);
-        await rasterVisualization.refreshTemporalLayers();
+        await Promise.all([rasterVisualization.refreshTemporalLayers(), models.loadTemporalDates(undefined, true)]);
     }
     const scheduleCatalogSearch = createDebouncedAction(
         loadCatalog.bind(null, false),
