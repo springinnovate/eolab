@@ -13,6 +13,7 @@ import rasterio
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.raster.catalog import StacRasterCatalog
+from eolab_app.raster.errors import RasterRequestError
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import (
@@ -126,6 +127,7 @@ def temporal_rendering(
             tracker,
             queue,
             hidden_layer=is_temporal_raster_layer,
+            use_layers=publication.use_layers,
         )
     )
     app.include_router(
@@ -135,6 +137,7 @@ def temporal_rendering(
             "http://geoserver/geoserver",
             tracker,
             queue,
+            use_layers=publication.use_layers,
         )
     )
     with TestClient(app) as client:
@@ -254,12 +257,12 @@ def test_recent_frames_evict_and_restart_removes_leftovers(
     assert (
         api.get("/geoserver/eolab/wms", params=map_query(layers[0])).status_code == 200
     )
-    assert (
-        api.get("/geoserver/eolab/wms", params=map_query(layers[1])).status_code == 400
-    )
     assert len(list(cache.glob("*.tif"))) == 3
     upstream.fail_delete = False
     api.portal.call(publication.cleanup)
+    assert len(list(cache.glob("*.tif"))) == 2
+    recovered = api.get("/geoserver/eolab/wms", params=map_query(layers[1]))
+    assert recovered.status_code == 200 and recovered.content == b"tile"
     assert len(list(cache.glob("*.tif"))) == 2
     orphan = cache / f"slice_{'a' * 32}.tif"
     orphan.write_bytes(b"interrupted native write")
@@ -280,23 +283,53 @@ def test_recent_frames_evict_and_restart_removes_leftovers(
     api.portal.call(fresh_client.aclose)
 
 
-def test_cancelled_materialization_removes_partial_file_and_releases_publication(
+def test_cancelled_materialization_releases_every_acquired_frame(
     temporal_rendering: tuple[
         TestClient, RasterPublicationService, OutputGeoServer, ScanManager, Path
     ],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cancel through the process boundary before removing its file or releasing the lock.
+    """Stop native restoration before deleting its partial file or releasing its lock.
 
     Args:
         temporal_rendering: Real source authority and publication service.
-        monkeypatch: Replaces only the already-tested native-process execution boundary.
+        monkeypatch: Replace only the already-tested native-process boundary.
     """
     api, publication, upstream, _, cache = temporal_rendering
 
     async def scenario() -> None:
-        """Hold simulated native exit long enough to observe cancellation ordering."""
+        """Cancel one restoration after protecting both its missing and resident frames."""
         started, cancelled, exited = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def completed_write(
+            reader: object, observation: object, path: Path
+        ) -> tuple[float, float, float, float]:
+            """Emulate a successful native write for lifecycle-only assertions.
+
+            Args:
+                reader: Trusted materialization function.
+                observation: Authorized temporal observation.
+                path: File owned by the publication service.
+
+            Returns:
+                Geographic bounds for the completed stand-in file.
+            """
+            path.write_bytes(b"completed")
+            return (-180, -90, 180, 90)
+
+        monkeypatch.setattr(
+            "eolab_app.raster.publication.read_private_raster", completed_write
+        )
+        layers = []
+        for hour in range(3):
+            published = await publication.publish(
+                RasterSourceRequest(
+                    source={**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}
+                )
+            )
+            layers.append(published.layer_name)
+        restored_path = cache / f"{layers[0].split(':')[1]}.tif"
+        assert not restored_path.exists()
 
         async def native_read(reader: object, observation: object, path: Path) -> None:
             """Emulate a process that must finish stopping before its caller returns.
@@ -318,21 +351,247 @@ def test_cancelled_materialization_removes_partial_file_and_releases_publication
                 await exited.wait()
                 raise
 
+        async def restore_frames() -> None:
+            """Use two frames, with the first requiring native reconstruction."""
+            async with publication.use_layers(tuple(layers[:2])):
+                pass
+
         monkeypatch.setattr(
             "eolab_app.raster.publication.read_private_raster", native_read
         )
-        request = RasterSourceRequest(source=SOURCE)
-        task = asyncio.create_task(publication.publish(request))
+        task = asyncio.create_task(restore_frames())
         await started.wait()
+
+        async def ordinary_render() -> None:
+            """Enter an ordinary render while temporal materialization holds its lock."""
+            async with publication.use_layers(("eolab:ordinary",)):
+                pass
+
+        await asyncio.wait_for(ordinary_render(), timeout=1)
         task.cancel()
         await cancelled.wait()
         cleanup = asyncio.create_task(publication.cleanup())
         await asyncio.sleep(0)
-        assert not cleanup.done() and list(cache.glob("*.tif"))
+        assert not cleanup.done() and restored_path.exists()
         exited.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         await cleanup
+        assert not restored_path.exists() and len(list(cache.glob("*.tif"))) == 2
+        monkeypatch.setattr(
+            "eolab_app.raster.publication.read_private_raster", completed_write
+        )
+        async with publication.use_layers((layers[0],)):
+            assert restored_path.exists()
+        await publication.invalidate_temporal_items((ITEM_KEY,))
+        await publication.cleanup()
         assert not list(cache.glob("*.tif")) and not upstream.names
+
+    api.portal.call(scenario)
+
+
+def test_other_browser_eviction_preserves_direct_and_composite_maps(
+    temporal_rendering: tuple[
+        TestClient, RasterPublicationService, OutputGeoServer, ScanManager, Path
+    ],
+) -> None:
+    """Restore one browser's unchanged layer after another browses additional dates.
+
+    Args:
+        temporal_rendering: Real source and rendering services with a two-frame cache.
+    """
+    api, publication, upstream, _, cache = temporal_rendering
+
+    async def scenario() -> None:
+        """Browse with independent clients sharing the same backend cache."""
+        transport = httpx2.ASGITransport(app=api.app)
+        async with (
+            httpx2.AsyncClient(transport=transport, base_url="http://test") as first,
+            httpx2.AsyncClient(transport=transport, base_url="http://test") as second,
+        ):
+            published = await first.post(
+                "/api/rendering/layers", json={"source": SOURCE}
+            )
+            assert published.status_code == 200, published.text
+            layer = published.json()["layerName"]
+            path = cache / f"{layer.split(':')[1]}.tif"
+            registered = await first.post(
+                "/api/map-rendering/plans", json=plan_request(layer)
+            )
+            assert registered.status_code == 200, registered.text
+            plan_url = registered.json()["wmsUrl"]
+            cached_tile = _tile_url(plan_url)
+            assert (await first.get(cached_tile)).content == b"tile"
+            for hour in (1, 2):
+                response = await second.post(
+                    "/api/rendering/layers",
+                    json={"source": {**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}},
+                )
+                assert response.status_code == 200, response.text
+            assert not path.exists()
+            requests = len(upstream.requests)
+            assert (await first.get(cached_tile)).content == b"tile"
+            assert len(upstream.requests) == requests and not path.exists()
+            recovered = await first.get("/geoserver/eolab/wms", params=map_query(layer))
+            assert recovered.status_code == 200 and recovered.content == b"tile"
+            with rasterio.open(path) as dataset:
+                assert (
+                    dataset.read(1, window=rasterio.windows.Window(720, 360, 1, 1))[
+                        0, 0
+                    ]
+                    == 10
+                )
+            for hour in (1, 2):
+                response = await second.post(
+                    "/api/rendering/layers",
+                    json={"source": {**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}},
+                )
+                assert response.status_code == 200, response.text
+            assert not path.exists()
+            recovered = await first.get(_tile_url(plan_url, "256,0,512,256"))
+            assert recovered.status_code == 200 and recovered.content == b"tile"
+            assert path.exists() and len(list(cache.glob("*.tif"))) == 2
+            same = await first.post("/api/rendering/layers", json={"source": SOURCE})
+            assert same.json() == published.json()
+            pixel = await first.post(
+                "/api/raster-analysis/pixels",
+                json={"source": SOURCE, "longitude": 0, "latitude": 0},
+            )
+            assert pixel.status_code == 200 and pixel.json()["value"] == 10
+            for hour in (1, 2):
+                response = await second.post(
+                    "/api/rendering/layers",
+                    json={"source": {**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}},
+                )
+                assert response.status_code == 200, response.text
+            assert not path.exists()
+            await publication.invalidate_temporal_items((ITEM_KEY,))
+            assert (await first.get(cached_tile)).status_code == 400
+            assert (
+                await first.get("/geoserver/eolab/wms", params=map_query(layer))
+            ).status_code == 400
+
+    api.portal.call(scenario)
+
+
+def test_composite_holds_more_frames_than_the_idle_cache(
+    temporal_rendering: tuple[
+        TestClient, RasterPublicationService, OutputGeoServer, ScanManager, Path
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep every composite member until GeoServer finishes, then trim idle files.
+
+    Args:
+        temporal_rendering: Real rendering services with a two-frame cache.
+        monkeypatch: Observe only the external GeoServer operation.
+    """
+    api, _, upstream, _, cache = temporal_rendering
+    layers = []
+    for hour in range(3):
+        response = api.post(
+            "/api/rendering/layers",
+            json={"source": {**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}},
+        )
+        assert response.status_code == 200, response.text
+        layers.append(response.json()["layerName"])
+    paths = [cache / f"{layer.split(':')[1]}.tif" for layer in layers]
+    assert sum(path.exists() for path in paths) == 2
+    external_request = OutputGeoServer.__call__
+    observed = False
+
+    def verify_active_files(
+        server: OutputGeoServer, request: httpx2.Request
+    ) -> httpx2.Response:
+        """Require all frame files during the real composite route's upstream request.
+
+        Args:
+            server: Controlled external GeoServer state.
+            request: Actual REST or WMS request made by the application.
+
+        Returns:
+            Existing controlled upstream response.
+        """
+        nonlocal observed
+        if request.url.path.endswith("/eolab/wms"):
+            observed = True
+            assert all(path.exists() for path in paths)
+            assert all(layer.split(":")[1] in upstream.names for layer in layers)
+        return external_request(server, request)
+
+    monkeypatch.setattr(OutputGeoServer, "__call__", verify_active_files)
+    response = api.post(
+        "/api/map-rendering/plans",
+        json={"layers": [plan_request(layer)["layers"][0] for layer in layers]},
+    )
+    assert response.status_code == 200, response.text
+    tile = api.get(_tile_url(response.json()["wmsUrl"]))
+    assert tile.status_code == 200 and tile.content == b"tile" and observed
+    assert sum(path.exists() for path in paths) == 2
+
+
+def test_active_render_survives_disconnect_and_refresh_rejects_queued_identity(
+    temporal_rendering: tuple[
+        TestClient, RasterPublicationService, OutputGeoServer, ScanManager, Path
+    ],
+) -> None:
+    """Protect an active frame through cancellation while revoking queued old names.
+
+    Args:
+        temporal_rendering: Real publication/source lifecycle around external GeoServer.
+    """
+    api, publication, upstream, _, cache = temporal_rendering
+    first = api.post("/api/rendering/layers", json={"source": SOURCE})
+    layer = first.json()["layerName"]
+    path = cache / f"{layer.split(':')[1]}.tif"
+
+    async def scenario() -> None:
+        """Exercise the existing queue's active-work cancellation contract."""
+        queue = GeoServerRenderQueue(1)
+        entered, finish = asyncio.Event(), asyncio.Event()
+
+        async def active_render() -> httpx2.Response:
+            """Keep the frame open until the simulated GeoServer response completes.
+
+            Returns:
+                Completed controlled map response.
+            """
+            async with publication.use_layers((layer,)):
+                entered.set()
+                await finish.wait()
+                assert path.exists()
+                return httpx2.Response(200, content=b"tile")
+
+        async def queued_render() -> httpx2.Response:
+            """Attempt to use the old identity after it waited behind another render.
+
+            Returns:
+                A response only if the revoked identity was incorrectly accepted.
+            """
+            async with publication.use_layers((layer,)):
+                return httpx2.Response(200)
+
+        task = asyncio.create_task(queue.run(active_render, request_key="active"))
+        await entered.wait()
+        queued = asyncio.create_task(queue.run(queued_render, request_key="queued"))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        for hour in (1, 2):
+            await publication.publish(
+                RasterSourceRequest(
+                    source={**SOURCE, "time": f"2000-02-01T0{hour}:00:00Z"}
+                )
+            )
+        assert path.exists() and len(list(cache.glob("*.tif"))) == 3
+        await publication.invalidate_temporal_items((ITEM_KEY,))
+        await publication.cleanup()
+        assert path.exists() and list(cache.glob("*.tif")) == [path]
+        finish.set()
+        with pytest.raises(RasterRequestError, match="no longer available"):
+            await queued
+        await queue.close()
+        assert not path.exists() and not upstream.names
 
     api.portal.call(scenario)
