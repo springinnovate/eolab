@@ -62,7 +62,7 @@ def plan_temporal_map(
     area: AggregateArea,
     limits: RasterAggregateLimits,
 ) -> TemporalMapGrid:
-    """Select an output crop and native read tiles without reading weather values.
+    """Select an output crop and native read tiles without reading observation values.
 
     Args:
         interval: Authorized nonempty observations sharing their admitted native grid.
