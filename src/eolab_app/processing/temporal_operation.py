@@ -131,6 +131,10 @@ async def prepare_temporal_map(
 ) -> PreparedJobPlan:
     """Prepare a native period map after matching the statistic to source metadata.
 
+    Ordinary statistics retain the source units. Precipitation totals integrate
+    kg m**-2 s**-1 over seconds to obtain kg/m², equivalent to mm of water;
+    their output units therefore differ from the source rate's units.
+
     Args:
         context: Existing worker execution and vector-selection capabilities.
         queued: Captured period-map request with any retained polygon input.
@@ -143,14 +147,15 @@ async def prepare_temporal_map(
         ProcessingError: If the statistic does not support this variable's units
             or time support, no observations overlap, or area preparation fails.
     """
-    total = queued.request.reduction.reducer == "precipitation_total"
-    if total:
+    output_unit = source.unit
+    if queued.request.reduction.reducer == "precipitation_total":
         if source.time_support != "mean_rate" or source.unit != "kg m**-2 s**-1":
             raise ProcessingError(
                 "unsupported_precipitation_source",
                 "Precipitation total requires mean rates in kg m**-2 s**-1. "
                 "Choose a precipitation-rate variable with those units.",
             )
+        output_unit = "mm"
     elif source.time_support != "instantaneous":
         raise ProcessingError(
             "unsupported_time_support",
@@ -200,7 +205,7 @@ async def prepare_temporal_map(
         reduction=request.reduction,
         area=area,
         grid=grid,
-        unit="mm" if total else source.unit,
+        unit=output_unit,
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
