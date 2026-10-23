@@ -388,12 +388,17 @@ def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
 def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
     era5_archive: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Discover exact variable labels from coverage without a renderer or Zarr reads.
+    """Discover actual dates for arbitrary variables without a renderer or pixel reads.
 
     Args:
         era5_archive: Two published partial months with variable-specific gaps.
-        monkeypatch: Prevent discovery from opening native weather arrays.
+        monkeypatch: Add a fixture variable and prevent native reads during discovery.
     """
+
+    monkeypatch.setitem(
+        VARIABLES, "vegetation_index", ("instant", "1", "Vegetation index")
+    )
+    publish_month(era5_archive, 3, {"vegetation_index": (12, 36, 84)})
     scanner, writer = create_scanner(era5_archive.parent)
     asyncio.run(scan(scanner))
 
@@ -467,6 +472,20 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
             "/api/catalog/temporal-times", json={**query, "variable": RADIATION}
         )
         assert radiation.json()["months"] == ["2000-02"]
+        vegetation = api.post(
+            "/api/catalog/temporal-times",
+            json={**query, "variable": "vegetation_index"},
+        )
+        assert vegetation.status_code == 200, vegetation.text
+        assert vegetation.json() == {
+            "months": ["2000-03"],
+            "month": "2000-03",
+            "times": [
+                "2000-03-01T12:00:00.000Z",
+                "2000-03-02T12:00:00.000Z",
+                "2000-03-04T12:00:00.000Z",
+            ],
+        }
         absent = api.post(
             "/api/catalog/temporal-times", json={**query, "month": "2000-03"}
         )

@@ -1,4 +1,10 @@
-"""Resolve admitted ERA5 selections using published producer coverage."""
+"""Read ERA5-NCAR archive metadata through the temporal-source contracts.
+
+This adapter knows the downloader's SQLite catalog, monthly Zarr paths and
+quarter-degree global grid. It returns observation locations and available dates
+for the shared temporal reader and Catalog API. Variable names and dates come
+from the archive; another storage layout would need its own admission and adapter.
+"""
 
 import sqlite3
 from collections.abc import Iterator
