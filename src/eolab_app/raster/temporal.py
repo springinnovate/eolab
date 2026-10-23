@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Literal, Self
 
 import numpy
 import zarr
@@ -62,6 +62,24 @@ class TemporalObservation:
     nodata: float | int | None
     column_offset: int = 0
     cyclic_x: bool = False
+
+
+@dataclass(frozen=True)
+class ResolvedTemporalInterval:
+    """Describe available observations and their admitted variable metadata.
+
+    Attributes:
+        observations: Available observations in increasing label order, retaining
+            original interval bounds. Missing observations remain absent.
+        unit: Unit of the stored values, unchanged from Catalog admission.
+        time_support: Whether values describe an instant, a mean rate over an
+            interval, or an accumulation over an interval. Calculations use this
+            distinction to interpret the values without guessing from names.
+    """
+
+    observations: tuple[TemporalObservation, ...]
+    unit: str
+    time_support: Literal["instantaneous", "mean_rate", "accumulation"]
 
 
 class _ConfinedStore(LocalStore):

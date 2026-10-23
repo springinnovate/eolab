@@ -21,7 +21,18 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec, UnpreparedClip
 from eolab_app.raster.models import AuthorizedRaster
-from eolab_app.raster.source_models import RasterSourceReference
+from eolab_app.raster.source_models import (
+    RasterSourceReference,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.processing import temporal_operation as temporal
+from eolab_app.processing.temporal_models import (
+    TemporalMapRequest,
+    QueuedTemporalMap,
+    TemporalMapSpec,
+    TemporalReduction,
+)
 from eolab_app.processing import raster_operations as raster
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing import downstream_operation as downstream
@@ -111,12 +122,14 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     prepared_type: type[Prepared]
     policy_type: type[BaseModel]
     bind: Callable[[dict[str, Any], dict[str, Any], str, str], Request]
-    source: Callable[[Request | Queued | Prepared], RasterSourceReference]
+    source: Callable[
+        [Request | Queued | Prepared], RasterSourceReference | TemporalIntervalSelection
+    ]
     polygon: Callable[[Request], PolygonAreaReference | None]
     selection: Callable[[Request], VectorSelection | None]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
-        [OperationContext, Queued, AuthorizedRaster],
+        [OperationContext, Queued, AuthorizedRaster | ResolvedTemporalInterval],
         Awaitable[PreparedJobPlan],
     ]
     execution: Callable[
@@ -138,7 +151,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         Callable[[Request | Queued | Prepared], dict[str, RasterSourceReference]] | None
     ) = None
     execution_inputs: Callable[
-        [OperationContext, Prepared, AuthorizedRaster], Awaitable[tuple[Any, Prepared]]
+        [OperationContext, Prepared, AuthorizedRaster | ResolvedTemporalInterval],
+        Awaitable[tuple[Any, Prepared]],
     ] = raster.prepare_raster_execution
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()
     input_adapters: tuple[tuple[str, TypeAdapter[Any]], ...] = ()
@@ -169,6 +183,51 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[TemporalMapRequest, QueuedTemporalMap, TemporalMapSpec](
+                id="temporal.reduce.v1",
+                inputs=(
+                    ("source", "temporal_interval"),
+                    ("area", "summary_area"),
+                    ("reduction", "temporal_reduction"),
+                ),
+                parameters=(),
+                output=OperationOutput(
+                    "raster", "raster", "map", "image/tiff", "Period map"
+                ),
+                additional_outputs=(
+                    OperationOutput(
+                        "count",
+                        "raster",
+                        "map",
+                        "image/tiff",
+                        "Valid observation count",
+                    ),
+                ),
+                execution_profile="temporal-period-map",
+                queued_type=QueuedTemporalMap,
+                prepared_type=TemporalMapSpec,
+                policy_type=temporal.TemporalMapNumericalPolicy,
+                bind=temporal.bind_temporal_map,
+                source=temporal.get_temporal_source,
+                polygon=temporal.get_temporal_polygon,
+                selection=lambda request: request.catalogSelection,
+                queue=temporal.build_temporal_submission,
+                prepare=temporal.prepare_temporal_map,
+                execution=temporal.select_temporal_execution,
+                policy=temporal.describe_temporal_policy,
+                result=temporal.describe_temporal_result,
+                outcome=temporal.describe_temporal_outcome,
+                primary_input="source",
+                execution_inputs=temporal.prepare_temporal_execution,
+                input_adapters=(
+                    ("temporal_interval", TypeAdapter(TemporalIntervalSelection)),
+                    ("temporal_reduction", TypeAdapter(TemporalReduction)),
+                ),
+                progress_descriptions=(
+                    ("reducing", "Calculating the period map"),
+                    ("creating_cog", "Preparing result rasters"),
+                ),
+            ),
             ModelOperation[DownstreamRequest, QueuedDownstream, DownstreamPlan](
                 id="hydrology.downstream_beneficiaries.v1",
                 inputs=(

@@ -15,6 +15,7 @@ from rasterio.windows import Window
 from zarr.codecs import ZstdCodec
 
 from eolab_app.raster.catalog import StacRasterCatalog
+from eolab_app.raster.errors import RasterAssetError
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.models import RasterStatistics
 from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
@@ -315,7 +316,7 @@ def test_api_reads_selections_and_refreshes_statistics(era5_archive: Path) -> No
 
 
 def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) -> None:
-    """Select physical support across months, keeping missing hours absent.
+    """Resolve admitted variable metadata and original intervals without filling gaps.
 
     Args:
         era5_archive: Two partial months with a gap in precipitation coverage.
@@ -323,39 +324,100 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
     populate_month(era5_archive, PRECIPITATION, (1, 99, 3))
     scanner, writer = create_scanner(era5_archive.parent)
     asyncio.run(scan(scanner))
-    resolver = MountedRasterResolver(era5_archive.parent)
-    selection = TemporalIntervalSelection(
-        collectionId=ITEM_KEY[0],
-        itemId=ITEM_KEY[1],
-        variable=PRECIPITATION,
-        startTime="2000-01-31T23:00:00Z",
-        endTime="2000-02-01T02:00:00Z",
-    )
-    observations = resolver.get_observations(
-        writer.write_session.items[ITEM_KEY], selection
-    )
-    assert [value.time.hour for value in observations] == [0, 2]
-    assert [
-        (value.time - value.reference_time).total_seconds() for value in observations
-    ] == [6 * 3600, 6 * 3600]
-    assert [
-        (value.interval_end - value.interval_start).total_seconds()
-        for value in observations
-    ] == [3600, 3600]
-    values = list(
-        iter_temporal_windows(
-            observations, Window(720, 360, 1, 1), maximum_decoded_bytes=None
-        )
-    )
-    assert [float(array[0, 0]) for _, _, array in values] == [1, 3]
-    instant = selection.model_dump(by_alias=True)
-    instant.update(variable=TEMPERATURE, endTime="2000-02-01T00:00:00Z")
-    selected = resolver.get_observations(
-        writer.write_session.items[ITEM_KEY], TemporalIntervalSelection(**instant)
-    )
-    assert len(selected) == 1
-    assert selected[0].time.isoformat() == "2000-01-31T23:00:00+00:00"
-    assert selected[0].reference_time is None
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the scanner's persisted Item through the real Catalog adapter.
+
+        Args:
+            request: Internal request for the selected Catalog Item.
+
+        Returns:
+            The admitted Item or the ordinary missing-Item response.
+        """
+        parts = request.url.path.split("/")
+        item = writer.write_session.items.get((parts[-3], parts[-1]))
+        return httpx2.Response(404) if item is None else httpx2.Response(200, json=item)
+
+    async def resolve_periods() -> None:
+        """Read real source metadata, gaps and native values through authorization."""
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(catalog_response)
+        ) as client:
+            authorizer = CatalogRasterSourceAuthorizer(
+                StacRasterCatalog(client, "http://catalog"),
+                MountedRasterResolver(era5_archive.parent),
+            )
+            period = {
+                "collectionId": ITEM_KEY[0],
+                "itemId": ITEM_KEY[1],
+                "variable": PRECIPITATION,
+                "startTime": "2000-01-31T23:00:00Z",
+                "endTime": "2000-02-01T02:00:00Z",
+            }
+            interval = await authorizer.get_temporal_interval(
+                TemporalIntervalSelection(**period)
+            )
+            assert interval.unit == "kg m**-2 s**-1"
+            assert interval.time_support == "mean_rate"
+            observations = interval.observations
+            assert [value.time.hour for value in observations] == [0, 2]
+            assert [
+                (value.time - value.reference_time).total_seconds()
+                for value in observations
+            ] == [6 * 3600, 6 * 3600]
+            assert [
+                (value.interval_end - value.interval_start).total_seconds()
+                for value in observations
+            ] == [3600, 3600]
+            values = list(
+                iter_temporal_windows(
+                    observations, Window(720, 360, 1, 1), maximum_decoded_bytes=None
+                )
+            )
+            assert [float(array[0, 0]) for _, _, array in values] == [1, 3]
+            partial = await authorizer.get_temporal_interval(
+                TemporalIntervalSelection(
+                    **{
+                        **period,
+                        "startTime": "2000-01-31T23:30:00Z",
+                        "endTime": "2000-02-01T01:30:00Z",
+                    }
+                )
+            )
+            assert [
+                (value.time, value.interval_start, value.interval_end)
+                for value in partial.observations
+            ] == [
+                (value.time, value.interval_start, value.interval_end)
+                for value in observations
+            ]
+            instant = await authorizer.get_temporal_interval(
+                TemporalIntervalSelection(
+                    **{
+                        **period,
+                        "variable": TEMPERATURE,
+                        "endTime": "2000-02-01T00:00:00Z",
+                    }
+                )
+            )
+            assert instant.unit == "K" and instant.time_support == "instantaneous"
+            assert len(instant.observations) == 1
+            assert (
+                instant.observations[0].time.isoformat() == "2000-01-31T23:00:00+00:00"
+            )
+            assert instant.observations[0].reference_time is None
+            accumulated = await authorizer.get_temporal_interval(
+                TemporalIntervalSelection(**{**period, "variable": RADIATION})
+            )
+            assert accumulated.unit == "W m**-2 s"
+            assert accumulated.time_support == "accumulation"
+            assert len(accumulated.observations) == 1
+            with pytest.raises(RasterAssetError, match="selected variable"):
+                await authorizer.get_temporal_interval(
+                    TemporalIntervalSelection(**{**period, "variable": "unknown"})
+                )
+
+    asyncio.run(resolve_periods())
 
 
 def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:

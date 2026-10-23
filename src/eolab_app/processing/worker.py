@@ -22,7 +22,12 @@ from eolab_app.processing.artifact_manifest import FileDeclaration
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_models import (
+    RasterSourceReference,
+    RunArtifactReference,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
@@ -133,22 +138,26 @@ class ProcessingWorker:
         )
 
     async def _resolve_source(
-        self, row: dict[str, Any], source: RasterSourceReference
-    ) -> tuple[AuthorizedRaster, str | None]:
-        """Authorize catalog data or resolve a file retained by this accepted job.
+        self,
+        row: dict[str, Any],
+        source: RasterSourceReference | TemporalIntervalSelection,
+    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval, str | None]:
+        """Resolve catalog raster observations or a file retained by this accepted job.
 
         Args:
             row: Claimed computation with its current attempt token.
-            source: Operation-owned catalog or published-file reference.
+            source: Operation-owned catalog raster, temporal interval or published-file reference.
 
         Returns:
-            Confined raster path with catalog identity or the private input's
-            published checksum. The durable grant survives parent expiry/deletion.
+            Confined raster input or temporal observations, and a checksum only for
+            a private published file. A retained file survives parent expiry/deletion.
 
         Raises:
             ProcessingError: If the accepted grant or confined file is unavailable.
             RasterFeatureError: If catalog authorization fails.
         """
+        if isinstance(source, TemporalIntervalSelection):
+            return await self.authorizer.get_temporal_interval(source), None
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
         parent_attempt, file = await asyncio.to_thread(
@@ -203,7 +212,7 @@ class ProcessingWorker:
         row: dict[str, Any],
         calculation: BaseModel,
         model: ModelRunSpec | None,
-    ) -> tuple[AuthorizedRaster, str | None]:
+    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval, str | None]:
         """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:

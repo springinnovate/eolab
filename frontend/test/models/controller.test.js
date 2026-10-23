@@ -41,6 +41,24 @@ function fixture(overrides = {}, viewOverride = null) {
     return {controller, api, jobs, context, storage, values, submitted, cancelled, filterRequests, mapFilters, handlers};
 }
 
+test("model setup omits temporal recipes while retaining their run history", async () => {
+    const temporal = {...model, id: "temporal-period-map", inputs: {
+        source: {type: "temporal_interval", label: "Dataset and period"},
+        area: model.inputs.area,
+        reduction: {type: "temporal_reduction", label: "Statistic"},
+    }};
+    const run = job({model: temporal});
+    const h = fixture({discoverModels: async () => [model, temporal, clipModel],
+        listModelRuns: async () => ({jobs: [run], nextCursor: null})});
+    await h.controller.loadLibrary();
+    await h.controller.loadRuns();
+    assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, clipModel.id]);
+    assert.equal(h.controller.state.runs[0].jobId, run.jobId);
+    h.controller.chooseModel(model);
+    assert.equal(h.controller.state.page, "setup");
+    h.controller.destroy();
+});
+
 test("published results are explicit model choices without previews or map layers", async () => {
     const artifacts = fileManifest(), parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
     const h = fixture({listModelRuns: async () => ({jobs: [parent], nextCursor: null})});

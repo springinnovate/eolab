@@ -8,7 +8,7 @@ from eolab_app.raster.source_models import (
     TemporalTimeChoices,
     TemporalTimeQuery,
 )
-from eolab_app.raster.temporal import TemporalObservation
+from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
 from eolab_app.raster.catalog_metadata import cataloged_source_signature
 from eolab_app.raster.models import (
@@ -80,6 +80,33 @@ class CatalogRasterSourceAuthorizer:
         item = await self._catalog.get_item(selection)
         return await asyncio.to_thread(
             self._source_resolver.get_observations, item, selection
+        )
+
+    async def get_temporal_interval(
+        self, selection: TemporalIntervalSelection
+    ) -> ResolvedTemporalInterval:
+        """Return available observations with their admitted units and time support.
+
+        Args:
+            selection: Catalog variable and requested start-inclusive,
+                end-exclusive period.
+
+        Returns:
+            Ordered observations with original bounds and variable metadata.
+            Missing times remain absent; values are not converted or reduced.
+
+        Raises:
+            RasterFeatureError: If the Catalog, archive or selection is unavailable.
+        """
+        item = await self._catalog.get_item(selection)
+        observations = await asyncio.to_thread(
+            self._source_resolver.get_observations, item, selection
+        )
+        variable = item["properties"]["cube:variables"][selection.variable]
+        return ResolvedTemporalInterval(
+            observations=observations,
+            unit=variable["unit"],
+            time_support=variable["eolab:time_support"],
         )
 
     async def get_time_choices(self, query: TemporalTimeQuery) -> TemporalTimeChoices:
