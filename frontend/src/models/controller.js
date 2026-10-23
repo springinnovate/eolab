@@ -94,13 +94,18 @@ export class ModelsController {
         this.jobs.schedule(); this.render();
     }
 
-    /** Read installed recipes without letting an old response replace a newer load.
+    /** Load installed recipes whose inputs this setup form can edit.
+     * Other recipes remain available through the API and existing run history.
      * @return {Promise<void>}
      */
     async loadLibrary() {
         if (this.state.loading) return;
         this.state.loading = true; this.render();
-        try { this.state.library = await this.api.discoverModels(); }
+        try {
+            this.state.library = (await this.api.discoverModels()).filter(model =>
+                Object.values(model.inputs).every(input =>
+                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source"].includes(input.type)));
+        }
         catch (error) { this.state.error = `Model library unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
     }

@@ -54,7 +54,8 @@ from eolab_app.processing.artifact_manifest import (
     read_artifact_manifest,
 )
 from eolab_app.processing.model_operations import get_model_operation
-
+from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.raster.source_models import TemporalIntervalSelection
 
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
     """Describe a run with its editable name and fixed local creation timestamp.
@@ -275,7 +276,7 @@ def build_model_calculation_request(
 def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
-    signature: tuple[int, int, int, int] | None,
+    source_metadata: tuple[int, int, int, int] | ResolvedTemporalInterval | None,
     additional_signatures: dict[str, tuple[int, int, int, int]] | None = None,
 ) -> PreparedJobPlan:
     """Create a model job submission and save its recipe, inputs and software identity.
@@ -283,7 +284,8 @@ def build_model_job_submission(
     Args:
         prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
-        signature: Catalog source identity, or None for a retained published file.
+        source_metadata: Catalog raster identity, admitted temporal metadata,
+            or None for a retained published file.
         additional_signatures: Catalog identities for additional operation inputs.
 
     Returns:
@@ -312,6 +314,29 @@ def build_model_job_submission(
     }
     revision = compute_implementation_checksum()
     build = get_application_build_id()
+    if isinstance(source_metadata, ResolvedTemporalInterval):
+        source_record = {
+            "kind": "temporalInterval",
+            "unit": source_metadata.unit,
+            "timeSupport": source_metadata.time_support,
+        }
+    else:
+        source_record = {
+            "sourceSignature": compute_document_checksum(
+                source_metadata
+                if source_metadata is not None
+                else {"sha256": prepared.input_files[0].sha256}
+            ),
+            **(
+                {
+                    "sha256": prepared.input_files[0].sha256,
+                    "bytes": prepared.input_files[0].size,
+                }
+                if prepared.input_files
+                else {}
+            ),
+            "band": 1,
+        }
     metadata = {
         "invocation": invocation.model_dump(mode="json", by_alias=True),
         "execution": {
@@ -324,24 +349,7 @@ def build_model_job_submission(
                 }
             },
             "sources": {
-                definition.steps[0]
-                .inputs[operation.primary_input]
-                .input: {
-                    "sourceSignature": compute_document_checksum(
-                        signature
-                        if signature is not None
-                        else {"sha256": prepared.input_files[0].sha256}
-                    ),
-                    **(
-                        {
-                            "sha256": prepared.input_files[0].sha256,
-                            "bytes": prepared.input_files[0].size,
-                        }
-                        if prepared.input_files
-                        else {}
-                    ),
-                    "band": 1,
-                }
+                definition.steps[0].inputs[operation.primary_input].input: source_record
             },
         },
     }
@@ -475,7 +483,7 @@ def record_model_preparation(
     prepared: PreparedJobPlan,
     limits: ProcessingLimits,
 ) -> PreparedJobPlan:
-    """Add the prepared raster grid and calculation settings to a model job.
+    """Record the executed source grid and calculation settings in a model job.
 
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
@@ -516,6 +524,8 @@ def record_model_preparation(
         }
     )
     execution["sources"][raster_name]["grid"] = spec.grid.model_dump(mode="json")
+    if isinstance(operation.source(spec), TemporalIntervalSelection):
+        execution["sources"][raster_name]["unit"] = spec.unit
     export_yaml(metadata, run=True)
     return replace(
         prepared,

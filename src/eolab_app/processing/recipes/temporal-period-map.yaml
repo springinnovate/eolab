@@ -1,0 +1,40 @@
+schema: eolab.model/v1
+id: temporal-period-map
+version: "1.0.0"
+title: Map for a period
+description: Calculate a statistic at each pixel over available instantaneous observations in a period, and return a map of the number of valid observations. Observations have equal weight; sums retain the source units without integration over time.
+inputs:
+  source:
+    type: temporal_interval
+    label: Dataset and period
+  area:
+    type: summary_area
+    label: Analysis area
+  reduction:
+    type: temporal_reduction
+    label: Statistic
+parameters: {}
+steps:
+  - id: calculate
+    operation: temporal.reduce.v1
+    inputs:
+      source: {input: source}
+      area: {input: area}
+      reduction: {input: reduction}
+    parameters: {}
+outputs:
+  raster:
+    type: raster
+    label: Period map
+    source: calculate.raster
+    role: result
+    presentation: map
+    saveEligible: true
+  count:
+    type: raster
+    label: Valid observation count
+    source: calculate.count
+    role: result
+    presentation: map
+    saveEligible: true
+executionProfile: temporal-period-map

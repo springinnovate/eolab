@@ -10,7 +10,7 @@ from eolab_app.raster.source_models import (
     TemporalTimeQuery,
     TemporalVariableSelection,
 )
-from eolab_app.raster.temporal import TemporalObservation
+from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
 from eolab_app.raster.models import (
     AuthorizedRaster,
@@ -164,6 +164,22 @@ class RasterSourceAuthorizer(Protocol):
 
         Returns:
             Available observations in time order.
+
+        Raises:
+            RasterFeatureError: If Catalog, mount or selection access fails.
+        """
+        ...
+
+    async def get_temporal_interval(
+        self, selection: TemporalIntervalSelection
+    ) -> ResolvedTemporalInterval:
+        """Return available observations with their variable's units and time support.
+
+        Args:
+            selection: Validated Catalog variable and requested period.
+
+        Returns:
+            Ordered observations and admitted metadata for interpreting their values.
 
         Raises:
             RasterFeatureError: If Catalog, mount or selection access fails.

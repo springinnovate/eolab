@@ -20,7 +20,12 @@ from eolab_app.processing.models import (
     ProcessingError,
     PreparedJobPlan,
 )
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_models import (
+    RasterSourceReference,
+    RunArtifactReference,
+    TemporalIntervalSelection,
+)
+from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
@@ -258,7 +263,9 @@ class ProcessingService:
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation)
-        signature = None
+        source_metadata: tuple[int, int, int, int] | ResolvedTemporalInterval | None = (
+            None
+        )
         if not isinstance(source, RunArtifactReference):
             if self.model_authorizer is None:
                 raise ProcessingError(
@@ -266,8 +273,13 @@ class ProcessingService:
                     "Model source authorization is unavailable.",
                     503,
                 )
-            authorized = await self.model_authorizer.authorize(source)
-            signature = tuple(authorized.source_signature.to_catalog())
+            if isinstance(source, TemporalIntervalSelection):
+                source_metadata = await self.model_authorizer.get_temporal_interval(
+                    source
+                )
+            else:
+                authorized = await self.model_authorizer.authorize(source)
+                source_metadata = tuple(authorized.source_signature.to_catalog())
         reference = operation.polygon(calculation)
         polygons = await self.read_polygon_area(owner, reference) if reference else None
         operation_plan = operation.queue(calculation, polygons)
@@ -302,7 +314,7 @@ class ProcessingService:
         prepared = build_model_job_submission(
             operation_plan,
             invocation,
-            signature,
+            source_metadata,
             additional_signatures,
         )
         prepared = replace(
@@ -474,13 +486,16 @@ class ProcessingService:
                 await finish_source_task(task)
 
     async def capture_input_file(
-        self, owner: str, source: RasterSourceReference, prepared: PreparedJobPlan
+        self,
+        owner: str,
+        source: RasterSourceReference | TemporalIntervalSelection,
+        prepared: PreparedJobPlan,
     ) -> PreparedJobPlan:
         """Capture a published raster identity for atomic job-input admission.
 
         Args:
             owner: Requesting browser session hash.
-            source: Catalog identity or owned published-file reference.
+            source: Catalog raster, temporal interval or owned published-file reference.
             prepared: Operation-owned queued specification.
 
         Returns:

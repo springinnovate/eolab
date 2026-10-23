@@ -40,7 +40,7 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.source_models import RasterSourceReference
 from eolab_app.processing.model_yaml import encode_canonical_json
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.processing.model_result_contracts import ModelResult
+from eolab_app.processing.model_result_contracts import ModelResult, RasterResultGrid
 from eolab_app.processing.artifact_manifest import (
     FileId,
     OutputName,
@@ -449,16 +449,16 @@ class RunDocument(ModelSchema):
             or self.execution.operations[step.id].id != step.operation
         ):
             raise ValueError("Execution operation does not match the captured recipe")
-        raster_roles = {
-            name
-            for name, role in definition.inputs.items()
-            if role.type in {"raster", "catalog_raster"}
-        }
-        if set(self.execution.sources) != raster_roles:
+        operation = get_model_operation(step.operation)
+        source_name = step.inputs[operation.primary_input].input
+        if set(self.execution.sources) != {source_name}:
             raise ValueError("Execution sources do not match the captured recipe")
-        for name in raster_roles:
-            private = self.invocation.inputs[name].get("kind") == "runArtifact"
-            recorded = self.execution.sources[name]
+        recorded = self.execution.sources[source_name]
+        temporal = definition.inputs[source_name].type == "temporal_interval"
+        if temporal != isinstance(recorded, ResolvedTemporalModelSource):
+            raise ValueError("Execution source metadata does not match its input type")
+        if isinstance(recorded, ResolvedModelSource):
+            private = self.invocation.inputs[source_name].get("kind") == "runArtifact"
             if private != (recorded.sha256 is not None and recorded.bytes is not None):
                 raise ValueError(
                     "Private raster provenance requires its published checksum and size"
@@ -485,6 +485,20 @@ class ResolvedModelSource(ModelSchema):
     bytes: Annotated[int, Field(gt=0)] | None = None
     band: Literal[1]
     grid: AggregateGrid | ClipGrid | None = None
+
+
+class ResolvedTemporalModelSource(ModelSchema):
+    """Record a temporal variable's units, time support and executed spatial grid.
+
+    The requested dataset, variable and half-open period remain in the captured
+    invocation. The operation's numerical policy records the actual observations
+    used; this record neither fingerprints the archive nor pins a past revision.
+    """
+
+    kind: Literal["temporalInterval"]
+    unit: str
+    timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
+    grid: RasterResultGrid | None = None
 
 
 class ModelExecutionLimits(ModelSchema):
@@ -524,14 +538,17 @@ class ModelOutcome(ModelSchema):
 class ModelExecution(ModelSchema):
     """Software, source data, calculation settings and results recorded for a run.
 
-    Before preparation, it records the software and source checksums. Preparation
-    adds grid details and result retention; completion adds the outcome.
+    Admission records the software and source metadata. Preparation adds the
+    executed grid, numerical policy and result retention; completion adds the
+    outcome. Temporal sources record variable metadata without archive checksums.
     """
 
     state: Literal["pending", "prepared"]
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
     operations: dict[Name, OperationImplementation] = Field(min_length=1, max_length=1)
-    sources: dict[Name, ResolvedModelSource] = Field(min_length=1, max_length=1)
+    sources: dict[Name, ResolvedModelSource | ResolvedTemporalModelSource] = Field(
+        min_length=1, max_length=1
+    )
     additionalSources: dict[Name, Digest] = Field(
         default_factory=dict, max_length=16, exclude_if=lambda value: not value
     )

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 SUITES = (
+    "test_temporal_processing_postgres.py",
     "test_processing_private_inputs_postgres.py",
     "test_processing_uploaded_vectors.py",
     "test_model_artifact_previews_postgres.py",
@@ -78,6 +79,9 @@ class RequiredDatabaseTests:
 def main() -> int:
     """Execute fixed database suites using an explicit disposable DSN.
 
+    The repository root makes shared test fixtures importable; application code
+    still comes from the installed package because src is not added to sys.path.
+
     Returns:
         Pytest exit code, nonzero for failures, absent coverage or skips.
     """
@@ -91,7 +95,7 @@ def main() -> int:
                 "-c",
                 str(root / "pyproject.toml"),
                 "-o",
-                "pythonpath=",
+                f"pythonpath={root}",
                 "-o",
                 "addopts=",
                 "-p",
