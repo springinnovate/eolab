@@ -2,7 +2,7 @@ schema: eolab.model/v1
 id: temporal-period-map
 version: "1.0.0"
 title: Map for a period
-description: Calculate a statistic over instantaneous observations, or integrate mean precipitation rates in kg m**-2 s**-1 into a total in millimetres. Results include valid-observation counts; gaps remain missing. Ordinary sums retain the source units without integration. Precipitation totals require whole UTC hours.
+description: Calculate a statistic over instantaneous observations or total precipitation for a period. Results include valid-observation counts; gaps remain missing. Ordinary sums retain the source units without integration. Precipitation totals require whole UTC hours.
 inputs:
   source:
     type: temporal_interval
@@ -21,6 +21,12 @@ steps:
       source: {input: source}
       area: {input: area}
       reduction: {input: reduction}
+      precipitation:
+        value:
+          inputUnit: "kg m**-2 s**-1"
+          outputUnit: mm
+          # Total = sum(rate * interval seconds * factor).
+          factor: 1
     parameters: {}
 outputs:
   raster:

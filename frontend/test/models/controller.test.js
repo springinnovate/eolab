@@ -47,7 +47,9 @@ const periodModel = {...model, id: "regional-period-statistic", parameters: {}, 
     weather: {type: "temporal_interval", label: "Dataset and period"},
     region: {type: "summary_area", label: "Analysis area"},
     statistic: {type: "temporal_reduction", label: "Statistic"},
-}, steps: [{id: "calculate", operation: "another.period-implementation.v2"}]};
+}, steps: [{id: "calculate", operation: "another.period-implementation.v2", inputs: {
+    precipitation: {value: {inputUnit: "kg m**-2 s**-1", outputUnit: "mm", factor: 1}},
+}}]};
 const temporalDataset = {collectionId: "eolab-temporal-datasets", itemId: "observations", label: "Weather observations"};
 const temporalItem = {collection: temporalDataset.collectionId, id: temporalDataset.itemId, properties: {
     title: "Weather observations", "cube:variables": {
@@ -248,6 +250,35 @@ test("a sole precipitation variable defaults to totals and copied runs preserve 
     assert.deepEqual(request.inputs, saved.inputs);
     assert.equal(h.controller.state.draft.areaMode, "captured");
     assert.equal(h.submitted.length, 0);
+    h.controller.destroy();
+});
+
+test("recipe precipitation units determine supported variables and labels without adding conversion settings to requests", async () => {
+    const recipe = structuredClone(periodModel);
+    recipe.steps[0].inputs.precipitation.value = {inputUnit: "mm/hour", outputUnit: "cm", factor: 1 / 36000};
+    const item = structuredClone(temporalItem);
+    item.properties["cube:variables"].rain.unit = "mm/hour";
+    item.properties["cube:variables"].water_flux = {description: "Another precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"};
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc);
+    const h = fixture({getTemporalItem: async () => structuredClone(item),
+        loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
+    h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
+    h.controller.chooseModel(recipe);
+    await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
+    await h.controller.chooseTemporalVariable("rain");
+    const controls = view.setup.temporal;
+    assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
+    assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, true);
+    assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (cm)"]);
+    assert.match(controls.support.textContent, /mean precipitation rates in mm\/hour/);
+    assert.match(controls.reductionHelp.textContent, /rate in mm\/hour.*converted to cm/);
+    controls.startTime.value = "2000-01-01T00:10"; controls.startTime.dispatchEvent(new Event("change"));
+    controls.endTime.value = "2000-01-01T02:30"; controls.endTime.dispatchEvent(new Event("change"));
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs, {weather: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
+        variable: "rain", startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-01-01T03:00:00.000Z"},
+        region: area, statistic: {reducer: "precipitation_total"}});
+    assert.deepEqual(h.submitted[0].parameters, {});
     h.controller.destroy();
 });
 

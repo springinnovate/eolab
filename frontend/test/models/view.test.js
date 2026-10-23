@@ -475,7 +475,9 @@ function temporalFixture() {
         observations: {type: "temporal_interval", label: "Dataset and period"},
         region: {type: "summary_area", label: "Analysis area"},
         statistic: {type: "temporal_reduction", label: "Period statistic"},
-    }};
+    }, steps: [{id: "calculate", operation: "another.period-implementation.v2", inputs: {
+        precipitation: {value: {inputUnit: "kg m**-2 s**-1", outputUnit: "mm", factor: 1}},
+    }}]};
     const dataset = {collectionId: "eolab-temporal-datasets", itemId: "vegetation", label: "Vegetation observations"};
     const draft = createModelDraft(recipe, {temporalDatasets: [dataset], area}, "temporal-draft");
     Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "vegetation_index",
@@ -574,7 +576,7 @@ test("precipitation controls explain duration totals and round changed dates vis
     assert.match(controls.periodHelp.textContent, /30 minutes rounds forward/);
     assert.match(controls.availabilityHelp.textContent, /observation labels, not the boundaries/);
     assert.match(controls.reductionHelp.textContent, /interval duration in seconds/);
-    assert.match(controls.reductionHelp.textContent, /millimetres \(mm\)/);
+    assert.match(controls.reductionHelp.textContent, /converted to mm/);
     assert.match(controls.reductionHelp.textContent, /omitted, not filled with zero/);
     assert.match(controls.reductionHelp.textContent, /counts valid available observations/);
     controls.endTime.focus(); controls.endTime.value = "2020-02-29T23:30";

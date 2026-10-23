@@ -203,6 +203,7 @@ def _reduce_ordered_values(
 def _reduce_window(
     interval: ResolvedTemporalInterval,
     reduction: TemporalReduction,
+    conversion_factor: float,
     window: Window,
     column_rotation: int,
     scratch: Path,
@@ -212,6 +213,8 @@ def _reduce_window(
     Args:
         interval: Authorized observations in increasing label order.
         reduction: Equal-weight statistic or integrated precipitation total.
+        conversion_factor: Model-configured multiplier after rate times seconds;
+            unused by instantaneous statistics.
         window: Integral native tile in the planned longitude view.
         column_rotation: Source-column shift shared by every observation.
         scratch: Attempt-owned temporary file for exact order statistics.
@@ -248,7 +251,7 @@ def _reduce_window(
             seconds = (
                 observation.interval_end - observation.interval_start
             ).total_seconds()
-            result[valid] += current * seconds
+            result[valid] += current * seconds * conversion_factor
         elif reduction.reducer == "sum":
             result[valid] += current
         elif reduction.reducer in {"mean", "stdev"}:
@@ -432,6 +435,7 @@ def create_temporal_map(
                         values, counts = _reduce_window(
                             interval,
                             spec.reduction,
+                            spec.conversionFactor,
                             window,
                             grid.columnRotation,
                             directory / "ordered-values.bin",

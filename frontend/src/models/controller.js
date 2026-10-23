@@ -194,10 +194,10 @@ export class ModelsController {
      */
     configureTemporalVariable(draft) {
         const temporal = draft.temporal, variable = temporal.item.properties["cube:variables"][temporal.variable];
-        const statistics = getTemporalStatistics(variable);
+        const statistics = getTemporalStatistics(variable, temporal.precipitation);
         if (statistics.length && !statistics.some(choice => choice.value === draft.reduction.reducer))
             draft.reduction.reducer = statistics[0].value;
-        if (supportsPrecipitationTotal(variable)) {
+        if (supportsPrecipitationTotal(variable, temporal.precipitation)) {
             temporal.startTime = snapTemporalHour(temporal.startTime);
             temporal.endTime = snapTemporalHour(temporal.endTime);
         }
@@ -226,7 +226,7 @@ export class ModelsController {
                 temporal.item = item;
                 if (!temporal.variable) {
                     const variables = Object.entries(item.properties["cube:variables"])
-                        .filter(([, value]) => getTemporalStatistics(value).length);
+                        .filter(([, value]) => getTemporalStatistics(value, temporal.precipitation).length);
                     if (variables.length === 1) {
                         temporal.variable = variables[0][0];
                         this.configureTemporalVariable(draft);
@@ -234,7 +234,7 @@ export class ModelsController {
                 }
             }
             const variable = temporal.item.properties["cube:variables"][temporal.variable];
-            if (!getTemporalStatistics(variable).length) { temporal.choices = null; return; }
+            if (!getTemporalStatistics(variable, temporal.precipitation).length) { temporal.choices = null; return; }
             try {
                 const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
                 if (isCurrent()) temporal.choices = choices;

@@ -20,14 +20,30 @@ from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.source_models import TemporalIntervalSelection
 
 
+class PrecipitationConversion(BaseModel):
+    """Configure the source units and conversion used for precipitation totals.
+
+    Attributes:
+        inputUnit: Exact unit required on the admitted mean-rate variable.
+        outputUnit: Unit written on the resulting total raster.
+        factor: Positive multiplier applied after rate times interval seconds:
+            total = sum(rate * seconds * factor).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    inputUnit: Annotated[str, Field(strict=True, min_length=1)]
+    outputUnit: Annotated[str, Field(strict=True, min_length=1)]
+    factor: Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
+
+
 class TemporalReduction(BaseModel):
     """Select an observation statistic or precipitation total at each cell.
 
     Statistics give valid observations equal weight. Standard deviation is the
     population statistic; percentiles use exact linear interpolation and require
     a percentile value. Sum retains the source units without integration.
-    Precipitation total integrates mean rates in kg m**-2 s**-1 over their recorded
-    intervals and returns millimetres of water equivalent.
+    Precipitation total integrates mean rates over their recorded intervals,
+    using the model's configured units and conversion factor.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -74,6 +90,7 @@ class TemporalMapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     source: TemporalIntervalSelection
     reduction: TemporalReduction
+    precipitation: PrecipitationConversion
     selectedBounds: Wgs84Bounds | None = None
     catalogSelection: VectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
@@ -161,6 +178,8 @@ class TemporalMapSpec(BaseModel):
     The authorized observations and their file locations stay in worker memory.
     Detailed observation labels and support intervals belong in provenance.json.
     unit describes the output values; original units remain in source metadata.
+    conversionFactor multiplies each rate after integration over interval seconds;
+    ordinary instantaneous statistics use 1.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -170,6 +189,7 @@ class TemporalMapSpec(BaseModel):
     area: AggregateArea
     grid: TemporalMapGrid
     unit: str
+    conversionFactor: float
     observationCount: int
     firstObservation: datetime
     lastObservation: datetime

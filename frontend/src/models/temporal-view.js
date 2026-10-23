@@ -95,13 +95,13 @@ export class TemporalModelInputsView {
                 temporal.item.properties.title : dataset.label}))], temporal.datasetKey);
         const variables = Object.entries(temporal.item?.properties["cube:variables"] ?? {});
         this.options(this.variable, [{value: "", label: "Choose a variable…"}, ...variables.map(([id, value]) => ({value: id,
-            label: `${value.description} (${value.unit})${getTemporalStatistics(value).length ? "" : " — not supported"}`,
-            disabled: !getTemporalStatistics(value).length}))], temporal.variable);
+            label: `${value.description} (${value.unit})${getTemporalStatistics(value, temporal.precipitation).length ? "" : " — not supported"}`,
+            disabled: !getTemporalStatistics(value, temporal.precipitation).length}))], temporal.variable);
         this.variable.disabled = !temporal.item;
-        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value).length);
-        this.support.textContent = "Period maps support instantaneous measurements and mean precipitation rates in kg m**-2 s**-1. Other rates and accumulated values are not supported.";
+        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value, temporal.precipitation).length);
+        this.support.textContent = `Period maps support instantaneous measurements and mean precipitation rates in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
         const variable = temporal.item?.properties["cube:variables"][temporal.variable];
-        const precipitation = supportsPrecipitationTotal(variable), precisionChanged = precipitation !== this.precipitation;
+        const precipitation = supportsPrecipitationTotal(variable, temporal.precipitation), precisionChanged = precipitation !== this.precipitation;
         this.precipitation = precipitation;
         for (const name of ["startTime", "endTime"]) {
             this[name].step = precipitation ? "3600" : "any";
@@ -124,7 +124,7 @@ export class TemporalModelInputsView {
         this.coverage.textContent = temporal.loading ? "Loading available observations…" : temporal.datesError ? temporal.datesError : !choices ? "Choose a variable to see available observations." :
             choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${choices.month}. First: ${observationLabel(choices.times[0])}. Last: ${observationLabel(choices.times.at(-1))}.` :
                 "No observations are available in this month. Choose another month or enter a different period.";
-        this.options(this.statistic, getTemporalStatistics(variable), reduction.reducer);
+        this.options(this.statistic, getTemporalStatistics(variable, temporal.precipitation), reduction.reducer);
         this.percentileField.hidden = reduction.reducer !== "percentile";
         this.percentile.disabled = reduction.reducer !== "percentile";
         if (this.document.activeElement !== this.percentile) this.percentile.value = reduction.percentile ?? "";
@@ -136,7 +136,7 @@ export class TemporalModelInputsView {
                 reduction.reducer === "sum" ? " The sum adds observations without multiplying by elapsed time." : "";
         const unit = variable?.unit;
         this.reductionHelp.textContent = precipitation ?
-            "Each precipitation rate is multiplied by its interval duration in seconds and converted to millimetres (mm). Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel." :
+            `Each precipitation rate in ${temporal.precipitation.inputUnit} is multiplied by its interval duration in seconds and converted to ${temporal.precipitation.outputUnit}. Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel.` :
             `Each valid observation has equal weight; missing values are omitted.${unit ? ` Result units: ${unit}.` : ""}${convention} A second map counts valid observations at each pixel.`;
         return selectionError || reductionError;
     }

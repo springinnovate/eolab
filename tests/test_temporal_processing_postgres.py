@@ -18,6 +18,7 @@ import zarr
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
 from eolab_app.processing.service import ProcessingService
@@ -297,16 +298,37 @@ def test_period_map_rejects_rate_variables_without_publishing(
     assert failed["artifacts"]["files"] == []
 
 
-def test_precipitation_total_publishes_mm_and_preserves_input_units(
-    temporal_boundary: TemporalBoundary, store: PostgresJobStore
+@pytest.mark.parametrize(
+    "conversion",
+    [None, {"inputUnit": "m s**-1", "outputUnit": "cm", "factor": 100.0}],
+)
+def test_precipitation_total_uses_model_conversion_and_preserves_input_units(
+    temporal_boundary: TemporalBoundary,
+    store: PostgresJobStore,
+    conversion: dict[str, Any] | None,
 ) -> None:
-    """Integrate cross-month hourly support, preserving gaps and native validity.
+    """Publish totals using the recipe's conversion, preserving gaps and validity.
 
     Args:
         temporal_boundary: Real temporal source, HTTP service and native worker.
         store: Disposable PostgreSQL lifecycle storage.
+        conversion: Alternate model conversion, or None for the installed recipe.
     """
-    client, worker, _, archive, _ = temporal_boundary
+    client, worker, service, archive, scanner = temporal_boundary
+    definition = service.model_registry.get("temporal-period-map", "1.0.0")
+    if conversion is not None:
+        document = definition.to_document()
+        document["steps"][0]["inputs"]["precipitation"]["value"] = conversion
+        definition = ModelDefinition.model_validate(document)
+        service.model_registry = ModelRegistry((definition,))
+        for month in ("01", "02"):
+            zarr.open_array(
+                archive / f"2000/{month}/era5.zarr" / PRECIPITATION, mode="r+"
+            ).attrs["units"] = conversion["inputUnit"]
+        assert client.portal.call(scan, scanner)["errors"] == []
+    configured = definition.to_document()["steps"][0]["inputs"]["precipitation"][
+        "value"
+    ]
     array = zarr.open_array(archive / "2000/02/era5.zarr" / PRECIPITATION, mode="r+")
     array[0, 360, 0] = 0
     array[2, 360, 0] = numpy.nan
@@ -323,7 +345,7 @@ def test_precipitation_total_publishes_mm_and_preserves_input_units(
     ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert ready["status"] == "ready", ready
     assert ready["result"]["temporalCoverage"] == {
-        "unit": "mm",
+        "unit": configured["outputUnit"],
         "observationCount": 2,
         "firstObservation": "2000-02-01T00:00:00Z",
         "lastObservation": "2000-02-01T02:00:00Z",
@@ -335,7 +357,11 @@ def test_precipitation_total_publishes_mm_and_preserves_input_units(
     }
     assert set(rasters) == {"raster", "count"}
     for name, expected, unit in (
-        ("raster", [8 * 3600, 0, numpy.nan], "mm"),
+        (
+            "raster",
+            [8 * 3600 * configured["factor"], 0, numpy.nan],
+            configured["outputUnit"],
+        ),
         ("count", [2, 1, 0], "observations"),
     ):
         with (
@@ -351,13 +377,21 @@ def test_precipitation_total_publishes_mm_and_preserves_input_units(
         client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
     )
     assert exported["invocation"]["inputs"] == request["inputs"]
-    assert exported["execution"]["sources"]["source"]["unit"] == "kg m**-2 s**-1"
+    assert (
+        exported["invocation"]["model"]["definition"]["steps"][0]["inputs"][
+            "precipitation"
+        ]["value"]
+        == configured
+    )
+    assert exported["execution"]["sources"]["source"]["unit"] == configured["inputUnit"]
     policy = exported["execution"]["numericalPolicy"]
     assert policy["timeSupport"] == "mean_rate"
     assert policy["weighting"] == "interval_duration"
-    assert policy["unit"] == "mm"
+    assert policy["unit"] == configured["outputUnit"]
     provenance = client.get(ready["result"]["provenanceUrl"]).json()
-    assert provenance["inputUnit"] == "kg m**-2 s**-1"
+    assert provenance["inputUnit"] == configured["inputUnit"]
+    assert provenance["unit"] == configured["outputUnit"]
+    assert provenance["conversionFactor"] == configured["factor"]
     assert provenance["availableDurationSeconds"] == 7200
     assert [item["time"] for item in provenance["observations"]] == [
         "2000-02-01T00:00:00+00:00",

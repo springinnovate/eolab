@@ -28,6 +28,7 @@ from eolab_app.raster.source_models import (
 from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing import temporal_operation as temporal
 from eolab_app.processing.temporal_models import (
+    PrecipitationConversion,
     TemporalMapRequest,
     QueuedTemporalMap,
     TemporalMapSpec,
@@ -193,6 +194,7 @@ OPERATIONS = MappingProxyType(
                     ("source", "temporal_interval"),
                     ("area", "summary_area"),
                     ("reduction", "temporal_reduction"),
+                    ("precipitation", "precipitation_conversion"),
                 ),
                 parameters=(),
                 output=OperationOutput(
@@ -223,6 +225,7 @@ OPERATIONS = MappingProxyType(
                 outcome=temporal.describe_temporal_outcome,
                 primary_input="source",
                 execution_inputs=temporal.prepare_temporal_execution,
+                fixed_input_models=(("precipitation", PrecipitationConversion),),
                 input_adapters=(
                     ("temporal_interval", TypeAdapter(TemporalIntervalSelection)),
                     ("temporal_reduction", TypeAdapter(TemporalReduction)),

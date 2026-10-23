@@ -53,7 +53,8 @@ def bind_temporal_map(
     """Capture a recipe's dataset period, statistic and existing analysis area.
 
     Args:
-        inputs: Source, reduction and area checked against the recipe's input types.
+        inputs: Source, reduction and area checked against the recipe's input types,
+            plus the model's validated precipitation conversion.
         parameters: Empty mapping required by this operation's recipe.
         request_id: Submission retry identifier retained by the model-run service.
         label: Run name retained by the model-run service.
@@ -67,6 +68,7 @@ def bind_temporal_map(
     return TemporalMapRequest(
         source=inputs["source"],
         reduction=inputs["reduction"],
+        precipitation=inputs["precipitation"],
         **bind_area_arguments(inputs["area"]),
     )
 
@@ -131,9 +133,8 @@ async def prepare_temporal_map(
 ) -> PreparedJobPlan:
     """Prepare a native period map after matching the statistic to source metadata.
 
-    Ordinary statistics retain the source units. Precipitation totals integrate
-    kg m**-2 s**-1 over seconds to obtain kg/m², equivalent to mm of water;
-    their output units therefore differ from the source rate's units.
+    Ordinary statistics retain the source units. Precipitation totals use the
+    model's configured source units, output units and conversion factor.
 
     Args:
         context: Existing worker execution and vector-selection capabilities.
@@ -148,19 +149,23 @@ async def prepare_temporal_map(
             or time support, no observations overlap, or area preparation fails.
     """
     output_unit = source.unit
+    conversion_factor = 1.0
+    precipitation = queued.request.precipitation
     if queued.request.reduction.reducer == "precipitation_total":
-        if source.time_support != "mean_rate" or source.unit != "kg m**-2 s**-1":
+        if source.time_support != "mean_rate" or source.unit != precipitation.inputUnit:
             raise ProcessingError(
                 "unsupported_precipitation_source",
-                "Precipitation total requires mean rates in kg m**-2 s**-1. "
+                f"Precipitation total requires mean rates in {precipitation.inputUnit}. "
                 "Choose a precipitation-rate variable with those units.",
             )
-        output_unit = "mm"
+        output_unit = precipitation.outputUnit
+        conversion_factor = precipitation.factor
     elif source.time_support != "instantaneous":
         raise ProcessingError(
             "unsupported_time_support",
             "This statistic requires instantaneous measurements. "
-            "Use Precipitation total for mean precipitation rates in kg m**-2 s**-1.",
+            "Use Precipitation total for mean precipitation rates in "
+            f"{precipitation.inputUnit}.",
         )
     if not source.observations:
         raise ProcessingError(
@@ -206,6 +211,7 @@ async def prepare_temporal_map(
         area=area,
         grid=grid,
         unit=output_unit,
+        conversionFactor=conversion_factor,
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
         lastObservation=source.observations[-1].time,
