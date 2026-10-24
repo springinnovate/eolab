@@ -832,8 +832,9 @@ def test_saved_invocation_rejects_extra_fields(
 
 
 def test_temporal_stack_recipe_binds_formulas_and_only_the_area_they_use() -> None:
-    """Bind discovered metrics to execution while retaining exact invocation inputs."""
+    """Preserve temporal identity and metrics through binding and queued job storage."""
     from eolab_app.processing.temporal_stack_models import TemporalStackRequest
+    from eolab_app.processing.temporal_stack_operation import build_stack_submission
 
     registry = ModelRegistry.load_installed()
     definition = registry.get("temporal-raster-stack", "1.0.0")
@@ -883,6 +884,12 @@ def test_temporal_stack_recipe_binds_formulas_and_only_the_area_they_use() -> No
     )
     assert request.wholeRaster is None
     assert invocation.inputs == body["inputs"]
+    plan = build_stack_submission(request, None)
+    operation = operation_registry.get_model_operation(definition.steps[0].operation)
+    restored = operation.parse_specification(plan.specification)
+    assert restored.request == request
+    assert plan.specification["request"]["source"] == body["inputs"]["source"]
+    assert plan.summary["source"] == body["inputs"]["source"]
     assert (
         ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
         == invocation

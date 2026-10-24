@@ -688,6 +688,7 @@ def test_temporal_stack_csv_preserves_named_results_and_path_free_provenance(
     provenance_text = (directory / "provenance.json").read_text(encoding="utf-8")
     provenance = json.loads(provenance_text)
     assert provenance["metrics"] == metrics.model_dump(mode="json")
+    assert provenance["source"] == spec.source.model_dump(mode="json", by_alias=True)
     assert provenance["sourceUnit"] == "K"
     assert provenance["groundArea"]["strategy"] == "rectilinear"
     assert provenance["temporalAggregation"] == "none"

@@ -89,9 +89,9 @@ def build_stack_submission(
     """
     queued = QueuedTemporalStack(request=request, polygonArea=polygons)
     return PreparedJobPlan(
-        specification=queued.model_dump(mode="json"),
+        specification=queued.model_dump(mode="json", by_alias=True),
         summary={
-            "source": request.source.model_dump(mode="json"),
+            "source": request.source.model_dump(mode="json", by_alias=True),
             "metrics": request.metrics.model_dump(mode="json"),
             "grid": None,
         },
@@ -155,12 +155,12 @@ async def prepare_temporal_stack(
         lastObservation=source.observations[-1].time,
     )
     return PreparedJobPlan(
-        specification=spec.model_dump(mode="json"),
+        specification=spec.model_dump(mode="json", by_alias=True),
         summary={
-            "source": spec.source.model_dump(mode="json"),
+            "source": spec.source.model_dump(mode="json", by_alias=True),
             "metrics": spec.metrics.model_dump(mode="json"),
             "grid": spec.grid.model_dump(mode="json"),
-            "area": spec.area.model_dump(mode="json"),
+            "area": spec.area.model_dump(mode="json", by_alias=True),
         },
         reserved_bytes=0,
         operation=spec.operation,

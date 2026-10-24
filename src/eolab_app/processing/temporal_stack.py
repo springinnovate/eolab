@@ -103,7 +103,7 @@ def create_temporal_stack(
         row_count=len(interval.observations) * len(spec.metrics.calculations),
     )
     provenance = {
-        **spec.model_dump(mode="json"),
+        **spec.model_dump(mode="json", by_alias=True),
         "observations": [
             {
                 "time": observation.time.isoformat(),
