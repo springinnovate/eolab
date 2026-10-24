@@ -10,9 +10,10 @@ from fastapi.testclient import TestClient
 import httpx2
 import numpy
 import pytest
-import zarr
+import rasterio
 from rasterio.windows import Window
-from zarr.codecs import ZstdCodec
+from contextlib import closing
+import sqlite3
 
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.errors import RasterAssetError
@@ -27,7 +28,7 @@ from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.raster.statistics_service import RasterStatisticsService
-from eolab_app.raster.temporal import iter_temporal_windows
+from eolab_app.raster.reader import open_raster_data
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.catalog import create_catalog_router
 from tests.test_catalog_temporal import (
@@ -39,33 +40,38 @@ from tests.test_catalog_temporal import (
     create_scanner,
     era5_archive,
     publish_month,
+    observation_path,
     scan,
 )
 
+
 def populate_month(archive: Path, variable: str, values: tuple[float, ...]) -> None:
-    """Write sparse February weather cells using the actual sharded storage format.
+    """Write sparse February values into published GeoTIFF observations.
 
     Args:
-        archive: Real test producer archive with published February coverage.
+        archive: Test producer archive with published February coverage.
         variable: Variable already recorded in SQLite.
-        values: Native values at the three available time coordinates.
+        values: Native values for hours zero, one and two; absent hours stay absent.
     """
-    step, unit, title = VARIABLES[variable]
-    array = zarr.create_array(
-        archive / "2000/02/era5.zarr" / variable,
-        shape=(3, 721, 1440),
-        chunks=(696, 32, 32),
-        shards=(696, 64, 64),
-        dtype="float32",
-        fill_value=numpy.nan,
-        overwrite=True,
-        compressors=[ZstdCodec(level=3)],
-        dimension_names=("time", "latitude", "longitude"),
-        attributes={"step_type": step, "units": unit, "long_name": title},
-    )
-    for index, value in enumerate(values):
-        array[index, 359:362, :3] = value
-        array[index, 359:362, -3:] = value + 2
+    with closing(sqlite3.connect(archive / "catalog.sqlite")) as connection:
+        rows = connection.execute(
+            "SELECT path, valid_time FROM observations WHERE variable = ? "
+            "AND strftime('%Y-%m', valid_time, 'unixepoch') = '2000-02'",
+            (variable,),
+        ).fetchall()
+    for relative_path, time in rows:
+        value = values[(time - 949363200) // 3600]
+        with rasterio.open(archive / relative_path, "r+") as raster:
+            raster.write(
+                numpy.full((3, 3), value, dtype="float32"),
+                1,
+                window=Window(720, 359, 3, 3),
+            )
+            raster.write(
+                numpy.full((3, 3), value + 2, dtype="float32"),
+                1,
+                window=Window(717, 359, 3, 3),
+            )
 
 
 def test_api_reads_selections_and_refreshes_statistics(era5_archive: Path) -> None:
@@ -299,9 +305,8 @@ def test_api_reads_selections_and_refreshes_statistics(era5_archive: Path) -> No
         assert retained.status_code == 200, retained.text
         assert retained.json() == unrelated.json()
         assert read_count == reads_before_unrelated
-        shard = era5_archive / "2000/02/era5.zarr" / TEMPERATURE / "c/0/5/0"
-        payload = shard.read_bytes()
-        shard.write_bytes(b"not-zstd" + payload[8:])
+        raster = observation_path(era5_archive, TEMPERATURE, 2, 0)
+        raster.write_bytes(b"unreadable raster")
         unreadable = api.post(
             "/api/raster-analysis/pixels",
             json={
@@ -369,12 +374,13 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
                 (value.interval_end - value.interval_start).total_seconds()
                 for value in observations
             ] == [3600, 3600]
-            values = list(
-                iter_temporal_windows(
-                    observations, Window(720, 360, 1, 1), maximum_decoded_bytes=None
-                )
-            )
-            assert [float(array[0, 0]) for _, _, array in values] == [1, 3]
+            values = []
+            for observation in observations:
+                with open_raster_data(observation) as dataset:
+                    values.append(
+                        float(dataset.read(1, window=Window(720, 360, 1, 1))[0, 0])
+                    )
+            assert values == [1, 3]
             partial = await authorizer.get_temporal_interval(
                 TemporalIntervalSelection(
                     **{
@@ -420,11 +426,17 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
     asyncio.run(resolve_periods())
 
 
-def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
-    """Reject a persisted descriptor URI outside the configured source mount.
+@pytest.mark.parametrize(
+    "location", ["descriptor", "raster", "absolute-raster", "symlink"]
+)
+def test_catalog_source_path_cannot_escape_mount(
+    era5_archive: Path, location: str
+) -> None:
+    """Confine descriptor and raster paths when a selection resolves its source.
 
     Args:
         era5_archive: Valid archive used to construct authoritative metadata.
+        location: External path or symlink introduced at the source boundary.
     """
     from eolab_app.raster.errors import RasterAssetError
     from eolab_app.raster.source_models import TemporalRasterSelection
@@ -432,9 +444,28 @@ def test_catalog_source_path_cannot_escape_mount(era5_archive: Path) -> None:
     scanner, writer = create_scanner(era5_archive.parent)
     asyncio.run(scan(scanner))
     item = writer.write_session.items[ITEM_KEY]
-    item["assets"]["eolab:temporal-source"]["href"] = (
-        era5_archive.parent.parent / "outside.yaml"
-    ).as_uri()
+    if location == "descriptor":
+        item["assets"]["eolab:temporal-source"]["href"] = (
+            era5_archive.parent.parent / "outside.yaml"
+        ).as_uri()
+    elif location == "symlink":
+        path = observation_path(era5_archive, TEMPERATURE, 2, 0)
+        external = era5_archive.parent / "outside.tif"
+        path.rename(external)
+        try:
+            path.symlink_to(external)
+        except OSError as error:
+            pytest.skip(f"Creating a test symlink is unavailable: {error}")
+    else:
+        path = (
+            "../outside.tif"
+            if location == "raster"
+            else (era5_archive / "absolute.tif").as_posix()
+        )
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute(
+                "UPDATE coverage SET path = ? WHERE variable = ?", (path, TEMPERATURE)
+            )
     with pytest.raises(RasterAssetError, match="outside"):
         MountedRasterResolver(era5_archive.parent).get_observations(
             item,
@@ -477,7 +508,7 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
         item = writer.write_session.items.get((parts[-3], parts[-1]))
         return httpx2.Response(404) if item is None else httpx2.Response(200, json=item)
 
-    def reject_zarr_read(*args: object, **kwargs: object) -> None:
+    def reject_raster_read(*args: object, **kwargs: object) -> None:
         """Fail if listing labels attempts a native array read.
 
         Args:
@@ -487,9 +518,9 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
         Raises:
             AssertionError: Always, because this request only needs SQLite coverage.
         """
-        raise AssertionError("Time discovery must not open Zarr arrays")
+        raise AssertionError("Time discovery must not open GeoTIFFs")
 
-    monkeypatch.setattr(zarr, "open_array", reject_zarr_read)
+    monkeypatch.setattr(rasterio, "open", reject_raster_read)
     catalog_client = httpx2.AsyncClient(
         transport=httpx2.MockTransport(catalog_response)
     )
@@ -571,7 +602,8 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
         assert missing.status_code == 404
 
         # Operator update -> explicit scan -> read new choices. Retain an explicit
-        # month, and exclude observations belonging only to superseded revisions.
+        # month, and list only observations currently published by the producer.
+        monkeypatch.undo()
         publish_month(
             era5_archive, 2, {TEMPERATURE: (0,), PRECIPITATION: (0,), RADIATION: (0,)}
         )

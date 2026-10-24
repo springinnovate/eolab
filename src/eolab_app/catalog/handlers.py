@@ -549,7 +549,7 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
-            name="era5-ncar-zarr",
+            name="temporal-cog",
             discover=discover_temporal_datasets,
             build_items=build_temporal_items,
             prepare_candidate=prepare_temporal_candidate,

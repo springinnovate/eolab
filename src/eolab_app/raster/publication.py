@@ -1,7 +1,6 @@
 """Application workflow coordinating authoritative raster publication."""
 
 import asyncio
-from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -26,7 +25,6 @@ from eolab_app.raster.sources import (
 from eolab_app.raster.source_access import (
     RasterSourceAccess,
     describe_raster_data,
-    read_private_raster,
 )
 from eolab_app.raster.source_models import (
     RasterSourceRequest,
@@ -34,7 +32,6 @@ from eolab_app.raster.source_models import (
     TemporalRasterSelection,
 )
 from eolab_app.raster.temporal import TemporalObservation
-from eolab_app.raster.temporal_geotiff import write_temporal_geotiff
 from eolab_app.raster.errors import (
     RasterConflictError,
     RasterFeatureError,
@@ -44,7 +41,7 @@ from eolab_app.source_files import SourceFileError
 
 
 def is_temporal_raster_layer(layer_name: str) -> bool:
-    """Identify a publication owned by the temporal display cache.
+    """Return whether a GeoServer layer name identifies a temporal observation.
 
     Args:
         layer_name: Qualified layer or unqualified GeoServer store name.
@@ -74,21 +71,21 @@ def temporary_raster_source(layer_name: str) -> RunArtifactReference | None:
 
 @dataclass
 class _TemporalPublication:
-    """Keep an observation's layer identity independently of its cached file.
+    """Track a temporal layer's identity and in-flight renders until unpublication.
 
     Attributes:
-        selection: Catalog variable and exact time that reconstruct this frame.
         published: Stable browser-facing layer identity and bounds.
-        users: Active upstream renders that still require its materialization.
+        users: Active upstream renders that still require its GeoServer layer.
+        revoked: Whether an explicit refresh withdrew this layer's identity.
     """
 
-    selection: TemporalRasterSelection
     published: PublishedRaster
     users: int = 0
+    revoked: bool = False
 
 
 class RasterPublicationService:
-    """Publish raster files and cached temporal observations through GeoServer."""
+    """Publish mounted rasters and model outputs through GeoServer."""
 
     def __init__(
         self,
@@ -99,10 +96,8 @@ class RasterPublicationService:
         *,
         source_access: RasterSourceAccess | None = None,
         source_available: Callable[[str, str], Awaitable[bool]] | None = None,
-        slice_cache_path: Path | None = None,
-        slice_cache_entries: int = 8,
     ) -> None:
-        """Configure serialized publication and the recent-observation display cache.
+        """Configure publication and cleanup of expired or refreshed layers.
 
         Args:
             catalog: Authoritative raster catalog port.
@@ -111,11 +106,6 @@ class RasterPublicationService:
             raster_registry: Process-local WMS authorization registry.
             source_access: Original-file and temporal-observation source authority.
             source_available: Composition-supplied lifetime check for cleanup only.
-            slice_cache_path: Dedicated writable directory shared read-only with
-                GeoServer. None disables temporal publication.
-            slice_cache_entries: Validated positive number of idle observations to
-                retain in least-recently-used order. Active renders may temporarily
-                require additional frames, protected until those renders finish.
         """
         self._catalog = catalog
         self._source_resolver = source_resolver
@@ -124,11 +114,8 @@ class RasterPublicationService:
         self._publish_lock = asyncio.Lock()
         self._source_access = source_access
         self._source_available = source_available
-        self._slice_cache_path = slice_cache_path
-        self._slice_cache_entries = slice_cache_entries
-        self._slices: dict[TemporalRasterSelection, _TemporalPublication] = {}
-        self._slice_layers: dict[str, _TemporalPublication] = {}
-        self._resident_slices: OrderedDict[str, _TemporalPublication] = OrderedDict()
+        self._observations: dict[TemporalRasterSelection, _TemporalPublication] = {}
+        self._temporal_layers: dict[str, _TemporalPublication] = {}
 
     async def publish(
         self,
@@ -147,7 +134,6 @@ class RasterPublicationService:
         Raises:
             RasterFeatureError: If the Item, Asset, or rendering adapter fails.
             SourceFileError: If temporary source access or expiry rejects publication.
-            asyncio.CancelledError: After native materialization has stopped.
         """
         async with self._publish_lock:
             if isinstance(request, RasterSourceRequest):
@@ -170,104 +156,63 @@ class RasterPublicationService:
     async def _publish_observation(
         self, selection: TemporalRasterSelection
     ) -> PublishedRaster:
-        """Publish or restore an observation under its existing layer identity.
+        """Publish the selected archive GeoTIFF under one process-local layer identity.
 
-        Called with the publication lock held. Logical identities last until an
-        explicit source refresh or process restart; idle materializations may be
-        evicted without changing those identities.
+        Called with the publication lock held. Repeated selections reuse their
+        layer until an explicit source refresh or process restart.
 
         Args:
             selection: Validated Catalog variable and exact observation time.
 
         Returns:
-            Ordinary WMS identity and bounds for the observation.
+            Ordinary WMS identity and admitted Catalog bounds for the GeoTIFF.
 
         Raises:
-            RasterFeatureError: If source access, reading, publication or cleanup fails.
-            asyncio.CancelledError: After native materialization has stopped.
+            RasterFeatureError: If source access, metadata reading or publication fails.
         """
-        if self._source_access is None or self._slice_cache_path is None:
+        record = self._observations.get(selection)
+        if record is not None:
+            return record.published
+        if self._source_access is None:
             raise RasterConflictError("Temporal map display is unavailable.")
         source = await self._source_access.resolve(selection)
-        record = self._slices.get(selection)
-        if record is None:
-            published = await self._materialize_observation(
-                cast(TemporalObservation, source.data), f"slice_{uuid4().hex}"
-            )
-            record = _TemporalPublication(selection, published)
-            self._slices[selection] = record
-            self._slice_layers[published.layer_name] = record
-            self._raster_registry.authorize(published.layer_name)
-        elif record.published.layer_name not in self._resident_slices:
-            await self._materialize_observation(
-                cast(TemporalObservation, source.data),
-                record.published.layer_name.split(":", 1)[1],
-            )
-        name = record.published.layer_name
-        self._resident_slices[name] = record
-        self._resident_slices.move_to_end(name)
-        await self._trim_idle_slices()
-        return record.published
-
-    async def _materialize_observation(
-        self, observation: TemporalObservation, resource_name: str
-    ) -> PublishedRaster:
-        """Write and publish one frame while holding the publication lock.
-
-        Native work uses the existing 30-second, 2 GiB raster process boundary.
-        Only a completed file reaches GeoServer. Interrupted publication resources
-        are removed before a later materialization retries the same layer name.
-
-        Args:
-            observation: Authorized original array and selected time index.
-            resource_name: Server-owned unqualified layer name to create or restore.
-
-        Returns:
-            Ordinary WMS layer identity and geographic bounds.
-
-        Raises:
-            RasterFeatureError: If reading, publication or orphan cleanup fails.
-            asyncio.CancelledError: After native work stops and its partial file
-                is removed; interrupted GeoServer resources are cleaned later.
-        """
-        await self._cleanup_slices(await self._publisher.temporary_layers())
-        cache = cast(Path, self._slice_cache_path)
-        path = cache / f"{resource_name}.tif"
         try:
-            cache.mkdir(parents=True, exist_ok=True)
-            bounds = await read_private_raster(
-                write_temporal_geotiff, observation, path
-            )
-        except BaseException as error:
-            path.unlink(missing_ok=True)
-            if isinstance(error, (ValueError, OSError)):
-                raise RasterConflictError(
-                    "The selected observation could not be prepared for map display."
-                ) from error
-            raise
-        await self._publisher.publish(resource_name, path, advertised=False)
-        return PublishedRaster(
-            layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}", bbox=bounds
+            await asyncio.to_thread(describe_raster_data, source.data)
+        except (OSError, ValueError, RasterioError) as error:
+            raise RasterConflictError(
+                "The selected observation could not be opened for map display."
+            ) from error
+        item = await self._catalog.get_item(selection)
+        resource_name = f"slice_{uuid4().hex}"
+        await self._publisher.publish(
+            resource_name, cast(TemporalObservation, source.data).path, advertised=False
         )
+        published = PublishedRaster(
+            layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}",
+            bbox=tuple(item["bbox"]),
+        )
+        record = _TemporalPublication(published)
+        self._observations[selection] = record
+        self._temporal_layers[published.layer_name] = record
+        self._raster_registry.authorize(published.layer_name)
+        return published
 
     @asynccontextmanager
     async def use_layers(self, layer_names: tuple[str, ...]) -> AsyncIterator[None]:
-        """Restore temporal frames and keep them available for one upstream render.
+        """Keep temporal GeoServer layers published until an upstream render finishes.
 
         Enter inside the scheduled upstream operation so protection lasts until
-        that operation finishes, even if its browser request disconnects. All
-        required frames are protected together; ordinary layers need no cache use.
+        that operation finishes, even if its browser request disconnects. An
+        explicit refresh revokes queued identities while active renders finish.
 
         Args:
             layer_names: Layer identities already authorized by the rendering route.
 
         Yields:
-            Control while the requested temporal materializations remain available.
+            Control while the requested temporal publications remain available.
 
         Raises:
             RasterRequestError: If a temporal identity was revoked while queued.
-            RasterFeatureError: If source access or materialization fails.
-            asyncio.CancelledError: After any native work has stopped.
         """
         temporal_names = tuple(
             name for name in layer_names if is_temporal_raster_layer(name)
@@ -280,8 +225,8 @@ class RasterPublicationService:
             async with self._publish_lock:
                 selected: list[_TemporalPublication] = []
                 for name in temporal_names:
-                    record = self._slice_layers.get(name)
-                    if record is None:
+                    record = self._temporal_layers.get(name)
+                    if record is None or record.revoked:
                         raise RasterRequestError(
                             "This temporal map layer is no longer available. Refresh its dates."
                         )
@@ -289,18 +234,6 @@ class RasterPublicationService:
                 records = selected
                 for record in records:
                     record.users += 1
-                for record in records:
-                    name = record.published.layer_name
-                    if name not in self._resident_slices:
-                        source = await cast(
-                            RasterSourceAccess, self._source_access
-                        ).resolve(record.selection)
-                        await self._materialize_observation(
-                            cast(TemporalObservation, source.data),
-                            name.split(":", 1)[1],
-                        )
-                        self._resident_slices[name] = record
-                    self._resident_slices.move_to_end(name)
             yield
         finally:
             if records:
@@ -308,91 +241,61 @@ class RasterPublicationService:
                     for record in records:
                         record.users -= 1
                     try:
-                        await self._trim_idle_slices()
-                    except (RasterFeatureError, OSError):
+                        await self._cleanup_temporal_publications(
+                            tuple(
+                                record.published.layer_name.split(":", 1)[1]
+                                for record in records
+                                if record.revoked
+                            )
+                        )
+                    except RasterFeatureError:
                         # Cleanup must not replace a completed tile or its read error.
                         logging.getLogger(__name__).warning(
-                            "Temporal display cache cleanup will retry."
+                            "Temporal publication cleanup will retry."
                         )
-
-    async def _trim_idle_slices(self) -> None:
-        """Remove revoked and excess idle frames while holding the publication lock.
-
-        Active renders may exceed the idle cache bound. Removing a materialization
-        never revokes a logical layer; a later render restores an evicted frame.
-
-        Raises:
-            RasterFeatureError: If GeoServer cleanup must be retried.
-            OSError: If cached file deletion fails.
-        """
-        idle = [
-            name for name, record in self._resident_slices.items() if not record.users
-        ]
-        obsolete = [name for name in idle if name not in self._slice_layers]
-        retained = [name for name in idle if name in self._slice_layers]
-        for name in (*obsolete, *retained[: -self._slice_cache_entries]):
-            self._resident_slices.pop(name)
-            await self._remove_slice(name.split(":", 1)[1])
 
     async def invalidate_temporal_items(
         self, item_keys: tuple[tuple[str, str], ...]
     ) -> None:
-        """Revoke all observation identities of datasets written by an explicit scan.
+        """Revoke observation layers of datasets written by an explicit scan.
 
-        Evicted identities are revoked too. Active renders keep their files until
-        completion; cleanup removes other obsolete materializations on its next pass.
         Revocation is immediate and does not require GeoServer to be available.
-        The operator refreshes between calculations; no source mutation checks
-        or historical observation copies are maintained.
+        Active renders keep their publications until completion. Cleanup removes
+        obsolete GeoServer resources without deleting original archive files.
 
         Args:
             item_keys: Collection and Item IDs successfully written by the scan.
         """
         refreshed = set(item_keys)
         async with self._publish_lock:
-            for selection in tuple(self._slices):
+            for selection in tuple(self._observations):
                 if (selection.collection_id, selection.item_id) in refreshed:
-                    record = self._slices.pop(selection)
-                    self._slice_layers.pop(record.published.layer_name)
+                    record = self._observations.pop(selection)
+                    record.revoked = True
                     self._raster_registry.revoke(record.published.layer_name)
 
-    async def _remove_slice(self, resource_name: str) -> None:
-        """Remove a display materialization without revoking its logical identity.
+    async def _cleanup_temporal_publications(self, names: tuple[str, ...]) -> None:
+        """Remove revoked idle layers and publications left by a previous process.
+
+        Called with the publication lock held. Original archive files are never
+        deleted. A failed unpublication remains available for a later retry.
 
         Args:
-            resource_name: Unqualified cache-owned publication name.
+            names: Unqualified temporary store names returned by GeoServer or
+                released by completed renders.
 
         Raises:
             RasterFeatureError: If GeoServer cleanup must be retried.
-            OSError: If cached file deletion fails.
         """
-        await self._publisher.remove(resource_name)
-        (cast(Path, self._slice_cache_path) / f"{resource_name}.tif").unlink(
-            missing_ok=True
-        )
-
-    async def _cleanup_slices(self, names: tuple[str, ...]) -> None:
-        """Remove cache files and publications no longer retained by this process.
-
-        The cache is process-local, so this also removes leftovers after restart.
-        Failed unpublication keeps its file until a later successful attempt.
-
-        Args:
-            names: Current temporary store names returned by GeoServer.
-
-        Raises:
-            RasterFeatureError: If external cleanup must be retried.
-            OSError: If directory access or file deletion fails.
-        """
-        if self._slice_cache_path is None:
-            return
-        retained = {name.split(":", 1)[1] for name in self._resident_slices}
         for name in names:
-            if is_temporal_raster_layer(name) and name not in retained:
-                await self._remove_slice(name)
-        for path in self._slice_cache_path.glob("slice_*.tif"):
-            if is_temporal_raster_layer(path.stem) and path.stem not in retained:
-                path.unlink()
+            if not is_temporal_raster_layer(name):
+                continue
+            layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{name}"
+            record = self._temporal_layers.get(layer_name)
+            if record is not None and (not record.revoked or record.users):
+                continue
+            await self._publisher.remove(name)
+            self._temporal_layers.pop(layer_name, None)
 
     async def _publish_temporary(
         self, reference: RunArtifactReference, owner: str | None
@@ -460,17 +363,15 @@ class RasterPublicationService:
     async def cleanup(self) -> None:
         """Remove obsolete output and temporal publications, including restart leftovers.
 
-        Original model-result file deletion remains with Processing. This service
-        deletes only its own cached observation files after unpublication.
-        Unavailable GeoServer or storage leaves cleanup retryable.
+        Original file deletion remains with each source owner. This service only
+        removes GeoServer resources. Unavailable GeoServer leaves cleanup retryable.
 
         Raises:
             Exception: If discovery, lifetime checks or unpublication fails; retry later.
         """
         async with self._publish_lock:
-            await self._trim_idle_slices()
             names = await self._publisher.temporary_layers()
-            await self._cleanup_slices(names)
+            await self._cleanup_temporal_publications(names)
             if self._source_available is None:
                 return
             for name in names:

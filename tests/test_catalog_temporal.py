@@ -1,15 +1,14 @@
-"""Test ERA5 admission with SQLite coverage and real Zarr coordinate reads."""
+"""Test GeoTIFF stack admission through its SQLite observation contract."""
 
 import asyncio
 import json
 import shutil
 import sqlite3
-from calendar import monthrange
 from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,169 +35,133 @@ VARIABLES = {
 ITEM_KEY = ("eolab-temporal-datasets", "era5-test")
 
 
-def write_coordinate(
-    path: Path, values: numpy.ndarray, attributes: dict[str, str]
-) -> None:
-    """Write a one-chunk Zarr v3 coordinate that GDAL can read directly.
+def observation_path(archive: Path, variable: str, month: int, hour: int) -> Path:
+    """Return a fixture observation's deterministic GeoTIFF path.
 
     Args:
-        path: Coordinate array directory.
-        values: One-dimensional integer or floating-point coordinate values.
-        attributes: Units and clock conventions stored in the array header.
+        archive: Test archive root.
+        variable: Published variable identifier.
+        month: Calendar month in 2000.
+        hour: Hour offset from the beginning of that month.
+
+    Returns:
+        Absolute or archive-rooted path for the requested observation.
     """
-    (path / "c").mkdir(parents=True, exist_ok=True)
-    metadata = {
-        "zarr_format": 3,
-        "node_type": "array",
-        "shape": [len(values)],
-        "data_type": values.dtype.name,
-        "chunk_grid": {
-            "name": "regular",
-            "configuration": {"chunk_shape": [len(values)]},
-        },
-        "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
-        "fill_value": 0,
-        "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
-        "dimension_names": [path.name],
-        "attributes": attributes,
-    }
-    (path / "zarr.json").write_text(json.dumps(metadata), encoding="utf-8")
-    (path / "c" / "0").write_bytes(
-        values.astype(values.dtype.newbyteorder("<")).tobytes()
+    stamp = datetime(2000, month, 1, tzinfo=timezone.utc) + timedelta(hours=hour)
+    return (
+        archive / f"{stamp:%Y/%m}" / variable / f"{variable}_{stamp:%Y%m%dT%H%M%SZ}.tif"
     )
 
 
-def publish_month(archive: Path, month: int, hours: dict[str, tuple[int, ...]]) -> None:
-    """Publish a small 2000 coverage revision and matching monthly array metadata.
+def publish_month(
+    archive: Path,
+    month: int,
+    hours: dict[str, tuple[int, ...]],
+    *,
+    shape: tuple[int, int] = (721, 1440),
+    transform: rasterio.Affine = rasterio.Affine(0.25, 0, -180.125, 0, -0.25, 90.125),
+    dtype: str = "float32",
+) -> None:
+    """Publish sparse GeoTIFFs and replace one month's observation metadata.
 
-    Coordinate values are stored, but weather pixels are deliberately absent.
-    As in the producer, the time axis is the union of available observation
-    labels and weather chunks span a calendar month. Non-forecast fields have no
-    forecast origin; forecast fields use a six-hour lead.
+    Non-forecast fields have no reference time; forecast fields use a six-hour
+    lead. Published rasters initially contain NoData so callers can populate the
+    cells their calculation needs.
 
     Args:
         archive: Directory containing the test producer catalog.
         month: Calendar month in 2000.
-        hours: Observation-hour offsets from the start of that month, by variable.
+        hours: Hour offsets from the start of that month, by variable.
+        shape: Native raster rows and columns.
+        transform: Native north-up grid.
+        dtype: Floating-point type retained by the fixture rasters.
     """
     start = int(datetime(2000, month, 1, tzinfo=timezone.utc).timestamp())
-    times = numpy.array(
-        sorted({start + hour * 3600 for values in hours.values() for hour in values}),
-        dtype="int64",
+    end = int(
+        datetime(2000 + month // 12, month % 12 + 1, 1, tzinfo=timezone.utc).timestamp()
     )
-    revision = f"month-{month}-hours-{len(times)}"
     with closing(sqlite3.connect(archive / "catalog.sqlite")) as connection, connection:
-        connection.execute("INSERT INTO revisions VALUES (?, 'published')", (revision,))
         connection.execute(
-            "INSERT OR REPLACE INTO months VALUES (2000, ?, ?)", (month, revision)
+            "DELETE FROM coverage WHERE valid_time >= ? AND valid_time < ?",
+            (start, end),
         )
         for variable, observations in hours.items():
-            step_type = VARIABLES[variable][0]
+            step_type, unit, title = VARIABLES[variable]
+            temporal_type = {
+                "instant": "instant",
+                "avg": "mean",
+                "accum": "accumulation",
+            }[step_type]
             duration = 0 if step_type == "instant" else 3600
-            connection.executemany(
-                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
+            for hour in observations:
+                stamp = start + hour * 3600
+                path = observation_path(archive, variable, month, hour)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with rasterio.open(
+                    path,
+                    "w",
+                    driver="GTiff",
+                    height=shape[0],
+                    width=shape[1],
+                    count=1,
+                    dtype=dtype,
+                    crs="EPSG:4326",
+                    transform=transform,
+                    nodata=numpy.nan,
+                    tiled=True,
+                    compress="deflate",
+                ) as target:
+                    target.write(numpy.full(shape, numpy.nan, dtype=dtype), 1)
+                connection.execute(
+                    "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        revision,
                         variable,
-                        start + hour * 3600,
-                        (
-                            int(numpy.iinfo(numpy.int64).min)
-                            if step_type == "instant"
-                            else start + hour * 3600 - 6 * 3600
-                        ),
-                        start + hour * 3600 - duration,
-                        start + hour * 3600,
-                        step_type,
-                    )
-                    for hour in observations
-                ],
-            )
-    store = archive / "2000" / f"{month:02d}" / "era5.zarr"
-    store.mkdir(parents=True, exist_ok=True)
-    (store / "zarr.json").write_text(
-        json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {}}),
-        encoding="utf-8",
-    )
-    write_coordinate(
-        store / "latitude", numpy.linspace(90, -90, 721), {"units": "degrees_north"}
-    )
-    write_coordinate(
-        store / "longitude", numpy.arange(1440) * 0.25, {"units": "degrees_east"}
-    )
-    write_coordinate(
-        store / "time",
-        times,
-        {
-            "units": "seconds since 1970-01-01 00:00:00",
-            "calendar": "proleptic_gregorian",
-            "timezone": "UTC",
-        },
-    )
-    for variable in hours:
-        step_type, unit, title = VARIABLES[variable]
-        path = store / variable
-        path.mkdir(exist_ok=True)
-        (path / "zarr.json").write_text(
-            json.dumps(
-                {
-                    "zarr_format": 3,
-                    "node_type": "array",
-                    "shape": [len(times), 721, 1440],
-                    "data_type": "float32",
-                    "dimension_names": ["time", "latitude", "longitude"],
-                    "fill_value": "NaN",
-                    "chunk_grid": {
-                        "name": "regular",
-                        "configuration": {
-                            "chunk_shape": [monthrange(2000, month)[1] * 24, 32, 32]
-                        },
-                    },
-                    "chunk_key_encoding": {
-                        "name": "default",
-                        "configuration": {"separator": "/"},
-                    },
-                    "codecs": [
-                        {"name": "bytes", "configuration": {"endian": "little"}}
-                    ],
-                    "attributes": {
-                        "step_type": step_type,
-                        "units": unit,
-                        "long_name": title,
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+                        title,
+                        unit,
+                        path.relative_to(archive).as_posix(),
+                        1,
+                        stamp,
+                        None if duration == 0 else stamp - 6 * 3600,
+                        stamp - duration,
+                        stamp,
+                        temporal_type,
+                        dtype,
+                        "NaN",
+                        "EPSG:4326",
+                        json.dumps(transform.to_gdal()),
+                        *shape,
+                    ),
+                )
 
 
 @pytest.fixture
 def era5_archive(tmp_path: Path) -> Path:
-    """Create two partial months, variable gaps and an unpublished revision.
+    """Create a GeoTIFF archive with partial months and variable-specific gaps.
 
     Args:
         tmp_path: Isolated scan mount.
 
     Returns:
-        Descriptor directory with the producer tables needed for admission.
+        Descriptor directory exposing the producer's observations view.
     """
     archive = tmp_path / "weather"
     archive.mkdir()
     (archive / "dataset.yaml").write_text(
         "id: era5-test\ntitle: Test hourly weather\nsource:\n"
-        "  format: era5_ncar_zarr\n  catalog: catalog.sqlite\n",
+        "  format: temporal_cog\n  catalog: catalog.sqlite\n",
         encoding="utf-8",
     )
     with closing(sqlite3.connect(archive / "catalog.sqlite")) as connection, connection:
         connection.executescript("""
-            CREATE TABLE revisions (id TEXT PRIMARY KEY, status TEXT NOT NULL);
-            CREATE TABLE months (year INTEGER, month INTEGER, current_revision_id TEXT,
-                                 PRIMARY KEY (year, month));
             CREATE TABLE coverage (
-                revision_id TEXT, variable TEXT, valid_time INTEGER, reference_time INTEGER,
-                interval_start INTEGER, interval_end INTEGER, step_type TEXT,
-                PRIMARY KEY (revision_id, variable, valid_time));
-            INSERT INTO revisions VALUES ('unfinished-month', 'preparing');
+                variable TEXT, name TEXT, units TEXT, path TEXT, band INTEGER,
+                valid_time INTEGER, reference_time INTEGER, interval_start INTEGER,
+                interval_end INTEGER, temporal_type TEXT, dtype TEXT, nodata TEXT,
+                crs TEXT, transform TEXT, height INTEGER, width INTEGER);
+            CREATE TABLE publications (variable TEXT, valid_time INTEGER, status TEXT);
+            CREATE VIEW observations AS SELECT c.* FROM coverage c WHERE NOT EXISTS (
+                SELECT 1 FROM publications p WHERE p.variable = c.variable
+                AND p.valid_time = c.valid_time AND p.status = 'ready');
         """)
     publish_month(archive, 1, {TEMPERATURE: (742, 743), PRECIPITATION: (742,)})
     publish_month(
@@ -257,9 +220,9 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
     """Index one temporal Item alongside an ordinary raster using metadata only.
 
     Args:
-        era5_archive: Two compact monthly stores with gaps in coverage.
+        era5_archive: Published GeoTIFF observations with gaps in coverage.
         tmp_path: Isolated scan mount.
-        monkeypatch: Records native opens without replacing coordinate reads.
+        monkeypatch: Records opens to verify temporal admission uses catalog metadata.
     """
     with rasterio.open(
         tmp_path / "ordinary.tif",
@@ -280,7 +243,7 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
     native_open = rasterio.open
 
     def record_open(path: Path, *args: Any, **kwargs: Any) -> rasterio.io.DatasetReader:
-        """Read real coordinates or the ordinary TIFF, never weather arrays.
+        """Read the ordinary TIFF; admission must not open observation files.
 
         Args:
             path: Source requested by the admission handler.
@@ -293,11 +256,7 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
         Raises:
             AssertionError: If admission attempts to open a weather array.
         """
-        assert Path(path).suffix == ".tif" or Path(path).name in {
-            "latitude",
-            "longitude",
-            "time",
-        }
+        assert Path(path) == tmp_path / "ordinary.tif"
         opened.append(Path(path))
         return native_open(path, *args, **kwargs)
 
@@ -322,13 +281,8 @@ def test_scan_admits_partial_months_without_reading_weather_pixels(
         PRECIPITATION: "mean_rate",
         RADIATION: "accumulation",
     }
-    assert set(item["assets"]) == {"2000-01", "2000-02", "eolab:temporal-source"}
-    assert item["assets"]["2000-01"]["href"] == "urn:eolab:temporal:era5-test:2000-01"
-    assert {path.name for path in opened if path.suffix != ".tif"} == {
-        "latitude",
-        "longitude",
-        "time",
-    }
+    assert set(item["assets"]) == {"eolab:temporal-source"}
+    assert opened == [tmp_path / "ordinary.tif"]
 
 
 def test_explicit_rescan_extends_the_same_item_and_is_idempotent(
@@ -461,7 +415,7 @@ def test_duplicate_id_cannot_overwrite_an_existing_unscanned_source(
     assert writer.write_session.items == {ITEM_KEY: original_item}
 
 
-@pytest.mark.parametrize("failure", ["descriptor", "missing-store"])
+@pytest.mark.parametrize("failure", ["descriptor", "missing-catalog"])
 def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     era5_archive: Path,
     tmp_path: Path,
@@ -472,7 +426,7 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     Args:
         era5_archive: Previously admitted archive.
         tmp_path: Isolated scan mount.
-        failure: Broken descriptor or absent monthly store introduced after admission.
+        failure: Broken descriptor or absent SQLite catalog after admission.
     """
     manager, writer = create_scanner(tmp_path)
     assert asyncio.run(scan(manager))["failed"] == 0
@@ -481,8 +435,7 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     if failure == "descriptor":
         descriptor.write_text("source: [not valid", encoding="utf-8")
     else:
-        store = era5_archive / "2000" / "01" / "era5.zarr"
-        store.rename(store.with_name("unavailable.zarr"))
+        (era5_archive / "catalog.sqlite").unlink()
     status = asyncio.run(scan(manager))
     assert status["failed"] == 1
     assert status["catalogItemsWritten"] == 0
@@ -490,88 +443,45 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     descriptor.unlink()
     status = asyncio.run(scan(manager))
     assert status["reconciliation"]["removed"] == 1
-    assert writer.write_session.items == {}
+    assert ITEM_KEY not in writer.write_session.items
 
 
 @pytest.mark.parametrize(
     "failure, message",
     [
-        ("shape", "Unsupported metadata"),
-        ("grid", "longitude coordinate values"),
-        ("calendar", "time coordinate metadata"),
-        ("missing-header", "zarr.json"),
+        ("grid", "Unsupported raster grid"),
         ("catalog-escape", "escapes its directory"),
-        ("variable-escape", "Unsupported variable name"),
         ("interval", "Invalid time or interval"),
         ("duplicate", "Duplicate observation"),
-        ("missing-revision", "has no published revision"),
+        ("variable", "Variable metadata differs"),
     ],
 )
 def test_invalid_external_metadata_is_reported_without_publishing_an_item(
-    era5_archive: Path,
-    tmp_path: Path,
-    failure: str,
-    message: str,
+    era5_archive: Path, tmp_path: Path, failure: str, message: str
 ) -> None:
-    """Reject malformed external metadata at admission with a dataset error.
-
-    The duplicate case represents an externally corrupted database whose table
-    has lost the producer's primary-key constraint.
+    """Reject malformed external observation metadata at catalog admission.
 
     Args:
         era5_archive: Archive to damage before its first scan.
         tmp_path: Isolated scan mount.
         failure: Metadata fault introduced into the fixture.
-        message: Useful failure detail expected from the owning boundary.
+        message: Useful detail expected from the owning input boundary.
     """
-    month = era5_archive / "2000" / "01" / "era5.zarr"
-    if failure in {"shape", "calendar"}:
-        header = month / (TEMPERATURE if failure == "shape" else "time") / "zarr.json"
-        metadata = json.loads(header.read_text(encoding="utf-8"))
-        if failure == "shape":
-            metadata["shape"][2] = 1439
-        else:
-            metadata["attributes"]["calendar"] = "360_day"
-        header.write_text(json.dumps(metadata), encoding="utf-8")
-    elif failure == "grid":
-        longitude = numpy.arange(1440, dtype="float64") * 0.25
-        longitude[0] = -180
-        (month / "longitude" / "c" / "0").write_bytes(longitude.tobytes())
-    elif failure == "missing-header":
-        (month / TEMPERATURE / "zarr.json").unlink()
-    elif failure == "catalog-escape":
+    if failure == "catalog-escape":
         descriptor = era5_archive / "dataset.yaml"
         descriptor.write_text(
-            descriptor.read_text(encoding="utf-8").replace(
-                "catalog.sqlite", "../outside.sqlite"
-            ),
+            descriptor.read_text().replace("catalog.sqlite", "../outside.sqlite"),
             encoding="utf-8",
         )
     else:
-        with (
-            closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as connection,
-            connection,
-        ):
-            if failure == "variable-escape":
-                connection.execute(
-                    "UPDATE coverage SET variable = '../outside' WHERE variable = ?",
-                    (TEMPERATURE,),
-                )
-            elif failure == "interval":
-                connection.execute(
-                    "UPDATE coverage SET interval_start = interval_start - 1 WHERE variable = ?",
-                    (PRECIPITATION,),
-                )
-            elif failure == "missing-revision":
-                connection.execute(
-                    "UPDATE months SET current_revision_id = 'missing' WHERE month = 1"
-                )
-            else:
-                connection.executescript("""
-                    ALTER TABLE coverage RENAME TO original_coverage;
-                    CREATE TABLE coverage AS SELECT * FROM original_coverage;
-                    INSERT INTO coverage SELECT * FROM original_coverage LIMIT 1;
-                """)
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            updates = {
+                "grid": "UPDATE coverage SET width = 0",
+                "interval": "UPDATE coverage SET interval_start = interval_end WHERE temporal_type = 'mean'",
+                "duplicate": "INSERT INTO coverage SELECT * FROM coverage LIMIT 1",
+                "variable": "UPDATE coverage SET units = 'different' WHERE rowid = 1",
+            }
+            db.execute(updates[failure])
     manager, writer = create_scanner(tmp_path)
     status = asyncio.run(scan(manager))
     assert status["failed"] == 1
@@ -579,25 +489,33 @@ def test_invalid_external_metadata_is_reported_without_publishing_an_item(
     assert writer.write_session.items == {}
 
 
-def test_coordinate_symlink_cannot_escape_the_archive(
-    era5_archive: Path,
-    tmp_path: Path,
-) -> None:
-    """Reject an external coordinate even when its symlink is inside the archive.
+def test_regional_float64_grid_and_publication_visibility(era5_archive: Path) -> None:
+    """Admit a regional grid while excluding the producer's uncommitted file.
 
     Args:
-        era5_archive: Archive containing the linked coordinate.
-        tmp_path: Isolated scan mount, also holding the external target.
+        era5_archive: Archive whose published metadata is replaced for this case.
     """
-    coordinate = era5_archive / "2000" / "01" / "era5.zarr" / "time"
-    external = tmp_path / "external-time"
-    coordinate.rename(external)
-    try:
-        coordinate.symlink_to(external, target_is_directory=True)
-    except OSError as error:
-        pytest.skip(f"Creating a test symlink is unavailable: {error}")
-    manager, writer = create_scanner(tmp_path)
-    status = asyncio.run(scan(manager))
-    assert status["failed"] == 1
-    assert "escapes its directory" in status["errors"][0]["error"]
-    assert writer.write_session.items == {}
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute("DELETE FROM coverage")
+    publish_month(
+        era5_archive,
+        2,
+        {TEMPERATURE: (0, 24)},
+        shape=(3, 4),
+        transform=from_origin(10, 20, 0.5, 0.5),
+        dtype="float64",
+    )
+    with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+        db.execute(
+            "INSERT INTO publications SELECT variable, valid_time, 'ready' "
+            "FROM coverage WHERE valid_time = (SELECT MAX(valid_time) FROM coverage)"
+        )
+    manager, writer = create_scanner(era5_archive.parent)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    item = writer.write_session.items[ITEM_KEY]
+    assert item["bbox"] == [10, 18.5, 12, 20]
+    assert item["properties"]["cube:variables"][TEMPERATURE]["data_type"] == "float64"
+    assert item["properties"]["cube:dimensions"]["time"]["extent"] == [
+        "2000-02-01T00:00:00Z",
+        "2000-02-01T00:00:00Z",
+    ]

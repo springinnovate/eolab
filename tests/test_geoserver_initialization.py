@@ -341,24 +341,18 @@ def test_main_rejects_invalid_geowebcache_quota(
 
 
 def test_source_url_rule_allows_published_rasters_only_on_expected_mounts() -> None:
-    """Allow published outputs and slice files without admitting scratch paths."""
+    """Allow mounted sources and published outputs without admitting scratch paths."""
     attempt = "a" * 32
     for url in (
         "file:///scan-source/catalog.tif",
         f"file:///processing-data/results/{attempt}/coverage.tif",
         f"file:///processing-data/results/{attempt}/result.TIFF",
-        f"file:///raster-slices/slice_{attempt}.tif",
     ):
         assert re.fullmatch(MOUNTED_SOURCE_URL_PATTERN, url)
     for url in (
         f"file:///processing-data/attempts/{attempt}/scratch.tif",
         f"file:///processing-data/results/{attempt}/../secret.tif",
         f"file:///processing-data/results/{attempt}/manifest.json",
-        f"file:///raster-slices/slice_{attempt}.tif.tmp",
-        f"file:///raster-slices/../slice_{attempt}.tif",
-        f"file:///raster-slices/nested/slice_{attempt}.tif",
-        f"file:///raster-slices/slice_{attempt.upper()}.tif",
-        "file:///raster-slices/other.tif",
         "file:///etc/passwd",
         "https://remote/raster.tif",
     ):

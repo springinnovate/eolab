@@ -1,9 +1,8 @@
 """Read native pixels using the calling reader's block and validity limits.
 
 Interactive pixel and statistics requests limit decoded native blocks to
-64 MiB. A temporal chunk includes every stored time that Zarr must decode,
-even when a request selects just one observation. The checks here account
-for that native read cost; admitted temporal grid metadata is trusted.
+64 MiB. The checks account for native TIFF data and validity blocks;
+admitted temporal grid metadata is trusted.
 
 Processing passes ``maximum_block_bytes=None`` to validate supported inputs
 without a block-size ceiling. These helpers do not limit an entire Processing
@@ -156,11 +155,10 @@ def require_signed_raster_dependencies(
 
     Args:
         dataset: Open raster whose GDAL dependencies are known.
-        source_path: Authorized file or admitted observation. Temporal array
-            dependencies are confined by its source reader.
+        source_path: Authorized GeoTIFF or admitted observation pointing to one.
 
     Returns:
-        None for an admitted observation or a GeoTIFF with embedded metadata.
+        None for a GeoTIFF with embedded metadata.
 
     Raises:
         ValueError: If an external mask, overview, or auxiliary metadata file
@@ -169,11 +167,10 @@ def require_signed_raster_dependencies(
     from eolab_app.raster.temporal import TemporalObservation
 
     if isinstance(source_path, TemporalObservation):
-        return
+        source_path = source_path.path
     signed_source = source_path.resolve(strict=False)
     dependencies = {
-        Path(dataset_file).resolve(strict=False)
-        for dataset_file in dataset.files
+        Path(dataset_file).resolve(strict=False) for dataset_file in dataset.files
     }
     if dependencies != {signed_source}:
         raise ValueError(
@@ -276,8 +273,7 @@ def require_pixel_source_structure(dataset: RasterDataset) -> None:
     Embedded mask blocks are bounded separately from data blocks.
 
     Args:
-        dataset: Authorized raster file or admitted observation. Temporal
-            decoding includes every time in the intersecting storage chunk.
+        dataset: Authorized GeoTIFF or admitted observation.
 
     Raises:
         ValueError: If band-one values or their decoded blocks are unsupported.
@@ -313,8 +309,8 @@ def require_bounded_source_structure(
     """Validate band structure and signed validity metadata, with optional block limits.
 
     Args:
-        dataset: Open raster dataset. Temporal grid and datatype invariants
-            are trusted; its full storage chunk still counts toward the limit.
+        dataset: Open raster dataset. Temporal views retain the underlying
+            GeoTIFF's native data and validity blocks.
         maximum_block_bytes: Decoded block ceiling, or None to validate structure
             without restricting the native block allocation.
 
@@ -329,13 +325,9 @@ def require_bounded_source_structure(
     from eolab_app.raster.temporal import TemporalRasterDataset
 
     if isinstance(dataset, TemporalRasterDataset):
-        if (
-            maximum_block_bytes is not None
-            and dataset.maximum_decoded_block_bytes > maximum_block_bytes
-        ):
-            raise ValueError(
-                "Raster temporal chunks exceed the native block memory limit"
-            )
+        require_bounded_source_structure(
+            dataset.native_dataset, maximum_block_bytes=maximum_block_bytes
+        )
         return
     if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
         raise ValueError("Bounded raster reads require one non-empty band")
@@ -423,8 +415,8 @@ def source_work_for_blocks(
     """Count native data/mask reads and their conservative decoded bytes.
 
     Each data window is charged for every mask block it intersects, including
-    repeated mask blocks across windows. Temporal blocks count the complete
-    storage chunk needed for the selected time. No cache hit is assumed.
+    repeated mask blocks across windows. Cyclic views count the underlying
+    GeoTIFF blocks touched by each logical block. No cache hit is assumed.
     Masked sources are charged full native blocks even at raster edges.
 
     Args:

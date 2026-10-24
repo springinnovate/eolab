@@ -28,14 +28,9 @@ def test_stac_proxy_omits_private_temporal_source(
 ) -> None:
     """Keep descriptor paths private in Item reads and projected search results."""
     private_path = "file:///private/mounted-weather/dataset.yaml"
-    public_asset = {
-        "href": "urn:eolab:temporal:era5:2000-01",
-        "type": "application/vnd.zarr; version=3",
-    }
     item: dict[str, Any] = {
         "assets": {
             "eolab:temporal-source": {"href": private_path},
-            "2000-01": public_asset,
         }
     }
     if not projected:
@@ -82,7 +77,7 @@ def test_stac_proxy_omits_private_temporal_source(
     assert private_path not in response.text
     assert "eolab:temporal-source" not in response.text
     public_item = response.json()["features"][0] if is_search else response.json()
-    assert public_item["assets"] == {"2000-01": public_asset}
+    assert public_item["assets"] == {}
     if not projected:
         assert public_item["properties"] == item["properties"]
     if method == "POST":

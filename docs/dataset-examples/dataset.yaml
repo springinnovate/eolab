@@ -1,5 +1,5 @@
 id: era5-ncar
 title: ERA5 hourly weather
 source:
-  format: era5_ncar_zarr
+  format: temporal_cog
   catalog: catalog.sqlite

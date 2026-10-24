@@ -2,8 +2,10 @@
 
 import asyncio
 from collections.abc import Iterator
+from contextlib import closing
 from copy import deepcopy
 from pathlib import Path
+import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -12,8 +14,9 @@ from fastapi.testclient import TestClient
 import httpx2
 import numpy
 import pytest
+import rasterio
 from rasterio.io import MemoryFile
-import zarr
+from rasterio.windows import Window
 
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.processing.artifacts import LocalJobArtifacts
@@ -34,6 +37,7 @@ from tests.test_catalog_temporal import (
     TEMPERATURE,
     create_scanner,
     era5_archive,
+    observation_path,
     scan,
 )
 from tests.test_temporal_source_access import populate_month
@@ -44,6 +48,42 @@ TemporalBoundary = tuple[
 BOUNDS = {"west": -0.3, "south": -0.1, "east": 0.3, "north": 0.1}
 
 
+def _write_equatorial_cell(path: Path, column: int, value: float) -> None:
+    """Set one fixture cell on the global observation's equator.
+
+    Args:
+        path: Isolated test observation's GeoTIFF.
+        column: Native column in the published -180 to 180 longitude order.
+        value: New cell value, including NaN for an unavailable measurement.
+
+    Raises:
+        rasterio.errors.RasterioError: If the fixture raster cannot be updated.
+    """
+    with rasterio.open(path, "r+") as raster:
+        raster.write(
+            numpy.array([[value]], dtype="float32"),
+            1,
+            window=Window(column, 360, 1, 1),
+        )
+
+
+def _set_variable_unit(archive: Path, variable: str, unit: str) -> None:
+    """Change the units published by the isolated fixture's observation index.
+
+    Args:
+        archive: Test archive containing the fixture SQLite catalog.
+        variable: Variable whose metadata will be refreshed by the test.
+        unit: New units for every observation of that variable.
+
+    Raises:
+        sqlite3.Error: If the fixture catalog cannot be updated.
+    """
+    with closing(sqlite3.connect(archive / "catalog.sqlite")) as connection, connection:
+        connection.execute(
+            "UPDATE coverage SET units = ? WHERE variable = ?", (unit, variable)
+        )
+
+
 @pytest.fixture
 def temporal_boundary(
     era5_archive: Path, store: PostgresJobStore
@@ -51,7 +91,7 @@ def temporal_boundary(
     """Compose source admission, HTTP, PostgreSQL and native jobs without GeoServer.
 
     Args:
-        era5_archive: Real SQLite catalog and partially populated monthly Zarr stores.
+        era5_archive: Real SQLite catalog and partially populated GeoTIFF observations.
         store: Explicit disposable PostgreSQL database.
 
     Yields:
@@ -59,9 +99,13 @@ def temporal_boundary(
     """
     populate_month(era5_archive, TEMPERATURE, (10, 20, 30))
     populate_month(era5_archive, PRECIPITATION, (1, 99, 3))
-    array = zarr.open_array(era5_archive / "2000/02/era5.zarr" / TEMPERATURE, mode="r+")
-    array[1, 360, 0] = numpy.nan
-    array[:, 360, 1] = numpy.nan
+    _write_equatorial_cell(
+        observation_path(era5_archive, TEMPERATURE, 2, 1), 720, numpy.nan
+    )
+    for hour in (0, 1, 2):
+        _write_equatorial_cell(
+            observation_path(era5_archive, TEMPERATURE, 2, hour), 721, numpy.nan
+        )
     scanner, writer = create_scanner(era5_archive)
     assert asyncio.run(scan(scanner))["errors"] == []
 
@@ -255,12 +299,11 @@ def test_new_run_reads_refreshed_values_without_changing_completed_outputs(
     first = client.get(f"/api/processing/jobs/{first['jobId']}").json()
     assert first["status"] == "ready", first
     original = client.get(first["result"]["url"]).content
-    array = zarr.open_array(archive / "2000/02/era5.zarr" / TEMPERATURE, mode="r+")
-    array[:2, 360, 0] = [40, 60]
-    for month in ("01", "02"):
-        zarr.open_array(
-            archive / f"2000/{month}/era5.zarr" / TEMPERATURE, mode="r+"
-        ).attrs["units"] = "degC"
+    for hour, value in enumerate((40, 60)):
+        _write_equatorial_cell(
+            observation_path(archive, TEMPERATURE, 2, hour), 720, value
+        )
+    _set_variable_unit(archive, TEMPERATURE, "degC")
     assert client.portal.call(scan, scanner)["errors"] == []
     second_request = deepcopy(request)
     second_request["requestId"] = uuid4().hex
@@ -321,18 +364,15 @@ def test_precipitation_total_uses_model_conversion_and_preserves_input_units(
         document["steps"][0]["inputs"]["precipitation"]["value"] = conversion
         definition = ModelDefinition.model_validate(document)
         service.model_registry = ModelRegistry((definition,))
-        for month in ("01", "02"):
-            zarr.open_array(
-                archive / f"2000/{month}/era5.zarr" / PRECIPITATION, mode="r+"
-            ).attrs["units"] = conversion["inputUnit"]
+        _set_variable_unit(archive, PRECIPITATION, conversion["inputUnit"])
         assert client.portal.call(scan, scanner)["errors"] == []
     configured = definition.to_document()["steps"][0]["inputs"]["precipitation"][
         "value"
     ]
-    array = zarr.open_array(archive / "2000/02/era5.zarr" / PRECIPITATION, mode="r+")
-    array[0, 360, 0] = 0
-    array[2, 360, 0] = numpy.nan
-    array[:, 360, 1] = numpy.nan
+    for hour, value in ((0, 0), (2, numpy.nan)):
+        path = observation_path(archive, PRECIPITATION, 2, hour)
+        _write_equatorial_cell(path, 720, value)
+        _write_equatorial_cell(path, 721, numpy.nan)
     request = period_request(client, PRECIPITATION)
     request["inputs"]["source"]["startTime"] = "2000-01-31T23:00:00Z"
     request["inputs"]["reduction"] = {"reducer": "precipitation_total"}
@@ -418,10 +458,7 @@ def test_precipitation_total_rejects_unsupported_source_metadata(
     """
     client, worker, _, archive, scanner = temporal_boundary
     if unit is not None:
-        for month in ("01", "02"):
-            zarr.open_array(
-                archive / f"2000/{month}/era5.zarr" / variable, mode="r+"
-            ).attrs["units"] = unit
+        _set_variable_unit(archive, variable, unit)
         assert client.portal.call(scan, scanner)["errors"] == []
     request = period_request(client, variable)
     request["inputs"]["reduction"] = {"reducer": "precipitation_total"}

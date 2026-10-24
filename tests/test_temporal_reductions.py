@@ -1,4 +1,4 @@
-"""Verify period-map calculations using native Zarr inputs and completed COGs."""
+"""Verify period-map calculations using native GeoTIFF inputs and completed COGs."""
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -7,12 +7,13 @@ import json
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import NDArray
 import pytest
 import rasterio
 from affine import Affine
 from pydantic import ValidationError
 from rasterio.crs import CRS
-import zarr
+from rasterio.windows import Window
 
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.polygon_areas import PolygonSummaryInput
@@ -29,6 +30,47 @@ from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
 
+def _write_observation(
+    path: Path,
+    values: NDArray[np.float32],
+    transform: Affine,
+    nodata: float | None,
+) -> Path:
+    """Write one native observation used by the period-calculation tests.
+
+    Args:
+        path: New GeoTIFF location inside the isolated archive.
+        values: Native observation values in published column order.
+        transform: Affine mapping native pixel edges to EPSG:4326.
+        nodata: Declared invalid value, or None when no explicit value is declared.
+
+    Returns:
+        The written observation path.
+
+    Raises:
+        OSError: If the fixture directory or raster cannot be written.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=values.shape[0],
+        width=values.shape[1],
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=nodata,
+        tiled=True,
+        blockxsize=16,
+        blockysize=16,
+        compress="deflate",
+    ) as raster:
+        raster.write(values, 1)
+    return path
+
+
 @pytest.fixture
 def interval(tmp_path: Path) -> ResolvedTemporalInterval:
     """Create gapped observations containing NaN, declared NoData and finite values.
@@ -39,15 +81,7 @@ def interval(tmp_path: Path) -> ResolvedTemporalInterval:
     Returns:
         Three instantaneous observations on a regional native grid.
     """
-    path = tmp_path / "archive" / "weather"
-    array = zarr.create_array(
-        path,
-        shape=(3, 2, 4),
-        chunks=(3, 1, 2),
-        dtype="float32",
-        fill_value=-9999,
-    )
-    array[:] = np.array(
+    values = np.array(
         [
             [[1, 2, np.nan, np.inf], [np.nan, -9999, 3, 5]],
             [[3, np.nan, np.nan, 4], [np.nan, 2, 7, -9999]],
@@ -58,9 +92,12 @@ def interval(tmp_path: Path) -> ResolvedTemporalInterval:
     start = datetime(2000, 1, 1, tzinfo=timezone.utc)
     observations = tuple(
         TemporalObservation(
-            root=tmp_path / "archive",
-            array_path=path,
-            time_index=index,
+            path=_write_observation(
+                tmp_path / "archive" / f"weather-{hour}.tif",
+                values[index],
+                Affine(1, 0, 10, 0, -1, 12),
+                -9999,
+            ),
             time=start + timedelta(hours=hour),
             reference_time=None,
             interval_start=start + timedelta(hours=hour),
@@ -86,7 +123,7 @@ def _calculate(
     """Plan and execute a real period-map operation in one private attempt.
 
     Args:
-        interval: Real Zarr observations and variable metadata.
+        interval: Real GeoTIFF observations and variable metadata.
         reduction: Requested statistic.
         area: Validated spatial area.
         directory: New attempt output directory.
@@ -198,7 +235,7 @@ def test_reducers_match_native_values_and_preserve_count_nodata(
     ]
     assert provenance["allTouched"] is False
     assert provenance["unit"] == "K"
-    assert "array_path" not in json.dumps(provenance)
+    assert str(tmp_path / "archive") not in json.dumps(provenance)
     assert "observations" not in spec.model_dump()
     assert source_files == {path: path.read_bytes() for path in source_files}
 
@@ -273,30 +310,37 @@ def test_rotated_seam_view_applies_to_every_observation(tmp_path: Path) -> None:
     Args:
         tmp_path: Isolated global archive and result directory.
     """
-    path = tmp_path / "archive" / "global"
-    array = zarr.create_array(path, shape=(3, 3, 8), chunks=(3, 1, 2), dtype="float32")
-    array[:] = np.broadcast_to(
-        np.arange(8)[None, None, :] + np.array([0, 10, 20])[:, None, None], (3, 3, 8)
-    ).copy()
+    transform = Affine(11.25, 0, -180, 0, -45, 67.5)
+    values = np.broadcast_to(
+        np.arange(32)[None, None, :] + np.array([0, 10, 20])[:, None, None],
+        (3, 3, 32),
+    ).astype("float32")
+    values = np.roll(values, 16, axis=2)
+    paths = [
+        _write_observation(
+            tmp_path / "archive" / f"global-{index}.tif",
+            observation_values,
+            transform,
+            None,
+        )
+        for index, observation_values in enumerate(values)
+    ]
     start = datetime(2000, 1, 1, tzinfo=timezone.utc)
     first = TemporalObservation(
-        root=tmp_path / "archive",
-        array_path=path,
-        time_index=0,
+        path=paths[0],
         time=start,
         reference_time=None,
         interval_start=start,
         interval_end=start,
-        transform=Affine(45, 0, -180, 0, -45, 67.5),
+        transform=transform,
         crs=CRS.from_epsg(4326),
         nodata=None,
-        column_offset=4,
         cyclic_x=True,
     )
     interval = ResolvedTemporalInterval(
         observations=tuple(
-            replace(first, time_index=index, time=start + timedelta(hours=index))
-            for index in range(3)
+            replace(first, path=path, time=start + timedelta(hours=index))
+            for index, path in enumerate(paths)
         ),
         unit="K",
         time_support="instantaneous",
@@ -305,7 +349,7 @@ def test_rotated_seam_view_applies_to_every_observation(tmp_path: Path) -> None:
     spec, _ = _calculate(
         interval,
         TemporalReduction(reducer="mean"),
-        AggregateArea(kind="bounds", bounds=(-179, -10, -145, 10)),
+        AggregateArea(kind="bounds", bounds=(-179, -10, -170, 10)),
         directory,
     )
     assert spec.grid.columnRotation != 0
@@ -313,7 +357,7 @@ def test_rotated_seam_view_applies_to_every_observation(tmp_path: Path) -> None:
         rasterio.open(directory / "result.tif") as result,
         rasterio.open(directory / "count.tif") as count,
     ):
-        assert result.read(1, masked=True).compressed().tolist() == [14.0]
+        assert result.read(1, masked=True).compressed().tolist() == [26.0]
         assert count.read(1, masked=True).compressed().tolist() == [3.0]
 
 
@@ -353,18 +397,16 @@ def test_single_observation_has_zero_population_deviation(
         np.testing.assert_array_equal(count.read(1), [[1, 1, 0, 0], [0, 0, 1, 1]])
 
 
-def test_corrupt_native_chunk_fails_and_removes_ordered_scratch(
+def test_unreadable_observation_fails_without_publishing_a_partial_median(
     interval: ResolvedTemporalInterval, tmp_path: Path
 ) -> None:
     """Expose an actual native read failure instead of publishing a partial median.
 
     Args:
-        interval: Admitted regional observations whose native chunk will be corrupt.
+        interval: Admitted regional observations whose second TIFF will be unreadable.
         tmp_path: Isolated attempt root.
     """
-    (interval.observations[0].array_path / "c/0/0/0").write_bytes(
-        b"corrupt compressed chunk"
-    )
+    interval.observations[1].path.write_bytes(b"unreadable GeoTIFF")
     directory = tmp_path / "corrupt"
     with pytest.raises((OSError, ValueError)):
         _calculate(
@@ -414,7 +456,8 @@ def test_precipitation_total_uses_recorded_durations_and_valid_cells(
             )
         ),
     )
-    zarr.open_array(rates.observations[0].array_path, mode="r+")[0, 0, 1] = 0
+    with rasterio.open(rates.observations[0].path, "r+") as source:
+        source.write(np.array([[0]], dtype="float32"), 1, window=Window(1, 0, 1, 1))
     directory = tmp_path / "precipitation"
     spec, artifact = _calculate(
         rates,
