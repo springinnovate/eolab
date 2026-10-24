@@ -9,23 +9,32 @@ export const TEMPORAL_STATISTICS = [
     {value: "precipitation_total", label: "Precipitation total"},
 ];
 
+/** Spatial statistics accepted by the area_statistic input contract. */
+const AREA_STATISTICS = [
+    {value: "mean", label: "Mean"}, {value: "sum", label: "Sum"},
+    {value: "min", label: "Minimum"}, {value: "max", label: "Maximum"},
+    {value: "stdev", label: "Population standard deviation"}, {value: "count", label: "Valid-pixel count"},
+];
+
 /** Check whether a variable matches the model's configured precipitation rate units.
  * @param {Object|undefined} variable Admitted Catalog variable metadata, or no selection.
- * @param {{inputUnit:string,outputUnit:string,factor:number}} precipitation Conversion fixed in Model YAML.
+ * @param {Object} temporal Period choices, statistic input type and model conversion configuration.
  * @return {boolean} Whether the model can integrate this variable over its observation intervals.
  */
-export function supportsPrecipitationTotal(variable, precipitation) {
-    return variable?.["eolab:time_support"] === "mean_rate" && variable.unit === precipitation.inputUnit;
+export function supportsPrecipitationTotal(variable, temporal) {
+    return temporal.statisticType === "temporal_reduction" &&
+        variable?.["eolab:time_support"] === "mean_rate" && variable.unit === temporal.precipitation.inputUnit;
 }
 
 /** List the statistics supported by the selected variable's measurement type and units.
  * @param {Object|undefined} variable Admitted Catalog variable metadata, or no selection.
- * @param {{inputUnit:string,outputUnit:string,factor:number}} precipitation Conversion fixed in Model YAML.
+ * @param {Object} temporal Period choices, statistic input type and model conversion configuration.
  * @return {{value:string,label:string}[]} Supported choices; empty for an unsupported or missing variable.
  */
-export function getTemporalStatistics(variable, precipitation) {
-    if (supportsPrecipitationTotal(variable, precipitation))
-        return [{value: "precipitation_total", label: `Precipitation total (${precipitation.outputUnit})`}];
+export function getTemporalStatistics(variable, temporal) {
+    if (temporal.statisticType === "area_statistic") return variable ? AREA_STATISTICS : [];
+    if (supportsPrecipitationTotal(variable, temporal))
+        return [{value: "precipitation_total", label: `Precipitation total (${temporal.precipitation.outputUnit})`}];
     return variable?.["eolab:time_support"] === "instantaneous" ?
         TEMPORAL_STATISTICS.filter(choice => choice.value !== "precipitation_total") : [];
 }
@@ -40,11 +49,12 @@ export function snapTemporalHour(value) {
 
 /** Create empty period choices independently of the observation displayed on the map.
  * @param {Object[]} datasets Catalog dataset identities retained in Map layers.
- * @param {{inputUnit:string,outputUnit:string,factor:number}} precipitation Conversion fixed in Model YAML.
- * @return {Object} Editable choices, fixed conversion and their Catalog availability state.
+ * @param {"temporal_reduction"|"area_statistic"} statisticType Recipe input defining whether to summarize observations or pixels.
+ * @param {{inputUnit:string,outputUnit:string,factor:number}|null} precipitation Period-map conversion fixed in Model YAML; null for area series.
+ * @return {Object} Editable choices, statistic type, fixed conversion and Catalog availability state.
  */
-export function createTemporalDraft(datasets, precipitation) {
-    return {datasets: structuredClone(datasets), precipitation, datasetKey: "", item: null, variable: "",
+export function createTemporalDraft(datasets, statisticType, precipitation) {
+    return {datasets: structuredClone(datasets), statisticType, precipitation, datasetKey: "", item: null, variable: "",
         startTime: "", endTime: "", choices: null, loading: false, error: "", datesError: ""};
 }
 
@@ -63,18 +73,18 @@ export function temporalSelectionError(temporal) {
     if (!temporal.item) return "Load the dataset's variables before running the analysis.";
     const variable = temporal.item.properties["cube:variables"][temporal.variable];
     if (!variable) return "Choose a variable.";
-    if (!getTemporalStatistics(variable, temporal.precipitation).length)
+    if (!getTemporalStatistics(variable, temporal).length)
         return `Choose instantaneous measurements or a mean precipitation rate in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
     if (!temporal.startTime || !temporal.endTime) return "Choose a start and end in UTC, or use an available month.";
     const start = Date.parse(`${temporal.startTime}Z`), end = Date.parse(`${temporal.endTime}Z`);
     if (!Number.isFinite(start) || !Number.isFinite(end)) return "Enter a valid start and end date and time in UTC.";
-    if (start >= end) return "The end must be later than the start. The end itself is excluded.";
-    if (supportsPrecipitationTotal(variable, temporal.precipitation) && (start % 3600000 !== 0 || end % 3600000 !== 0))
+    if (start >= end) return "The end must be later than the start.";
+    if (supportsPrecipitationTotal(variable, temporal) && (start % 3600000 !== 0 || end % 3600000 !== 0))
         return "Finish editing the dates to round them to whole UTC hours before running the precipitation total.";
     return "";
 }
 
-/** Capture a path-free dataset selection with a start-inclusive, end-exclusive UTC period.
+/** Capture a path-free dataset selection and its requested UTC period.
  * @param {Object} temporal Editable period choices.
  * @return {Object} The temporal_interval input accepted by Processing.
  * @throws {Error} If the selected dataset, variable or date boundaries are unavailable or invalid.
@@ -100,10 +110,10 @@ export function captureTemporalReduction(reduction) {
 
 /** Describe the submitted variable and exact UTC boundaries without reading current Catalog state.
  * @param {Object} input Captured temporal_interval input.
- * @return {string} Dataset, variable and half-open period for saved run details.
+ * @return {string} Dataset, variable and requested period for saved run details.
  */
 export function describeTemporalInterval(input) {
-    return `${input.itemId} · ${input.variable} · Start ${input.startTime} (included); end ${input.endTime} (excluded). All times UTC.`;
+    return `${input.itemId} · ${input.variable} · Requested period: ${input.startTime} to ${input.endTime}. All times UTC.`;
 }
 
 /** Describe the saved statistic independently of the current setup controls.

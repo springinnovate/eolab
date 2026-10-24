@@ -27,7 +27,7 @@ export class TemporalModelInputsView {
      * @param {()=>void} handlers.onRefreshTemporal Refresh guidance while preserving dates.
      * @param {(change:Object)=>void} handlers.onTemporalEdit Edit UTC period boundaries.
      * @param {(change:Object)=>void} handlers.onEdit Edit the statistic choice.
-     * @param {string} statisticLabel Label declared by the recipe's temporal_reduction input.
+     * @param {string} statisticLabel Label declared by the recipe's statistic input.
      */
     constructor({element, field, button, options, document}, handlers, statisticLabel) {
         this.document = document; this.options = options;
@@ -40,7 +40,7 @@ export class TemporalModelInputsView {
         this.variable.setAttribute("aria-describedby", this.support.id);
         this.sourceRoot.append(field("models-temporal-dataset", "Dataset", this.dataset),
             field("models-temporal-variable", "Variable", this.variable), this.support);
-        for (const [name, caption] of [["startTime", "Start (UTC, included)"], ["endTime", "End (UTC, excluded)"]]) {
+        for (const [name, caption] of [["startTime", "Start (UTC)"], ["endTime", "End (UTC)"]]) {
             const input = this[name] = element("input");
             input.type = "datetime-local"; input.step = "any"; input.required = true;
             input.setAttribute("aria-describedby", "models-temporal-period-help models-temporal-status");
@@ -95,13 +95,15 @@ export class TemporalModelInputsView {
                 temporal.item.properties.title : dataset.label}))], temporal.datasetKey);
         const variables = Object.entries(temporal.item?.properties["cube:variables"] ?? {});
         this.options(this.variable, [{value: "", label: "Choose a variable…"}, ...variables.map(([id, value]) => ({value: id,
-            label: `${value.description} (${value.unit})${getTemporalStatistics(value, temporal.precipitation).length ? "" : " — not supported"}`,
-            disabled: !getTemporalStatistics(value, temporal.precipitation).length}))], temporal.variable);
+            label: `${value.description} (${value.unit})${getTemporalStatistics(value, temporal).length ? "" : " — not supported"}`,
+            disabled: !getTemporalStatistics(value, temporal).length}))], temporal.variable);
         this.variable.disabled = !temporal.item;
-        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value, temporal.precipitation).length);
-        this.support.textContent = `Period maps support instantaneous measurements and mean precipitation rates in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
+        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value, temporal).length);
+        this.support.textContent = this.support.hidden ? "" : `Period maps support instantaneous measurements and mean precipitation rates in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
         const variable = temporal.item?.properties["cube:variables"][temporal.variable];
-        const precipitation = supportsPrecipitationTotal(variable, temporal.precipitation), precisionChanged = precipitation !== this.precipitation;
+        const precipitation = supportsPrecipitationTotal(variable, temporal), precisionChanged = precipitation !== this.precipitation;
+        const areaSeries = temporal.statisticType === "area_statistic";
+        const intervalSeries = areaSeries && variable && variable["eolab:time_support"] !== "instantaneous";
         this.precipitation = precipitation;
         for (const name of ["startTime", "endTime"]) {
             this[name].step = precipitation ? "3600" : "any";
@@ -109,7 +111,9 @@ export class TemporalModelInputsView {
         }
         this.periodHelp.textContent = precipitation ?
             "Total precipitation between these dates. Dates round to the nearest whole UTC hour when you finish editing; 30 minutes rounds forward. The calculation uses the dates shown." :
-            "These dates define the calculation period. Changing the observation displayed on the map does not change them.";
+            (intervalSeries ? "Include each complete observation whose time interval overlaps this period. Dates are not rounded; values are not prorated or integrated over time." :
+                "Include observations at or after the start and before the end.") +
+            " Changing the observation displayed on the map does not change these dates.";
         this.availabilityHelp.textContent = "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
             (precipitation ? "These are observation labels, not the boundaries of the intervals they represent. Missing intervals are omitted from the total." : "Missing observations are omitted from the calculation.");
         const selectionError = temporalSelectionError(temporal);
@@ -124,7 +128,7 @@ export class TemporalModelInputsView {
         this.coverage.textContent = temporal.loading ? "Loading available observations…" : temporal.datesError ? temporal.datesError : !choices ? "Choose a variable to see available observations." :
             choices.times.length ? `${choices.times.length.toLocaleString()} observations in ${choices.month}. First: ${observationLabel(choices.times[0])}. Last: ${observationLabel(choices.times.at(-1))}.` :
                 "No observations are available in this month. Choose another month or enter a different period.";
-        this.options(this.statistic, getTemporalStatistics(variable, temporal.precipitation), reduction.reducer);
+        this.options(this.statistic, getTemporalStatistics(variable, temporal), reduction.reducer);
         this.percentileField.hidden = reduction.reducer !== "percentile";
         this.percentile.disabled = reduction.reducer !== "percentile";
         if (this.document.activeElement !== this.percentile) this.percentile.value = reduction.percentile ?? "";
@@ -135,7 +139,8 @@ export class TemporalModelInputsView {
             reduction.reducer === "percentile" || reduction.reducer === "median" ? " Percentiles use linear interpolation between ordered values." :
                 reduction.reducer === "sum" ? " The sum adds observations without multiplying by elapsed time." : "";
         const unit = variable?.unit;
-        this.reductionHelp.textContent = precipitation ?
+        this.reductionHelp.textContent = areaSeries ?
+            `Each CSV row summarizes valid pixels in the selected area for one observation. Pixels have equal weight; missing pixel values are omitted. Rows with no valid pixels have an empty value and are marked as having no valid data.${reduction.reducer === "count" ? " Result units: cells." : unit ? ` Result units: ${unit}.` : ""}${reduction.reducer === "stdev" ? " Standard deviation uses the population formula." : ""}` : precipitation ?
             `Each precipitation rate in ${temporal.precipitation.inputUnit} is multiplied by its interval duration in seconds and converted to ${temporal.precipitation.outputUnit}. Missing intervals and missing pixel values are omitted, not filled with zero. A second map counts valid available observations at each pixel.` :
             `Each valid observation has equal weight; missing values are omitted.${unit ? ` Result units: ${unit}.` : ""}${convention} A second map counts valid observations at each pixel.`;
         return selectionError || reductionError;

@@ -100,6 +100,7 @@ export function createModelDraft(model, context, id) {
     const suggestedRaster = visibleCatalogRasters.length === 1 ? visibleCatalogRasters[0] : catalogRasters.length === 1 ? catalogRasters[0] : null;
     const usesStartingMask = modelHasInput(model, "mask_source");
     const usesTemporal = modelHasInput(model, "temporal_interval");
+    const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
     let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
     let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
     let selectionError = "";
@@ -116,8 +117,9 @@ export function createModelDraft(model, context, id) {
         area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
         vectorKey: "", vectorInfo: null, selecting: false, selectionError,
         maskRaster: null,
-        temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], model.steps[0].inputs.precipitation.value) : null,
-        reduction: modelHasInput(model, "temporal_reduction") ? {reducer: "mean", percentile: 90} : null,
+        temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], statisticType,
+            statisticType === "temporal_reduction" ? model.steps[0].inputs.precipitation.value : null) : null,
+        reduction: statisticType ? {reducer: "mean", percentile: 90} : null,
         parameters: Object.fromEntries(Object.entries(model.parameters).map(([name, parameter]) => [name, parameter.default])),
     };
 }
@@ -155,6 +157,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
             {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
+        else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
         else if (input.type === "mask_source") inputs[name] = draft.areaMode === "raster" ?
             {kind: "catalogRaster", source: {collectionId: draft.maskRaster.collectionId, itemId: draft.maskRaster.itemId}} : structuredClone(draft.area);

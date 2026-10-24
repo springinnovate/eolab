@@ -161,7 +161,7 @@ export class ModelsView {
         resultActions.append(refreshResults, olderResults); if (!usesStartingMask && !draft.temporal) fields.append(resultActions);
         const temporal = draft.temporal ? new TemporalModelInputsView({element: this.element.bind(this), field: this.field.bind(this),
             button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers,
-            Object.values(draft.model.inputs).find(input => input.type === "temporal_reduction").label) : null;
+            Object.values(draft.model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type)).label) : null;
         if (temporal) fields.append(temporal.sourceRoot);
         const areaMode = this.element("select");
         areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
@@ -296,7 +296,7 @@ export class ModelsView {
         setupControls.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
             `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
-        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction"].includes(input.type));
+        const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type));
         const areaReady = usesStartingMask && draft.areaMode === "raster" ? Boolean(draft.maskRaster) : Boolean(draft.area);
         const sourceReady = draft.temporal ? !temporalError : Boolean(draft.raster) && draft.raster.available !== false;
         setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !sourceReady || !supported;

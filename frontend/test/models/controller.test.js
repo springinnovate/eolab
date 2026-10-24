@@ -282,24 +282,85 @@ test("recipe precipitation units determine supported variables and labels withou
     h.controller.destroy();
 });
 
+test("area-series controls accept every observation type and capture scalar statistics without rounding dates", async () => {
+    const item = structuredClone(temporalItem);
+    item.properties["cube:variables"].energy = {description: "Stored energy", unit: "J m-2", "eolab:time_support": "accumulation"};
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = fixture({discoverModels: async () => [model, seriesModel],
+        getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
+    h.context.rasters = [];
+    h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
+    await h.controller.loadLibrary();
+    h.controller.chooseModel(h.controller.state.library.find(recipe => recipe.id === seriesModel.id));
+    await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
+    const controls = view.setup.temporal, draft = h.controller.state.draft;
+    controls.startTime.value = "2000-01-31T23:30:15.250"; controls.startTime.dispatchEvent(new Event("input"));
+    controls.endTime.value = "2000-02-01T01:10:22.500"; controls.endTime.dispatchEvent(new Event("input"));
+    for (const variable of ["temperature", "rain", "energy"]) {
+        await h.controller.chooseTemporalVariable(variable);
+        assert.equal(controls.variable.children.find(option => option.value === variable).disabled, false);
+        assert.deepEqual(controls.statistic.children.map(option => option.value), ["mean", "sum", "min", "max", "stdev", "count"]);
+        for (const input of [controls.startTime, controls.endTime]) {
+            input.dispatchEvent(new Event("change")); input.dispatchEvent(new Event("blur"));
+        }
+        for (const statistic of ["mean", "sum", "min", "max", "stdev", "count"]) {
+            controls.statistic.value = statistic; controls.statistic.dispatchEvent(new Event("change"));
+            const request = captureModelSubmission(draft, "e".repeat(32));
+            assert.equal(request.inputs.statistic, statistic);
+            assert.equal(request.inputs.source.variable, variable);
+            assert.equal(request.inputs.source.startTime, "2000-01-31T23:30:15.250Z");
+            assert.equal(request.inputs.source.endTime, "2000-02-01T01:10:22.500Z");
+            assert.deepEqual(request.inputs.area, area);
+            assert.deepEqual(request.parameters, {});
+        }
+        assert.equal(controls.startTime.step, "any"); assert.equal(controls.endTime.step, "any");
+        assert.equal(controls.percentileField.hidden, true);
+        assert.equal(view.setup.run.disabled, false);
+    }
+    assert.equal(h.submitted.length, 0);
+    await h.controller.submit();
+    assert.equal(h.submitted[0].inputs.statistic, "count");
+    assert.equal(h.submitted[0].inputs.source.variable, "energy");
+    h.controller.destroy();
+});
+
+test("copying an area series preserves its scalar statistic, exact period and area through refresh", async () => {
+    const saved = {model: {...seriesModel, definition: seriesModel}, label: "Original series", parameters: {}, inputs: {
+        source: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "rain",
+            startTime: "2000-01-31T23:30:15.250Z", endTime: "2000-02-01T01:10:22.500Z"},
+        statistic: "stdev", area,
+    }};
+    const run = job({model: seriesModel, status: "ready", result: timeSeriesResult, expiresAt: "2099-01-01T00:00:00Z"});
+    const h = fixture({discoverModels: async () => [seriesModel], getJob: async () => run,
+        readModelInvocation: async () => structuredClone(saved), getTemporalItem: async () => structuredClone(temporalItem),
+        loadTemporalTimes: async () => structuredClone(temporalChoices)});
+    h.context.temporalDatasets = [temporalDataset];
+    await h.controller.loadLibrary(); await h.controller.showRun(run.jobId); await h.controller.duplicateRun();
+    assert.equal(h.controller.state.page, "setup");
+    h.context.area = {kind: "wholeRaster"}; h.controller.refreshMapArea();
+    await h.controller.loadTemporalDates(undefined, true);
+    const draft = h.controller.state.draft;
+    assert.equal(draft.areaMode, "captured");
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, saved.inputs);
+    assert.equal(h.submitted.length, 0);
+    h.controller.destroy();
+});
+
 test("model setup supports temporal input types and omits unknown controls while retaining run history", async () => {
     const temporal = {...model, id: "temporal-period-map", inputs: {
         source: {type: "temporal_interval", label: "Dataset and period"},
         area: model.inputs.area,
         reduction: {type: "temporal_reduction", label: "Statistic"},
     }};
-    const run = job({model: seriesModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: timeSeriesResult});
-    const saved = {...invocation, model: {...seriesModel, definition: seriesModel}, parameters: {}, inputs: {
-        source: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "temperature",
-            startTime: "2000-01-01T00:00:00Z", endTime: "2000-01-04T00:00:00Z"}, area, statistic: "mean",
-    }};
     const unknown = {...model, id: "future-recipe", inputs: {unknown: {type: "unknown_input", label: "Unknown"}}};
+    const run = job({model: unknown, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: timeSeriesResult});
+    const saved = {...invocation, model: {...unknown, definition: unknown}, parameters: {}, inputs: {unknown: "Original input"}};
     const h = fixture({discoverModels: async () => [model, temporal, clipModel, seriesModel, unknown],
         getJob: async () => run, readModelInvocation: async () => saved,
         listModelRuns: async () => ({jobs: [run], nextCursor: null})});
     await h.controller.loadLibrary();
     await h.controller.loadRuns();
-    assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, temporal.id, clipModel.id]);
+    assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, temporal.id, clipModel.id, seriesModel.id]);
     assert.deepEqual(h.controller.state.runs[0], run);
     await h.controller.showRun(run.jobId);
     await h.controller.duplicateRun();
