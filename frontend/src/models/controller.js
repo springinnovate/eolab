@@ -175,7 +175,7 @@ export class ModelsController {
     }
 
     /** Choose a variable and its supported statistic, then load date guidance.
-     * Selecting a precipitation rate visibly rounds existing boundaries to whole UTC hours.
+     * Selecting a period-map precipitation total visibly rounds existing boundaries to whole UTC hours.
      * @param {string} variable Catalog variable identifier from the setup control.
      * @return {Promise<void>} Completion after monthly guidance or a visible discovery error.
      */
