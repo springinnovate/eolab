@@ -158,9 +158,6 @@ class Settings:
         raster_pixel_read_concurrency: Maximum concurrent raster pixel reads.
         raster_statistics_read_concurrency: Maximum concurrent statistics reads.
         raster_statistics_cache_entries: Completed statistics cache capacity.
-        raster_slice_cache_path: Rendering-only GeoTIFF cache shared with GeoServer.
-        raster_slice_cache_entries: Maximum idle temporal GeoTIFFs retained; files in
-            active renders are additional and become eligible for eviction on release.
         raster_statistics_queue_capacity: Additional distinct histogram reads allowed to wait.
         raster_statistics_queue_wait_seconds: Maximum histogram wait before reading starts.
         raster_statistics_max_waiters: Maximum callers awaiting histogram results, including duplicates.
@@ -238,8 +235,6 @@ class Settings:
     processing_data_path: Path = Path("/processing-data").absolute()
     vector_upload_data_path: Path = Path("/vector-uploads").absolute()
     vector_upload_max_bytes: int | None = None
-    raster_slice_cache_path: Path = Path("/raster-slices").absolute()
-    raster_slice_cache_entries: int = 8
     jobs_token: str = field(default="", repr=False)
     admin_password: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
@@ -311,10 +306,6 @@ class Settings:
             raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
         if not self.vector_upload_data_path.is_absolute():
             raise ValueError("VECTOR_UPLOAD_DATA_PATH must be an absolute path")
-        if not self.raster_slice_cache_path.is_absolute():
-            raise ValueError("RASTER_SLICE_CACHE_PATH must be an absolute path")
-        if self.raster_slice_cache_entries < 1:
-            raise ValueError("RASTER_SLICE_CACHE_ENTRIES must be greater than zero")
         if self.vector_upload_max_bytes is not None and self.vector_upload_max_bytes < 1:
             raise ValueError("VECTOR_UPLOAD_MAX_BYTES must be greater than zero")
         if not -180 <= self.initial_longitude <= 180:
@@ -618,14 +609,6 @@ def load_settings(
             os.environ.get(
                 "VECTOR_UPLOAD_DATA_PATH", str(Path("/vector-uploads").absolute())
             )
-        ),
-        raster_slice_cache_path=Path(
-            os.environ.get(
-                "RASTER_SLICE_CACHE_PATH", str(Path("/raster-slices").absolute())
-            )
-        ),
-        raster_slice_cache_entries=int(
-            os.environ.get("RASTER_SLICE_CACHE_ENTRIES", "8")
         ),
         vector_upload_max_bytes=(
             int(raw_upload_max_bytes) if raw_upload_max_bytes else None

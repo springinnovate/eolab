@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy
 import pytest
 import rasterio
-import zarr
 from affine import Affine
 from rasterio.crs import CRS
 
@@ -36,16 +35,30 @@ def cyclic_observation(tmp_path: Path) -> TemporalObservation:
         tmp_path: Isolated source directory.
 
     Returns:
-        First of two observations whose columns begin at zero longitude.
+        First of two observations in their published longitude order.
     """
-    path = tmp_path / "grid.zarr"
+    path = tmp_path / "grid_0.tif"
     values = numpy.arange(24, dtype="float32").reshape(3, 8)
-    zarr.create_array(path, data=numpy.stack((values, values + 100)), chunks=(2, 2, 4))
+    for index in range(2):
+        with rasterio.open(
+            tmp_path / f"grid_{index}.tif",
+            "w",
+            driver="GTiff",
+            height=3,
+            width=8,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=Affine(45, 0, -202.5, 0, -45, 67.5),
+            tiled=True,
+            blockxsize=16,
+            blockysize=16,
+        ) as target:
+            target.write(numpy.roll(values + index * 100, -4, axis=1), 1)
     time = datetime(2000, 1, 1, tzinfo=timezone.utc)
     return TemporalObservation(
         root=tmp_path,
-        array_path=path,
-        time_index=0,
+        path=path,
         time=time,
         reference_time=None,
         interval_start=time,
@@ -53,7 +66,6 @@ def cyclic_observation(tmp_path: Path) -> TemporalObservation:
         transform=Affine(45, 0, -202.5, 0, -45, 67.5),
         crs=CRS.from_epsg(4326),
         nodata=None,
-        column_offset=4,
         cyclic_x=True,
     )
 
@@ -211,7 +223,7 @@ def test_polygon_selection_uses_paired_reference_view(
     assert result.sample_minimum == 12
     paired = read_raster_paired_statistics(
         cyclic_observation,
-        replace(cyclic_observation, time_index=1),
+        replace(cyclic_observation, path=cyclic_observation.root / "grid_1.tif"),
         None,
         catalog_selection=selection,
     )
@@ -251,7 +263,6 @@ def test_projected_temporal_statistics_keep_the_admitted_grid(
         cyclic_observation,
         transform=Affine(30, 0, 500000, 0, -30, 1000),
         crs=CRS.from_epsg(32632),
-        column_offset=0,
         cyclic_x=False,
     )
     result = read_raster_categorical_statistics(

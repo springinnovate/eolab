@@ -234,7 +234,7 @@ def test_discovery_rejects_all_duplicate_ids_before_returning_candidates(
         root.mkdir()
         (root / "dataset.yaml").write_text(
             f"id: {item_id}\ntitle: Weather\n"
-            "source:\n  format: era5_ncar_zarr\n  catalog: catalog.sqlite\n",
+            "source:\n  format: temporal_cog\n  catalog: catalog.sqlite\n",
             encoding="utf-8",
         )
         if root != roots[0] or not missing_catalog:

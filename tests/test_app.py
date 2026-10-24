@@ -1258,7 +1258,6 @@ def test_load_settings_rejects_blank_version(
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
-        ("RASTER_SLICE_CACHE_ENTRIES", "1.5"),
         ("RASTER_STATISTICS_QUEUE_CAPACITY", "1.5"),
         ("RASTER_STATISTICS_MAX_WAITERS", "1.5"),
         ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "invalid"),
@@ -1275,38 +1274,6 @@ def test_load_settings_rejects_malformed_number(
     monkeypatch.setenv(environment_variable_name, invalid_value)
 
     with pytest.raises(ValueError):
-        load_settings(version_file_path)
-
-
-def test_raster_slice_cache_settings(
-    configured_environment: None,
-    monkeypatch: pytest.MonkeyPatch,
-    version_file_path: Path,
-    tmp_path: Path,
-) -> None:
-    """Load the rendering cache defaults and reject a relative cache directory.
-
-    Args:
-        configured_environment: Baseline application environment.
-        monkeypatch: Isolated environment overrides.
-        version_file_path: Test application version file.
-        tmp_path: Parent of the configured cache directory.
-    """
-    monkeypatch.delenv("RASTER_SLICE_CACHE_PATH", raising=False)
-    monkeypatch.delenv("RASTER_SLICE_CACHE_ENTRIES", raising=False)
-    defaults = load_settings(version_file_path)
-    assert defaults.raster_slice_cache_path == Path("/raster-slices").absolute()
-    assert defaults.raster_slice_cache_entries == 8
-
-    cache_path = tmp_path / "map-slices"
-    monkeypatch.setenv("RASTER_SLICE_CACHE_PATH", str(cache_path))
-    monkeypatch.setenv("RASTER_SLICE_CACHE_ENTRIES", "3")
-    configured = load_settings(version_file_path)
-    assert configured.raster_slice_cache_path == cache_path
-    assert configured.raster_slice_cache_entries == 3
-
-    monkeypatch.setenv("RASTER_SLICE_CACHE_PATH", "relative/map-slices")
-    with pytest.raises(ValueError, match="RASTER_SLICE_CACHE_PATH"):
         load_settings(version_file_path)
 
 
@@ -1383,7 +1350,6 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
-        ("RASTER_SLICE_CACHE_ENTRIES", "0"),
         ("RASTER_STATISTICS_QUEUE_CAPACITY", "-1"),
         ("RASTER_STATISTICS_MAX_WAITERS", "0"),
         ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "0"),

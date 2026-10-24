@@ -25,7 +25,7 @@ def open_raster_data(source: RasterData) -> Iterator[RasterDataset]:
 
     Raises:
         OSError: If the source cannot be opened.
-        ValueError: If native metadata or array decoding is unsupported.
+        ValueError: If native metadata is unsupported.
         rasterio.errors.RasterioError: If the GeoTIFF cannot be opened.
     """
     if isinstance(source, TemporalObservation):

@@ -260,8 +260,6 @@ def create_app(
         published_rasters,
         source_access=raster_sources,
         source_available=processing_service.model_artifact_is_available,
-        slice_cache_path=app_global_configuration.raster_slice_cache_path,
-        slice_cache_entries=app_global_configuration.raster_slice_cache_entries,
     )
     raster_feature = create_raster_feature(
         raster_publication,
@@ -327,7 +325,7 @@ def create_app(
 
     @asynccontextmanager
     async def use_map_layers(layer_names: tuple[str, ...]) -> AsyncIterator[None]:
-        """Prepare map layers and retain their files until the upstream request finishes.
+        """Keep temporal layers published until the upstream request finishes.
 
         Args:
             layer_names: Authorized layer identities requested by a rendering route.
@@ -336,15 +334,13 @@ def create_app(
             None while the route may read the layers through GeoServer.
 
         Raises:
-            HTTPException: If source access or publication cannot prepare a layer.
+            HTTPException: If an explicit refresh revoked a queued temporal layer.
         """
         try:
             async with raster_publication.use_layers(layer_names):
                 yield
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
-        except SourceFileError as error:
-            raise HTTPException(error.status, str(error)) from error
 
     async def reconcile_output_publications() -> None:
         """Retry obsolete model-result and temporal display cleanup.
@@ -537,7 +533,7 @@ def create_app(
     )
 
     async def refresh_temporal_items(item_keys: tuple[tuple[str, str], ...]) -> None:
-        """Invalidate analysis and display caches after explicit Catalog writes.
+        """Invalidate analysis caches and temporal layers after explicit Catalog writes.
 
         Args:
             item_keys: Collection and Item IDs successfully written by the scan.

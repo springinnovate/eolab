@@ -1,4 +1,4 @@
-"""Read native windows from admitted Zarr time stacks without loading a cube."""
+"""Read native GeoTIFF observations while preserving temporal and cyclic grids."""
 
 import math
 from collections.abc import Iterator
@@ -9,16 +9,13 @@ from types import TracebackType
 from typing import Literal, Self
 
 import numpy
-import zarr
+import rasterio
 from affine import Affine
 from numpy.typing import NDArray
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
 from rasterio.enums import MaskFlags
 from rasterio.windows import Window
-from zarr.abc.store import ByteRequest
-from zarr.core.buffer import Buffer, BufferPrototype
-from zarr.storage import LocalStore
 
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
@@ -33,8 +30,7 @@ class TemporalObservation:
 
     Attributes:
         root: Authorized archive directory that confines every source read.
-        array_path: Numeric Zarr v3 array with axes ordered as time, row, column.
-        time_index: Selected position along the array's time axis.
+        path: Confined single-band GeoTIFF containing this observation.
         time: UTC observation label used by public selections.
         reference_time: UTC forecast origin, or None for non-forecast observations.
         interval_start: Beginning of the observation's physical support.
@@ -42,17 +38,12 @@ class TemporalObservation:
         transform: Affine mapping output column/row edges to source CRS coordinates.
         crs: Coordinate reference system of that grid.
         nodata: Invalid cell value, or None when every finite value is valid.
-            Zarr's storage fill value is not necessarily NoData.
-        column_offset: Source column exposed as output column zero; subsequent
-            columns wrap at the array width. It is in [0, width); zero preserves
-            source column order.
         cyclic_x: Whether point coordinates repeat across the grid's full width.
             False leaves points outside regional grids out of bounds.
     """
 
     root: Path
-    array_path: Path
-    time_index: int
+    path: Path
     time: datetime
     reference_time: datetime | None
     interval_start: datetime
@@ -60,7 +51,6 @@ class TemporalObservation:
     transform: Affine
     crs: CRS
     nodata: float | int | None
-    column_offset: int = 0
     cyclic_x: bool = False
 
 
@@ -82,117 +72,37 @@ class ResolvedTemporalInterval:
     time_support: Literal["instantaneous", "mean_rate", "accumulation"]
 
 
-class _ConfinedStore(LocalStore):
-    """Read Zarr keys only when their resolved files stay in the archive."""
-
-    def __init__(self, array_path: Path, archive_root: Path) -> None:
-        """Open a read-only store inside an already authorized archive.
-
-        Args:
-            array_path: Variable array to read.
-            archive_root: Resolved archive directory retained by source access.
-        """
-        super().__init__(array_path, read_only=True)
-        self._archive_root = archive_root
-
-    def _confine_key(self, key: str) -> None:
-        """Reject a source key that resolves outside its authorized archive.
-
-        Args:
-            key: Metadata or chunk key requested by Zarr.
-
-        Raises:
-            ValueError: If a source member escapes through a path or symlink.
-        """
-        if not (self.root / key).resolve().is_relative_to(self._archive_root):
-            raise ValueError("Temporal source member is outside its archive")
-
-    def get_sync(
-        self,
-        key: str,
-        *,
-        prototype: BufferPrototype | None = None,
-        byte_range: ByteRequest | None = None,
-    ) -> Buffer | None:
-        """Read one confined metadata file or byte range from a shard.
-
-        Args:
-            key: Store-relative source member.
-            prototype: Zarr's requested buffer implementation.
-            byte_range: Requested portion, or None for the complete member.
-
-        Returns:
-            Source bytes, or None for a missing key under Zarr's fill contract.
-
-        Raises:
-            ValueError: If the member escapes the archive.
-            OSError: If the actual read fails.
-        """
-        self._confine_key(key)
-        return super().get_sync(key, prototype=prototype, byte_range=byte_range)
-
-    async def get(
-        self,
-        key: str,
-        prototype: BufferPrototype | None = None,
-        byte_range: ByteRequest | None = None,
-    ) -> Buffer | None:
-        """Read a confined member through Zarr's asynchronous metadata path.
-
-        Args:
-            key: Store-relative source member.
-            prototype: Zarr's requested buffer implementation.
-            byte_range: Requested portion, or None for the complete member.
-
-        Returns:
-            Source bytes, or None for a missing key under Zarr's fill contract.
-
-        Raises:
-            ValueError: If the member escapes the archive.
-            OSError: If the actual read fails.
-        """
-        self._confine_key(key)
-        return await super().get(key, prototype=prototype, byte_range=byte_range)
-
-
 class TemporalRasterDataset:
-    """Expose one admitted Zarr observation to the native raster readers.
+    """Read one GeoTIFF with an optional request-local cyclic longitude origin.
 
-    Arrays have time, row and column axes and a regular affine spatial grid.
-    Admission supplies georeferencing, validity and optional column rotation;
-    shape, dtype and chunks come from the array. Values retain their native dtype
-    without resampling or scale/offset conversion. Logical blocks stay within
-    physical chunks, including when columns wrap. Each read charges the full
-    temporal chunk that Zarr must decode for the selected observation.
+    Native blocks, values and masks come from Rasterio. The geographic view
+    preserves seam-crossing cells without resampling or creating another file.
+    Metadata admission establishes the observation's grid and time semantics.
     """
 
-    count: int = 1
-
     def __init__(self, observation: TemporalObservation) -> None:
-        """Open the selected array read-only without loading its pixel values.
+        """Open the admitted GeoTIFF read-only without reading its pixel values.
 
         Args:
-            observation: Source and time index established by source access.
+            observation: Confined source and metadata established by source access.
 
         Raises:
-            ValueError: If native Zarr metadata or source confinement fails.
-            OSError: If source metadata cannot be read.
+            rasterio.errors.RasterioError: If the source cannot be opened.
         """
-        self._observation = observation
-        self._store = _ConfinedStore(observation.array_path, observation.root)
-        self._array = zarr.open_array(self._store, mode="r", zarr_format=3)
-        _, self.height, self.width = self._array.shape
-        self.dtypes = (self._array.dtype.name,)
+        self.native_dataset = rasterio.open(observation.path, "r", driver="GTiff")
+        self.height, self.width = self.native_dataset.shape
+        self.count = self.native_dataset.count
+        self.dtypes = self.native_dataset.dtypes
+        self.name = self.native_dataset.name
+        self.files = self.native_dataset.files
         self.transform = observation.transform
         self.cyclic_x = observation.cyclic_x
-        self._column_offset = observation.column_offset
+        self._column_offset = 0
         self._column_view_prepared = False
         self.crs = observation.crs
         self.nodata = observation.nodata
         self.nodatavals = (self.nodata,)
-        self.mask_flag_enums = (
-            [MaskFlags.all_valid if self.nodata is None else MaskFlags.nodata],
-        )
+        self.mask_flag_enums = self.native_dataset.mask_flag_enums
         self._update_grid_metadata()
 
     def _update_grid_metadata(self) -> None:
@@ -208,7 +118,9 @@ class TemporalRasterDataset:
         ]
         x, y = zip(*corners)
         self.bounds = BoundingBox(min(x), min(y), max(x), max(y))
-        height, width = self._array.chunks[1:]
+        height, width = self.native_dataset.block_shapes[0]
+        if self.cyclic_x:
+            width = min(width, max(1, self.width // 2))
         if self._column_offset:
             width = math.gcd(width, self._column_offset, self.width)
         self.block_shapes = ((height, width),)
@@ -241,37 +153,53 @@ class TemporalRasterDataset:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close the store after a read, including when native I/O fails.
+        """Close the GeoTIFF after a read, including when native I/O fails.
 
         Args:
             exc_type: Active exception type, if the read failed.
             exc_value: Active exception, if any.
             traceback: Active exception traceback, if any.
         """
-        self._store.close()
+        self.native_dataset.close()
 
     @property
     def maximum_decoded_block_bytes(self) -> int:
-        """Return temporal chunk bytes plus the returned values and validity."""
-        return math.prod(self._array.chunks) * self._array.dtype.itemsize + math.prod(
-            self.block_shapes[0]
-        ) * (self._array.dtype.itemsize + 1)
+        """Return one native TIFF block's decoded values and validity allocation."""
+        from eolab_app.raster.source_contract import internal_mask_block_shape
+
+        block = self.native_dataset.block_shapes[0]
+        size = math.prod(block) * (numpy.dtype(self.dtypes[0]).itemsize + 1)
+        mask = internal_mask_block_shape(self.native_dataset)
+        return size if mask is None else size + max(math.prod(block), math.prod(mask))
 
     def native_work_for_blocks(
         self, block_indexes: tuple[tuple[int, int], ...]
     ) -> tuple[int, int]:
-        """Charge every logical block for its full temporal chunk decode.
-
-        Adjacent logical blocks can touch the same physical chunk, but no cache
-        hit is assumed. Reading both blocks therefore counts both decodes.
+        """Count physical TIFF blocks touched by each requested logical block.
 
         Args:
-            block_indexes: Logical row and column indexes to read separately.
+            block_indexes: Logical row and column indexes read separately.
 
         Returns:
-            Physical chunk read count and cumulative decoded bytes.
+            Native data/mask read count and decoded bytes, without assuming reuse.
         """
-        return len(block_indexes), len(block_indexes) * self.maximum_decoded_block_bytes
+        from eolab_app.raster.source_contract import (
+            source_block_indexes_for_window,
+            source_work_for_blocks,
+        )
+
+        reads = decoded = 0
+        for index in block_indexes:
+            for window in self._source_windows(self.block_window(1, *index)):
+                count, size = source_work_for_blocks(
+                    self.native_dataset,
+                    source_block_indexes_for_window(
+                        window, self.native_dataset.block_shapes[0]
+                    ),
+                )
+                reads += count
+                decoded += size
+        return reads, decoded
 
     def index(self, x: float, y: float) -> tuple[int, int]:
         """Return the native row and column containing a point in the source CRS.
@@ -315,43 +243,73 @@ class TemporalRasterDataset:
         """
         return []
 
+    def _source_windows(self, window: Window) -> tuple[Window, ...]:
+        """Map one logical window to one or two native TIFF windows.
+
+        Args:
+            window: Integral window within the request-local grid.
+
+        Returns:
+            Native windows in output order, split at the longitude seam if needed.
+        """
+        start = (int(window.col_off) + self._column_offset) % self.width
+        first_width = min(int(window.width), self.width - start)
+        first = Window(start, window.row_off, first_width, window.height)
+        if first_width == window.width:
+            return (first,)
+        return (
+            first,
+            Window(0, window.row_off, window.width - first_width, window.height),
+        )
+
+    def read_masks(self, band: int, *, window: Window) -> NDArray[numpy.uint8]:
+        """Read original validity bytes in the request-local column order.
+
+        Args:
+            band: Established single band, 1.
+            window: Integral window inside the logical grid.
+
+        Returns:
+            Native mask bytes; zero excludes a cell.
+
+        Raises:
+            rasterio.errors.RasterioError: If mask data cannot be read.
+        """
+        parts = [
+            self.native_dataset.read_masks(band, window=part)
+            for part in self._source_windows(window)
+        ]
+        return parts[0] if len(parts) == 1 else numpy.concatenate(parts, axis=1)
+
     def read(
         self, band: int, *, window: Window, masked: bool = False
     ) -> NDArray[numpy.generic] | numpy.ma.MaskedArray:
-        """Read a caller-admitted native window at the selected observation.
+        """Read exact native TIFF cells in the request-local column order.
 
         Args:
-            band: The established single band, 1.
-            window: Integral window within the virtual raster.
-            masked: Whether to mask nonfinite and declared NoData cells.
+            band: Established single band, 1.
+            window: Integral window inside the logical grid.
+            masked: Whether to exclude nonfinite, NoData and mask-invalid cells.
 
         Returns:
-            Two-dimensional native values in the admitted output grid order.
+            Original values, optionally carrying their combined validity mask.
 
         Raises:
-            ValueError: If a shard is corrupt or escapes the archive.
-            OSError: If the actual source read fails.
+            rasterio.errors.RasterioError: If native data or masks cannot be read.
         """
-        rows, columns = window.toslices()
-        start = (columns.start + self._column_offset) % self.width
-        stop = start + columns.stop - columns.start
-        try:
-            values = self._array[
-                self._observation.time_index, rows, start : min(stop, self.width)
-            ]
-            if stop > self.width:
-                values = numpy.concatenate(
-                    (
-                        values,
-                        self._array[
-                            self._observation.time_index, rows, : stop - self.width
-                        ],
-                    ),
-                    axis=1,
-                )
-        except RuntimeError as error:
-            raise OSError("A temporal data chunk could not be decoded.") from error
-        return mask_invalid_raster_values(values, self.nodata) if masked else values
+        parts = [
+            self.native_dataset.read(band, window=part)
+            for part in self._source_windows(window)
+        ]
+        values = parts[0] if len(parts) == 1 else numpy.concatenate(parts, axis=1)
+        if not masked:
+            return values
+        validity = (
+            self.read_masks(band, window=window)
+            if MaskFlags.per_dataset in self.mask_flag_enums[0]
+            else None
+        )
+        return mask_invalid_raster_values(values, self.nodata, validity)
 
 
 def iter_temporal_windows(
@@ -393,7 +351,8 @@ def iter_temporal_windows(
             for row in range(row_start, row_stop):
                 for column in range(column_start, column_stop):
                     require_active_raster_read(cancellation_requested)
-                    decoded_bytes += dataset.maximum_decoded_block_bytes
+                    _, block_bytes = dataset.native_work_for_blocks(((row, column),))
+                    decoded_bytes += block_bytes
                     if (
                         maximum_decoded_bytes is not None
                         and decoded_bytes > maximum_decoded_bytes

@@ -111,13 +111,6 @@ services:
       - "9404"
     volumes:
       - geoserver-data:/opt/geoserver_data
-      - type: volume
-        source: raster-slices
-        target: /raster-slices
-        read_only: true
-        volume:
-          # The app image initializes this volume with its non-root owner.
-          nocopy: true
       - processing-data:/processing-data:ro
       - vector-uploads:/vector-uploads:ro
       # GeoServer also verifies at startup that /scan-source is read-only.
@@ -276,8 +269,6 @@ services:
       - "SHARED_LAYER_CREATION_WINDOW_SECONDS=${EOLAB_SHARED_LAYER_CREATION_WINDOW_SECONDS-60}"
       - "VECTOR_UPLOAD_DATA_PATH=/vector-uploads"
       - "VECTOR_UPLOAD_MAX_BYTES=${EOLAB_VECTOR_UPLOAD_MAX_BYTES-}"
-      - "RASTER_SLICE_CACHE_PATH=/raster-slices"
-      - "RASTER_SLICE_CACHE_ENTRIES=${EOLAB_RASTER_SLICE_CACHE_ENTRIES-8}"
       - "ADMIN_PASSWORD=${EOLAB_ADMIN_PASSWORD-}"
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
@@ -332,7 +323,6 @@ services:
     volumes:
       - processing-data:/processing-data:ro
       - vector-uploads:/vector-uploads
-      - raster-slices:/raster-slices
       # Primary container-level protection. The image also verifies the
       # effective kernel mount mode at startup in case deployment metadata
       # reports or requests this bind as writable.
@@ -366,5 +356,3 @@ volumes:
     name: ${EOLAB_PROCESSING_DATA_VOLUME_NAME:-eolab-processing-data}
   vector-uploads:
     name: ${EOLAB_VECTOR_UPLOAD_DATA_VOLUME_NAME:-eolab-vector-uploads}
-  raster-slices:
-    name: ${EOLAB_RASTER_SLICE_CACHE_VOLUME_NAME:-eolab-raster-slices}

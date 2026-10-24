@@ -169,16 +169,22 @@ whose mounted source files have disappeared. The source mount remains
 read-only; EOLab stores Catalog metadata and generated GeoServer configuration
 elsewhere.
 
-Temporal archive ingestion currently supports the ERA5 NCAR downloader's
-SQLite catalog and monthly Zarr layout, rather than arbitrary Zarr stores.
-Variable names and observation dates come from the archive metadata; the
-temporal map controls and raster reader use storage-independent selections.
+Temporal archives contain prepared GeoTIFF observations and a read-only SQLite
+catalog exposing the `observations` view. Copy the complete archive into the
+mount with its [dataset.yaml descriptor](docs/dataset-examples/dataset.yaml),
+using `source.format: temporal_cog` and a unique dataset `id`, then scan.
+The archive appears as one temporal Catalog item; its folder contents are not
+indexed separately. Admission reads observation metadata without opening each
+GeoTIFF. Missing observations are valid.
 
-Copy an ERA5 NCAR archive with its `catalog.sqlite` and
-`YYYY/MM/era5.zarr` stores into the mount. Put this
-[dataset.yaml example](docs/dataset-examples/dataset.yaml) at its root, choose a
-unique `id` and title, then scan. The archive appears as one temporal Catalog
-item; its folder contents are not indexed separately. Partial months are valid.
+The catalog supplies each observation's relative `path`, single `band`,
+`variable`, human-readable `name`, `units`, Unix-second `valid_time`,
+nullable `reference_time`, `interval_start`, `interval_end`, and
+`temporal_type` (`instant`, `mean`, or `accumulation`). Raster metadata
+includes `dtype`, `nodata`, `crs`, a JSON `transform` in GDAL order,
+`height` and `width`. Observations share one north-up grid; the producer
+publishes completed GeoTIFFs before exposing them in the view.
+
 Update files only between calculations and rescan before using the updated
 data. A failed refresh reports an error and keeps the last valid metadata;
 correct the source and complete a successful scan before continuing.
@@ -191,13 +197,13 @@ and statistics accept `selectedBounds`. Paired statistics accept selections in
 `xRaster` and `yRaster`. Choose a variable and UTC time listed in the dataset
 coverage. In the browser, add the temporal Catalog item to the map and choose a
 variable, month and UTC time in its Map layers row. **Add another view** lets you
-compare observations independently. Temporal model calculations are not yet
-enabled. The [API tests](tests/test_temporal_source_access.py) provide runnable
+compare observations independently. Use **Tools → Models → Map for a period**
+for the available temporal calculations. The [API tests](tests/test_temporal_source_access.py) provide runnable
 requests against a small archive.
 
 Rendering mounted rasters expects prepared, georeferenced, single-band GeoTIFFs.
-EOLab does not rewrite or optimize them during scanning. Temporal map views use
-temporary GeoTIFFs created on demand from the selected observations. Mounted
+EOLab does not rewrite or optimize them during scanning. Temporal map views
+publish the selected original GeoTIFF through the same GeoServer pipeline. Mounted
 Shapefiles and spatial GeoPackage layers can be added to the map. Other
 recognized vector containers may be searchable in the Catalog even when they
 are not yet renderable.

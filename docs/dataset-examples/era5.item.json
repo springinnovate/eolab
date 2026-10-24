@@ -13,7 +13,7 @@
   "bbox": [-180, -90, 180, 90],
   "properties": {
     "title": "ERA5 hourly weather",
-    "description": "Design example for issue #813, not a catalog export or supported API. It uses the inspected ERA5 grid and three variables with synthetic partial-month coverage. Asset URLs are illustrative; this example does not require a raw-store download endpoint.",
+    "description": "Example temporal GeoTIFF catalog item with three variables and partial observation coverage.",
     "datetime": null,
     "start_datetime": "2000-01-31T22:00:00Z",
     "end_datetime": "2000-02-01T02:00:00Z",
@@ -21,10 +21,9 @@
     "cube:dimensions": {
       "time": {
         "type": "temporal",
-        "extent": ["2000-01-31T23:00:00Z", "2000-02-01T02:00:00Z"],
-        "step": "PT1H"
+        "extent": ["2000-01-31T23:00:00Z", "2000-02-01T02:00:00Z"]
       },
-      "latitude": {
+      "y": {
         "type": "spatial",
         "axis": "y",
         "extent": [-90, 90],
@@ -32,10 +31,10 @@
         "unit": "degrees_north",
         "reference_system": 4326
       },
-      "longitude": {
+      "x": {
         "type": "spatial",
         "axis": "x",
-        "extent": [0, 359.75],
+        "extent": [-180, 179.75],
         "step": 0.25,
         "unit": "degrees_east",
         "reference_system": 4326
@@ -43,7 +42,7 @@
     },
     "cube:variables": {
       "2_metre_temperature": {
-        "dimensions": ["time", "latitude", "longitude"],
+        "dimensions": ["time", "y", "x"],
         "type": "data",
         "description": "Air temperature at 2 m",
         "unit": "K",
@@ -52,7 +51,7 @@
         "eolab:time_support": "instantaneous"
       },
       "mean_total_precipitation_rate": {
-        "dimensions": ["time", "latitude", "longitude"],
+        "dimensions": ["time", "y", "x"],
         "type": "data",
         "description": "Mean precipitation rate over the preceding hour",
         "unit": "kg m**-2 s**-1",
@@ -61,7 +60,7 @@
         "eolab:time_support": "mean_rate"
       },
       "surface_solar_radiation_downwards": {
-        "dimensions": ["time", "latitude", "longitude"],
+        "dimensions": ["time", "y", "x"],
         "type": "data",
         "description": "Downward solar energy accumulated over the preceding hour",
         "unit": "W m**-2 s",
@@ -76,27 +75,7 @@
       "rel": "collection",
       "href": "https://example.invalid/stac/collections/eolab-temporal-datasets",
       "type": "application/json"
-    },
-    {
-      "rel": "about",
-      "href": "https://github.com/springinnovate/eolab/issues/813",
-      "type": "text/html"
     }
   ],
-  "assets": {
-    "2000-01": {
-      "href": "https://example.invalid/assets/era5-ncar/2000-01",
-      "type": "application/vnd.zarr; version=3",
-      "roles": ["data"],
-      "start_datetime": "2000-01-31T22:00:00Z",
-      "end_datetime": "2000-01-31T23:00:00Z"
-    },
-    "2000-02": {
-      "href": "https://example.invalid/assets/era5-ncar/2000-02",
-      "type": "application/vnd.zarr; version=3",
-      "roles": ["data"],
-      "start_datetime": "2000-01-31T23:00:00Z",
-      "end_datetime": "2000-02-01T02:00:00Z"
-    }
-  }
+  "assets": {}
 }
