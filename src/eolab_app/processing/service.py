@@ -24,8 +24,8 @@ from eolab_app.raster.source_models import (
     RasterSourceReference,
     RunArtifactReference,
     TemporalIntervalSelection,
+    TemporalVariableMetadata,
 )
-from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
@@ -263,7 +263,7 @@ class ProcessingService:
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation)
-        source_metadata: tuple[int, int, int, int] | ResolvedTemporalInterval | None = (
+        source_metadata: tuple[int, int, int, int] | TemporalVariableMetadata | None = (
             None
         )
         if not isinstance(source, RunArtifactReference):
@@ -274,7 +274,7 @@ class ProcessingService:
                     503,
                 )
             if isinstance(source, TemporalIntervalSelection):
-                source_metadata = await self.model_authorizer.get_temporal_interval(
+                source_metadata = await self.model_authorizer.get_temporal_metadata(
                     source
                 )
             else:

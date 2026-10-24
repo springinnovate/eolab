@@ -1,12 +1,15 @@
 """Summarize one selected area separately for each available observation."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import csv
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
+from itertools import batched
 from pathlib import Path
+from threading import Lock
 import time
 from typing import Any, Literal
 
@@ -35,7 +38,11 @@ from eolab_app.raster.source_contract import (
     RASTER_VALIDITY_POLICY,
     read_native_raster_window,
 )
-from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalRasterDataset
+from eolab_app.raster.temporal import (
+    ResolvedTemporalInterval,
+    TemporalObservation,
+    TemporalRasterDataset,
+)
 
 
 def create_temporal_series(
@@ -46,6 +53,7 @@ def create_temporal_series(
 ) -> TemporalSeriesArtifact:
     """Write one area statistic per observation to CSV, with its time support.
 
+    Read two observations concurrently, retaining timestamp order in the CSV.
     Reuse one selected-area mask across the admitted common grid. Each row
     summarizes valid native cells with equal weights; observations are not
     combined, integrated or converted. Missing observations stay absent. An
@@ -75,6 +83,7 @@ def create_temporal_series(
     completed_tiles = 0
     total_tiles = grid.tileCount * len(interval.observations)
     last_progress = 0.0
+    read_lock = Lock()
     with (
         rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"),
         ExitStack() as resources,
@@ -109,9 +118,27 @@ def create_temporal_series(
         variable = escape_spreadsheet_text(spec.source.variable)
         unit = escape_spreadsheet_text(spec.unit)
         write_progress(directory, "summarizing", 0, total_tiles)
-        for observation in interval.observations:
+
+        def summarize_observation(observation: TemporalObservation) -> dict[str, Any]:
+            """Return one observation's area statistic using its own TIFF handle.
+
+            Args:
+                observation: Authorized timestamp and original TIFF metadata.
+
+            Returns:
+                Scalar value, validity state and valid-pixel count from Calculation.
+
+            Raises:
+                OSError: If source, mask or progress I/O fails.
+                ValueError: If native decoding fails.
+                rasterio.errors.RasterioError: If a source or mask cannot be read.
+            """
+            nonlocal completed_tiles, last_progress
             calculation = Calculation(root)
-            with TemporalRasterDataset(observation) as dataset:
+            with (
+                rasterio.Env(GDAL_NUM_THREADS="2"),
+                TemporalRasterDataset(observation) as dataset,
+            ):
                 dataset.prepare_column_view(grid.columnRotation)
                 for window in temporal_grid_windows(grid):
                     values = read_native_raster_window(dataset, window)
@@ -123,29 +150,36 @@ def create_temporal_series(
                             window.width,
                             window.height,
                         )
-                        valid &= mask.read(1, window=mask_window) != 0
+                        with read_lock:
+                            valid &= mask.read(1, window=mask_window) != 0
                     calculation.process_tile(values.data.astype(np.float64), valid)
-                    completed_tiles += 1
-                    if time.monotonic() - last_progress > 0.5:
-                        write_progress(
-                            directory, "summarizing", completed_tiles, total_tiles
+                    with read_lock:
+                        completed_tiles += 1
+                        if time.monotonic() - last_progress > 0.5:
+                            write_progress(
+                                directory, "summarizing", completed_tiles, total_tiles
+                            )
+                            last_progress = time.monotonic()
+            return calculation.result()
+
+        with ThreadPoolExecutor(max_workers=2) as readers:
+            for observations in batched(interval.observations, 2):
+                for observation, row in zip(
+                    observations, readers.map(summarize_observation, observations)
+                ):
+                    writer.writerow(
+                        (
+                            observation.time.isoformat(),
+                            observation.interval_start.isoformat(),
+                            observation.interval_end.isoformat(),
+                            variable,
+                            spec.statistic,
+                            row["value"],
+                            unit,
+                            row["aggregates"][0]["validPixels"],
+                            row["state"],
                         )
-                        last_progress = time.monotonic()
-            row = calculation.result()
-            valid_pixels = row["aggregates"][0]["validPixels"]
-            writer.writerow(
-                (
-                    observation.time.isoformat(),
-                    observation.interval_start.isoformat(),
-                    observation.interval_end.isoformat(),
-                    variable,
-                    spec.statistic,
-                    row["value"],
-                    unit,
-                    valid_pixels,
-                    row["state"],
-                )
-            )
+                    )
         write_progress(directory, "summarizing", completed_tiles, total_tiles)
     with result_path.open("rb") as result:
         digest = hashlib.file_digest(result, "sha256").hexdigest()

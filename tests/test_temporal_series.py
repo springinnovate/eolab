@@ -7,12 +7,14 @@ import hashlib
 import json
 from pathlib import Path
 from queue import SimpleQueue
+from threading import Barrier, Event, Lock
 
 import numpy as np
 import pytest
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
+from rasterio.windows import Window
 
 from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
 from eolab_app.processing.polygon_areas import PolygonSummaryInput
@@ -27,7 +29,12 @@ from eolab_app.processing.temporal_series_models import (
     TemporalSeriesSpec,
 )
 from eolab_app.raster.source_models import TemporalIntervalSelection
-from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
+from eolab_app.raster.source_contract import read_native_raster_window
+from eolab_app.raster.temporal import (
+    ResolvedTemporalInterval,
+    TemporalObservation,
+    TemporalRasterDataset,
+)
 from tests.test_temporal_reductions import _write_observation, interval
 
 
@@ -147,6 +154,81 @@ def test_series_combines_multiple_native_tiles(
     assert spec.grid.tileCount == 2
     assert rows[0]["valid_pixels"] == "40"
     assert float(rows[0]["value"]) == pytest.approx(float(np.std(values)))
+
+
+def test_series_reads_two_observations_concurrently_and_writes_in_time_order(
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlap real TIFF reads while retaining ordered values and complete progress.
+
+    Args:
+        interval: Three observations, including an odd final batch.
+        tmp_path: Isolated result root.
+        monkeypatch: Coordinate the first two native reads without timing assertions.
+    """
+    first, second, third = (item.path for item in interval.observations)
+    together = Barrier(2, timeout=5)
+    second_finished = Event()
+    lock = Lock()
+    active = peak = 0
+    finished: list[Path] = []
+    datasets: list[TemporalRasterDataset] = []
+
+    def read_out_of_order(
+        dataset: TemporalRasterDataset, window: Window
+    ) -> np.ma.MaskedArray:
+        """Read real pixels, making the second timestamp finish before the first.
+
+        Args:
+            dataset: Observation handle owned by the calling read thread.
+            window: The calculation's spatial crop.
+
+        Returns:
+            Native values and validity from the original reader.
+        """
+        nonlocal active, peak
+        path = Path(dataset.name)
+        with lock:
+            datasets.append(dataset)
+            active += 1
+            peak = max(peak, active)
+        try:
+            if path in (first, second):
+                together.wait()
+            if path == first:
+                assert second_finished.wait(5)
+            values = read_native_raster_window(dataset, window)
+            with lock:
+                finished.append(path)
+            if path == second:
+                second_finished.set()
+            return values
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(
+        "eolab_app.processing.temporal_series.read_native_raster_window",
+        read_out_of_order,
+    )
+    directory = tmp_path / "result"
+    _, _, rows = calculate_series(
+        interval, "mean", AggregateArea(kind="wholeRaster"), directory
+    )
+    assert peak == 2 and active == 0
+    assert finished == [second, first, third]
+    assert all(dataset.native_dataset.closed for dataset in datasets)
+    assert [float(row["value"]) for row in rows] == pytest.approx([2.75, 4, 43 / 6])
+    assert [row["time_utc"] for row in rows] == [
+        item.time.isoformat() for item in interval.observations
+    ]
+    assert json.loads((directory / "progress.json").read_text()) == {
+        "phase": "summarizing",
+        "completedBlocks": 3,
+        "totalBlocks": 3,
+    }
 
 
 @pytest.mark.parametrize("statistic", ["count", "mean"])
@@ -296,7 +378,10 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
         tmp_path: Isolated private output root.
     """
     spec, _, _ = calculate_series(
-        interval, "mean", AggregateArea(kind="wholeRaster"), tmp_path / "complete"
+        interval,
+        "mean",
+        AggregateArea(kind="bounds", bounds=(10, 10, 14, 12)),
+        tmp_path / "complete",
     )
     interval.observations[1].path.unlink()
     directory = tmp_path / "failed"
@@ -314,3 +399,4 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
         ),
     )
     assert not (directory / "provenance.json").exists()
+    assert not (directory / "polygon-mask.tif").exists()

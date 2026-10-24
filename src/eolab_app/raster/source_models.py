@@ -38,6 +38,20 @@ class TemporalVariableSelection(BaseModel):
     variable: str = Field(strict=True, min_length=1)
 
 
+@dataclass(frozen=True)
+class TemporalVariableMetadata:
+    """Describe stored values using metadata admitted by the Catalog.
+
+    Attributes:
+        unit: Unit of the stored values, without conversion.
+        time_support: Whether a value represents an instant, a mean rate over
+            an interval, or an accumulation over an interval.
+    """
+
+    unit: str
+    time_support: Literal["instantaneous", "mean_rate", "accumulation"]
+
+
 class TemporalTimeQuery(TemporalVariableSelection):
     """Request a variable's available timestamps in one UTC calendar month.
 

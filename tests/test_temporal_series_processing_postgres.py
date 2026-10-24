@@ -5,6 +5,7 @@ import csv
 from io import StringIO
 import time
 from typing import Any, Literal
+from unittest.mock import Mock
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ from eolab_app.processing.temporal_series import (
     create_temporal_series,
     temporal_series_process_target,
 )
+from eolab_app.raster import sources
 from test_processing_jobs import HEADERS, store
 from tests.test_catalog_temporal import (
     ITEM_KEY,
@@ -85,15 +87,20 @@ def submit_series(client: TestClient, request: dict[str, Any]) -> dict[str, Any]
 
 def test_series_csv_preserves_values_lineage_and_session_ownership(
     temporal_boundary: TemporalBoundary,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Publish native area means with exact coverage and owned downloadable files.
 
     Args:
         temporal_boundary: Real catalog admission, PostgreSQL, HTTP and native worker.
+        monkeypatch: Count observation lookups while retaining the actual source reader.
     """
     client, worker, _, archive, _ = temporal_boundary
+    observations = Mock(wraps=sources.get_temporal_observations)
+    monkeypatch.setattr(sources, "get_temporal_observations", observations)
     request = series_request(client)
     job = submit_series(client, request)
+    assert observations.call_count == 0
     base = f"/api/processing/jobs/{job['jobId']}"
     pending = parse_yaml(client.get(base + "/run-yaml").content, run=True)
     assert pending["execution"]["sources"]["source"] == {
@@ -102,6 +109,7 @@ def test_series_csv_preserves_values_lineage_and_session_ownership(
         "timeSupport": "instantaneous",
     }
     assert client.portal.call(worker.run_once)
+    assert observations.call_count == 1
     ready = client.get(base).json()
     assert ready["status"] == "ready", ready
     result = ready["result"]

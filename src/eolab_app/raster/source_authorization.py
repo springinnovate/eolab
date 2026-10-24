@@ -7,15 +7,19 @@ from eolab_app.raster.source_models import (
     TemporalIntervalSelection,
     TemporalTimeChoices,
     TemporalTimeQuery,
+    TemporalVariableMetadata,
+    TemporalVariableSelection,
 )
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
 from eolab_app.raster.catalog_metadata import cataloged_source_signature
+from eolab_app.raster.errors import RasterAssetError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterRequest,
 )
 from eolab_app.raster.ports import RasterCatalog, RasterSourceResolver
+
 
 class CatalogRasterSourceAuthorizer:
     """Resolve current mounted raster sources without a rendering dependency."""
@@ -80,6 +84,32 @@ class CatalogRasterSourceAuthorizer:
         item = await self._catalog.get_item(selection)
         return await asyncio.to_thread(
             self._source_resolver.get_observations, item, selection
+        )
+
+    async def get_temporal_metadata(
+        self, selection: TemporalVariableSelection
+    ) -> TemporalVariableMetadata:
+        """Return admitted units and time support without opening the archive.
+
+        Args:
+            selection: Catalog identity and variable whose metadata is requested.
+
+        Returns:
+            Units and physical time support recorded for the selected variable.
+
+        Raises:
+            RasterFeatureError: If the Catalog Item or selected variable is unavailable.
+        """
+        item = await self._catalog.get_item(selection)
+        variables = item["properties"]["cube:variables"]
+        try:
+            variable = variables[selection.variable]
+        except KeyError as error:
+            raise RasterAssetError(
+                "This dataset does not contain the selected variable."
+            ) from error
+        return TemporalVariableMetadata(
+            unit=variable["unit"], time_support=variable["eolab:time_support"]
         )
 
     async def get_temporal_interval(
