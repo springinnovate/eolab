@@ -53,11 +53,15 @@ export const statisticsResult = {name: "statistics", label: "Statistics", role: 
     url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
     rows: [{label: "Total", expression: "sum(a)", state: "ok", value: "42", valueType: "integer", aggregates: []}]};
 
-/** A temporal recipe whose statistic input has no browser setup control yet. */
+/** An area-series recipe with a scalar statistic and no precipitation conversion. */
 export const seriesModel = {...model, id: "regional-time-series", title: "Area time series", parameters: {},
     inputs: {source: {type: "temporal_interval", label: "Dataset and period"}, area: model.inputs.area,
         statistic: {type: "area_statistic", label: "Statistic"}},
-    outputs: {series: {source: "calculate.series", role: "result", presentation: "download", saveEligible: true}}};
+    steps: [{id: "calculate", operation: "temporal.series.v1", inputs: {
+        source: {input: "source"}, area: {input: "area"}, statistic: {input: "statistic"},
+    }, parameters: {}}],
+    outputs: {series: {type: "timeSeries", label: "Area time series", source: "calculate.series",
+        role: "result", presentation: "download", saveEligible: false}}};
 
 /** A completed CSV with one spatial mean for each available observation. */
 export const timeSeriesResult = {name: "series", label: "Area time series", role: "result", presentation: "download", kind: "timeSeries",

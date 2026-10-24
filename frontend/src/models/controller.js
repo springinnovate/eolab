@@ -116,7 +116,7 @@ export class ModelsController {
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
                 Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction"].includes(input.type)));
+                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
         }
         catch (error) { this.state.error = `Model library unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -175,7 +175,7 @@ export class ModelsController {
     }
 
     /** Choose a variable and its supported statistic, then load date guidance.
-     * Selecting a precipitation rate visibly rounds existing boundaries to whole UTC hours.
+     * Selecting a period-map precipitation total visibly rounds existing boundaries to whole UTC hours.
      * @param {string} variable Catalog variable identifier from the setup control.
      * @return {Promise<void>} Completion after monthly guidance or a visible discovery error.
      */
@@ -194,10 +194,10 @@ export class ModelsController {
      */
     configureTemporalVariable(draft) {
         const temporal = draft.temporal, variable = temporal.item.properties["cube:variables"][temporal.variable];
-        const statistics = getTemporalStatistics(variable, temporal.precipitation);
+        const statistics = getTemporalStatistics(variable, temporal);
         if (statistics.length && !statistics.some(choice => choice.value === draft.reduction.reducer))
             draft.reduction.reducer = statistics[0].value;
-        if (supportsPrecipitationTotal(variable, temporal.precipitation)) {
+        if (supportsPrecipitationTotal(variable, temporal)) {
             temporal.startTime = snapTemporalHour(temporal.startTime);
             temporal.endTime = snapTemporalHour(temporal.endTime);
         }
@@ -226,7 +226,7 @@ export class ModelsController {
                 temporal.item = item;
                 if (!temporal.variable) {
                     const variables = Object.entries(item.properties["cube:variables"])
-                        .filter(([, value]) => getTemporalStatistics(value, temporal.precipitation).length);
+                        .filter(([, value]) => getTemporalStatistics(value, temporal).length);
                     if (variables.length === 1) {
                         temporal.variable = variables[0][0];
                         this.configureTemporalVariable(draft);
@@ -234,7 +234,7 @@ export class ModelsController {
                 }
             }
             const variable = temporal.item.properties["cube:variables"][temporal.variable];
-            if (!getTemporalStatistics(variable, temporal.precipitation).length) { temporal.choices = null; return; }
+            if (!getTemporalStatistics(variable, temporal).length) { temporal.choices = null; return; }
             try {
                 const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
                 if (isCurrent()) temporal.choices = choices;
@@ -250,8 +250,7 @@ export class ModelsController {
     }
 
     /** Replace the period only after the user explicitly chooses the displayed month.
-     * Missing dates within that calendar month remain valid; the calculation uses
-     * available observations and publishes each pixel's valid-observation count.
+     * Missing dates within that calendar month remain valid; the calculation uses available observations.
      * @return {void}
      */
     useTemporalMonth() {
@@ -753,6 +752,8 @@ export class ModelsController {
                     startTime: new Date(value.startTime).toISOString().slice(0, -1), endTime: new Date(value.endTime).toISOString().slice(0, -1)});
             } else if (input.type === "temporal_reduction") {
                 draft.reduction = {...draft.reduction, ...saved.inputs[name]};
+            } else if (input.type === "area_statistic") {
+                draft.reduction.reducer = saved.inputs[name];
             } else if (input.type === "mask_source" && saved.inputs[name].kind === "catalogRaster") {
                 draft.area = null; draft.areaMode = "raster";
                 draft.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(saved.inputs[name].source)) ?? null;

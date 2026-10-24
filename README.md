@@ -197,8 +197,9 @@ and statistics accept `selectedBounds`. Paired statistics accept selections in
 `xRaster` and `yRaster`. Choose a variable and UTC time listed in the dataset
 coverage. In the browser, add the temporal Catalog item to the map and choose a
 variable, month and UTC time in its Map layers row. **Add another view** lets you
-compare observations independently. Use **Tools → Models → Map for a period**
-for the available temporal calculations. The [API tests](tests/test_temporal_source_access.py) provide runnable
+compare observations independently. Under **Tools → Models**, choose **Map for a period**
+to summarize observations into a map, or **Time series for an area** to download a
+CSV with one spatial statistic per observation. The [API tests](tests/test_temporal_source_access.py) provide runnable
 requests against a small archive.
 
 Rendering mounted rasters expects prepared, georeferenced, single-band GeoTIFFs.

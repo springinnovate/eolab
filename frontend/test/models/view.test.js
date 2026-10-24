@@ -529,8 +529,8 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.match(h.view.setup.mapHelp.textContent, /Run analysis/);
     assert.equal(controls.startTime.type, "datetime-local"); assert.equal(controls.startTime.step, "any");
     assert.equal(controls.endTime.type, "datetime-local"); assert.equal(controls.endTime.step, "any");
-    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC, included)");
-    assert.equal(controls.endTime.parentNode.textContent, "End (UTC, excluded)");
+    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC)");
+    assert.equal(controls.endTime.parentNode.textContent, "End (UTC)");
     assert.equal(controls.statistic.parentNode.textContent, "Period statistic");
     assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
     assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
@@ -592,6 +592,47 @@ test("temporal validation and statistic settings remain local to the relevant co
     assert.match(controls.status.textContent, /no longer in Map layers/); assert.equal(h.view.setup.run.disabled, true);
 });
 
+test("area-series setup describes spatial statistics and complete overlapping intervals without period-map controls", () => {
+    const h = fixture();
+    const dataset = {collectionId: "eolab-temporal-datasets", itemId: "observations", label: "Weather observations"};
+    const draft = createModelDraft(seriesModel, {temporalDatasets: [dataset], area}, "series-draft");
+    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "temperature",
+        startTime: "2000-01-31T23:30", endTime: "2000-02-01T01:10",
+        item: {collection: dataset.collectionId, id: dataset.itemId, properties: {title: dataset.label, "cube:variables": {
+            temperature: {description: "Air temperature", unit: "K", "eolab:time_support": "instantaneous"},
+            rain: {description: "Rainfall rate", unit: "mm/day", "eolab:time_support": "mean_rate"},
+            energy: {description: "Stored energy", unit: "J m-2", "eolab:time_support": "accumulation"},
+        }}}});
+    h.state.draft = draft; h.view.render(h.state);
+    const controls = h.view.setup.temporal;
+    assert.equal(h.view.setup.form.contains(h.view.setup.source), false);
+    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC)");
+    assert.equal(controls.endTime.parentNode.textContent, "End (UTC)");
+    assert.equal(controls.statistic.parentNode.textContent, "Statistic");
+    assert.equal(controls.support.hidden, true);
+    assert.ok(controls.variable.children.slice(1).every(option => !option.disabled));
+    assert.deepEqual(controls.statistic.children.map(option => option.value), ["mean", "sum", "min", "max", "stdev", "count"]);
+    assert.match(controls.periodHelp.textContent, /start.*includ|at or after.*start/i);
+    assert.match(controls.periodHelp.textContent, /end.*exclud|before.*end/i);
+    assert.match(controls.reductionHelp.textContent, /equal weight/i);
+    assert.match(controls.reductionHelp.textContent, /CSV/);
+    assert.doesNotMatch(controls.reductionHelp.textContent, /second map/);
+    for (const variable of ["rain", "energy"]) {
+        draft.temporal.variable = variable; draft.reduction.reducer = "count"; h.view.render(h.state);
+        assert.match(controls.periodHelp.textContent, /overlap/i);
+        assert.match(controls.periodHelp.textContent, /full|complete/i);
+        assert.match(controls.periodHelp.textContent, /prorat|scal/i);
+        assert.match(controls.reductionHelp.textContent, /cells/);
+        assert.equal(controls.percentileField.hidden, true); assert.equal(controls.percentile.disabled, true);
+        assert.equal(controls.startTime.step, "any"); assert.equal(controls.endTime.step, "any");
+        assert.equal(h.view.setup.run.disabled, false);
+    }
+    draft.reduction.reducer = "stdev"; h.view.render(h.state);
+    assert.match(controls.reductionHelp.textContent, /population/i);
+    assert.match(controls.reductionHelp.textContent, /J m-2/);
+    assert.equal(h.actions.length, 0);
+});
+
 test("precipitation controls explain duration totals and round changed dates visibly across calendar boundaries", () => {
     const h = temporalFixture(), controls = h.controls;
     h.draft.temporal.item.properties["cube:variables"].precipitation.unit = "kg m**-2 s**-1";
@@ -627,8 +668,8 @@ test("saved temporal run inputs describe the captured interval and statistic ind
     h.view.render(h.state);
     const details = h.view.run.inputsBody.children[0].children;
     assert.match(details[1].textContent, /vegetation_index/);
-    assert.match(details[1].textContent, /2020-01-01T03:27:41.250Z \(included\)/);
-    assert.match(details[1].textContent, /2020-01-04T18:00:00.000Z \(excluded\)/);
+    assert.match(details[1].textContent, /2020-01-01T03:27:41.250Z/);
+    assert.match(details[1].textContent, /2020-01-04T18:00:00.000Z/);
     assert.equal(details[5].textContent, "Percentile 97.5");
     h.draft.temporal.variable = "precipitation"; h.draft.temporal.startTime = "2025-01-01T00:00";
     h.view.render(h.state);
