@@ -11,6 +11,7 @@ from typing import Any
 from eolab_app.catalog.collections import (
     SCAN_COLLECTION_IDENTIFIERS,
     SCAN_COLLECTIONS,
+    TEMPORAL_COLLECTION_ID,
 )
 from eolab_app.catalog.discovery import FilesystemDatasetDiscovery
 from eolab_app.catalog.handlers import (
@@ -82,7 +83,8 @@ class ScanManager:
                 after extraction and before persistence.
             reconciler: Optional destructive reconciliation collaborator.
             items_updated: Optional callback receiving Collection and Item IDs
-                after each successful write, for refreshing dependent caches.
+                written or retired after successful publication, for refreshing
+                dependent caches.
             error_detail_limit: Maximum individual failure details retained in
                 the public scan status.
 
@@ -523,7 +525,7 @@ class ScanManager:
         items: list[dict[str, Any]],
         existing_item_keys: set[tuple[str, str]],
     ) -> None:
-        """Write one batch, classify persisted Items, and notify source consumers.
+        """Publish a batch, retire replaced temporal IDs, and refresh consumers.
 
         Args:
             catalog_session: Open STAC write session.
@@ -531,23 +533,25 @@ class ScanManager:
             existing_item_keys: Catalog inventory captured before the scan.
 
         Raises:
-            Exception: Propagates catalog writer or post-write callback failures.
+            Exception: Propagates publication, retirement or callback failures.
         """
         phase_started = perf_counter()
+        retired_keys: tuple[tuple[str, str], ...] = ()
         try:
             await catalog_session.upsert_items(items)
-        finally:
-            self._status.timing.catalog_write_seconds += (
-                perf_counter() - phase_started
+            self._status.indexed += len(items)
+            self._status.already_in_catalog += sum(
+                (item["collection"], item["id"]) in existing_item_keys for item in items
             )
-        self._status.indexed += len(items)
-        self._status.already_in_catalog += sum(
-            (item["collection"], item["id"]) in existing_item_keys
-            for item in items
-        )
+            if items[0]["collection"] == TEMPORAL_COLLECTION_ID:
+                retired_keys = (
+                    await self.catalog_database.delete_replaced_temporal_items(items)
+                )
+        finally:
+            self._status.timing.catalog_write_seconds += perf_counter() - phase_started
         if self.items_updated is not None:
             await self.items_updated(
-                tuple((item["collection"], item["id"]) for item in items)
+                tuple((item["collection"], item["id"]) for item in items) + retired_keys
             )
 
     async def _reconcile_missing_items(self) -> int:
