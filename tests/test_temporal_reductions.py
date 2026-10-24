@@ -25,7 +25,8 @@ from eolab_app.processing.temporal_models import (
     TemporalReduction,
 )
 from eolab_app.processing.temporal_operation import describe_temporal_policy
-from eolab_app.processing.temporal_reduce import create_temporal_map, plan_temporal_map
+from eolab_app.processing.temporal_reduce import create_temporal_map
+from eolab_app.processing.temporal_grid import plan_temporal_grid
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
@@ -139,7 +140,7 @@ def _calculate(
     """
     directory.mkdir()
     limits = RasterAggregateLimits()
-    grid = plan_temporal_map(interval, area, limits)
+    grid = plan_temporal_grid(interval, area, limits)
     spec = TemporalMapSpec(
         source=TemporalIntervalSelection(
             collectionId="eolab-temporal-datasets",

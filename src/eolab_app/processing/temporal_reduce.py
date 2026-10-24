@@ -19,102 +19,24 @@ from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.bounded_vector import PolygonRasterizer
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.raster_aggregate import get_raster_window_and_mask_source
 from eolab_app.processing.raster_mask import temporary_polygon_mask
+from eolab_app.processing.temporal_grid import (
+    TemporalReadGrid,
+    plan_temporal_grid,
+    temporal_grid_windows,
+)
 from eolab_app.processing.temporal_models import (
     TemporalMapArtifact,
-    TemporalMapGrid,
     TemporalMapSpec,
     TemporalReduction,
 )
 from eolab_app.raster.source_contract import read_native_raster_window
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalRasterDataset
-
-
-def _tile_windows(grid: TemporalMapGrid) -> Iterator[Window]:
-    """Yield native spatial blocks clipped to the selected crop.
-
-    Args:
-        grid: Native read dimensions and integral crop window.
-
-    Yields:
-        Integral source windows in increasing row and column order.
-    """
-    crop = Window(*grid.window)
-    row_stop = math.ceil((crop.row_off + crop.height) / grid.tileHeight)
-    column_stop = math.ceil((crop.col_off + crop.width) / grid.tileWidth)
-    for row in range(int(crop.row_off) // grid.tileHeight, row_stop):
-        for column in range(int(crop.col_off) // grid.tileWidth, column_stop):
-            yield Window(
-                column * grid.tileWidth,
-                row * grid.tileHeight,
-                grid.tileWidth,
-                grid.tileHeight,
-            ).intersection(crop)
-
-
-def plan_temporal_map(
-    interval: ResolvedTemporalInterval,
-    area: AggregateArea,
-    limits: RasterAggregateLimits,
-) -> TemporalMapGrid:
-    """Select an output crop and native read tiles without reading observation values.
-
-    Args:
-        interval: Authorized nonempty observations sharing their admitted native grid.
-        area: Validated bounds, polygons, vector selection or whole-grid choice.
-        limits: Existing Processing lifecycle and geometry settings.
-
-    Returns:
-        Native output grid, including the longitude view reused by every observation.
-
-    Raises:
-        ProcessingError: If the area cannot be projected or does not overlap.
-        OSError: If source metadata cannot be read.
-    """
-    observation = interval.observations[0]
-    with TemporalRasterDataset(observation) as dataset:
-        window, polygons = get_raster_window_and_mask_source(dataset, area, limits)
-        try:
-            tile_height, tile_width = dataset.block_shapes[0]
-            rotation, _ = ~observation.transform * (
-                dataset.transform.c,
-                dataset.transform.f,
-            )
-            rows = (
-                math.ceil((window.row_off + window.height) / tile_height)
-                - int(window.row_off) // tile_height
-            )
-            columns = (
-                math.ceil((window.col_off + window.width) / tile_width)
-                - int(window.col_off) // tile_width
-            )
-            return TemporalMapGrid(
-                crs=dataset.crs.to_wkt(),
-                transform=tuple(window_transform(window, dataset.transform))[:6],
-                window=tuple(
-                    int(value)
-                    for value in (
-                        window.col_off,
-                        window.row_off,
-                        window.width,
-                        window.height,
-                    )
-                ),
-                width=int(window.width),
-                height=int(window.height),
-                columnRotation=round(rotation),
-                tileHeight=tile_height,
-                tileWidth=tile_width,
-                tileCount=rows * columns,
-            )
-        finally:
-            if isinstance(polygons, PolygonRasterizer):
-                polygons.close()
 
 
 def _read_observations(
@@ -279,7 +201,7 @@ def _reduce_window(
 def _create_cog(
     stage: Path,
     destination: Path,
-    grid: TemporalMapGrid,
+    grid: TemporalReadGrid,
     valid_pixels: int,
     unit: str,
 ) -> ProducedFile:
@@ -418,7 +340,7 @@ def create_temporal_map(
             count_raster.set_band_unit(1, "observations")
             statistic.update_tags(1, units=spec.unit, reducer=spec.reduction.reducer)
             count_raster.update_tags(1, units="observations")
-            for index, window in enumerate(_tile_windows(grid), start=1):
+            for index, window in enumerate(temporal_grid_windows(grid), start=1):
                 output_window = Window(
                     window.col_off - crop.col_off,
                     window.row_off - crop.row_off,
@@ -526,7 +448,7 @@ def temporal_process_target(
     """
     try:
         value = (
-            plan_temporal_map(*arguments)
+            plan_temporal_grid(*arguments)
             if operation == "plan"
             else create_temporal_map(*arguments)
         )

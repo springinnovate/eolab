@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ModelsView, describeModelProgress } from "../../src/models/view.js";
 import { createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
-import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Render the actual Models view over current application markup.
  * @return {Object} View, document, mutable state and action log.
@@ -455,14 +455,41 @@ test("clip results offer a GeoTIFF with dimensions and expire correctly", () => 
 });
 
 test("result cards use captured YAML labels for unfamiliar models", () => {
-    for (const output of [clipResult, statisticsResult]) {
+    for (const output of [clipResult, statisticsResult, timeSeriesResult]) {
         const h = fixture(); h.state.page = "run"; h.state.selectedRun = job().jobId;
         h.state.runs = [job({model: {...model, id: "habitat-model"}, status: "ready", expiresAt: "2099-01-01T00:00:00Z",
             result: {...output, name: "habitat", label: "Habitat output <script>"}})];
         h.view.render(h.state);
         const first = h.view.run.result.children[0];
-        assert.equal(output.kind === "raster" ? first.children[0].textContent : first.textContent, "Habitat output <script>");
+        assert.equal(output.kind === "statistics" ? first.textContent : first.children[0].textContent, "Habitat output <script>");
     }
+});
+
+test("time-series runs show saved coverage, their statistic and the ordinary CSV download", () => {
+    const h = fixture(), artifacts = fileManifest();
+    artifacts.files = [{...artifacts.files[0], name: timeSeriesResult.name, label: timeSeriesResult.label,
+        filename: timeSeriesResult.filename, mediaType: timeSeriesResult.mediaType, bytes: timeSeriesResult.bytes}];
+    artifacts.totalBytes = timeSeriesResult.bytes;
+    const run = job({model: seriesModel, status: "ready", expiresAt: artifacts.expiresAt, result: timeSeriesResult, artifacts});
+    Object.assign(h.state, {page: "run", selectedRun: run.jobId, runs: [run],
+        invocation: {model: {...seriesModel, definition: seriesModel}, parameters: {}, inputs: {
+            source: {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature",
+                startTime: "2000-01-01T00:00:00Z", endTime: "2000-01-04T00:00:00Z"}, area, statistic: "mean",
+        }}});
+    h.view.render(h.state);
+    const card = h.view.run.result.children[0];
+    assert.equal(card.className, "models-result");
+    const text = card.children.map(node => node.textContent);
+    for (const value of ["Area time series", "series.csv", "Statistic: Mean", "Units: K", "Observations in this run: 3",
+        "First observation: 2000-01-01 00:00:00 UTC", "Last observation: 2000-01-03 12:00:00 UTC"])
+        assert.ok(text.includes(value), value);
+    assert.match(text.at(-1), /Download the CSV.*one result per observation.*valid-pixel count/);
+    assert.deepEqual(h.view.run.inputsBody.children[0].children.slice(-2).map(node => node.textContent), ["Statistic", "Mean"]);
+    const actions = h.view.run.result.children[2].children[3];
+    assert.equal(actions.children[0].hidden, true);
+    assert.equal(actions.children[1].textContent, "Download");
+    assert.equal(actions.children[1].href, artifacts.files[0].url);
+    assert.equal(h.actions.length, 0);
 });
 
 

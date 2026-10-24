@@ -53,6 +53,19 @@ export const statisticsResult = {name: "statistics", label: "Statistics", role: 
     url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
     rows: [{label: "Total", expression: "sum(a)", state: "ok", value: "42", valueType: "integer", aggregates: []}]};
 
+/** A temporal recipe whose statistic input has no browser setup control yet. */
+export const seriesModel = {...model, id: "regional-time-series", title: "Area time series", parameters: {},
+    inputs: {source: {type: "temporal_interval", label: "Dataset and period"}, area: model.inputs.area,
+        statistic: {type: "area_statistic", label: "Statistic"}},
+    outputs: {series: {source: "calculate.series", role: "result", presentation: "download", saveEligible: true}}};
+
+/** A completed CSV with one spatial mean for each available observation. */
+export const timeSeriesResult = {name: "series", label: "Area time series", role: "result", presentation: "download", kind: "timeSeries",
+    mediaType: "text/csv", filename: "series.csv", bytes: 256, sha256: "d".repeat(64), statistic: "mean",
+    url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
+    temporalCoverage: {unit: "K", observationCount: 3,
+        firstObservation: "2000-01-01T00:00:00Z", lastObservation: "2000-01-03T12:00:00Z"}};
+
 /** Build a run-owned inventory with a result, coverage intermediate and provenance.
  * @return {Object} Independent manifest for API and presentation tests.
  */

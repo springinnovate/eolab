@@ -7,6 +7,7 @@ import pytest
 
 SUITES = (
     "test_temporal_processing_postgres.py",
+    "test_temporal_series_processing_postgres.py",
     "test_processing_private_inputs_postgres.py",
     "test_processing_uploaded_vectors.py",
     "test_model_artifact_previews_postgres.py",

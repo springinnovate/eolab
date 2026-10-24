@@ -40,12 +40,12 @@ class ModelResultFile(JobResultResponse):
 
 
 class TemporalResultCoverage(BaseModel):
-    """Describe the observations used to calculate a completed period map.
+    """Describe the observations used to calculate a completed temporal result.
 
     Attributes:
         unit: Unit of the resulting values recorded when the run was prepared.
-        observationCount: Number of available observations in the requested period;
-            individual pixels may have fewer valid values, shown by the count raster.
+        observationCount: Number of available observations in the requested period.
+            Missing cell values are reported separately by each output type.
         firstObservation: UTC label of the first available observation used.
         lastObservation: UTC label of the last available observation used.
     """
@@ -94,6 +94,21 @@ class ModelStatisticsResult(ModelResultFile):
     cacheHit: bool = False
 
 
+class ModelTimeSeriesResult(ModelResultFile):
+    """A downloadable spatial statistic for each available temporal observation.
+
+    Rows remain in the CSV, avoiding an unbounded observation list in job status.
+    Units and observed dates describe the actual calculation, including gaps.
+    """
+
+    kind: Literal["timeSeries"]
+    mediaType: Literal["text/csv"]
+    presentation: Literal["download"]
+    statistic: Literal["count", "sum", "mean", "min", "max", "stdev"]
+    temporalCoverage: TemporalResultCoverage
+
+
 ModelResult = Annotated[
-    ModelRasterResult | ModelStatisticsResult, Field(discriminator="kind")
+    ModelRasterResult | ModelStatisticsResult | ModelTimeSeriesResult,
+    Field(discriminator="kind"),
 ]

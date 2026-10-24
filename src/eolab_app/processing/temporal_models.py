@@ -15,6 +15,7 @@ from pydantic import (
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.models import Artifact
+from eolab_app.processing.temporal_grid import TemporalReadGrid
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import Wgs84Bounds
 from eolab_app.raster.source_models import TemporalIntervalSelection
@@ -149,29 +150,6 @@ class QueuedTemporalMap(BaseModel):
     polygonArea: AggregateArea | None = None
 
 
-class TemporalMapGrid(BaseModel):
-    """Describe an output crop and the native windows used to calculate it.
-
-    columnRotation is the integral source-column shift applied before selecting
-    the crop; every observation uses the same shift. window is the crop in that
-    shifted source grid. transform is the output crop's affine transform.
-    tileHeight and tileWidth are native read-block dimensions, and tileCount is
-    the number of spatial tiles intersecting the crop, independently of time.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    crs: str
-    transform: tuple[float, float, float, float, float, float]
-    window: tuple[int, int, int, int]
-    width: int
-    height: int
-    dtype: Literal["float64"] = "float64"
-    columnRotation: int
-    tileHeight: int
-    tileWidth: int
-    tileCount: int
-
-
 class TemporalMapSpec(BaseModel):
     """A path-free period-map plan with a compact observation summary.
 
@@ -187,7 +165,7 @@ class TemporalMapSpec(BaseModel):
     source: TemporalIntervalSelection
     reduction: TemporalReduction
     area: AggregateArea
-    grid: TemporalMapGrid
+    grid: TemporalReadGrid
     unit: str
     conversionFactor: float
     observationCount: int

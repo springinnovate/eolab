@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
-import { model, invocation, job, clipModel, clipResult, statisticsResult, fileManifest } from "../../test-support/models/fixtures.js";
+import { model, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Compose the transport over recorded same-origin HTTP replies.
  * @param {Function} reply Return the requested response body.
@@ -192,4 +192,19 @@ test("period-map result coverage survives API validation and rejects malformed s
         result.temporalCoverage = coverage;
         await assert.rejects(h.api.getJob(job().jobId), /invalid temporal coverage/);
     }
+});
+
+test("time-series recipes and completed CSV runs coexist with the existing model library and history", async () => {
+    const result = structuredClone(timeSeriesResult);
+    const run = job({model: seriesModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result});
+    const ordinaryRun = job({jobId: "2".repeat(32)});
+    const h = fixture(url => url.endsWith("/models") ? {models: [model, seriesModel]} :
+        url.includes("/model-runs?") ? {jobs: [ordinaryRun, run], nextCursor: null} : run);
+    assert.deepEqual(await h.api.discoverModels(), [model, seriesModel]);
+    assert.deepEqual((await h.api.listModelRuns()).jobs, [ordinaryRun, run]);
+    assert.deepEqual((await h.api.getJob(run.jobId)).result, result);
+    result.statistic = "median";
+    await assert.rejects(h.api.listModelRuns(), /invalid time-series statistic/);
+    result.statistic = "mean"; delete result.temporalCoverage;
+    await assert.rejects(h.api.getJob(run.jobId), /invalid temporal coverage/);
 });

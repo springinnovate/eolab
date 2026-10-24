@@ -1,0 +1,33 @@
+schema: eolab.model/v1
+id: temporal-area-series
+version: "1.0.0"
+title: Time series for an area
+description: Calculate one spatial statistic per available observation and download a CSV. Valid selected pixels have equal weight. Missing observations remain absent; rows with no valid pixels report that state. Instantaneous observations include the start and exclude the end. Rates and accumulations include complete observations whose intervals overlap the period, retaining their stored units without prorating or time integration.
+inputs:
+  source:
+    type: temporal_interval
+    label: Dataset and period
+  area:
+    type: summary_area
+    label: Analysis area
+  statistic:
+    type: area_statistic
+    label: Statistic
+parameters: {}
+steps:
+  - id: calculate
+    operation: temporal.series.v1
+    inputs:
+      source: {input: source}
+      area: {input: area}
+      statistic: {input: statistic}
+    parameters: {}
+outputs:
+  series:
+    type: timeSeries
+    label: Area time series
+    source: calculate.series
+    role: result
+    presentation: download
+    saveEligible: false
+executionProfile: temporal-area-series

@@ -257,7 +257,7 @@ class ModelOutput(ModelSchema):
     """Describe a result or intermediate output produced by a model step.
 
     ``source`` names the step and output, such as ``calculate.statistics``.
-    ``presentation`` says whether it is a map layer or table; ``role`` distinguishes
+    ``presentation`` selects a map, table or download; ``role`` distinguishes
     final results from intermediate outputs. This describes an output, while a
     particular run creates its files and download links. Optional ``type`` must
     match the registered operation; ``label`` names the result in the UI. Omitting
@@ -269,9 +269,9 @@ class ModelOutput(ModelSchema):
         Field(strict=True, pattern=r"^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}$"),
     ]
     role: Literal["result", "intermediate"]
-    presentation: Literal["map", "table"]
+    presentation: Literal["map", "table", "download"]
     saveEligible: bool = Field(strict=True)
-    type: Literal["statistics", "raster", "vector"] | None = None
+    type: Literal["statistics", "raster", "vector", "timeSeries"] | None = None
     label: Label | None = None
 
 
