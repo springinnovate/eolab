@@ -92,7 +92,6 @@ def interval(tmp_path: Path) -> ResolvedTemporalInterval:
     start = datetime(2000, 1, 1, tzinfo=timezone.utc)
     observations = tuple(
         TemporalObservation(
-            root=tmp_path / "archive",
             path=_write_observation(
                 tmp_path / "archive" / f"weather-{hour}.tif",
                 values[index],
@@ -328,7 +327,6 @@ def test_rotated_seam_view_applies_to_every_observation(tmp_path: Path) -> None:
     ]
     start = datetime(2000, 1, 1, tzinfo=timezone.utc)
     first = TemporalObservation(
-        root=tmp_path / "archive",
         path=paths[0],
         time=start,
         reference_time=None,

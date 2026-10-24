@@ -148,7 +148,6 @@ def get_temporal_observations(
             crs = CRS.from_user_input(projection)
             observations.append(
                 TemporalObservation(
-                    root=root,
                     path=raster_path,
                     time=observation_datetime(time),
                     reference_time=(

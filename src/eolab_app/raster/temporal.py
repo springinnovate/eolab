@@ -1,7 +1,6 @@
 """Read native GeoTIFF observations while preserving temporal and cyclic grids."""
 
 import math
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,10 +16,6 @@ from rasterio.crs import CRS
 from rasterio.enums import MaskFlags
 from rasterio.windows import Window
 
-from eolab_app.raster.read_cancellation import (
-    RasterReadCancellationCheck,
-    require_active_raster_read,
-)
 from eolab_app.raster.source_contract import mask_invalid_raster_values
 
 
@@ -29,7 +24,6 @@ class TemporalObservation:
     """Identify an admitted variable observation and its physical time support.
 
     Attributes:
-        root: Authorized archive directory that confines every source read.
         path: Confined single-band GeoTIFF containing this observation.
         time: UTC observation label used by public selections.
         reference_time: UTC forecast origin, or None for non-forecast observations.
@@ -42,7 +36,6 @@ class TemporalObservation:
             False leaves points outside regional grids out of bounds.
     """
 
-    root: Path
     path: Path
     time: datetime
     reference_time: datetime | None
@@ -161,16 +154,6 @@ class TemporalRasterDataset:
             traceback: Active exception traceback, if any.
         """
         self.native_dataset.close()
-
-    @property
-    def maximum_decoded_block_bytes(self) -> int:
-        """Return one native TIFF block's decoded values and validity allocation."""
-        from eolab_app.raster.source_contract import internal_mask_block_shape
-
-        block = self.native_dataset.block_shapes[0]
-        size = math.prod(block) * (numpy.dtype(self.dtypes[0]).itemsize + 1)
-        mask = internal_mask_block_shape(self.native_dataset)
-        return size if mask is None else size + max(math.prod(block), math.prod(mask))
 
     def native_work_for_blocks(
         self, block_indexes: tuple[tuple[int, int], ...]
@@ -310,55 +293,3 @@ class TemporalRasterDataset:
             else None
         )
         return mask_invalid_raster_values(values, self.nodata, validity)
-
-
-def iter_temporal_windows(
-    observations: tuple[TemporalObservation, ...],
-    window: Window,
-    cancellation_requested: RasterReadCancellationCheck | None = None,
-    maximum_decoded_bytes: int | None = None,
-) -> Iterator[tuple[TemporalObservation, Window, numpy.ma.MaskedArray]]:
-    """Yield native window blocks for selected observations in their given order.
-
-    Callers select exact available observations before entering this reader.
-    Each yielded array contains one observation and one spatial block. No
-    temporal reduction, resampling or whole-cube allocation occurs.
-
-    Args:
-        observations: Admitted observations in the caller's desired order.
-        window: Integral virtual-grid window inside the source.
-        cancellation_requested: Optional cancellation check between native reads.
-        maximum_decoded_bytes: Optional cumulative decoded-work limit. Processing
-            passes None to attempt the requested work without a work ceiling.
-
-    Yields:
-        Observation metadata, clipped source window and masked native values.
-
-    Raises:
-        ValueError: If native decoding fails or the requested read exceeds its budget.
-        OSError: If the actual source read fails.
-        RasterReadCancelled: If the caller cancels between native reads.
-    """
-    decoded_bytes = 0
-    for observation in observations:
-        require_active_raster_read(cancellation_requested)
-        with TemporalRasterDataset(observation) as dataset:
-            height, width = dataset.block_shapes[0]
-            row_start = int(window.row_off) // height
-            row_stop = math.ceil((window.row_off + window.height) / height)
-            column_start = int(window.col_off) // width
-            column_stop = math.ceil((window.col_off + window.width) / width)
-            for row in range(row_start, row_stop):
-                for column in range(column_start, column_stop):
-                    require_active_raster_read(cancellation_requested)
-                    _, block_bytes = dataset.native_work_for_blocks(((row, column),))
-                    decoded_bytes += block_bytes
-                    if (
-                        maximum_decoded_bytes is not None
-                        and decoded_bytes > maximum_decoded_bytes
-                    ):
-                        raise ValueError("Temporal read exceeds its decoded-work limit")
-                    block = dataset.block_window(1, row, column).intersection(window)
-                    values = dataset.read(1, window=block, masked=True)
-                    require_active_raster_read(cancellation_requested)
-                    yield observation, block, values

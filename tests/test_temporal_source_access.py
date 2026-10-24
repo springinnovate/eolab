@@ -28,7 +28,7 @@ from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.raster.statistics_service import RasterStatisticsService
-from eolab_app.raster.temporal import iter_temporal_windows
+from eolab_app.raster.reader import open_raster_data
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.catalog import create_catalog_router
 from tests.test_catalog_temporal import (
@@ -374,12 +374,13 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
                 (value.interval_end - value.interval_start).total_seconds()
                 for value in observations
             ] == [3600, 3600]
-            values = list(
-                iter_temporal_windows(
-                    observations, Window(720, 360, 1, 1), maximum_decoded_bytes=None
-                )
-            )
-            assert [float(array[0, 0]) for _, _, array in values] == [1, 3]
+            values = []
+            for observation in observations:
+                with open_raster_data(observation) as dataset:
+                    values.append(
+                        float(dataset.read(1, window=Window(720, 360, 1, 1))[0, 0])
+                    )
+            assert values == [1, 3]
             partial = await authorizer.get_temporal_interval(
                 TemporalIntervalSelection(
                     **{

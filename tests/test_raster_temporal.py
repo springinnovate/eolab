@@ -1,4 +1,4 @@
-"""Read temporal GeoTIFFs through native window and cancellation contracts."""
+"""Read temporal GeoTIFFs through native window, grid and work contracts."""
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -11,11 +11,10 @@ from affine import Affine
 from rasterio.crs import CRS
 from rasterio.windows import Window
 
-from eolab_app.raster.read_cancellation import RasterReadCancelled
+from eolab_app.raster.source_contract import source_work_for_blocks
 from eolab_app.raster.temporal import (
     TemporalObservation,
     TemporalRasterDataset,
-    iter_temporal_windows,
 )
 
 
@@ -52,7 +51,6 @@ def observation(tmp_path: Path) -> TemporalObservation:
             target.write(values, 1)
     time = datetime(2000, 1, 1, tzinfo=timezone.utc)
     return TemporalObservation(
-        root=tmp_path,
         path=tmp_path / "temperature_0.tif",
         time=time,
         reference_time=time,
@@ -79,7 +77,6 @@ def test_read_preserves_published_column_order(
         )
         assert dataset.index(-180, 90) == dataset.index(180, 90) == (0, 0)
         assert dataset.index(0, 90) == (0, 720)
-        assert dataset.maximum_decoded_block_bytes == 32 * 32 * 5
         assert dataset.read(1, window=Window(0, 50, 1, 1), masked=True).mask.all()
 
 
@@ -100,54 +97,6 @@ def test_unreadable_observation_reports_native_failure(
     with pytest.raises(rasterio.errors.RasterioError):
         with TemporalRasterDataset(observation):
             pass
-
-
-def test_interval_iterator_keeps_time_support_and_native_values(
-    observation: TemporalObservation,
-) -> None:
-    """Stream selected observations and blocks with their exact interval metadata.
-
-    Args:
-        observation: First global observation.
-    """
-    later = observation.time + timedelta(hours=2)
-    second = replace(
-        observation,
-        path=observation.root / "temperature_2.tif",
-        time=later,
-        reference_time=observation.time,
-        interval_start=later - timedelta(hours=1),
-        interval_end=later,
-    )
-    blocks = list(iter_temporal_windows((observation, second), Window(734, 0, 4, 1)))
-    assert [item[0] for item in blocks] == [observation, observation, second, second]
-    assert [item[1] for item in blocks[:2]] == [
-        Window(734, 0, 2, 1),
-        Window(736, 0, 2, 1),
-    ]
-    numpy.testing.assert_array_equal(blocks[0][2], [[734, 735]])
-    numpy.testing.assert_array_equal(blocks[3][2], [[4736, 4737]])
-
-
-def test_interval_iterator_preserves_budget_and_cancellation(
-    observation: TemporalObservation,
-) -> None:
-    """Bound interactive work and honor cancellation between native TIFF reads.
-
-    Args:
-        observation: First global observation.
-    """
-    with TemporalRasterDataset(observation) as dataset:
-        limit = dataset.maximum_decoded_block_bytes
-    blocks = iter_temporal_windows(
-        (observation,), Window(734, 0, 4, 1), maximum_decoded_bytes=limit
-    )
-    next(blocks)
-    with pytest.raises(ValueError, match="decoded-work limit"):
-        next(blocks)
-    with pytest.raises(RasterReadCancelled):
-        next(iter_temporal_windows((observation,), Window(0, 0, 1, 1), lambda: True))
-    assert len(list(iter_temporal_windows((observation,), Window(734, 0, 4, 1)))) == 2
 
 
 @pytest.mark.parametrize(
@@ -190,7 +139,6 @@ def test_read_uses_admitted_regional_grid_and_validity(
         target.write(values, 1)
     time = datetime(2023, 7, 15, tzinfo=timezone.utc)
     selected = TemporalObservation(
-        root=tmp_path,
         path=path,
         time=time,
         reference_time=None,
@@ -228,7 +176,7 @@ def test_cyclic_view_preserves_embedded_mask_and_edge_cells(
     Args:
         observation: Source time metadata reused for a small global TIFF.
     """
-    path = observation.root / "small.tif"
+    path = observation.path.parent / "small.tif"
     transform = Affine(36, 0, -180, 0, -30, 90)
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with rasterio.open(
@@ -255,3 +203,35 @@ def test_cyclic_view_preserves_embedded_mask_and_edge_cells(
         actual = dataset.read(1, window=Window(6, 0, 4, 1), masked=True)
         numpy.testing.assert_array_equal(actual.data, [[9, 0, 1, 2]])
         numpy.testing.assert_array_equal(actual.mask, [[False, False, False, True]])
+
+
+def test_cyclic_source_work_counts_each_intersecting_tiff_block(
+    observation: TemporalObservation,
+) -> None:
+    """Charge both physical blocks when one logical window crosses a TIFF tile.
+
+    Args:
+        observation: Time metadata reused for a two-tile global raster.
+    """
+    path = observation.path.parent / "two-tiles.tif"
+    transform = Affine(7.5, 0, -180, 0, -30, 90)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=3,
+        width=48,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        tiled=True,
+        blockxsize=32,
+        blockysize=32,
+    ) as target:
+        target.write(numpy.ones((3, 48), dtype="float32"), 1)
+    selected = replace(observation, path=path, transform=transform, nodata=None)
+    with TemporalRasterDataset(selected) as dataset:
+        reads, decoded = source_work_for_blocks(dataset, ((0, 1),))
+    assert reads == 2
+    assert decoded == 48 * 3 * 5
