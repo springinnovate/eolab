@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
-import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour, temporalMonthPeriod } from "./temporal-inputs.js";
+import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour, getTemporalMonthBoundaries } from "./temporal-inputs.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
@@ -256,7 +256,7 @@ export class ModelsController {
     useTemporalMonth() {
         const temporal = this.state.draft?.temporal;
         if (!temporal?.choices || this.state.submitting) return;
-        Object.assign(temporal, {periodMode: "month", ...temporalMonthPeriod(temporal.choices.month)});
+        Object.assign(temporal, {periodMode: "month", ...getTemporalMonthBoundaries(temporal.choices.month)});
         this.editDraft({});
     }
 

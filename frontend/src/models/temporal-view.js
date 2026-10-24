@@ -1,7 +1,7 @@
 /** Present temporal period and statistic choices inside the existing Models form. */
 import { modelSourceKey } from "./inputs.js";
 import { getTemporalStatistics, supportsPrecipitationTotal, snapTemporalHour, temporalSelectionError, captureTemporalReduction,
-    temporalMonthPeriod, temporalDayPeriod, temporalPeriodDays, selectTemporalPeriodMode, describeTemporalPeriod } from "./temporal-inputs.js";
+    getTemporalMonthBoundaries, getTemporalDayBoundaries, getTemporalSelectedDays, selectTemporalPeriodMode, describeTemporalPeriod } from "./temporal-inputs.js";
 
 /** Format an available observation label without using the browser's timezone.
  * @param {string} time Catalog timestamp.
@@ -48,11 +48,11 @@ export class TemporalModelInputsView {
         this.monthFields = element("div"); this.dayFields = element("div", "", "models-time-grid");
         this.exactFields = element("div", "", "models-time-grid");
         this.selectedMonth = element("input"); this.selectedMonth.type = "month"; this.selectedMonth.required = true;
-        this.selectedMonth.addEventListener("input", () => handlers.onTemporalEdit(temporalMonthPeriod(this.selectedMonth.value)));
+        this.selectedMonth.addEventListener("input", () => handlers.onTemporalEdit(getTemporalMonthBoundaries(this.selectedMonth.value)));
         this.monthFields.append(field("models-temporal-selected-month", "Month", this.selectedMonth));
         for (const [name, caption] of [["firstDay", "First day"], ["lastDay", "Last day (included)"]]) {
             const input = this[name] = element("input"); input.type = "date"; input.required = true;
-            input.addEventListener("input", () => handlers.onTemporalEdit(temporalDayPeriod(this.firstDay.value, this.lastDay.value)));
+            input.addEventListener("input", () => handlers.onTemporalEdit(getTemporalDayBoundaries(this.firstDay.value, this.lastDay.value)));
             this.dayFields.append(field(`models-temporal-${name}`, caption, input));
         }
         for (const [name, caption] of [["start", "Start"], ["end", "End"]]) {
@@ -145,7 +145,7 @@ export class TemporalModelInputsView {
         const intervalSeries = areaSeries && variable && variable["eolab:time_support"] !== "instantaneous";
         this.precipitation = precipitation;
         this.periodMode.value = temporal.periodMode;
-        const days = temporalPeriodDays(temporal);
+        const days = getTemporalSelectedDays(temporal);
         const values = {selectedMonth: temporal.startTime.split("T")[0].slice(0, 7), ...days};
         for (const name of ["start", "end"]) {
             const [date, time] = temporal[name + "Time"].split("T");
