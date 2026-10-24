@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import numpy
 import pytest
@@ -311,6 +312,127 @@ def test_explicit_rescan_extends_the_same_item_and_is_idempotent(
             writer.write_session.items[ITEM_KEY]["properties"]["end_datetime"]
             == "2000-02-01T03:00:00Z"
         )
+
+
+def test_changed_dataset_id_retires_old_records_and_keeps_other_sources(
+    era5_archive: Path,
+    tmp_path: Path,
+) -> None:
+    """Replace every old ID at one descriptor while preserving another source.
+
+    Args:
+        era5_archive: Archive whose descriptor receives a new Item ID.
+        tmp_path: Isolated mount containing another archive with the same title.
+    """
+    other_archive = tmp_path / "other-weather"
+    shutil.copytree(era5_archive, other_archive)
+    other_descriptor = other_archive / "dataset.yaml"
+    other_descriptor.write_text(
+        other_descriptor.read_text().replace("era5-test", "other-weather"),
+        encoding="utf-8",
+    )
+    other_key = (ITEM_KEY[0], "other-weather")
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    other_item = deepcopy(writer.write_session.items[other_key])
+    stale_item = deepcopy(writer.write_session.items[ITEM_KEY])
+    stale_item["id"] = "older-weather"
+    stale_key = (ITEM_KEY[0], stale_item["id"])
+    writer.write_session.items[stale_key] = stale_item
+    descriptor = era5_archive / "dataset.yaml"
+    descriptor.write_text(
+        descriptor.read_text().replace("era5-test", "renamed-weather"),
+        encoding="utf-8",
+    )
+    new_key = (ITEM_KEY[0], "renamed-weather")
+    updated_items = AsyncMock()
+    manager.items_updated = updated_items
+
+    for retired_keys in ({ITEM_KEY, stale_key}, set()):
+        status = asyncio.run(scan(manager))
+        assert status["state"] == "completed"
+        assert status["failed"] == 0
+        assert set(writer.write_session.items) == {new_key, other_key}
+        assert writer.write_session.items[other_key] == other_item
+        updated_items.assert_awaited_once()
+        assert (
+            set(updated_items.await_args.args[0]) == {new_key, other_key} | retired_keys
+        )
+        updated_items.reset_mock()
+
+
+@pytest.mark.parametrize(
+    "failure", ["admission", "finalization", "publication", "retirement"]
+)
+def test_failed_id_replacement_preserves_the_previous_item_until_retry(
+    era5_archive: Path,
+    tmp_path: Path,
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retire an old ID only after its replacement is admitted and published.
+
+    Args:
+        era5_archive: Previously admitted archive receiving a new Item ID.
+        tmp_path: Isolated scan mount.
+        failure: Boundary that rejects the first replacement attempt.
+        monkeypatch: Substitutes a failing database deletion for the retirement case.
+    """
+    manager, writer = create_scanner(tmp_path)
+    assert asyncio.run(scan(manager))["failed"] == 0
+    prior_item = deepcopy(writer.write_session.items[ITEM_KEY])
+    descriptor = era5_archive / "dataset.yaml"
+    descriptor.write_text(
+        descriptor.read_text().replace("era5-test", "renamed-weather"),
+        encoding="utf-8",
+    )
+    new_key = (ITEM_KEY[0], "renamed-weather")
+    updated_items = AsyncMock()
+    manager.items_updated = updated_items
+    retire_items = manager.catalog_database.delete_replaced_temporal_items
+    if failure == "admission":
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute("UPDATE coverage SET width = 0")
+    elif failure == "finalization":
+        manager.item_finalizer = AsyncMock()
+        manager.item_finalizer.finalize.side_effect = RuntimeError(
+            "Finalization failed"
+        )
+    elif failure == "publication":
+        writer.write_session.item_error = RuntimeError("Publication failed")
+    else:
+        monkeypatch.setattr(
+            manager.catalog_database,
+            "delete_replaced_temporal_items",
+            AsyncMock(side_effect=RuntimeError("Retirement failed")),
+        )
+
+    status = asyncio.run(scan(manager))
+    assert status["errors"]
+    assert status["state"] == (
+        "failed" if failure in {"publication", "retirement"} else "completed"
+    )
+    assert status["catalogItemsWritten"] == (1 if failure == "retirement" else 0)
+    assert writer.write_session.items[ITEM_KEY] == prior_item
+    assert set(writer.write_session.items) == (
+        {ITEM_KEY, new_key} if failure == "retirement" else {ITEM_KEY}
+    )
+    updated_items.assert_not_awaited()
+
+    if failure == "admission":
+        with closing(sqlite3.connect(era5_archive / "catalog.sqlite")) as db, db:
+            db.execute("UPDATE coverage SET width = 1440")
+    manager.item_finalizer = None
+    writer.write_session.item_error = None
+    monkeypatch.setattr(
+        manager.catalog_database, "delete_replaced_temporal_items", retire_items
+    )
+    status = asyncio.run(scan(manager))
+    assert status["state"] == "completed"
+    assert status["failed"] == 0
+    assert set(writer.write_session.items) == {new_key}
+    updated_items.assert_awaited_once()
+    assert set(updated_items.await_args.args[0]) == {ITEM_KEY, new_key}
 
 
 def test_relocated_dataset_is_removed_then_republished_under_the_same_id(

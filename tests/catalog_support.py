@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from typing import Any
 
+from eolab_app.catalog.collections import TEMPORAL_COLLECTION_ID
 from eolab_app.catalog.models import CatalogItemSource
 from eolab_app.catalog.pgstac import catalog_item_source
 
@@ -163,3 +164,30 @@ class RecordingCatalogDatabase:
     async def invalidate_search_count_cache(self) -> None:
         """Record one count-cache invalidation."""
         self.search_count_cache_invalidations += 1
+
+    async def delete_replaced_temporal_items(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[tuple[str, str], ...]:
+        """Remove previous temporal IDs for the supplied published descriptors.
+
+        Args:
+            items: Nonempty temporal batch successfully written by the scanner.
+
+        Returns:
+            Removed Collection and Item identifiers.
+        """
+        published = {
+            item["assets"]["eolab:temporal-source"]["href"]: item["id"]
+            for item in items
+        }
+        stored_items = self.catalog_writer.write_session.items
+        retired = tuple(
+            key
+            for key, item in stored_items.items()
+            if key[0] == TEMPORAL_COLLECTION_ID
+            and (href := item["assets"]["eolab:temporal-source"]["href"]) in published
+            and key[1] != published[href]
+        )
+        for key in retired:
+            del stored_items[key]
+        return retired

@@ -92,6 +92,45 @@ def test_count_estimate_lookup_uses_pgstac_search_path(
     connect.assert_awaited_once_with(options="-c search_path=pgstac,public")
 
 
+def test_pgstac_retires_only_other_temporal_ids_at_published_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scope retirement to published descriptor paths and return deleted IDs.
+
+    Args:
+        monkeypatch: Replaces only the external PostgreSQL connection.
+    """
+    cursor = AsyncMock()
+    cursor.fetchall.return_value = [("eolab-temporal-datasets", "old-weather")]
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    monkeypatch.setattr(
+        psycopg.AsyncConnection, "connect", AsyncMock(return_value=connection)
+    )
+    hrefs = ["file:///data/weather/dataset.yaml", "file:///data/ocean/dataset.yaml"]
+    items = [
+        {
+            "id": item_id,
+            "collection": "eolab-temporal-datasets",
+            "assets": {"eolab:temporal-source": {"href": href}},
+        }
+        for item_id, href in zip(("weather", "ocean"), hrefs)
+    ]
+
+    retired = asyncio.run(PgStacCatalogDatabase().delete_replaced_temporal_items(items))
+
+    assert retired == (("eolab-temporal-datasets", "old-weather"),)
+    connection.execute.assert_awaited_once()
+    query, parameters = connection.execute.await_args.args
+    assert parameters == (["weather", "ocean"], hrefs, "eolab-temporal-datasets")
+    assert "item.collection = %s" in query
+    assert "item.content->'assets'->'eolab:temporal-source'->>'href'" in query
+    assert "= published.href" in query
+    assert "item.id <> published.id" in query
+    assert "RETURNING item.collection, item.id" in query
+
+
 def test_stac_api_writer_bounds_upstream_error_detail() -> None:
     """Expose status and path without retaining an unbounded response."""
     request_timeouts: list[float] = []

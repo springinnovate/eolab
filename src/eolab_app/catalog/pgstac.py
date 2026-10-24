@@ -180,6 +180,43 @@ class PgStacCatalogDatabase:
         async with await psycopg.AsyncConnection.connect() as connection:
             await connection.execute("DELETE FROM pgstac.search_wheres")
 
+    async def delete_replaced_temporal_items(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[tuple[str, str], ...]:
+        """Delete old temporal IDs that reference a newly published descriptor.
+
+        Args:
+            items: Nonempty temporal Item batch already published by the scanner,
+                with one current ID per descriptor.
+
+        Returns:
+            Deleted Collection and Item identifiers. Other descriptors,
+            Collections and the published IDs are retained.
+
+        Raises:
+            psycopg.Error: If deletion fails; the transaction is rolled back.
+        """
+        item_ids, descriptor_hrefs = zip(
+            *(
+                (item["id"], item["assets"]["eolab:temporal-source"]["href"])
+                for item in items
+            )
+        )
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute(
+                """
+                DELETE FROM pgstac.items AS item
+                USING unnest(%s::text[], %s::text[]) AS published(id, href)
+                WHERE item.collection = %s
+                  AND item.content->'assets'->'eolab:temporal-source'->>'href'
+                      = published.href
+                  AND item.id <> published.id
+                RETURNING item.collection, item.id
+                """,
+                (list(item_ids), list(descriptor_hrefs), TEMPORAL_COLLECTION_ID),
+            )
+            return tuple(await cursor.fetchall())
+
 
 def catalog_item_source(
     collection: str,

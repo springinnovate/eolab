@@ -148,3 +148,17 @@ class CatalogDatabase(Protocol):
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
+
+    async def delete_replaced_temporal_items(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[tuple[str, str], ...]:
+        """Remove previous IDs for successfully published temporal descriptors.
+
+        Args:
+            items: Nonempty, single-Collection batch of temporal Items whose
+                publication succeeded. Each descriptor has one current ID.
+
+        Returns:
+            Deleted Collection and Item identifiers, for cache invalidation.
+            Items with another descriptor or the published ID are retained.
+        """

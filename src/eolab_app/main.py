@@ -536,7 +536,7 @@ def create_app(
         """Invalidate analysis caches and temporal layers after explicit Catalog writes.
 
         Args:
-            item_keys: Collection and Item IDs successfully written by the scan.
+            item_keys: Collection and Item IDs written or retired by the scan.
         """
         await raster_statistics_service.invalidate_temporal_items(item_keys)
         await raster_publication.invalidate_temporal_items(item_keys)
