@@ -165,7 +165,7 @@ class RasterPublicationService:
             selection: Validated Catalog variable and exact observation time.
 
         Returns:
-            Ordinary WMS identity and bounds for the original GeoTIFF.
+            Ordinary WMS identity and admitted Catalog bounds for the GeoTIFF.
 
         Raises:
             RasterFeatureError: If source access, metadata reading or publication fails.
@@ -177,20 +177,19 @@ class RasterPublicationService:
             raise RasterConflictError("Temporal map display is unavailable.")
         source = await self._source_access.resolve(selection)
         try:
-            metadata = await asyncio.to_thread(describe_raster_data, source.data)
+            await asyncio.to_thread(describe_raster_data, source.data)
         except (OSError, ValueError, RasterioError) as error:
             raise RasterConflictError(
                 "The selected observation could not be opened for map display."
             ) from error
-        if metadata["bounds"] is None:
-            raise RasterConflictError("This observation cannot be placed on the map.")
+        item = await self._catalog.get_item(selection)
         resource_name = f"slice_{uuid4().hex}"
         await self._publisher.publish(
             resource_name, cast(TemporalObservation, source.data).path, advertised=False
         )
         published = PublishedRaster(
             layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}",
-            bbox=metadata["bounds"],
+            bbox=tuple(item["bbox"]),
         )
         record = _TemporalPublication(published)
         self._observations[selection] = record

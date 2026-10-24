@@ -161,9 +161,7 @@ def test_observations_publish_original_files_and_refresh_without_gating_analysis
     first = api.post("/api/rendering/layers", json={"source": SOURCE})
     assert first.status_code == 200, first.text
     layer = first.json()["layerName"]
-    west, south, east, north = first.json()["bbox"]
-    assert -180 <= west < 0 < east <= 180
-    assert (south, north) == (-90, 90)
+    assert first.json()["bbox"] == [-180, -90, 180, 90]
     assert str(archive) not in first.text
     writes = [
         request
@@ -217,6 +215,7 @@ def test_observations_publish_original_files_and_refresh_without_gating_analysis
     api.portal.call(publication.cleanup)
     assert not upstream.names and set(archive.rglob("*.tif")) == original_files
     with rasterio.open(path) as dataset:
+        assert tuple(dataset.bounds) == (-180.125, -90.125, 179.875, 90.125)
         assert next(dataset.sample([(0, 0)]))[0] == 10
     replacement = api.post("/api/rendering/layers", json={"source": SOURCE})
     assert replacement.status_code == 200, replacement.text

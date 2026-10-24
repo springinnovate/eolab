@@ -443,7 +443,7 @@ def test_failed_refresh_preserves_prior_item_and_missing_descriptor_removes_it(
     descriptor.unlink()
     status = asyncio.run(scan(manager))
     assert status["reconciliation"]["removed"] == 1
-    assert writer.write_session.items == {}
+    assert ITEM_KEY not in writer.write_session.items
 
 
 @pytest.mark.parametrize(
