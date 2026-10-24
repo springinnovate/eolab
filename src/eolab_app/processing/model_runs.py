@@ -54,7 +54,7 @@ from eolab_app.processing.artifact_manifest import (
     read_artifact_manifest,
 )
 from eolab_app.processing.model_operations import get_model_operation
-from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.raster.source_models import TemporalVariableMetadata
 
 
 def describe_model_run_name(row: dict[str, Any]) -> dict[str, str]:
@@ -276,7 +276,7 @@ def build_model_calculation_request(
 def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
-    source_metadata: tuple[int, int, int, int] | ResolvedTemporalInterval | None,
+    source_metadata: tuple[int, int, int, int] | TemporalVariableMetadata | None,
     additional_signatures: dict[str, tuple[int, int, int, int]] | None = None,
 ) -> PreparedJobPlan:
     """Create a model job submission and save its recipe, inputs and software identity.
@@ -314,7 +314,7 @@ def build_model_job_submission(
     }
     revision = compute_implementation_checksum()
     build = get_application_build_id()
-    if isinstance(source_metadata, ResolvedTemporalInterval):
+    if isinstance(source_metadata, TemporalVariableMetadata):
         source_record = {
             "kind": "temporalInterval",
             "unit": source_metadata.unit,

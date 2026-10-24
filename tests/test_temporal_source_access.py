@@ -359,6 +359,11 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
                 "startTime": "2000-01-31T23:00:00Z",
                 "endTime": "2000-02-01T02:00:00Z",
             }
+            metadata = await authorizer.get_temporal_metadata(
+                TemporalIntervalSelection(**period)
+            )
+            assert metadata.unit == "kg m**-2 s**-1"
+            assert metadata.time_support == "mean_rate"
             interval = await authorizer.get_temporal_interval(
                 TemporalIntervalSelection(**period)
             )
@@ -418,6 +423,10 @@ def test_interval_selection_preserves_gaps_and_time_support(era5_archive: Path) 
             assert accumulated.unit == "W m**-2 s"
             assert accumulated.time_support == "accumulation"
             assert len(accumulated.observations) == 1
+            with pytest.raises(RasterAssetError, match="selected variable"):
+                await authorizer.get_temporal_metadata(
+                    TemporalIntervalSelection(**{**period, "variable": "unknown"})
+                )
             with pytest.raises(RasterAssetError, match="selected variable"):
                 await authorizer.get_temporal_interval(
                     TemporalIntervalSelection(**{**period, "variable": "unknown"})

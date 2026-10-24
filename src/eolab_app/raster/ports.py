@@ -9,6 +9,7 @@ from eolab_app.raster.source_models import (
     TemporalTimeChoices,
     TemporalTimeQuery,
     TemporalVariableSelection,
+    TemporalVariableMetadata,
 )
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 
@@ -167,6 +168,22 @@ class RasterSourceAuthorizer(Protocol):
 
         Raises:
             RasterFeatureError: If Catalog, mount or selection access fails.
+        """
+        ...
+
+    async def get_temporal_metadata(
+        self, selection: TemporalVariableSelection
+    ) -> TemporalVariableMetadata:
+        """Return admitted units and time support without opening the archive.
+
+        Args:
+            selection: Validated Catalog identity and variable.
+
+        Returns:
+            Units and physical time support recorded for the selected variable.
+
+        Raises:
+            RasterFeatureError: If the Catalog Item or selected variable is unavailable.
         """
         ...
 
