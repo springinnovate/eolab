@@ -260,7 +260,12 @@ def test_processing_retains_polygons_without_memory_estimates(tmp_path: Path) ->
     plan = make_spec(path, ["sum(a)"], area).model_copy(update={"area": area})
     limits = RasterAggregateLimits()
     with rasterio.open(path) as dataset:
-        tools = kernel.prepare_raster_area_tools(dataset, plan, limits)
+        tools = kernel.prepare_raster_area_tools(
+            dataset,
+            plan.area,
+            limits,
+            measure_hectares=plan.grid.groundArea is not None,
+        )
         assert list(tools.selected_polygons.iter_projected_polygons())
         tools.selected_polygons.close()
 

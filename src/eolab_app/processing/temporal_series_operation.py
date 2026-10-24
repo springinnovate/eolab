@@ -21,6 +21,11 @@ from eolab_app.processing.temporal_series_models import (
 )
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.processing.temporal_stack_models import (
+    QueuedTemporalStack,
+    TemporalStackRequest,
+    TemporalStackSpec,
+)
 
 
 class TemporalSeriesNumericalPolicy(BaseModel):
@@ -71,7 +76,14 @@ def bind_temporal_series(
 
 
 def get_series_source(
-    value: TemporalSeriesRequest | QueuedTemporalSeries | TemporalSeriesSpec,
+    value: (
+        TemporalSeriesRequest
+        | QueuedTemporalSeries
+        | TemporalSeriesSpec
+        | TemporalStackRequest
+        | QueuedTemporalStack
+        | TemporalStackSpec
+    ),
 ) -> TemporalIntervalSelection:
     """Return the Catalog variable and period captured by a request or saved plan.
 
@@ -83,12 +95,14 @@ def get_series_source(
     """
     return (
         value.request.source
-        if isinstance(value, QueuedTemporalSeries)
+        if isinstance(value, (QueuedTemporalSeries, QueuedTemporalStack))
         else value.source
     )
 
 
-def get_series_polygon(request: TemporalSeriesRequest) -> PolygonAreaReference | None:
+def get_series_polygon(
+    request: TemporalSeriesRequest | TemporalStackRequest,
+) -> PolygonAreaReference | None:
     """Return the owned polygon input that admission must retain, if selected.
 
     Args:
@@ -149,31 +163,7 @@ async def prepare_temporal_series(
             "no_observations", "No observations are available in the selected period."
         )
     request = queued.request
-    if queued.polygonArea is not None:
-        area = queued.polygonArea
-    elif request.wholeRaster:
-        area = AggregateArea(kind="wholeRaster")
-    elif request.selectedBounds is not None:
-        area = AggregateArea(
-            kind="bounds", bounds=request.selectedBounds.canonical_tuple()
-        )
-    else:
-        if context.areas is None:
-            raise ProcessingError(
-                "selection_unavailable", "Vector selection reader is unavailable.", 409
-            )
-        resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
-        success, summary = await context.run_native(
-            summary_process, (resolved, None), None, context.native
-        )
-        if not success:
-            raise ProcessingError("selection_unavailable", summary, 409)
-        area = AggregateArea(
-            kind="catalogSelection",
-            bounds=summary["bbox"],
-            catalogSelection=request.catalogSelection,
-            resolved=resolved,
-        )
+    area = await prepare_series_area(context, request, queued.polygonArea)
     status, grid = await context.run_native(
         temporal_series_process_target,
         ("plan", (source, area, context.aggregate_limits)),
@@ -206,11 +196,57 @@ async def prepare_temporal_series(
     )
 
 
+async def prepare_series_area(
+    context: OperationContext,
+    request: TemporalSeriesRequest | TemporalStackRequest,
+    polygons: AggregateArea | None,
+) -> AggregateArea:
+    """Resolve the submitted area once for all observations in a temporal run.
+
+    Args:
+        context: Existing worker and vector-selection capabilities.
+        request: Model-bound area choice.
+        polygons: Owned polygons already retained during admission, if selected.
+
+    Returns:
+        The selected area with its original vector reader when needed.
+
+    Raises:
+        ProcessingError: If the vector selection cannot be read.
+    """
+    if polygons is not None:
+        area = polygons
+    elif request.wholeRaster:
+        area = AggregateArea(kind="wholeRaster")
+    elif request.selectedBounds is not None:
+        area = AggregateArea(
+            kind="bounds", bounds=request.selectedBounds.canonical_tuple()
+        )
+    else:
+        if context.areas is None:
+            raise ProcessingError(
+                "selection_unavailable", "Vector selection reader is unavailable.", 409
+            )
+        resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
+        success, summary = await context.run_native(
+            summary_process, (resolved, None), None, context.native
+        )
+        if not success:
+            raise ProcessingError("selection_unavailable", summary, 409)
+        area = AggregateArea(
+            kind="catalogSelection",
+            bounds=summary["bbox"],
+            catalogSelection=request.catalogSelection,
+            resolved=resolved,
+        )
+    return area
+
+
 async def prepare_series_execution(
     context: OperationContext,
-    spec: TemporalSeriesSpec,
+    spec: TemporalSeriesSpec | TemporalStackSpec,
     source: ResolvedTemporalInterval,
-) -> tuple[ResolvedTemporalInterval, TemporalSeriesSpec]:
+) -> tuple[ResolvedTemporalInterval, TemporalSeriesSpec | TemporalStackSpec]:
     """Supply authorized observations and the run's original vector selection.
 
     Args:
@@ -288,7 +324,9 @@ def describe_series_result(
     """
     policy = cast(dict[str, Any], numerical_policy)
     return {
-        "statistic": policy["statistic"],
+        "calculations": [
+            {"label": policy["statistic"], "expression": f"{policy['statistic']}(a)"}
+        ],
         "temporalCoverage": {
             name: policy[name]
             for name in (

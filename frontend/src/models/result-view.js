@@ -52,30 +52,36 @@ function statisticsCards(result, element) {
     })];
 }
 
-/** Name the statistic calculated over the area for each observation.
- * @param {"count"|"sum"|"mean"|"min"|"max"|"stdev"} statistic Validated area statistic.
- * @return {string} Human-readable statistic name.
+const AREA_STATISTIC_LABELS = new Map([
+    ["count", "Valid-pixel count"], ["sum", "Sum"], ["mean", "Mean"], ["min", "Minimum"], ["max", "Maximum"],
+    ["stdev", "Population standard deviation"],
+]);
+
+/** Name a built-in area statistic or retain the label of a user-defined calculation.
+ * @param {string} statistic Saved statistic identifier or calculation label.
+ * @return {string} Human-readable statistic name or the unchanged calculation label.
  */
 export function describeAreaStatistic(statistic) {
-    return {count: "Valid-pixel count", sum: "Sum", mean: "Mean", min: "Minimum", max: "Maximum",
-        stdev: "Population standard deviation"}[statistic];
+    return AREA_STATISTIC_LABELS.get(statistic) ?? statistic;
 }
 
 /** Build a time-series summary for the downloadable CSV without loading its rows.
- * @param {Object} result Time-series output with its saved statistic and coverage.
+ * @param {Object} result Time-series output with its saved calculations and coverage.
  * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
- * @return {HTMLElement[]} Summary card for one result per observation.
+ * @return {HTMLElement[]} Summary card naming the calculations performed for each observation.
  */
 function timeSeriesCards(result, element) {
     const card = element("article", "", "models-result");
     const coverage = result.temporalCoverage;
-    card.append(element("strong", result.label), element("span", result.filename, "models-name"),
-        element("span", `Statistic: ${describeAreaStatistic(result.statistic)}`),
-        element("span", `Units: ${coverage.unit}`),
+    card.append(element("strong", result.label), element("span", result.filename, "models-name"));
+    for (const calculation of result.calculations)
+        card.append(element("span", `Statistic: ${describeAreaStatistic(calculation.label)}`), element("code", calculation.expression));
+    if (coverage.unit) card.append(element("span", `Units: ${coverage.unit}`));
+    card.append(
         element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
         element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
         element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
-        element("p", "Download the CSV under Files from this run for one result per observation and its valid-pixel count.", "models-help"));
+        element("p", "Download the CSV under Files from this run for values and per-calculation pixel counts.", "models-help"));
     return [card];
 }
 

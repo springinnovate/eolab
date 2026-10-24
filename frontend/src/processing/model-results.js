@@ -50,14 +50,15 @@ function validateTemporalCoverage(coverage) {
     }
 }
 
-/** Check a CSV time series' statistic and saved observation coverage.
+/** Check a CSV time series' named formulas and saved observation coverage.
  * @param {Object} result Time-series output from the Processing API.
  * @return {void}
- * @throws {Error} If the statistic or temporal coverage is invalid.
+ * @throws {Error} If the calculation list or temporal coverage is invalid.
  */
 function validateTimeSeriesResult(result) {
-    if (!["count", "sum", "mean", "min", "max", "stdev"].includes(result.statistic))
-        throw new Error("Processing returned an invalid time-series statistic.");
+    if (!Array.isArray(result.calculations) || result.calculations.length < 1 || result.calculations.length > 5 ||
+        result.calculations.some(calculation => typeof calculation?.label !== "string" || typeof calculation.expression !== "string"))
+        throw new Error("Processing returned invalid time-series calculations.");
     validateTemporalCoverage(result.temporalCoverage);
 }
 

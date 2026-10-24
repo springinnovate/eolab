@@ -65,7 +65,7 @@ export const seriesModel = {...model, id: "regional-time-series", title: "Area t
 
 /** A completed CSV with one spatial mean for each available observation. */
 export const timeSeriesResult = {name: "series", label: "Area time series", role: "result", presentation: "download", kind: "timeSeries",
-    mediaType: "text/csv", filename: "series.csv", bytes: 256, sha256: "d".repeat(64), statistic: "mean",
+    mediaType: "text/csv", filename: "series.csv", bytes: 256, sha256: "d".repeat(64), calculations: [{label: "mean", expression: "mean(a)"}],
     url: clipResult.url, provenanceUrl: clipResult.provenanceUrl,
     temporalCoverage: {unit: "K", observationCount: 3,
         firstObservation: "2000-01-01T00:00:00Z", lastObservation: "2000-01-03T12:00:00Z"}};

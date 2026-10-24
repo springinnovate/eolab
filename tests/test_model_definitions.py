@@ -829,3 +829,70 @@ def test_saved_invocation_rejects_extra_fields(
     saved[extra] = {}
     with pytest.raises(ValidationError):
         ModelInvocation.model_validate(saved)
+
+
+def test_temporal_stack_recipe_binds_formulas_and_only_the_area_they_use() -> None:
+    """Bind discovered metrics to execution while retaining exact invocation inputs."""
+    from eolab_app.processing.temporal_stack_models import TemporalStackRequest
+
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("temporal-raster-stack", "1.0.0")
+    body = {
+        "requestId": "temporal-stack-binding",
+        "utcOffsetMinutes": 0,
+        "model": {
+            "id": definition.id,
+            "version": definition.version,
+            "definitionSha256": definition.digest,
+        },
+        "inputs": {
+            "source": {
+                "collectionId": "eolab-temporal-datasets",
+                "itemId": "weather",
+                "variable": "temperature",
+                "startTime": "2000-02-01T00:00:00Z",
+                "endTime": "2000-02-01T03:00:00Z",
+            },
+            "area": {
+                "kind": "selectedArea",
+                "selectedBounds": {
+                    "west": -1,
+                    "south": -1,
+                    "east": 1,
+                    "north": 1,
+                },
+            },
+            "metrics": {
+                "calculations": [
+                    {"label": "Area mean", "expression": "mean(a)"},
+                    {"label": "Clicked pixel", "expression": "pixelValue(a)"},
+                ],
+                "pixelPoint": {"longitude": 0.0, "latitude": 0.0},
+            },
+        },
+        "parameters": {},
+        "label": "Temporal formulas",
+    }
+    request, invocation = build_model_calculation_request(
+        ModelRunRequest.model_validate(body), registry
+    )
+    assert isinstance(request, TemporalStackRequest)
+    assert request.metrics.model_dump(mode="json") == body["inputs"]["metrics"]
+    assert (
+        request.selectedBounds.model_dump() == body["inputs"]["area"]["selectedBounds"]
+    )
+    assert request.wholeRaster is None
+    assert invocation.inputs == body["inputs"]
+    assert (
+        ModelInvocation.model_validate_json(invocation.model_dump_json(by_alias=True))
+        == invocation
+    )
+    body["inputs"]["metrics"]["calculations"].pop(0)
+    point_request, _ = build_model_calculation_request(
+        ModelRunRequest.model_validate(body), registry
+    )
+    assert point_request.wholeRaster is True
+    assert point_request.selectedBounds is None
+    body["inputs"]["metrics"].pop("pixelPoint")
+    with pytest.raises(ProcessingError, match="invalid"):
+        build_model_calculation_request(ModelRunRequest.model_validate(body), registry)
