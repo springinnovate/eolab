@@ -39,7 +39,7 @@ class TemporalStackNumericalPolicy(BaseModel):
     standardDeviation: Literal["population"] = "population"
     temporalAggregation: Literal["none"] = "none"
     metrics: TemporalStackMetrics
-    groundArea: GroundAreaPlan | None
+    groundArea: GroundAreaPlan | None = None
     sourceUnit: str
     timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
     observationCount: int
