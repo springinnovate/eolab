@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
-import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour } from "./temporal-inputs.js";
+import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour, temporalMonthPeriod } from "./temporal-inputs.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";
@@ -256,9 +256,7 @@ export class ModelsController {
     useTemporalMonth() {
         const temporal = this.state.draft?.temporal;
         if (!temporal?.choices || this.state.submitting) return;
-        const startTime = `${temporal.choices.month}-01T00:00`;
-        const end = new Date(`${startTime}Z`); end.setUTCMonth(end.getUTCMonth() + 1);
-        Object.assign(temporal, {startTime, endTime: end.toISOString().slice(0, 16)});
+        Object.assign(temporal, {periodMode: "month", ...temporalMonthPeriod(temporal.choices.month)});
         this.editDraft({});
     }
 
@@ -749,7 +747,7 @@ export class ModelsController {
             } else if (input.type === "temporal_interval") {
                 const value = saved.inputs[name];
                 Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,
-                    startTime: new Date(value.startTime).toISOString().slice(0, -1), endTime: new Date(value.endTime).toISOString().slice(0, -1)});
+                    periodMode: "times", startTime: new Date(value.startTime).toISOString().slice(0, -1), endTime: new Date(value.endTime).toISOString().slice(0, -1)});
             } else if (input.type === "temporal_reduction") {
                 draft.reduction = {...draft.reduction, ...saved.inputs[name]};
             } else if (input.type === "area_statistic") {

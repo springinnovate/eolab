@@ -75,11 +75,67 @@ async function periodFixture(overrides = {}, view = null) {
     return h;
 }
 
+/** Edit one exact UTC boundary through its date and time controls.
+ * @param {Object} controls Temporal model controls.
+ * @param {"start"|"end"} boundary Boundary to edit.
+ * @param {string} value Date and time without a timezone suffix.
+ * @param {string} [event="input"] Event completing the edit.
+ * @return {void}
+ */
+function editExactTime(controls, boundary, value, event = "input") {
+    const [date, time] = value.split("T");
+    controls[`${boundary}Date`].value = date;
+    controls[`${boundary}Time`].value = time;
+    controls[`${boundary}Time`].dispatchEvent(new Event(event));
+}
+
+test("calendar controls capture whole months and inclusive days as the existing UTC interval", async () => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({}, view), controls = view.setup.temporal, draft = h.controller.state.draft;
+    assert.equal(controls.periodMode.value, "month");
+    for (const [month, start, end] of [
+        ["2000-02", "2000-02-01T00:00:00.000Z", "2000-03-01T00:00:00.000Z"],
+        ["2000-12", "2000-12-01T00:00:00.000Z", "2001-01-01T00:00:00.000Z"],
+    ]) {
+        controls.selectedMonth.value = month; controls.selectedMonth.dispatchEvent(new Event("input"));
+        const request = captureModelSubmission(draft, "e".repeat(32), -420);
+        assert.deepEqual(request.inputs.weather, {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
+            variable: "temperature", startTime: start, endTime: end});
+        assert.match(controls.periodSummary.textContent, /UTC/);
+    }
+    controls.periodMode.value = "days"; controls.periodMode.dispatchEvent(new Event("change"));
+    for (const [first, last, end] of [
+        ["2000-02-29", "2000-02-29", "2000-03-01T00:00:00.000Z"],
+        ["2024-03-10", "2024-03-11", "2024-03-12T00:00:00.000Z"],
+    ]) {
+        controls.firstDay.value = first; controls.lastDay.value = last;
+        controls.lastDay.dispatchEvent(new Event("input"));
+        const request = captureModelSubmission(draft, "e".repeat(32), -420);
+        assert.equal(request.inputs.weather.startTime, `${first}T00:00:00.000Z`);
+        assert.equal(request.inputs.weather.endTime, end);
+        assert.match(controls.periodSummary.textContent, /includ/);
+    }
+    const expected = captureModelSubmission(draft, "e".repeat(32)).inputs;
+    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
+    assert.equal(controls.startDate.value, "2024-03-10"); assert.equal(controls.startTime.value, "00:00");
+    assert.equal(controls.endDate.value, "2024-03-12"); assert.equal(controls.endTime.value, "00:00");
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, expected);
+    editExactTime(controls, "start", "2024-03-10T12:30");
+    editExactTime(controls, "end", "2024-03-11T05:15");
+    controls.periodMode.value = "days"; controls.periodMode.dispatchEvent(new Event("change"));
+    assert.equal(controls.firstDay.value, "2024-03-10"); assert.equal(controls.lastDay.value, "2024-03-11");
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, expected);
+    assert.equal(h.submitted.length, 0);
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs, expected);
+    h.controller.destroy();
+});
+
 test("temporal setup captures typed inputs in UTC without raster publication or automatic jobs", async () => {
     const h = await periodFixture(), draft = h.controller.state.draft;
     assert.equal(draft.raster, null);
     assert.equal(draft.temporal.variable, "temperature");
-    h.handlers.onTemporalEdit({startTime: "2000-01-01T00:00", endTime: "2000-01-02T13:00"});
+    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-02T13:00"});
     h.controller.editDraft({reduction: {reducer: "percentile", percentile: 95}});
     assert.equal(h.submitted.length, 0);
     const request = captureModelSubmission(draft, "e".repeat(32), -420);
@@ -99,7 +155,7 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
     let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
     const h = await periodFixture({getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
     const draft = h.controller.state.draft;
-    h.handlers.onTemporalEdit({startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
+    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
     dates = {months: ["2000-03"], month: "2000-03", times: ["2000-03-12T00:00:00Z"]};
     h.context.temporalDatasets[0] = {...temporalDataset, variable: "rain", visible: false};
     h.controller.refreshMapLayers();
@@ -110,6 +166,7 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
     h.controller.useTemporalMonth();
     assert.equal(draft.temporal.startTime, "2000-03-01T00:00");
     assert.equal(draft.temporal.endTime, "2000-04-01T00:00");
+    assert.equal(draft.temporal.periodMode, "month");
     assert.equal(h.submitted.length, 0);
     delete item.properties["cube:variables"].temperature;
     await h.controller.loadTemporalDates(undefined, true);
@@ -127,7 +184,7 @@ test("availability replies preserve typed dates and cannot change a later model 
     let finishDates;
     h.api.loadTemporalTimes = () => new Promise(resolve => { finishDates = resolve; });
     const pending = h.controller.loadTemporalDates("2000-03");
-    h.handlers.onTemporalEdit({startTime: "2000-03-01T00:00", endTime: "2000-03-15T00:00"});
+    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-03-01T00:00", endTime: "2000-03-15T00:00"});
     finishDates(temporalChoices); await pending;
     assert.equal(h.controller.state.draft.temporal.loading, false);
     assert.equal(h.controller.state.draft.temporal.endTime, "2000-03-15T00:00");
@@ -141,7 +198,7 @@ test("availability replies preserve typed dates and cannot change a later model 
 
 test("temporal controls explain unsupported choices and date guidance does not authorize work", async () => {
     const h = await periodFixture(), draft = h.controller.state.draft;
-    h.handlers.onTemporalEdit({startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
+    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
     await h.controller.chooseTemporalVariable("rain");
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /instantaneous measurements/);
     h.api.loadTemporalTimes = async () => { throw new Error("Offline"); };
@@ -169,6 +226,7 @@ test("copying a temporal run preserves its original period, statistic and fixed 
     await h.controller.duplicateRun();
     const draft = h.controller.state.draft;
     assert.equal(draft.areaMode, "captured");
+    assert.equal(draft.temporal.periodMode, "times");
     h.context.area = {kind: "wholeRaster"};
     h.controller.refreshMapArea();
     const request = captureModelSubmission(draft, "e".repeat(32));
@@ -185,45 +243,47 @@ test("precipitation inputs visibly round UTC hours and submit exactly those date
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
     const h = await periodFixture({getTemporalItem: async () => structuredClone(item)}, view);
     const draft = h.controller.state.draft, controls = view.setup.temporal;
+    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
     await h.controller.chooseTemporalVariable("temperature");
-    controls.startTime.value = "2000-01-31T23:30"; controls.startTime.dispatchEvent(new Event("input"));
-    controls.endTime.value = "2000-02-01T01:10"; controls.endTime.dispatchEvent(new Event("input"));
+    editExactTime(controls, "start", "2000-01-31T23:30");
+    editExactTime(controls, "end", "2000-02-01T01:10");
     controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
     controls.startTime.focus();
     await h.controller.chooseTemporalVariable("water_flux");
-    assert.equal(controls.startTime.value, "2000-02-01T00:00");
-    assert.equal(controls.endTime.value, "2000-02-01T01:00");
+    assert.equal(controls.startDate.value, "2000-02-01");
+    assert.equal(controls.startTime.value, "00:00");
+    assert.equal(controls.endTime.value, "01:00");
     assert.equal(draft.reduction.reducer, "precipitation_total");
     assert.deepEqual(controls.statistic.children.map(option => option.value), ["precipitation_total"]);
-    controls.startTime.value = "2000-02-01T00:10"; controls.startTime.dispatchEvent(new Event("input"));
+    editExactTime(controls, "start", "2000-02-01T00:10");
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /whole UTC hours/);
     await h.controller.loadTemporalDates(undefined, true);
-    assert.equal(controls.startTime.value, "2000-02-01T00:10");
+    assert.equal(controls.startTime.value, "00:10");
     assert.equal(draft.temporal.startTime, "2000-02-01T00:10");
     controls.startTime.dispatchEvent(new Event("blur"));
-    assert.equal(controls.startTime.value, "2000-02-01T00:00");
-    assert.equal(draft.temporal.startTime, controls.startTime.value);
-    controls.endTime.focus(); controls.endTime.value = "2000-02-01T00:20";
-    controls.endTime.dispatchEvent(new Event("input")); controls.endTime.dispatchEvent(new Event("blur"));
-    assert.equal(controls.endTime.value, "2000-02-01T00:00");
+    assert.equal(controls.startTime.value, "00:00");
+    assert.equal(draft.temporal.startTime, `${controls.startDate.value}T${controls.startTime.value}`);
+    controls.endTime.focus(); editExactTime(controls, "end", "2000-02-01T00:20");
+    controls.endTime.dispatchEvent(new Event("blur"));
+    assert.equal(controls.endTime.value, "00:00");
     assert.match(controls.status.textContent, /end must be later/);
     assert.equal(view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /end must be later/);
-    controls.endTime.value = "2000-02-01T00:30"; controls.endTime.dispatchEvent(new Event("input"));
+    editExactTime(controls, "end", "2000-02-01T00:30");
     controls.endTime.dispatchEvent(new Event("change"));
-    assert.equal(controls.endTime.value, "2000-02-01T01:00");
+    assert.equal(controls.endTime.value, "01:00");
     assert.equal(view.setup.run.disabled, false);
     await h.controller.chooseTemporalVariable("temperature");
     assert.equal(draft.reduction.reducer, "mean");
     controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
-    controls.startTime.value = "2000-02-01T00:10"; controls.startTime.dispatchEvent(new Event("input"));
+    editExactTime(controls, "start", "2000-02-01T00:10");
     controls.startTime.dispatchEvent(new Event("change")); controls.startTime.dispatchEvent(new Event("blur"));
     assert.equal(draft.temporal.startTime, "2000-02-01T00:10");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.statistic, {reducer: "sum"});
     await h.controller.chooseTemporalVariable("water_flux");
     const expected = captureModelSubmission(draft, "e".repeat(32));
-    assert.equal(expected.inputs.weather.startTime, `${controls.startTime.value}:00.000Z`);
-    assert.equal(expected.inputs.weather.endTime, `${controls.endTime.value}:00.000Z`);
+    assert.equal(expected.inputs.weather.startTime, `${controls.startDate.value}T${controls.startTime.value}:00.000Z`);
+    assert.equal(expected.inputs.weather.endTime, `${controls.endDate.value}T${controls.endTime.value}:00.000Z`);
     assert.equal(h.submitted.length, 0);
     await h.controller.submit();
     assert.deepEqual(h.submitted[0].inputs, expected.inputs);
@@ -267,13 +327,14 @@ test("recipe precipitation units determine supported variables and labels withou
     await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
     await h.controller.chooseTemporalVariable("rain");
     const controls = view.setup.temporal;
+    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
     assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
     assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, true);
     assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (cm)"]);
     assert.match(controls.support.textContent, /mean precipitation rates in mm\/hour/);
     assert.match(controls.reductionHelp.textContent, /rate in mm\/hour.*converted to cm/);
-    controls.startTime.value = "2000-01-01T00:10"; controls.startTime.dispatchEvent(new Event("change"));
-    controls.endTime.value = "2000-01-01T02:30"; controls.endTime.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2000-01-01T00:10", "change");
+    editExactTime(controls, "end", "2000-01-01T02:30", "change");
     await h.controller.submit();
     assert.deepEqual(h.submitted[0].inputs, {weather: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
         variable: "rain", startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-01-01T03:00:00.000Z"},
@@ -294,8 +355,9 @@ test("area-series controls accept every observation type and capture scalar stat
     h.controller.chooseModel(h.controller.state.library.find(recipe => recipe.id === seriesModel.id));
     await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
     const controls = view.setup.temporal, draft = h.controller.state.draft;
-    controls.startTime.value = "2000-01-31T23:30:15.250"; controls.startTime.dispatchEvent(new Event("input"));
-    controls.endTime.value = "2000-02-01T01:10:22.500"; controls.endTime.dispatchEvent(new Event("input"));
+    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2000-01-31T23:30:15.250");
+    editExactTime(controls, "end", "2000-02-01T01:10:22.500");
     for (const variable of ["temperature", "rain", "energy"]) {
         await h.controller.chooseTemporalVariable(variable);
         assert.equal(controls.variable.children.find(option => option.value === variable).disabled, false);
@@ -331,15 +393,20 @@ test("copying an area series preserves its scalar statistic, exact period and ar
         statistic: "stdev", area,
     }};
     const run = job({model: seriesModel, status: "ready", result: timeSeriesResult, expiresAt: "2099-01-01T00:00:00Z"});
+    const view = new ModelsView(new SummaryControlDocument());
     const h = fixture({discoverModels: async () => [seriesModel], getJob: async () => run,
         readModelInvocation: async () => structuredClone(saved), getTemporalItem: async () => structuredClone(temporalItem),
-        loadTemporalTimes: async () => structuredClone(temporalChoices)});
+        loadTemporalTimes: async () => structuredClone(temporalChoices)}, view);
     h.context.temporalDatasets = [temporalDataset];
     await h.controller.loadLibrary(); await h.controller.showRun(run.jobId); await h.controller.duplicateRun();
     assert.equal(h.controller.state.page, "setup");
     h.context.area = {kind: "wholeRaster"}; h.controller.refreshMapArea();
     await h.controller.loadTemporalDates(undefined, true);
     const draft = h.controller.state.draft;
+    const controls = view.setup.temporal;
+    assert.equal(controls.periodMode.value, "times");
+    assert.equal(controls.startDate.value, "2000-01-31"); assert.equal(controls.startTime.value, "23:30:15.250");
+    assert.equal(controls.endDate.value, "2000-02-01"); assert.equal(controls.endTime.value, "01:10:22.500");
     assert.equal(draft.areaMode, "captured");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, saved.inputs);
     assert.equal(h.submitted.length, 0);

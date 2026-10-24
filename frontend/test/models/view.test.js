@@ -507,7 +507,7 @@ function temporalFixture() {
     }}]};
     const dataset = {collectionId: "eolab-temporal-datasets", itemId: "vegetation", label: "Vegetation observations"};
     const draft = createModelDraft(recipe, {temporalDatasets: [dataset], area}, "temporal-draft");
-    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "vegetation_index",
+    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "vegetation_index", periodMode: "times",
         startTime: "2020-01-01T00:00", endTime: "2020-02-01T00:00",
         item: {collection: dataset.collectionId, id: dataset.itemId, properties: {title: "Vegetation observations", "cube:variables": {
             vegetation_index: {description: "Vegetation index", unit: "1", "eolab:time_support": "instantaneous"},
@@ -527,10 +527,12 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.deepEqual(h.view.setup.areaMode.children.map(option => option.textContent),
         ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
     assert.match(h.view.setup.mapHelp.textContent, /Run analysis/);
-    assert.equal(controls.startTime.type, "datetime-local"); assert.equal(controls.startTime.step, "any");
-    assert.equal(controls.endTime.type, "datetime-local"); assert.equal(controls.endTime.step, "any");
-    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC)");
-    assert.equal(controls.endTime.parentNode.textContent, "End (UTC)");
+    assert.equal(controls.startDate.type, "date"); assert.equal(controls.endDate.type, "date");
+    assert.equal(controls.startTime.type, "time"); assert.equal(controls.startTime.step, "any");
+    assert.equal(controls.endTime.type, "time"); assert.equal(controls.endTime.step, "any");
+    assert.equal(controls.startTime.parentNode.textContent, "Start time (UTC)");
+    assert.equal(controls.endTime.parentNode.textContent, "End time (excluded, UTC)");
+    assert.deepEqual(controls.periodMode.children.map(option => option.textContent), ["Whole month", "Date range", "Exact times"]);
     assert.equal(controls.statistic.parentNode.textContent, "Period statistic");
     assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
     assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
@@ -544,15 +546,36 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.equal(controls.percentileField.hidden, true); assert.equal(controls.percentile.disabled, true);
 });
 
+test("time entry modes expose only their own required fields and describe the captured UTC period", () => {
+    const h = temporalFixture(), controls = h.controls;
+    const groups = {month: [controls.selectedMonth], days: [controls.firstDay, controls.lastDay],
+        times: [controls.startDate, controls.startTime, controls.endDate, controls.endTime]};
+    for (const mode of ["month", "days", "times"]) {
+        h.draft.temporal.periodMode = mode; h.view.render(h.state);
+        assert.equal(controls.periodMode.value, mode);
+        for (const [name, inputs] of Object.entries(groups)) {
+            for (const input of inputs) assert.equal(input.disabled, name !== mode);
+        }
+        assert.match(controls.periodSummary.textContent, /UTC/);
+    }
+    assert.equal(controls.selectedMonth.type, "month");
+    assert.equal(controls.selectedMonth.value, "2020-01");
+    assert.equal(controls.firstDay.type, "date"); assert.equal(controls.lastDay.type, "date");
+    assert.equal(controls.firstDay.value, "2020-01-01"); assert.equal(controls.lastDay.value, "2020-01-31");
+    assert.equal(controls.lastDay.parentNode.textContent, "Last day (included)");
+    assert.match(controls.periodSummary.textContent, /end excluded/);
+    assert.equal(h.actions.length, 0);
+});
+
 test("temporal edits and availability actions preserve focused dates and never submit a run", () => {
     const h = temporalFixture(), controls = h.controls;
     controls.availability.open = true;
-    controls.startTime.focus(); controls.startTime.value = "2020-01-01T03:27:41.250";
+    controls.startTime.focus(); controls.startTime.value = "03:27:41.250";
     controls.startTime.dispatchEvent(new Event("input"));
     assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2020-01-01T03:27:41.250"}]);
     h.draft.temporal.loading = true; h.view.render(h.state);
     assert.equal(h.view.setup.temporal, controls); assert.equal(h.doc.activeElement, controls.startTime);
-    assert.equal(controls.startTime.value, "2020-01-01T03:27:41.250");
+    assert.equal(controls.startTime.value, "03:27:41.250");
     assert.equal(controls.availability.open, true); assert.equal(controls.refresh.disabled, true);
     assert.equal(controls.sourceRoot.getAttribute("aria-busy"), "true");
     h.draft.temporal.loading = false; h.view.render(h.state);
@@ -596,7 +619,7 @@ test("area-series setup describes spatial statistics and complete overlapping in
     const h = fixture();
     const dataset = {collectionId: "eolab-temporal-datasets", itemId: "observations", label: "Weather observations"};
     const draft = createModelDraft(seriesModel, {temporalDatasets: [dataset], area}, "series-draft");
-    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "temperature",
+    Object.assign(draft.temporal, {datasetKey: modelSourceKey(dataset), variable: "temperature", periodMode: "times",
         startTime: "2000-01-31T23:30", endTime: "2000-02-01T01:10",
         item: {collection: dataset.collectionId, id: dataset.itemId, properties: {title: dataset.label, "cube:variables": {
             temperature: {description: "Air temperature", unit: "K", "eolab:time_support": "instantaneous"},
@@ -606,8 +629,8 @@ test("area-series setup describes spatial statistics and complete overlapping in
     h.state.draft = draft; h.view.render(h.state);
     const controls = h.view.setup.temporal;
     assert.equal(h.view.setup.form.contains(h.view.setup.source), false);
-    assert.equal(controls.startTime.parentNode.textContent, "Start (UTC)");
-    assert.equal(controls.endTime.parentNode.textContent, "End (UTC)");
+    assert.equal(controls.startTime.parentNode.textContent, "Start time (UTC)");
+    assert.equal(controls.endTime.parentNode.textContent, "End time (excluded, UTC)");
     assert.equal(controls.statistic.parentNode.textContent, "Statistic");
     assert.equal(controls.support.hidden, true);
     assert.ok(controls.variable.children.slice(1).every(option => !option.disabled));
@@ -647,13 +670,15 @@ test("precipitation controls explain duration totals and round changed dates vis
     assert.match(controls.reductionHelp.textContent, /converted to mm/);
     assert.match(controls.reductionHelp.textContent, /omitted, not filled with zero/);
     assert.match(controls.reductionHelp.textContent, /counts valid available observations/);
-    controls.endTime.focus(); controls.endTime.value = "2020-02-29T23:30";
+    controls.endDate.value = "2020-02-29";
+    controls.endTime.focus(); controls.endTime.value = "23:30";
     controls.endTime.dispatchEvent(new Event("change"));
-    assert.equal(controls.endTime.value, "2020-03-01T00:00");
+    assert.equal(controls.endDate.value, "2020-03-01"); assert.equal(controls.endTime.value, "00:00");
     assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {endTime: "2020-03-01T00:00"}]);
-    controls.startTime.focus(); controls.startTime.value = "2019-12-31T23:29:59.999";
+    controls.startDate.value = "2019-12-31";
+    controls.startTime.focus(); controls.startTime.value = "23:29:59.999";
     controls.startTime.dispatchEvent(new Event("blur"));
-    assert.equal(controls.startTime.value, "2019-12-31T23:00");
+    assert.equal(controls.startDate.value, "2019-12-31"); assert.equal(controls.startTime.value, "23:00");
     assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2019-12-31T23:00"}]);
     assert.equal(h.actions.some(([action]) => action === "Submit"), false);
 });

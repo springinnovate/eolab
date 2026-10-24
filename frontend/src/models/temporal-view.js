@@ -1,6 +1,7 @@
 /** Present temporal period and statistic choices inside the existing Models form. */
 import { modelSourceKey } from "./inputs.js";
-import { getTemporalStatistics, supportsPrecipitationTotal, snapTemporalHour, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
+import { getTemporalStatistics, supportsPrecipitationTotal, snapTemporalHour, temporalSelectionError, captureTemporalReduction,
+    temporalMonthPeriod, temporalDayPeriod, temporalPeriodDays, selectTemporalPeriodMode, describeTemporalPeriod } from "./temporal-inputs.js";
 
 /** Format an available observation label without using the browser's timezone.
  * @param {string} time Catalog timestamp.
@@ -25,7 +26,7 @@ export class TemporalModelInputsView {
      * @param {(month:string)=>void} handlers.onTemporalMonth Browse availability without changing dates.
      * @param {()=>void} handlers.onUseTemporalMonth Explicitly set the calendar-month period.
      * @param {()=>void} handlers.onRefreshTemporal Refresh guidance while preserving dates.
-     * @param {(change:Object)=>void} handlers.onTemporalEdit Edit UTC period boundaries.
+     * @param {(change:Object)=>void} handlers.onTemporalEdit Edit entry mode and UTC period boundaries.
      * @param {(change:Object)=>void} handlers.onEdit Edit the statistic choice.
      * @param {string} statisticLabel Label declared by the recipe's statistic input.
      */
@@ -40,18 +41,39 @@ export class TemporalModelInputsView {
         this.variable.setAttribute("aria-describedby", this.support.id);
         this.sourceRoot.append(field("models-temporal-dataset", "Dataset", this.dataset),
             field("models-temporal-variable", "Variable", this.variable), this.support);
-        for (const [name, caption] of [["startTime", "Start (UTC)"], ["endTime", "End (UTC)"]]) {
-            const input = this[name] = element("input");
-            input.type = "datetime-local"; input.step = "any"; input.required = true;
-            input.setAttribute("aria-describedby", "models-temporal-period-help models-temporal-status");
-            input.addEventListener("input", () => handlers.onTemporalEdit({[name]: input.value}));
-            for (const event of ["change", "blur"]) input.addEventListener(event, () => {
-                if (!this.precipitation) return;
-                input.value = snapTemporalHour(input.value);
-                handlers.onTemporalEdit({[name]: input.value});
-            });
-            this.sourceRoot.append(field(`models-temporal-${name}`, caption, input));
+        this.periodMode = element("select");
+        options(this.periodMode, [{value: "month", label: "Whole month"}, {value: "days", label: "Date range"},
+            {value: "times", label: "Exact times"}], "month");
+        this.periodMode.addEventListener("change", () => handlers.onTemporalEdit(selectTemporalPeriodMode(this.temporal, this.periodMode.value)));
+        this.monthFields = element("div"); this.dayFields = element("div", "", "models-time-grid");
+        this.exactFields = element("div", "", "models-time-grid");
+        this.selectedMonth = element("input"); this.selectedMonth.type = "month"; this.selectedMonth.required = true;
+        this.selectedMonth.addEventListener("input", () => handlers.onTemporalEdit(temporalMonthPeriod(this.selectedMonth.value)));
+        this.monthFields.append(field("models-temporal-selected-month", "Month", this.selectedMonth));
+        for (const [name, caption] of [["firstDay", "First day"], ["lastDay", "Last day (included)"]]) {
+            const input = this[name] = element("input"); input.type = "date"; input.required = true;
+            input.addEventListener("input", () => handlers.onTemporalEdit(temporalDayPeriod(this.firstDay.value, this.lastDay.value)));
+            this.dayFields.append(field(`models-temporal-${name}`, caption, input));
         }
+        for (const [name, caption] of [["start", "Start"], ["end", "End"]]) {
+            const group = element("div", "", "models-vector");
+            for (const [part, type] of [["Date", "date"], ["Time", "time"]]) {
+                const input = this[name + part] = element("input"); input.type = type; input.required = true;
+                input.setAttribute("aria-describedby", "models-temporal-period-help models-temporal-status");
+                input.addEventListener("input", () => this.editExactBoundary(name, handlers.onTemporalEdit, false));
+                input.addEventListener("change", () => this.editExactBoundary(name, handlers.onTemporalEdit, this.precipitation));
+                input.addEventListener("blur", () => {
+                    if (this.precipitation) this.editExactBoundary(name, handlers.onTemporalEdit, true);
+                });
+                const label = part === "Date" ? `${caption} date` : name === "start" ? "Start time (UTC)" : "End time (excluded, UTC)";
+                group.append(field(`models-temporal-${name}${part}`, label, input));
+            }
+            this.exactFields.append(group);
+        }
+        this.periodSummary = element("p", "", "models-period-summary");
+        this.periodSummary.setAttribute("role", "status");
+        this.sourceRoot.append(field("models-temporal-mode", "Choose time by", this.periodMode),
+            this.monthFields, this.dayFields, this.exactFields, this.periodSummary);
         this.periodHelp = element("p", "", "models-help");
         this.periodHelp.id = "models-temporal-period-help";
         this.status = element("p", "", "models-help"); this.status.id = "models-temporal-status";
@@ -83,12 +105,29 @@ export class TemporalModelInputsView {
             this.percentileField, this.reductionHelp, this.reductionStatus);
     }
 
+    /** Capture one exact boundary and display precipitation rounding before updating the draft.
+     * @param {"start"|"end"} name Boundary being edited.
+     * @param {(change:Object)=>void} onEdit Draft update callback.
+     * @param {boolean} round Whether this completed edit must snap to a whole UTC hour.
+     * @return {void}
+     */
+    editExactBoundary(name, onEdit, round) {
+        const date = this[name + "Date"], time = this[name + "Time"];
+        let value = `${date.value}T${time.value}`;
+        if (round) {
+            value = snapTemporalHour(value);
+            [date.value, time.value] = value.split("T");
+        }
+        onEdit({[name + "Time"]: value});
+    }
+
     /** Refresh guidance and values without replacing controls or focused edits.
      * @param {ReturnType<typeof import("./temporal-inputs.js").createTemporalDraft>} temporal Editable source and period.
      * @param {{reducer:string,percentile:number|null}} reduction Editable statistic choice.
      * @return {string} Local source, period or statistic problem; empty when complete.
      */
     render(temporal, reduction) {
+        this.temporal = temporal;
         this.reduction = reduction;
         this.options(this.dataset, [{value: "", label: "Choose a temporal dataset…"}, ...temporal.datasets.map(dataset =>
             ({value: modelSourceKey(dataset), label: modelSourceKey(dataset) === temporal.datasetKey && temporal.item ?
@@ -105,14 +144,28 @@ export class TemporalModelInputsView {
         const areaSeries = temporal.statisticType === "area_statistic";
         const intervalSeries = areaSeries && variable && variable["eolab:time_support"] !== "instantaneous";
         this.precipitation = precipitation;
-        for (const name of ["startTime", "endTime"]) {
-            this[name].step = precipitation ? "3600" : "any";
-            if (precisionChanged || this.document.activeElement !== this[name]) this[name].value = temporal[name];
+        this.periodMode.value = temporal.periodMode;
+        const days = temporalPeriodDays(temporal);
+        const values = {selectedMonth: temporal.startTime.split("T")[0].slice(0, 7), ...days};
+        for (const name of ["start", "end"]) {
+            const [date, time] = temporal[name + "Time"].split("T");
+            values[name + "Date"] = date; values[name + "Time"] = time ?? "00:00";
+            this[name + "Time"].step = precipitation ? "3600" : "any";
         }
+        for (const [name, value] of Object.entries(values)) {
+            if (precisionChanged || this.document.activeElement !== this[name]) this[name].value = value;
+        }
+        for (const [mode, group, fields] of [["month", this.monthFields, ["selectedMonth"]],
+            ["days", this.dayFields, ["firstDay", "lastDay"]],
+            ["times", this.exactFields, ["startDate", "startTime", "endDate", "endTime"]]]) {
+            group.hidden = temporal.periodMode !== mode;
+            for (const name of fields) this[name].disabled = group.hidden;
+        }
+        this.periodSummary.textContent = describeTemporalPeriod(temporal);
         this.periodHelp.textContent = precipitation ?
             "Total precipitation between these dates. Dates round to the nearest whole UTC hour when you finish editing; 30 minutes rounds forward. The calculation uses the dates shown." :
             (intervalSeries ? "Include each complete observation whose time interval overlaps this period. Dates are not rounded; values are not prorated or integrated over time." :
-                "Include observations at or after the start and before the end.") +
+                temporal.periodMode === "times" ? "Include observations at or after the start and before the end." : "Include available observations throughout the selected whole UTC days.") +
             " Changing the observation displayed on the map does not change these dates.";
         this.availabilityHelp.textContent = "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
             (precipitation ? "These are observation labels, not the boundaries of the intervals they represent. Missing intervals are omitted from the total." : "Missing observations are omitted from the calculation.");
