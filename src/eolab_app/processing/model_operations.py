@@ -27,6 +27,13 @@ from eolab_app.raster.source_models import (
 )
 from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing import temporal_operation as temporal
+from eolab_app.processing import temporal_series_operation as series
+from eolab_app.processing.temporal_series_models import (
+    AreaStatistic,
+    QueuedTemporalSeries,
+    TemporalSeriesRequest,
+    TemporalSeriesSpec,
+)
 from eolab_app.processing.temporal_models import (
     PrecipitationConversion,
     TemporalMapRequest,
@@ -69,8 +76,8 @@ class OperationOutput:
     """
 
     name: str
-    kind: Literal["statistics", "raster", "vector"]
-    presentation: Literal["table", "map"]
+    kind: Literal["statistics", "raster", "vector", "timeSeries"]
+    presentation: Literal["table", "map", "download"]
     media_type: str
     label: str
     role: Literal["result", "intermediate"] = "result"
@@ -188,6 +195,43 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[
+                TemporalSeriesRequest, QueuedTemporalSeries, TemporalSeriesSpec
+            ](
+                id="temporal.series.v1",
+                inputs=(
+                    ("source", "temporal_interval"),
+                    ("area", "summary_area"),
+                    ("statistic", "area_statistic"),
+                ),
+                parameters=(),
+                output=OperationOutput(
+                    "series", "timeSeries", "download", "text/csv", "Area time series"
+                ),
+                execution_profile="temporal-area-series",
+                queued_type=QueuedTemporalSeries,
+                prepared_type=TemporalSeriesSpec,
+                policy_type=series.TemporalSeriesNumericalPolicy,
+                bind=series.bind_temporal_series,
+                source=series.get_series_source,
+                polygon=series.get_series_polygon,
+                selection=lambda request: request.catalogSelection,
+                queue=series.build_series_submission,
+                prepare=series.prepare_temporal_series,
+                execution=series.select_series_execution,
+                policy=series.describe_series_policy,
+                result=series.describe_series_result,
+                outcome=series.describe_series_outcome,
+                primary_input="source",
+                execution_inputs=series.prepare_series_execution,
+                input_adapters=(
+                    ("temporal_interval", TypeAdapter(TemporalIntervalSelection)),
+                    ("area_statistic", TypeAdapter(AreaStatistic)),
+                ),
+                progress_descriptions=(
+                    ("summarizing", "Summarizing each observation"),
+                ),
+            ),
             ModelOperation[TemporalMapRequest, QueuedTemporalMap, TemporalMapSpec](
                 id="temporal.reduce.v1",
                 inputs=(

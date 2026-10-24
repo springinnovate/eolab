@@ -727,7 +727,7 @@ export class ModelsController {
     }
 
     /** Copy a run into a new draft using its saved filter and available map-layer choices.
-     * The exact model recipe must still be installed; absent sources need a new choice.
+     * The exact model recipe must be available in setup; absent sources need a new choice.
      * @return {Promise<void>}
      */
     async duplicateRun() {
@@ -735,7 +735,7 @@ export class ModelsController {
         this.closeVectorFilter();
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
-        if (!model) { this.state.error = "This exact model version is no longer installed. Its YAML remains available until metadata expires."; this.render(); return; }
+        if (!model) { this.state.error = "This model version is not available in model setup. Its YAML remains available until metadata expires."; this.render(); return; }
         this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         const draft = createModelDraft(model, this.inputContext(model), this.newId());

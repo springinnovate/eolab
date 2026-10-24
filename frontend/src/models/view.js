@@ -1,7 +1,7 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
-import { renderModelResult, renderModelFiles, updateModelFileActions } from "./result-view.js";
+import { renderModelResult, renderModelFiles, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { describeTemporalInterval, describeTemporalReduction } from "./temporal-inputs.js";
@@ -394,7 +394,7 @@ export class ModelsView {
         if (saved && this.run === run) this.closeRunNameEditor();
     }
 
-    /** Render run progress, results and inline deletion confirmation without replacing controls.
+    /** Render run progress, results, saved inputs and deletion confirmation without replacing controls.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -454,7 +454,8 @@ export class ModelsView {
                     `${value.source.collectionId} / ${value.source.itemId} · valid cells greater than zero` :
                     ["raster", "catalog_raster"].includes(input.type) ? sourceLabel :
                         input.type === "temporal_interval" ? describeTemporalInterval(value) :
-                            input.type === "temporal_reduction" ? describeTemporalReduction(value) : describeModelArea(value);
+                            input.type === "temporal_reduction" ? describeTemporalReduction(value) :
+                                input.type === "area_statistic" ? describeAreaStatistic(value) : describeModelArea(value);
                 list.append(this.element("dt", input.label), this.element("dd", description));
             }
             for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) list.append(this.element("dt", parameter.label),

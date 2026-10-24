@@ -52,15 +52,43 @@ function statisticsCards(result, element) {
     })];
 }
 
+/** Name the statistic calculated over the area for each observation.
+ * @param {"count"|"sum"|"mean"|"min"|"max"|"stdev"} statistic Validated area statistic.
+ * @return {string} Human-readable statistic name.
+ */
+export function describeAreaStatistic(statistic) {
+    return {count: "Valid-pixel count", sum: "Sum", mean: "Mean", min: "Minimum", max: "Maximum",
+        stdev: "Population standard deviation"}[statistic];
+}
+
+/** Build a time-series summary for the downloadable CSV without loading its rows.
+ * @param {Object} result Time-series output with its saved statistic and coverage.
+ * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
+ * @return {HTMLElement[]} Summary card for one result per observation.
+ */
+function timeSeriesCards(result, element) {
+    const card = element("article", "", "models-result");
+    const coverage = result.temporalCoverage;
+    card.append(element("strong", result.label), element("span", result.filename, "models-name"),
+        element("span", `Statistic: ${describeAreaStatistic(result.statistic)}`),
+        element("span", `Units: ${coverage.unit}`),
+        element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
+        element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
+        element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
+        element("p", "Download the CSV under Files from this run for one result per observation and its valid-pixel count.", "models-help"));
+    return [card];
+}
+
 const RESULT_VIEWS = new Map([
     ["raster", {cards: rasterCards}],
     ["statistics", {cards: statisticsCards}],
+    ["timeSeries", {cards: timeSeriesCards}],
 ]);
 
-/** Render the values or raster dimensions from a validated model output.
+/** Render the values, raster dimensions or time-series summary of a model output.
  * @param {HTMLElement} root Container owned by the model run view.
  * @param {Object} result Output validated at the Processing API boundary.
- * @param {Function} element Owning view's DOM element factory.
+ * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
  * @return {void}
  * @throws {TypeError} If an internal caller bypasses output-type validation.
  */

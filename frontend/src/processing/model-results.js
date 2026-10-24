@@ -33,13 +33,32 @@ function validateRasterResult(result) {
         !Array.isArray(grid.transform) || grid.transform.length !== 6 || !grid.transform.every(Number.isFinite) ||
         !Number.isSafeInteger(result.validPixels) || result.validPixels < 0 || result.validPixels > grid.width * grid.height ||
         result.rows !== undefined) throw new Error("Processing returned invalid raster result details.");
-    const coverage = result.temporalCoverage;
-    if (coverage !== undefined && (!coverage || typeof coverage.unit !== "string" ||
+    if (result.temporalCoverage !== undefined) validateTemporalCoverage(result.temporalCoverage);
+}
+
+/** Check the saved observation count, units and timestamps of a temporal result.
+ * @param {Object} coverage Temporal coverage from the Processing API.
+ * @return {void}
+ * @throws {Error} If the observation count, units or timestamps are invalid.
+ */
+function validateTemporalCoverage(coverage) {
+    if (!coverage || typeof coverage.unit !== "string" ||
         !Number.isSafeInteger(coverage.observationCount) || coverage.observationCount < 1 ||
         !["firstObservation", "lastObservation"].every(key =>
-            typeof coverage[key] === "string" && Number.isFinite(Date.parse(coverage[key]))))) {
+            typeof coverage[key] === "string" && Number.isFinite(Date.parse(coverage[key])))) {
         throw new Error("Processing returned invalid temporal coverage.");
     }
+}
+
+/** Check a CSV time series' statistic and saved observation coverage.
+ * @param {Object} result Time-series output from the Processing API.
+ * @return {void}
+ * @throws {Error} If the statistic or temporal coverage is invalid.
+ */
+function validateTimeSeriesResult(result) {
+    if (!["count", "sum", "mean", "min", "max", "stdev"].includes(result.statistic))
+        throw new Error("Processing returned an invalid time-series statistic.");
+    validateTemporalCoverage(result.temporalCoverage);
 }
 
 /** Check formula results and whether the server reused a cached calculation.
@@ -56,9 +75,10 @@ function validateStatisticsResult(result) {
 const RESULT_TYPES = new Map([
     ["raster", {mediaType: "image/tiff", presentation: "map", validate: validateRasterResult}],
     ["statistics", {mediaType: "text/csv", presentation: "table", validate: validateStatisticsResult}],
+    ["timeSeries", {mediaType: "text/csv", presentation: "download", validate: validateTimeSeriesResult}],
 ]);
 
-/** Check a model result's file metadata and its raster or statistics contents.
+/** Check a model result's file metadata and details for its declared output type.
  * The API client checks session-specific download URLs before calling this function.
  * @param {Object} result API output, including its saved YAML name and label.
  * @return {void}

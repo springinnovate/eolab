@@ -9,7 +9,7 @@ import { FakeRasterControlDocument } from "../../test-support/raster/fake-contro
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingRequestError } from "../../src/processing/api.js";
 import { captureModelSubmission, createModelDraft, modelSourceKey, modelViewportArea } from "../../src/models/inputs.js";
-import { model, raster, area, invocation, selection, job, clipModel, fileManifest } from "../../test-support/models/fixtures.js";
+import { model, raster, area, invocation, selection, job, clipModel, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
 /** Compose the real controller and observer with controllable boundary responses.
  * @param {Object} [overrides={}] API behavior replacements.
@@ -288,14 +288,25 @@ test("model setup supports temporal input types and omits unknown controls while
         area: model.inputs.area,
         reduction: {type: "temporal_reduction", label: "Statistic"},
     }};
-    const run = job({model: temporal});
+    const run = job({model: seriesModel, status: "ready", expiresAt: "2099-01-01T00:00:00Z", result: timeSeriesResult});
+    const saved = {...invocation, model: {...seriesModel, definition: seriesModel}, parameters: {}, inputs: {
+        source: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "temperature",
+            startTime: "2000-01-01T00:00:00Z", endTime: "2000-01-04T00:00:00Z"}, area, statistic: "mean",
+    }};
     const unknown = {...model, id: "future-recipe", inputs: {unknown: {type: "unknown_input", label: "Unknown"}}};
-    const h = fixture({discoverModels: async () => [model, temporal, clipModel, unknown],
+    const h = fixture({discoverModels: async () => [model, temporal, clipModel, seriesModel, unknown],
+        getJob: async () => run, readModelInvocation: async () => saved,
         listModelRuns: async () => ({jobs: [run], nextCursor: null})});
     await h.controller.loadLibrary();
     await h.controller.loadRuns();
     assert.deepEqual(h.controller.state.library.map(value => value.id), [model.id, temporal.id, clipModel.id]);
-    assert.equal(h.controller.state.runs[0].jobId, run.jobId);
+    assert.deepEqual(h.controller.state.runs[0], run);
+    await h.controller.showRun(run.jobId);
+    await h.controller.duplicateRun();
+    assert.equal(h.controller.state.error,
+        "This model version is not available in model setup. Its YAML remains available until metadata expires.");
+    assert.equal(h.controller.state.page, "run");
+    assert.equal(h.submitted.length, 0);
     h.controller.chooseModel(model);
     assert.equal(h.controller.state.page, "setup");
     h.controller.destroy();
@@ -605,7 +616,7 @@ test("duplicate uses the saved recipe and inputs without submitting or changing 
     draft.parameters.summary = "mean(a)";
     assert.equal(h.controller.state.invocation.parameters.summary, "sum(a)"); assert.equal(h.submitted.length, 0);
     h.controller.state.library = []; h.controller.state.page = "run";
-    await h.controller.duplicateRun(); assert.match(h.controller.state.error, /no longer installed/);
+    await h.controller.duplicateRun(); assert.match(h.controller.state.error, /not available in model setup/);
 });
 
 test("a late vector preparation cannot overwrite a newer area choice", async () => {
