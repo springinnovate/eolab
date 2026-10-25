@@ -27,17 +27,18 @@ export function supportsPrecipitationTotal(variable, temporal) {
         variable?.["eolab:time_support"] === "mean_rate" && variable.unit === temporal.precipitation.inputUnit;
 }
 
-/** List the statistics supported by the selected variable's measurement type and units.
+/** List ordinary statistics and any configured precipitation total for the selected variable.
  * @param {Object|undefined} variable Admitted Catalog variable metadata, or no selection.
  * @param {Object} temporal Period choices, statistic input type and model conversion configuration.
- * @return {{value:string,label:string}[]} Supported choices; empty for an unsupported or missing variable.
+ * @return {{value:string,label:string}[]} Supported choices; empty when no variable is selected.
  */
 export function getTemporalStatistics(variable, temporal) {
-    if (temporal.statisticType === "area_statistic") return variable ? AREA_STATISTICS : [];
+    if (!variable) return [];
+    if (temporal.statisticType === "area_statistic") return AREA_STATISTICS;
+    const statistics = TEMPORAL_STATISTICS.filter(choice => choice.value !== "precipitation_total");
     if (supportsPrecipitationTotal(variable, temporal))
-        return [{value: "precipitation_total", label: `Precipitation total (${temporal.precipitation.outputUnit})`}];
-    return variable?.["eolab:time_support"] === "instantaneous" ?
-        TEMPORAL_STATISTICS.filter(choice => choice.value !== "precipitation_total") : [];
+        statistics.push({value: "precipitation_total", label: `Precipitation total (${temporal.precipitation.outputUnit})`});
+    return statistics;
 }
 
 /** Create empty period choices independently of the observation displayed on the map.
@@ -56,9 +57,10 @@ export function createTemporalDraft(datasets, statisticType, precipitation) {
  * Availability guidance does not restrict period boundaries to observation timestamps.
  * Precipitation totals require whole UTC hours already shown in the controls; capture never rounds them.
  * @param {Object} temporal Editable period choices.
+ * @param {string} reducer Selected observation or area statistic.
  * @return {string} User-facing problem, or an empty string when the choices are complete.
  */
-export function temporalSelectionError(temporal) {
+export function temporalSelectionError(temporal, reducer) {
     if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset from Map layers." :
         "Add a temporal dataset from Catalog to Map layers, then choose it here.";
     if (temporal.loading) return "Loading available variables and dates…";
@@ -66,23 +68,22 @@ export function temporalSelectionError(temporal) {
     if (!temporal.item) return "Load the dataset's variables before running the analysis.";
     const variable = temporal.item.properties["cube:variables"][temporal.variable];
     if (!variable) return "Choose a variable.";
-    if (!getTemporalStatistics(variable, temporal).length)
-        return `Choose instantaneous measurements or a mean precipitation rate in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
     const periodError = temporalPeriodError(temporal);
     if (periodError) return periodError;
     const start = Date.parse(`${temporal.startTime}Z`), end = Date.parse(`${temporal.endTime}Z`);
-    if (supportsPrecipitationTotal(variable, temporal) && (start % 3600000 !== 0 || end % 3600000 !== 0))
+    if (reducer === "precipitation_total" && (start % 3600000 !== 0 || end % 3600000 !== 0))
         return "Finish editing the dates to round them to whole UTC hours before running the precipitation total.";
     return "";
 }
 
 /** Capture a path-free dataset selection and its requested UTC period.
  * @param {Object} temporal Editable period choices.
+ * @param {string} reducer Selected observation or area statistic.
  * @return {Object} The temporal_interval input accepted by Processing.
  * @throws {Error} If the selected dataset, variable or date boundaries are unavailable or invalid.
  */
-export function captureTemporalInput(temporal) {
-    const error = temporalSelectionError(temporal);
+export function captureTemporalInput(temporal, reducer) {
+    const error = temporalSelectionError(temporal, reducer);
     if (error) throw new Error(error);
     return {collectionId: temporal.item.collection, itemId: temporal.item.id, variable: temporal.variable,
         startTime: new Date(`${temporal.startTime}Z`).toISOString(), endTime: new Date(`${temporal.endTime}Z`).toISOString()};

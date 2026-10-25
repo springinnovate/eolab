@@ -2,7 +2,7 @@ schema: eolab.model/v1
 id: temporal-period-map
 version: "1.0.0"
 title: Map for a period
-description: Calculate a statistic over instantaneous observations or total precipitation for a period. Results include valid-observation counts; gaps remain missing. Ordinary sums retain the source units without integration. Precipitation totals require whole UTC hours.
+description: Calculate a statistic over observations or total precipitation for a period. Ordinary statistics give observations equal weight and retain source units without integration. Results include valid-observation counts; gaps remain missing. Precipitation totals require whole UTC hours.
 inputs:
   source:
     type: temporal_interval

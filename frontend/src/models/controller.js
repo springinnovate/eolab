@@ -2,7 +2,7 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
-import { supportsPrecipitationTotal, getTemporalStatistics } from "./temporal-inputs.js";
+import { getTemporalStatistics } from "./temporal-inputs.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
@@ -150,12 +150,18 @@ export class ModelsController {
     }
 
     /** Update draft fields without changing a pending or accepted submission.
-     * @param {Object} change Edited label, values raster, starting raster or parameters.
+     * Selecting Precipitation total rounds the visible period to whole UTC hours.
+     * @param {Object} change Edited model choices, including the statistic or parameters.
      * @return {void}
      */
     editDraft(change) {
         if (!this.state.draft || this.state.submitting) return;
         Object.assign(this.state.draft, change);
+        if (change.reduction?.reducer === "precipitation_total") {
+            const temporal = this.state.draft.temporal;
+            temporal.startTime = snapTemporalHour(temporal.startTime);
+            temporal.endTime = snapTemporalHour(temporal.endTime);
+        }
         this.refreshMapLayers();
         for (const job of this.runSnapshots.values()) this.rememberRun(job);
         this.jobs.schedule();
@@ -176,7 +182,6 @@ export class ModelsController {
     }
 
     /** Choose a variable and its supported statistic, then load date guidance.
-     * Selecting a period-map precipitation total visibly rounds existing boundaries to whole UTC hours.
      * @param {string} variable Catalog variable identifier from the setup control.
      * @return {Promise<void>} Completion after monthly guidance or a visible discovery error.
      */
@@ -188,7 +193,7 @@ export class ModelsController {
         await this.loadTemporalDates();
     }
 
-    /** Set a supported statistic and date precision when a variable is chosen.
+    /** Keep the selected statistic or choose Mean when the new variable does not support it.
      * Refreshing guidance and copying a saved run preserve their existing choices instead.
      * @param {Object} draft Current temporal model setup with its chosen variable.
      * @return {void}
@@ -198,10 +203,6 @@ export class ModelsController {
         const statistics = getTemporalStatistics(variable, temporal);
         if (statistics.length && !statistics.some(choice => choice.value === draft.reduction.reducer))
             draft.reduction.reducer = statistics[0].value;
-        if (supportsPrecipitationTotal(variable, temporal)) {
-            temporal.startTime = snapTemporalHour(temporal.startTime);
-            temporal.endTime = snapTemporalHour(temporal.endTime);
-        }
     }
 
     /** Read one month's actual dates, optionally reloading the current Catalog metadata.
@@ -226,16 +227,15 @@ export class ModelsController {
                 if (!isCurrent()) return;
                 temporal.item = item;
                 if (!temporal.variable) {
-                    const variables = Object.entries(item.properties["cube:variables"])
-                        .filter(([, value]) => getTemporalStatistics(value, temporal).length);
+                    const variables = Object.keys(item.properties["cube:variables"]);
                     if (variables.length === 1) {
-                        temporal.variable = variables[0][0];
+                        temporal.variable = variables[0];
                         this.configureTemporalVariable(draft);
                     }
                 }
             }
             const variable = temporal.item.properties["cube:variables"][temporal.variable];
-            if (!getTemporalStatistics(variable, temporal).length) { temporal.choices = null; return; }
+            if (!variable) { temporal.choices = null; return; }
             try {
                 const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
                 if (isCurrent()) temporal.choices = choices;
