@@ -108,7 +108,9 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         bind: Translate recipe-bound arguments into the existing request contract.
         source: Extract the operation's catalog or owned run-file reference.
         polygon: Identify an owned polygon upload that admission must copy.
-        selection: Identify the selected vector whose source admission must retain.
+        vector_selections: Return selected vectors keyed by operation input name;
+            admission retains their uploaded sources. Return an empty mapping
+            when the request has no vector selections.
         queue: Capture inputs and ordinary sharing identity; model admission removes it.
         prepare: Resolve captured inputs into a native calculation plan.
         execution: Select the native target, action and execution settings.
@@ -143,7 +145,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         [Request | Queued | Prepared], RasterSourceReference | TemporalIntervalSelection
     ]
     polygon: Callable[[Request], PolygonAreaReference | None]
-    selection: Callable[[Request], VectorSelection | None]
+    vector_selections: Callable[[Request], dict[str, VectorSelection]]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
         [OperationContext, Queued, AuthorizedRaster | ResolvedTemporalInterval],
@@ -226,7 +228,11 @@ OPERATIONS = MappingProxyType(
                 bind=stack.bind_temporal_stack,
                 source=series.get_series_source,
                 polygon=series.get_series_polygon,
-                selection=lambda request: request.catalogSelection,
+                vector_selections=lambda request: (
+                    {"area": request.catalogSelection}
+                    if request.catalogSelection is not None
+                    else {}
+                ),
                 queue=stack.build_stack_submission,
                 prepare=stack.prepare_temporal_stack,
                 execution=stack.select_stack_execution,
@@ -263,7 +269,11 @@ OPERATIONS = MappingProxyType(
                 bind=series.bind_temporal_series,
                 source=series.get_series_source,
                 polygon=series.get_series_polygon,
-                selection=lambda request: request.catalogSelection,
+                vector_selections=lambda request: (
+                    {"area": request.catalogSelection}
+                    if request.catalogSelection is not None
+                    else {}
+                ),
                 queue=series.build_series_submission,
                 prepare=series.prepare_temporal_series,
                 execution=series.select_series_execution,
@@ -308,7 +318,11 @@ OPERATIONS = MappingProxyType(
                 bind=temporal.bind_temporal_map,
                 source=temporal.get_temporal_source,
                 polygon=temporal.get_temporal_polygon,
-                selection=lambda request: request.catalogSelection,
+                vector_selections=lambda request: (
+                    {"area": request.catalogSelection}
+                    if request.catalogSelection is not None
+                    else {}
+                ),
                 queue=temporal.build_temporal_submission,
                 prepare=temporal.prepare_temporal_map,
                 execution=temporal.select_temporal_execution,
@@ -384,10 +398,10 @@ OPERATIONS = MappingProxyType(
                 bind=downstream.bind_downstream,
                 source=downstream.get_values_source,
                 polygon=downstream.get_uploaded_polygon,
-                selection=lambda request: (
-                    request.starting_mask.selection
+                vector_selections=lambda request: (
+                    {"starting_mask": request.starting_mask.selection}
                     if isinstance(request.starting_mask, VectorStartingMask)
-                    else None
+                    else {}
                 ),
                 queue=downstream.build_downstream_submission,
                 prepare=downstream.prepare_downstream,
@@ -416,7 +430,11 @@ OPERATIONS = MappingProxyType(
                 bind=raster.bind_summary,
                 source=raster.get_summary_source,
                 polygon=raster.get_summary_polygon,
-                selection=lambda request: request.catalogSelection,
+                vector_selections=lambda request: (
+                    {"area": request.catalogSelection}
+                    if request.catalogSelection is not None
+                    else {}
+                ),
                 queue=raster.build_summary_submission,
                 prepare=raster.prepare_summary,
                 execution=raster.select_summary_execution,
@@ -441,7 +459,11 @@ OPERATIONS = MappingProxyType(
                 bind=raster.bind_clip,
                 source=raster.get_clip_source,
                 polygon=raster.get_clip_polygon,
-                selection=lambda request: request.catalogSelection,
+                vector_selections=lambda request: (
+                    {"area": request.catalogSelection}
+                    if request.catalogSelection is not None
+                    else {}
+                ),
                 queue=raster.build_clip_submission,
                 prepare=raster.prepare_clip,
                 execution=raster.select_clip_execution,

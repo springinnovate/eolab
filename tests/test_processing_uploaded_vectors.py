@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from dataclasses import replace
 import hashlib
 from pathlib import Path
 from threading import Event
@@ -17,15 +18,20 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from eolab_app.catalog.geopackage import build_stac_items
+from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.artifacts import LocalJobArtifacts
-from eolab_app.processing.clip_models import ClipJobRequest
+from eolab_app.processing.clip_models import ClipInputs, ClipJobRequest, UnpreparedClip
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing import model_definitions, model_operations
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.native_processes import create_native_process
-from eolab_app.processing.models import JobSubmission, ProcessingError
+from eolab_app.processing.models import JobSubmission, PreparedJobPlan, ProcessingError
+from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.catalog import StacRasterCatalog
+from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
 from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.routes.processing import COOKIE, create_processing_router
@@ -84,17 +90,20 @@ def upload_boundary(
         crs="EPSG:3857",
     )
     item = mounted_geotiff_item(path.as_uri())
+    vector_item = build_stac_items(tmp_path, original)[0]
 
     def catalog_request(request: httpx2.Request) -> httpx2.Response:
-        """Serve the raster Item and reject catalog requests for private polygons.
+        """Serve scanner-built raster and vector Items for the mounted fixture files.
 
         Args:
             request: Catalog HTTP request from the real raster authorizer.
 
         Returns:
-            Scanner-produced raster metadata.
+            Scanner-produced metadata for the requested mounted raster or vector.
         """
         assert request.url.host == "catalog"
+        if request.url.path.endswith(f"/items/{vector_item['id']}"):
+            return httpx2.Response(200, json=vector_item)
         assert request.url.path.endswith(f"/items/{SOURCE['itemId']}")
         return httpx2.Response(200, json=item)
 
@@ -128,6 +137,7 @@ def upload_boundary(
         uploads=uploads,
     )
     app = FastAPI()
+    app.state.vector_item = vector_item
     app.include_router(create_vector_uploads_router(uploads))
     app.include_router(create_processing_router(service))
     with TestClient(app, base_url="https://testserver") as owner:
@@ -192,6 +202,307 @@ def processing_request(
         "calculations": [{"label": "Range sum", "expression": "min(a) + max(a)"}],
         "requestId": uuid4().hex,
     }
+
+
+class ClipWithReferenceRequest(ClipJobRequest):
+    """Add an independent reference selection to the fixture's ordinary clip request."""
+
+    catalogSelection: VectorSelection
+    reference_sites: VectorSelection
+
+
+class QueuedClipWithReference(UnpreparedClip):
+    """Persist both fixture selections until the worker prepares the clip."""
+
+    request: ClipWithReferenceRequest
+
+
+@pytest.fixture
+def reference_clip(
+    upload_boundary: UploadBoundary, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, list[int]]:
+    """Install a fixture recipe that reads two selections before ordinary clipping.
+
+    Args:
+        upload_boundary: Actual upload, HTTP, PostgreSQL and worker components.
+        monkeypatch: Restore the installed operation and recipe after this test.
+
+    Returns:
+        Feature attribute values read independently for each named input by the worker.
+    """
+    _, _, service, _, _ = upload_boundary
+    document = service.model_registry.get("raster-clip", "1.1.0").to_document()
+    original = model_operations.get_model_operation("raster.clip.v1")
+    observed: dict[str, list[int]] = {}
+
+    def bind_reference_clip(
+        inputs: dict[str, Any], parameters: dict[str, Any], request_id: str, label: str
+    ) -> ClipWithReferenceRequest:
+        """Bind the fixture's independent reference sites alongside its clip area.
+
+        Args:
+            inputs: Raster, clip area and reference-site area from the model request.
+            parameters: Ordinary clip parameters.
+            request_id: Browser retry identifier.
+            label: Requested run label.
+
+        Returns:
+            Clip request carrying both validated vector descriptors.
+
+        Raises:
+            ValueError: If either input is not a vector selection.
+        """
+        request = original.bind(inputs, parameters, request_id, label)
+        return ClipWithReferenceRequest(
+            **request.model_dump(by_alias=True),
+            reference_sites=inputs["reference_sites"]["selection"],
+        )
+
+    def queue_reference_clip(
+        request: ClipWithReferenceRequest, polygons: None
+    ) -> PreparedJobPlan:
+        """Save both vector descriptors with the ordinary queued clip plan.
+
+        Args:
+            request: Fixture request with independently named selections.
+            polygons: Unused owned-polygon input, as required by ordinary clipping.
+
+        Returns:
+            Queued plan whose persisted request retains both selections.
+        """
+        clip = ClipJobRequest.model_validate(
+            request.model_dump(exclude={"reference_sites"}, by_alias=True)
+        )
+        return replace(
+            original.queue(clip, polygons),
+            specification=QueuedClipWithReference(request=request).model_dump(
+                mode="json", by_alias=True
+            ),
+        )
+
+    async def prepare_reference_clip(
+        context: OperationContext,
+        queued: QueuedClipWithReference,
+        authorized: AuthorizedRaster,
+    ) -> PreparedJobPlan:
+        """Read each persisted selection's exact features, then prepare the clip.
+
+        Args:
+            context: Real worker capabilities, including its retained vector reader.
+            queued: Both descriptors restored from the database.
+            authorized: Ordinary raster authorization for this worker attempt.
+
+        Returns:
+            Native clip plan prepared by the existing operation.
+
+        Raises:
+            SelectionUnavailableError: If a saved vector selection cannot be read.
+            ProcessingError: If ordinary clip preparation fails.
+        """
+        assert context.areas is not None
+        for name, selection in operation.vector_selections(queued.request).items():
+            resolved = await context.areas.resolve_for_sampling(selection)
+            with fiona.open(resolved.path, layer=selection.layerName) as dataset:
+                observed[name] = [
+                    feature["properties"]["count"]
+                    for feature in dataset.filter(where=resolved.where)
+                ]
+        clip = ClipInputs.model_validate(
+            queued.request.model_dump(
+                exclude={"reference_sites", "requestId"}, by_alias=True
+            )
+        )
+        return await original.prepare(context, UnpreparedClip(request=clip), authorized)
+
+    operation = replace(
+        original,
+        inputs=(*original.inputs, ("reference_sites", "clip_area")),
+        queued_type=QueuedClipWithReference,
+        bind=bind_reference_clip,
+        queue=queue_reference_clip,
+        prepare=prepare_reference_clip,
+        vector_selections=lambda request: {
+            "area": request.catalogSelection,
+            "reference_sites": request.reference_sites,
+        },
+    )
+    operations = {**model_operations.OPERATIONS, operation.id: operation}
+    monkeypatch.setattr(model_operations, "OPERATIONS", operations)
+    monkeypatch.setattr(model_definitions, "OPERATIONS", operations)
+    document["id"] = "reference-clip"
+    document["inputs"]["reference_sites"] = {
+        "type": "clip_area",
+        "label": "Reference sites",
+    }
+    document["steps"][0]["inputs"]["reference_sites"] = {"input": "reference_sites"}
+    registry = ModelRegistry((ModelDefinition.model_validate(document),))
+    service.model_registry = registry
+    monkeypatch.setattr(
+        ModelRegistry, "load_installed", classmethod(lambda cls: registry)
+    )
+    return observed
+
+
+@pytest.mark.parametrize("reference_source", ["upload", "catalog", "same_upload"])
+def test_model_keeps_independent_vector_inputs_after_upload_deletion(
+    upload_boundary: UploadBoundary,
+    reference_clip: dict[str, list[int]],
+    store: PostgresJobStore,
+    reference_source: str,
+) -> None:
+    """Restore each selected predicate through the ordinary worker after upload deletion.
+
+    Args:
+        upload_boundary: Real upload, HTTP, PostgreSQL and native worker boundary.
+        reference_clip: Attribute values read by the fixture operation during preparation.
+        store: Disposable database retaining all accepted upload identities.
+        reference_source: A second upload, a mounted vector or the first upload again.
+    """
+    owner, worker, service, uploads, selection = upload_boundary
+    reference = {
+        **selection,
+        "filter": {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "count", "operator": "eq", "value": 14}],
+        },
+    }
+    if reference_source == "upload":
+        reference_path = uploads.root.parent / "reference_sites.gpkg"
+        write_layer(reference_path, geometry="MultiPolygon")
+        with fiona.open(reference_path, layer="areas") as dataset:
+            geometry = next(iter(dataset)).geometry
+        with fiona.open(reference_path, "a", layer="areas") as dataset:
+            dataset.write(
+                {
+                    "geometry": geometry,
+                    "properties": {
+                        "label": "Reference sites",
+                        "count": 28,
+                        "weight": 1.0,
+                    },
+                }
+            )
+        response = owner.post(
+            "/api/vector-uploads",
+            params={"name": "Reference sites"},
+            headers=UPLOAD_HEADERS,
+            content=reference_path.read_bytes(),
+        )
+        assert response.status_code == 201, response.text
+        reference["uploadId"] = response.json()["id"]
+        reference["filter"]["rules"][0]["value"] = 28
+    elif reference_source == "catalog":
+        item = owner.app.state.vector_item
+        reference.pop("uploadId")
+        reference.update(
+            collectionId=item["collection"], itemId=item["id"], assetKey="data"
+        )
+    body = model_request(
+        owner,
+        "reference-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {"kind": "catalogSelection", "selection": selection},
+            "reference_sites": {"kind": "catalogSelection", "selection": reference},
+        },
+    )
+    response = owner.post("/api/processing/model-runs", json=body, headers=HEADERS)
+    assert response.status_code == 202, response.text
+    job = response.json()
+    tokens = store.active_input_uploads()
+    upload_ids = {
+        value["uploadId"] for value in (selection, reference) if "uploadId" in value
+    }
+    assert len(tokens) == len(upload_ids)
+    assert len(list(uploads.root.glob(".retained/*.gpkg"))) == len(tokens)
+    retained = [uploads.get_retained_source(token) for token in tokens]
+    for upload_id in upload_ids:
+        assert (
+            owner.delete(
+                f"/api/vector-uploads/{upload_id}", headers=UPLOAD_HEADERS
+            ).status_code
+            == 204
+        )
+    owner.portal.call(service.reconcile_upload_inputs)
+    assert all(path.is_file() for path in retained)
+    restarted = ProcessingWorker(
+        worker.authorizer,
+        store,
+        worker.artifacts,
+        store.limits,
+        areas=worker.areas,
+        uploads=VectorUploadStore(uploads.root, None),
+        native=worker.native,
+    )
+    assert owner.portal.call(restarted.run_once)
+    ready = owner.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    assert reference_clip == {
+        "area": [7],
+        "reference_sites": [28 if reference_source == "upload" else 14],
+    }
+    invocation = owner.get(f"/api/processing/jobs/{job['jobId']}/invocation").json()
+    assert invocation["inputs"] == body["inputs"]
+    assert str(uploads.root) not in str(invocation)
+    assert not any(token in str(invocation) for token in tokens)
+    owner.portal.call(service.reconcile_upload_inputs)
+    assert not store.active_input_uploads()
+    assert all(not path.exists() for path in retained)
+
+
+@pytest.mark.parametrize("rejection", ["foreign_upload", "invalid_filter"])
+def test_second_vector_input_rejection_releases_unused_retention(
+    upload_boundary: UploadBoundary,
+    reference_clip: dict[str, list[int]],
+    store: PostgresJobStore,
+    rejection: str,
+) -> None:
+    """Reject the whole run when its second input is inaccessible or has an invalid filter.
+
+    Args:
+        upload_boundary: Real upload and Processing submission components.
+        reference_clip: Fixture recipe that declares two independent selections.
+        store: Disposable job store used to verify that rejection admits no uploads.
+        rejection: Foreign upload or invalid second predicate on the first upload.
+    """
+    owner, _, service, uploads, selection = upload_boundary
+    reference = dict(selection)
+    if rejection == "foreign_upload":
+        with TestClient(owner.app, base_url="https://testserver") as other:
+            response = other.post(
+                "/api/vector-uploads",
+                params={"name": "Other browser's sites"},
+                headers=UPLOAD_HEADERS,
+                content=(uploads.root.parent / "polygons.gpkg").read_bytes(),
+            )
+            assert response.status_code == 201, response.text
+            reference["uploadId"] = response.json()["id"]
+    else:
+        reference["filter"] = {
+            "enabled": True,
+            "match": "all",
+            "rules": [{"field": "nonexistent", "operator": "eq", "value": 7}],
+        }
+    body = model_request(
+        owner,
+        "reference-clip",
+        inputs={
+            "raster": SOURCE,
+            "area": {"kind": "catalogSelection", "selection": selection},
+            "reference_sites": {"kind": "catalogSelection", "selection": reference},
+        },
+    )
+    response = owner.post("/api/processing/model-runs", json=body, headers=HEADERS)
+    assert response.status_code == (
+        404 if rejection == "foreign_upload" else 409
+    ), response.text
+    assert not reference_clip
+    assert not store.active_input_uploads()
+    retained = list(uploads.root.glob(".retained/*.gpkg"))
+    assert len(retained) == 1
+    owner.portal.call(service.reconcile_upload_inputs)
+    assert all(not path.exists() for path in retained)
 
 
 @pytest.mark.parametrize(

@@ -325,7 +325,7 @@ class ProcessingService:
             request.requestId,
             prepared,
             request_hash,
-            operation.selection(calculation),
+            operation.vector_selections(calculation),
             upload_owner,
         )
         return serialize_processing_job(row)
@@ -336,17 +336,17 @@ class ProcessingService:
         request_key: str,
         prepared: PreparedJobPlan,
         request_hash: str,
-        selection: VectorSelection | None,
+        selections: dict[str, VectorSelection],
         upload_owner: str | None,
     ) -> dict[str, Any]:
-        """Queue one job after retaining any uploaded polygon input.
+        """Queue one job after retaining all its uploaded polygon inputs.
 
         Args:
             owner: Processing session that owns the submitted job.
             request_key: Stable browser retry identifier.
             prepared: Queued operation data and captured raster inputs.
             request_hash: Complete public request identity.
-            selection: Vector input declared by the registered operation.
+            selections: Vector selections keyed by the operation's input names.
             upload_owner: Browser identity for private GeoPackage access.
 
         Returns:
@@ -355,14 +355,17 @@ class ProcessingService:
         Raises:
             ProcessingError: If source access or job admission fails.
         """
-        if not isinstance(selection, UploadedSelection):
+        if not any(
+            isinstance(selection, UploadedSelection)
+            for selection in selections.values()
+        ):
             return await asyncio.to_thread(
                 self.jobs.submit, owner, request_key, prepared, request_hash
             )
         results = await self._submit_jobs_with_uploaded_inputs(
             owner,
             [JobSubmission(request_key, request_hash, prepared.operation, prepared)],
-            [selection],
+            [selections],
             upload_owner,
         )
         result = results[0]
@@ -374,7 +377,7 @@ class ProcessingService:
         self,
         owner: str,
         submissions: list[JobSubmission],
-        selections: list[VectorSelection | None],
+        selections: list[dict[str, VectorSelection]],
         upload_owner: str | None,
     ) -> list[dict[str, Any] | ProcessingError]:
         """Submit jobs and keep their uploaded polygon files available until they stop.
@@ -390,7 +393,10 @@ class ProcessingService:
         Args:
             owner: Processing session receiving each job handle.
             submissions: Queued plans or input errors, in request order.
-            selections: The corresponding operation-declared vector inputs.
+            selections: Each job's vector selections keyed by operation input name,
+                in the same order as submissions. Every uploaded selection's
+                predicate is authorized; selections sharing an upload retain one
+                file per job.
             upload_owner: Browser identity used only while authorizing uploads.
 
         Returns:
@@ -411,11 +417,14 @@ class ProcessingService:
                 ProcessingError: If the admission transaction fails.
             """
             captured = []
-            for submission, selection in zip(submissions, selections, strict=True):
+            for submission, inputs in zip(submissions, selections, strict=True):
                 prepared = submission.prepared
-                if isinstance(selection, UploadedSelection) and isinstance(
-                    prepared, PreparedJobPlan
-                ):
+                uploaded = [
+                    selection
+                    for selection in inputs.values()
+                    if isinstance(selection, UploadedSelection)
+                ]
+                if uploaded and isinstance(prepared, PreparedJobPlan):
                     try:
                         if (
                             self.uploads is None
@@ -425,15 +434,19 @@ class ProcessingService:
                             raise VectorUploadError(
                                 404, "This upload is not available to this browser."
                             )
-                        resolved = await self.areas.resolve_for_sampling(
-                            selection, upload_owner
-                        )
-                        token = await asyncio.to_thread(
-                            self.uploads.retain_source, resolved.path
-                        )
+                        retained: dict[str, str] = {}
+                        for selection in uploaded:
+                            resolved = await self.areas.resolve_for_sampling(
+                                selection, upload_owner
+                            )
+                            upload_id = str(selection.uploadId)
+                            if upload_id not in retained:
+                                retained[upload_id] = await asyncio.to_thread(
+                                    self.uploads.retain_source, resolved.path
+                                )
                         prepared = replace(
                             prepared,
-                            input_uploads={str(selection.uploadId): token},
+                            input_uploads=retained,
                             work_key=None,
                         )
                     except VectorUploadError as error:
@@ -779,7 +792,7 @@ class ProcessingService:
             request.requestId,
             prepared,
             request_hash,
-            operation.selection(request),
+            operation.vector_selections(request),
             upload_owner,
         )
         require_operation(row, operation.id)
@@ -837,7 +850,7 @@ class ProcessingService:
                 request.requestId,
                 submission.prepared,
                 request_hash,
-                request.catalogSelection,
+                get_model_operation("raster.aggregate.v1").vector_selections(request),
                 upload_owner,
             )
         return (
@@ -931,8 +944,13 @@ class ProcessingService:
             await self.build_calculation_submission(owner, request, polygon_inputs)
             for request in requests
         ]
-        selections = [request.catalogSelection for request in requests]
-        if any(isinstance(selection, UploadedSelection) for selection in selections):
+        operation = get_model_operation("raster.aggregate.v1")
+        selections = [operation.vector_selections(request) for request in requests]
+        if any(
+            isinstance(selection, UploadedSelection)
+            for inputs in selections
+            for selection in inputs.values()
+        ):
             results = await self._submit_jobs_with_uploaded_inputs(
                 owner, submissions, selections, upload_owner
             )

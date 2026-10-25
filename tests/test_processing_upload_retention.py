@@ -74,8 +74,8 @@ def test_job_retains_upload_until_execution_stops(
         store: Real disposable PostgreSQL adapter.
         outcome: Terminal lifecycle transition that releases the input.
     """
-    token = uuid4().hex
-    retained = {str(uuid4()): token}
+    retained = {str(uuid4()): uuid4().hex for _ in range(2)}
+    tokens = set(retained.values())
     plan = PreparedJobPlan(
         specification={"operation": "retention-test"},
         summary={},
@@ -86,20 +86,20 @@ def test_job_retains_upload_until_execution_stops(
     owner = "a" * 64
     submitted = store.submit(owner, uuid4().hex, plan, "b" * 64)
     assert "input_uploads" not in submitted
-    assert store.active_input_uploads() == {token}
+    assert store.active_input_uploads() == tokens
     row = store.claim_next_job()
     assert row["input_uploads"] == retained
     prepared = store.save_prepared_job(
         row["id"], row["attempt_id"], replace(plan, input_uploads={})
     )
     assert prepared["input_uploads"] == retained
-    assert store.active_input_uploads() == {token}
+    assert store.active_input_uploads() == tokens
     if outcome == "restart":
         assert store.interrupt_unfinished_jobs_on_restart() == 1
     else:
         if outcome == "cancelled":
             assert store.cancel(submitted["id"], owner)["status"] == "cancelling"
-            assert store.active_input_uploads() == {token}
+            assert store.active_input_uploads() == tokens
         artifact = Artifact(1, "c" * 64, "result.tif") if outcome == "ready" else None
         assert store.finish(row["id"], row["attempt_id"], artifact)
     assert store.active_input_uploads() == set()
