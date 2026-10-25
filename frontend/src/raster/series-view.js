@@ -1,12 +1,15 @@
 /** Controls and chart presentation for raster formula series. */
 import { formatSeriesNumber } from "../charts/series-chart.js";
 import { createStatisticSwatch, RasterSeriesPlotsView } from "./series-plots-view.js";
+import { TemporalPeriodView } from "../temporal-period-view.js";
+import { describeTemporalPeriod } from "../temporal-period.js";
 
 const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No matches", no_valid_data: "No valid data", invalid_arithmetic: "Invalid arithmetic", overflow: "Overflow" };
 
 /**
  * @typedef {Object} SeriesValueRow
  * @property {string} label Full raster name.
+ * @property {number} [xValue] UTC timestamp in milliseconds for a temporal observation.
  * @property {string} statisticLabel Statistic name for the values table.
  * @property {string} state Value, pending or failure state from the owner.
  * @property {number|null} value Numeric plotting value.
@@ -42,6 +45,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {{id:number,scale:string}[]} plots Independent plot settings.
  * @property {boolean} showingPrevious Whether plots use retained results.
+ * @property {Object|null} [temporal] Dataset, variable and period controls; absent for ordinary raster layers.
  */
 
 /** Display Raster series without accessing map, renderer or request state. */
@@ -91,11 +95,42 @@ export class RasterSeriesView {
      * @param {()=>void} actions.onCalculate Calculate remaining sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
+     * @param {(mode:string)=>void} actions.onSourceMode Choose raster layers or a temporal dataset.
+     * @param {(key:string)=>void} actions.onTemporalDataset Choose a retained dataset.
+     * @param {(variable:string)=>void} actions.onTemporalVariable Choose its variable.
+     * @param {(change:Object)=>void} actions.onTemporalEdit Edit UTC period boundaries.
+     * @param {(month:string)=>void} actions.onTemporalMonth Browse observation availability.
+     * @param {()=>void} actions.onUseTemporalMonth Select the displayed calendar month.
+     * @param {()=>void} actions.onRefreshTemporal Reload Catalog date guidance.
      * @return {void}
      */
     bind(actions) {
         this.actions = actions;
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
+        this.document.querySelector("#raster-series-source-mode").addEventListener("change", event => actions.onSourceMode(event.target.value));
+        for (const [id, handler] of [["dataset", actions.onTemporalDataset], ["variable", actions.onTemporalVariable], ["month", actions.onTemporalMonth]]) {
+            this.document.querySelector("#raster-series-temporal-" + id).addEventListener("change", event => handler(event.target.value));
+        }
+        this.document.querySelector("#raster-series-use-month").addEventListener("click", actions.onUseTemporalMonth);
+        this.document.querySelector("#raster-series-refresh-dates").addEventListener("click", actions.onRefreshTemporal);
+        /** Create a text-only period control element.
+         * @param {string} tag HTML tag. @param {string} [text=""] Caption.
+         * @param {string} [className=""] CSS class. @return {HTMLElement}
+         */
+        const element = (tag, text = "", className = "") => {
+            const node = this.document.createElement(tag); node.textContent = text; node.className = className; return node;
+        };
+        /** Associate a caption with one native period field.
+         * @param {string} id Unique field ID. @param {string} caption Readable label.
+         * @param {HTMLElement} input Native control. @return {HTMLLabelElement}
+         */
+        const field = (id, caption, input) => {
+            input.id = id; const label = element("label", caption); label.htmlFor = id; label.append(input); return label;
+        };
+        this.period = new TemporalPeriodView({element, field, document: this.document,
+            options: (select, choices, value) => this.setOptions(select, choices, value)},
+        {onEdit: actions.onTemporalEdit, idPrefix: "raster-series-period", describedBy: "raster-series-temporal-help"});
+        this.document.querySelector("#raster-series-period").append(this.period.root);
         this.document.querySelector("#close-raster-series").addEventListener("click", actions.onClose);
         const order = this.document.querySelector("#raster-series-order");
         const direction = this.document.querySelector("#raster-series-direction");
@@ -132,7 +167,7 @@ export class RasterSeriesView {
      */
     render(state) {
         const sources = state.sources.filter(source => source.selected);
-        this.onContextChange({ source: sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
+        this.onContextChange({ source: state.temporal ? state.temporal.item?.properties.title || "Temporal dataset" : sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
             scope: state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected" });
         this.pendingState = state;
         if (!state.active) {
@@ -157,9 +192,11 @@ export class RasterSeriesView {
      */
     draw(state) {
         this.renderAreaControls(state);
+        this.renderTemporalControls(state.temporal);
         const scope = state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected";
         const selectedCount = state.sources.filter(source => source.selected).length;
-        const context = `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
+        const context = state.temporal ? `${scope} · ${state.temporal.item?.properties.title || "Temporal dataset"} · ${state.temporal.variable || "Choose a variable"} · ${describeTemporalPeriod(state.temporal)}` :
+            `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
         if (this.context.textContent !== context) this.context.textContent = context;
         if (this.status.textContent !== state.message) this.status.textContent = state.message;
         const busy = String(state.busy);
@@ -167,7 +204,8 @@ export class RasterSeriesView {
         const order = this.document.querySelector("#raster-series-order").value === "name" ? "Layer name" : "Map layer order";
         const direction = this.document.querySelector("#raster-series-direction").value === "reverse" ? "Reverse" : "Forward";
         const chartType = state.chartType === "scatter" ? "Scatter" : "Line";
-        const dataSummary = `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
+        const dataSummary = state.temporal ? `Data and period · Temporal dataset · ${chartType}` :
+            `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
         const statisticsLink = this.document.querySelector("#raster-series-edit-statistics");
         const statisticCount = `Statistics (${state.statistics.length})`;
@@ -212,6 +250,69 @@ export class RasterSeriesView {
             }));
         }
         if (this.download.disabled !== !state.canDownload) this.download.disabled = !state.canDownload;
+    }
+
+    /** Update select choices only when their contents change, preserving focused controls.
+     * @param {HTMLSelectElement} select Native choice control.
+     * @param {{value:string,label:string}[]} choices Available values and labels.
+     * @param {string} value Selected value.
+     * @return {void}
+     */
+    setOptions(select, choices, value) {
+        const signature = JSON.stringify(choices);
+        if (select.dataset.options !== signature) {
+            select.dataset.options = signature;
+            select.replaceChildren(...choices.map(choice => {
+                const option = this.document.createElement("option"); option.value = choice.value; option.textContent = choice.label; return option;
+            }));
+        }
+        if (select.value !== value) select.value = value;
+    }
+
+    /** Show independent temporal source and period choices beside the ordinary layer checklist.
+     * @param {Object|null|undefined} temporal Current temporal draft, or ordinary-layer mode.
+     * @return {void}
+     */
+    renderTemporalControls(temporal) {
+        const mode = temporal ? "temporal" : "layers";
+        const sourceMode = this.document.querySelector("#raster-series-source-mode");
+        if (sourceMode.value !== mode) sourceMode.value = mode;
+        const controls = this.document.querySelector("#raster-series-temporal");
+        if (controls.hidden !== !temporal) controls.hidden = !temporal;
+        if (this.sources.hidden !== !!temporal) this.sources.hidden = !!temporal;
+        for (const id of ["order", "direction"]) {
+            const label = this.document.querySelector("#raster-series-" + id).parentElement;
+            if (label.hidden !== !!temporal) label.hidden = !!temporal;
+        }
+        const heading = this.document.querySelector("#raster-series-value-source"), caption = temporal ? "Time (UTC)" : "Raster";
+        if (heading.textContent !== caption) heading.textContent = caption;
+        const shortcut = this.document.querySelector("#raster-series-edit-data"), shortcutText = temporal ? "Data and period" : "Data and order";
+        if (shortcut.textContent !== shortcutText) shortcut.textContent = shortcutText;
+        if (this.sourceMode !== mode && temporal) this.document.querySelector("#raster-series-data-settings").open = true;
+        this.sourceMode = mode;
+        if (!temporal) return;
+        const dataset = this.document.querySelector("#raster-series-temporal-dataset");
+        this.setOptions(dataset, [{value: "", label: "Choose a temporal dataset…"}, ...temporal.datasets.map(source =>
+            ({value: source.key, label: source.key === temporal.datasetKey && temporal.item ? temporal.item.properties.title : source.label}))], temporal.datasetKey);
+        const variable = this.document.querySelector("#raster-series-temporal-variable");
+        this.setOptions(variable, [{value: "", label: "Choose a variable…"}, ...Object.entries(temporal.item?.properties["cube:variables"] ?? {})
+            .map(([value, metadata]) => ({value, label: `${metadata.description} (${metadata.unit})`}))], temporal.variable);
+        variable.disabled = !temporal.item;
+        this.period.render(temporal, {roundToHour: false});
+        const metadata = temporal.item?.properties["cube:variables"][temporal.variable];
+        this.document.querySelector("#raster-series-temporal-help").textContent =
+            (metadata && metadata["eolab:time_support"] !== "instantaneous" ?
+                "Use each complete observation whose interval overlaps this period, in its stored units. Values are not prorated or integrated over time. " :
+                "Use observations at or after the start and before the end. ") +
+            "The observation displayed on the map does not change this selection. Missing observations are omitted. Choose Calculate to plot.";
+        const month = this.document.querySelector("#raster-series-temporal-month"), choices = temporal.choices;
+        this.setOptions(month, (choices?.months ?? []).map(value => ({value, label: value})), choices?.month ?? "");
+        month.disabled = temporal.loading || !choices?.months.length;
+        this.document.querySelector("#raster-series-use-month").disabled = temporal.loading || !choices?.times.length;
+        this.document.querySelector("#raster-series-refresh-dates").disabled = temporal.loading || !temporal.datasetKey;
+        this.document.querySelector("#raster-series-temporal-coverage").textContent = temporal.loading ? "Loading available observations…" :
+            temporal.datesError || (!choices ? "Choose a variable to browse available observations." :
+                `${choices.times.length.toLocaleString()} observations in ${choices.month}.`);
     }
 
 
@@ -272,7 +373,8 @@ export class RasterSeriesView {
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
         const calculate = this.document.querySelector("#raster-series-calculate");
-        const cannotCalculate = state.busy || !area.sources.length || (area.areaChoice !== "whole" && !area.area);
+        const cannotCalculate = state.busy || (state.temporal ? !!state.temporal.selectionError || !area.area :
+            !area.sources.length || (area.areaChoice !== "whole" && !area.area));
         if (calculate.disabled !== cannotCalculate) calculate.disabled = cannotCalculate;
         const hideCalculate = !!area.complete && !area.hasErrors;
         if (calculate.hidden !== hideCalculate) calculate.hidden = hideCalculate;

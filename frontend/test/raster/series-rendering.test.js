@@ -10,6 +10,10 @@ import { RasterSeriesPlotsView } from "../../src/raster/series-plots-view.js";
  */
 function fixture() {
     const document = new FakeRasterControlDocument();
+    for (const id of ["order", "direction"]) {
+        const label = document.createElement("label");
+        label.append(document.querySelector("#raster-series-" + id));
+    }
     const frames = new Map();
     let serial = 0;
     document.defaultView.requestAnimationFrame = callback => { frames.set(++serial, callback); return serial; };
@@ -204,7 +208,8 @@ test("section shortcuts focus owned destinations and open data settings without 
     const h = controlsFixture();
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
-        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover"].map(key => [key, () => assert.fail(key)]));
+        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onSourceMode", "onTemporalDataset",
+        "onTemporalVariable", "onTemporalEdit", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
     h.view.bind(actions);
     for (const [button, target] of [["show-plots", "plots"], ["edit-statistics", "statistics-title"], ["edit-data", "source-summary"]]) {
         h.document.querySelector("#raster-series-" + button).dispatchEvent(new Event("click"));
@@ -213,6 +218,50 @@ test("section shortcuts focus owned destinations and open data settings without 
         assert.deepEqual(destination.scrollRequests, [{ block: "start", inline: "nearest" }]);
     }
     assert.equal(h.document.querySelector("#raster-series-data-settings").open, true);
+});
+
+test("temporal controls reuse the period editor and preserve focused input while availability changes", () => {
+    const h = controlsFixture();
+    const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
+        "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
+        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onSourceMode", "onTemporalDataset",
+        "onTemporalVariable", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
+    actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
+    h.view.bind(actions);
+    h.view.plotsView = {renderPlots() {}};
+    h.state.busy = false;
+    h.state.area.area = {kind: "wholeRaster"};
+    h.state.temporal = {datasets: [{key: "observations", label: "Weather observations"}], datasetKey: "observations",
+        item: {properties: {title: "Weather observations", "cube:variables": {temperature: {
+            description: "Air temperature", unit: "K", "eolab:time_support": "instantaneous"}}}},
+        variable: "temperature", periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00",
+        choices: {months: ["2000-01"], month: "2000-01", times: ["2000-01-01T00:00:00Z"]},
+        loading: false, datesError: "", selectionError: ""};
+    h.draw();
+    const field = id => h.document.querySelector("#raster-series-" + id);
+    assert.equal(field("data-settings").open, true);
+    assert.equal(field("order").parentElement.hidden, true);
+    assert.equal(field("value-source").textContent, "Time (UTC)");
+    assert.equal(field("temporal-variable").children[1].textContent, "Air temperature (K)");
+    assert.equal(h.view.period.periodMode.value, "month");
+    assert.equal(field("calculate").disabled, false);
+    h.view.period.periodMode.value = "times";
+    h.view.period.periodMode.dispatchEvent(new Event("change"));
+    h.view.period.startTime.focus();
+    h.view.period.startTime.value = "03:15";
+    h.view.period.startTime.dispatchEvent(new Event("input"));
+    assert.equal(h.state.temporal.startTime, "2000-01-01T03:15");
+    h.state.temporal.loading = true; h.draw();
+    assert.equal(h.document.activeElement, h.view.period.startTime);
+    assert.equal(h.view.period.startTime.value, "03:15");
+    assert.equal(h.view.period.startTime.step, "any");
+    assert.equal(field("refresh-dates").disabled, true);
+    assert.match(field("temporal-help").textContent, /Choose Calculate/);
+    h.state.temporal = null; h.draw();
+    assert.equal(field("temporal").hidden, true);
+    assert.equal(field("order").parentElement.hidden, false);
+    assert.equal(field("sources").hidden, false);
+    assert.equal(field("value-source").textContent, "Raster");
 });
 
 test("compact statistic controls send stable identities through the existing owner callbacks", () => {
@@ -302,6 +351,38 @@ test("plot signatures ignore progress and catalog metadata, but retain display c
     statistic.visible = false;
     view.renderPlots(state);
     assert.equal(calls.length, 6);
+});
+
+test("temporal plots use actual UTC spacing and retain NoData gaps through presentation changes", () => {
+    const h = controlsFixture();
+    const view = new RasterSeriesPlotsView(h.document, {});
+    const rows = [0, 1, 2, 6].map(hour => ({
+        label: `1 Jan 2000 ${String(hour).padStart(2, "0")}:00 UTC`,
+        xValue: Date.UTC(2000, 0, 1, hour), state: hour === 2 ? "no_valid_data" : "value",
+        value: hour === 2 ? null : hour + 1, rawValue: hour === 2 ? null : `${hour + 1}.0000000000000001`, unit: "K",
+    }));
+    const state = { plots: [{ id: 1, scale: "linear" }], chartType: "line", temporal: {}, showingPrevious: false,
+        statistics: [{ id: 1, label: "Mean", expression: "mean(a)", styleIndex: 0, visible: true, plotId: 1, rows }] };
+    view.renderPlots(state);
+    const chart = view.cards.get(1).chart;
+    const points = chart.querySelectorAll(".series-chart-point");
+    const x = points.map(point => Number(point.getAttribute("cx")));
+    assert.deepEqual(points.map(point => point.getAttribute("data-point-index")), ["0", "1", "3"]);
+    assert.ok(Math.abs((x[1] - x[0]) / (x[2] - x[0]) - 1 / 6) < 1e-12);
+    assert.equal(chart.querySelector(".series-chart-line").getAttribute("d").split("M").length - 1, 2,
+        "the unavailable observation breaks the line rather than becoming zero");
+    assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Time (UTC)");
+    assert.match(points[1].getAttribute("aria-label"), /1 Jan 2000 01:00 UTC/);
+    assert.match(points[1].getAttribute("aria-label"), /2\.0000000000000001 K/);
+    state.chartType = "scatter";
+    view.renderPlots(state);
+    assert.deepEqual(chart.querySelectorAll(".series-chart-point").map(point => Number(point.getAttribute("cx"))), x);
+    assert.equal(chart.querySelector(".series-chart-line"), null);
+    state.temporal = null;
+    view.renderPlots(state);
+    assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Raster");
+    const ordinalX = chart.querySelectorAll(".series-chart-point").map(point => Number(point.getAttribute("cx")));
+    assert.ok(Math.abs((ordinalX[1] - ordinalX[0]) / (ordinalX[2] - ordinalX[0]) - 1 / 3) < 1e-12);
 });
 
 test("adding a secondary plot reveals it once; initial drawing and updates preserve scroll and focus", () => {

@@ -88,6 +88,7 @@ export class RasterSeriesPlotsView {
      * @param {Object[]} state.statistics Formulas, display settings and ordered result rows.
      * @param {boolean} state.showingPrevious Whether every plot uses the previous area.
      * @param {"line"|"scatter"} state.chartType Plot geometry.
+     * @param {Object|null} state.temporal Temporal dataset choices, or null for ordinary raster layers.
      * @return {void}
      */
     renderPlots(state) {
@@ -107,11 +108,11 @@ export class RasterSeriesPlotsView {
                 id: String(statistic.id), label: `${statistic.label || "Custom statistic"} · ${statistic.expression}`,
                 ...STATISTIC_STYLES[statistic.styleIndex],
                 points: (state.showingPrevious ? statistic.previousRows : statistic.rows).map(row => ({
-                    xLabel: row.label, yValue: row.state === "value" ? row.value : null, rawValue: row.rawValue, unit: row.unit,
+                    xLabel: row.label, xValue: row.xValue, yValue: row.state === "value" ? row.value : null, rawValue: row.rawValue, unit: row.unit,
                 })),
             }));
             // Only chart inputs belong here: progress and catalog metadata do not change a figure.
-            const signature = JSON.stringify([plot.scale, state.chartType, state.showingPrevious, series]);
+            const signature = JSON.stringify([plot.scale, state.chartType, state.showingPrevious, !!state.temporal, series]);
             if (elements.signature === signature) continue;
             elements.signature = signature;
             this.renderPlot(elements, plot, statistics, state, series);
@@ -124,7 +125,7 @@ export class RasterSeriesPlotsView {
      * @param {Object} elements Retained card elements.
      * @param {{id:number,scale:string}} plot Plot settings.
      * @param {Object[]} statistics Visible statistics assigned to this plot.
-     * @param {{showingPrevious:boolean,chartType:string}} state Current presentation settings.
+     * @param {{showingPrevious:boolean,chartType:string,temporal:Object|null}} state Current presentation settings.
      * @param {import("../charts/series-chart.js").ChartSeries[]} series Chart-only observations and styles.
      * @return {void}
      */
@@ -162,7 +163,8 @@ export class RasterSeriesPlotsView {
             : "Waiting for statistic values.";
         if (!chart.hidden) renderOrdinalSeriesChart({
             documentContext: this.document, chart, series, chartType: state.chartType, yScale: plot.scale,
-            xAxisLabel: "Raster", yAxisLabel: (units.length === 1 && units[0] !== "unit unspecified" ? units[0] : "Value") + (plot.scale === "log" ? " (log)" : ""),
+            xScale: state.temporal ? "numeric" : "ordinal", xAxisLabel: state.temporal ? "Time (UTC)" : "Raster",
+            yAxisLabel: (units.length === 1 && units[0] !== "unit unspecified" ? units[0] : "Value") + (plot.scale === "log" ? " (log)" : ""),
             ariaLabel: `Plot ${plot.id}${state.showingPrevious ? "; previous results" : ""}: ${series.map(item => item.label).join("; ")}`,
             pointAccessibleLabel: (point, item, index) => this.describePoint(series, index, plot.scale, state.showingPrevious),
             onInspect: inspection => {

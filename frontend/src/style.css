@@ -5258,3 +5258,9 @@ summary:hover > .raster-disclosure-chevron {
 .vector-filter-inline { border: 1px solid var(--border-1); border-radius: var(--radius); padding: 10px; min-width: 0; }
 .vector-filter-inline .layer-style-header { position: static; padding: 0; }
 .vector-filter-inline[hidden] { display: none; }
+
+/* Calendar period controls shared by temporal calculations. */
+.temporal-period, .temporal-period-fields { display: grid; gap: 8px; min-width: 0; }
+.temporal-period-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+.temporal-period-summary { margin: 4px 0; padding: 10px; background: var(--surface-selected); border-radius: var(--radius); font-size: 0.8rem; overflow-wrap: anywhere; }
+.temporal-period[hidden], .temporal-period [hidden] { display: none; }

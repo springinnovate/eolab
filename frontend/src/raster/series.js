@@ -1,6 +1,8 @@
 /** Plot Processing formulas across original raster sources. */
 import { rasterSourceReference } from "../raster-source.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
+import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
+import { csvParse, csvFormat } from "d3";
 
 const SERIES_STATISTICS = Object.freeze({
     pixel: { label: "Pixel value", expression: "pixelValue(a)" },
@@ -20,9 +22,14 @@ const SERIES_STATISTICS = Object.freeze({
  */
 function csvField(value) {
     let text = value == null ? "" : String(value);
-    if (typeof value === "string" && /^[=+@\-\t\r\n]/.test(text)) text = "'" + text;
+    if (typeof value === "string") text = spreadsheetText(text);
     return '"' + text.replaceAll('"', '""') + '"';
 }
+
+/** Keep a user-entered CSV label from executing as a spreadsheet formula.
+ * @param {string} text User label. @return {string} Literal spreadsheet text.
+ */
+function spreadsheetText(text) { return /^[=+@\-\t\r\n]/.test(text) ? "'" + text : text; }
 
 /** Own raster choices, formulas and presentation settings for Raster series. */
 export class RasterSeriesController {
@@ -33,9 +40,12 @@ export class RasterSeriesController {
      * @param {import("../processing/raster-series-calculations.js").RasterSeriesCalculations} options.areaStatistics Area formulas and Processing client.
      * @param {()=>void} options.onEditArea Open existing sampling controls.
      * @param {()=>void} options.onClose Request that composition close this tool.
+     * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
+     * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} options.loadTemporalTimes Read available observations for guidance.
      */
-    constructor({ view, onClose, areaStatistics, onEditArea }) {
+    constructor({ view, onClose, areaStatistics, onEditArea, getTemporalItem, loadTemporalTimes }) {
         this.view = view;
+        Object.assign(this, {getTemporalItem, loadTemporalTimes});
         this.areaStatistics = areaStatistics;
         this.areaStatistics.setProgressListener(() => this.render());
         this.formulas = [{ id: 1, ...SERIES_STATISTICS.mean }];
@@ -55,6 +65,9 @@ export class RasterSeriesController {
         this.order = "map";
         this.direction = "forward";
         this.chartType = "line";
+        this.sourceMode = "layers";
+        this.temporal = {datasets: [], datasetKey: "", item: null, variable: "", periodMode: "month",
+            startTime: "", endTime: "", choices: null, loading: false, error: "", datesError: ""};
         view.bind({
             onClose, onEditArea,
             onArea: choice => this.chooseArea(choice),
@@ -69,6 +82,18 @@ export class RasterSeriesController {
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
+            onSourceMode: mode => { this.sourceMode = mode; this.updateAreaInputs(); },
+            onTemporalDataset: key => void this.chooseTemporalDataset(key),
+            onTemporalVariable: variable => {
+                this.temporal.variable = variable; this.updateAreaInputs(); void this.loadTemporalDates();
+            },
+            onTemporalEdit: change => { Object.assign(this.temporal, change); this.updateAreaInputs(); },
+            onTemporalMonth: month => void this.loadTemporalDates(month),
+            onRefreshTemporal: () => void this.loadTemporalDates(undefined, true),
+            onUseTemporalMonth: () => {
+                Object.assign(this.temporal, {periodMode: "month", ...getTemporalMonthBoundaries(this.temporal.choices.month)});
+                this.updateAreaInputs();
+            },
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
             },
@@ -83,15 +108,85 @@ export class RasterSeriesController {
      * Untouched sources follow map visibility; explicit checklist choices override
      * that default until the source is removed. Hidden rasters remain selectable.
      * @param {Object[]} sources Ordered map snapshots with original-source references.
+     * @param {Object[]} [datasets=[]] Distinct temporal Catalog identities retained in Map layers.
      * @return {void}
      */
-    updateAvailableRasters(sources) {
+    updateAvailableRasters(sources, datasets = []) {
+        if (!this.sources.length && !this.temporal.datasets.length && !sources.length && datasets.length) this.sourceMode = "temporal";
+        this.temporal.datasets = datasets;
+        if (this.temporal.datasetKey && !datasets.some(dataset => dataset.key === this.temporal.datasetKey)) {
+            this.temporalAbort?.abort();
+            Object.assign(this.temporal, {datasetKey: "", item: null, variable: "", choices: null, loading: false, error: ""});
+        }
         const newKeys = new Set(sources.map(source => source.key));
         this.selectionOverrides = new Map([...this.selectionOverrides].filter(([key]) => newKeys.has(key)));
         this.selectedKeys = new Set(sources.filter(source => this.selectionOverrides.get(source.key) ?? source.visible)
             .map(source => source.key));
         this.sources = sources.map(source => ({ ...source }));
         this.updateAreaInputs();
+    }
+
+    /** Select one dataset without inheriting the observation displayed on the map.
+     * @param {string} key Retained Catalog dataset key, or an empty selection.
+     * @return {Promise<void>} Metadata and availability guidance have finished loading.
+     */
+    async chooseTemporalDataset(key) {
+        this.temporalAbort?.abort();
+        Object.assign(this.temporal, {datasetKey: key, item: null, variable: "", choices: null, loading: false, error: "", datesError: ""});
+        this.updateAreaInputs();
+        if (key) await this.loadTemporalDates(undefined, true);
+    }
+
+    /** Read Catalog guidance while leaving the requested period unchanged.
+     * Superseded selections cancel their availability reads; a failed date listing
+     * does not prevent the user from entering a period directly.
+     * @param {string} [month] UTC month to browse; omission asks for the latest month.
+     * @param {boolean} [reloadItem=false] Whether to reload the dataset's Catalog metadata.
+     * @return {Promise<void>} Updated guidance or a displayed read error.
+     */
+    async loadTemporalDates(month, reloadItem = false) {
+        const temporal = this.temporal;
+        const source = temporal.datasets.find(dataset => dataset.key === temporal.datasetKey);
+        if (!source) return;
+        if (reloadItem) this.areaStatistics.discardTemporalResults();
+        this.temporalAbort?.abort();
+        const abort = this.temporalAbort = new AbortController();
+        Object.assign(temporal, {loading: true, error: "", datesError: ""}); this.render();
+        try {
+            if (reloadItem) {
+                const item = await this.getTemporalItem(source);
+                if (abort.signal.aborted) return;
+                temporal.item = item;
+                const variables = Object.keys(item.properties["cube:variables"]);
+                if (!temporal.variable && variables.length === 1) temporal.variable = variables[0];
+            }
+            if (!temporal.variable) { temporal.choices = null; return; }
+            try {
+                const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
+                if (!abort.signal.aborted) temporal.choices = choices;
+            } catch (error) {
+                if (!abort.signal.aborted) {
+                    temporal.choices = null;
+                    temporal.datesError = `Available dates could not be loaded: ${error.message} You can still enter a period.`;
+                }
+            }
+        } catch (error) {
+            if (!abort.signal.aborted) temporal.error = `Dataset could not be loaded: ${error.message} Refresh to try again.`;
+        } finally {
+            if (!abort.signal.aborted) { temporal.loading = false; this.updateAreaInputs(); }
+        }
+    }
+
+    /** Explain incomplete temporal input before enabling Calculate.
+     * @return {string} User-facing guidance, or an empty string for a complete selection.
+     */
+    temporalSelectionError() {
+        const temporal = this.temporal;
+        if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset." : "Add a temporal dataset from Catalog to Map layers.";
+        if (temporal.loading) return "Loading available variables and dates…";
+        if (temporal.error) return temporal.error;
+        if (!temporal.item?.properties["cube:variables"][temporal.variable]) return "Choose a variable.";
+        return temporalPeriodError(temporal);
     }
 
     /**
@@ -155,6 +250,14 @@ export class RasterSeriesController {
 
     /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
     updateAreaInputs() {
+        if (this.sourceMode === "temporal") {
+            const temporal = this.temporal;
+            const source = this.temporalSelectionError() ? null : {collectionId: temporal.item.collection, itemId: temporal.item.id,
+                variable: temporal.variable, startTime: new Date(`${temporal.startTime}Z`).toISOString(), endTime: new Date(`${temporal.endTime}Z`).toISOString()};
+            this.areaStatistics.updateTemporalInputs(source, this.areaChoice === "whole" ? {kind: "wholeRaster"} : this.selectedArea,
+                this.selectedAreaLabel, this.formulas, this.position);
+            return;
+        }
         this.areaStatistics.updateCalculationInputs(this.sources.filter(source => this.selectedKeys.has(source.key)),
             this.areaChoice === "whole" ? {kind:"wholeRaster"} : this.selectedArea, this.selectedAreaLabel, this.formulas, this.position);
     }
@@ -246,6 +349,7 @@ export class RasterSeriesController {
     /** Present every statistic, keeping previous-area plots separate from current results. @return {void} */
     render() {
         const area = this.areaStatistics;
+        if (this.sourceMode === "temporal") { this.renderTemporalResults(); return; }
         const sources = this.orderedSources();
         /** Join one result set to plot order without mixing current and previous areas.
          * @param {Map<string,Object>} results Per-source calculation outcomes.
@@ -277,11 +381,41 @@ export class RasterSeriesController {
         });
     }
 
+    /** Present saved temporal values through the same statistic, chart and table contract.
+     * Plot-only edits never resubmit a calculation or reread its source rasters.
+     * @return {void}
+     */
+    renderTemporalResults() {
+        const area = this.areaStatistics, result = area.temporalResult;
+        const observations = result?.observations ?? [];
+        const statistics = this.formulas.map(formula => ({...formula, ...this.statisticDisplay.get(formula.id), previousRows: null,
+            rows: observations.map(({time, rows}) => {
+                const row = rows.find(value => value.label === "stat-" + formula.id);
+                return {key: time, xValue: Date.parse(time), label: new Date(time).toISOString().replace("T", " ").replace(/(\.000)?Z$/, " UTC"),
+                    statisticId: formula.id, statisticLabel: formula.label || formula.expression, state: row.state === "ok" ? "value" : row.state,
+                    value: row.value === null ? null : Number(row.value), rawValue: row.value, unit: row.unit ?? ""};
+            })}));
+        this.view.render({active: this.active, temporal: {...this.temporal, selectionError: this.temporalSelectionError()},
+            area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: area.area, areaLabel: area.areaLabel,
+                results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
+            statistics, plots: this.plots, sources: [], rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
+            previousRows: null, showingPrevious: false, busy: area.busy, chartType: this.chartType,
+            message: this.temporalSelectionError() || area.message,
+            canDownload: !!result && !area.busy});
+    }
+
     /** Export every statistic with its exact scalar text, unit, source and area provenance.
      * @return {string} CSV document, or an empty string before results are available.
      */
     exportCsv() {
         const area = this.areaStatistics;
+        if (this.sourceMode === "temporal") {
+            if (area.busy || !area.temporalResult) return "";
+            const rows = csvParse(area.temporalResult.csv);
+            const labels = new Map(this.formulas.map(formula => ["stat-" + formula.id, formula.label || formula.expression]));
+            for (const row of rows) row.calculation = spreadsheetText(labels.get(row.calculation));
+            return csvFormat(rows) + "\r\n";
+        }
         if (area.busy || !area.results.size) return "";
         const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point", "source"]];
         for (const source of this.orderedSources()) {

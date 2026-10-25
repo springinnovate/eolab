@@ -1,6 +1,7 @@
 /** Present the model library, editable setup and one run's results in Analysis. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
+import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, renderModelFiles, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
@@ -28,20 +29,6 @@ export function describeModelArea(area) {
     }
     if (area.kind === "catalogSelection") return `${area.selection.layerName} · ${describeModelFilter(area.selection.filter)}`;
     return "Previously selected polygons; the server checks that the input is still available.";
-}
-
-/** Describe a model's lifecycle or server-supplied stage without interpreting operation phases.
- * Missing descriptions from older responses use a generic running label. Counts
- * describe the current stage, never an estimated percentage of the whole run.
- * @param {{status:string,expiresAt?:string|null,progress:{description?:string|null,completed?:number|null,total?:number|null,unit?:string|null}}} job Validated model run status.
- * @return {string} Lifecycle label or literal stage description with measured work when available.
- */
-export function describeModelProgress(job) {
-    const status = job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
-    if (status !== "running") return ({queued: "Queued", cancelling: "Cancelling…", ready: "Ready", failed: "Failed",
-        cancelled: "Cancelled", interrupted: "Interrupted", expired: "Results expired", deleted: "Deleted"})[status] ?? status;
-    const description = job.progress.description ?? "Running model";
-    return job.progress.total > 0 ? `${description} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${description}…`;
 }
 
 /** Keep setup fields and run controls stable while progress updates arrive. */

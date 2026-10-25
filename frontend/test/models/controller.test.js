@@ -84,46 +84,46 @@ async function periodFixture(overrides = {}, view = null) {
  */
 function editExactTime(controls, boundary, value, event = "input") {
     const [date, time] = value.split("T");
-    controls[`${boundary}Date`].value = date;
-    controls[`${boundary}Time`].value = time;
-    controls[`${boundary}Time`].dispatchEvent(new Event(event));
+    controls.period[`${boundary}Date`].value = date;
+    controls.period[`${boundary}Time`].value = time;
+    controls.period[`${boundary}Time`].dispatchEvent(new Event(event));
 }
 
 test("calendar controls capture whole months and inclusive days as the existing UTC interval", async () => {
     const view = new ModelsView(new SummaryControlDocument());
     const h = await periodFixture({}, view), controls = view.setup.temporal, draft = h.controller.state.draft;
-    assert.equal(controls.periodMode.value, "month");
+    assert.equal(controls.period.periodMode.value, "month");
     for (const [month, start, end] of [
         ["2000-02", "2000-02-01T00:00:00.000Z", "2000-03-01T00:00:00.000Z"],
         ["2000-12", "2000-12-01T00:00:00.000Z", "2001-01-01T00:00:00.000Z"],
     ]) {
-        controls.selectedMonth.value = month; controls.selectedMonth.dispatchEvent(new Event("input"));
+        controls.period.selectedMonth.value = month; controls.period.selectedMonth.dispatchEvent(new Event("input"));
         const request = captureModelSubmission(draft, "e".repeat(32), -420);
         assert.deepEqual(request.inputs.weather, {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
             variable: "temperature", startTime: start, endTime: end});
-        assert.match(controls.periodSummary.textContent, /UTC/);
+        assert.match(controls.period.periodSummary.textContent, /UTC/);
     }
-    controls.periodMode.value = "days"; controls.periodMode.dispatchEvent(new Event("change"));
+    controls.period.periodMode.value = "days"; controls.period.periodMode.dispatchEvent(new Event("change"));
     for (const [first, last, end] of [
         ["2000-02-29", "2000-02-29", "2000-03-01T00:00:00.000Z"],
         ["2024-03-10", "2024-03-11", "2024-03-12T00:00:00.000Z"],
     ]) {
-        controls.firstDay.value = first; controls.lastDay.value = last;
-        controls.lastDay.dispatchEvent(new Event("input"));
+        controls.period.firstDay.value = first; controls.period.lastDay.value = last;
+        controls.period.lastDay.dispatchEvent(new Event("input"));
         const request = captureModelSubmission(draft, "e".repeat(32), -420);
         assert.equal(request.inputs.weather.startTime, `${first}T00:00:00.000Z`);
         assert.equal(request.inputs.weather.endTime, end);
-        assert.match(controls.periodSummary.textContent, /includ/);
+        assert.match(controls.period.periodSummary.textContent, /includ/);
     }
     const expected = captureModelSubmission(draft, "e".repeat(32)).inputs;
-    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
-    assert.equal(controls.startDate.value, "2024-03-10"); assert.equal(controls.startTime.value, "00:00");
-    assert.equal(controls.endDate.value, "2024-03-12"); assert.equal(controls.endTime.value, "00:00");
+    controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
+    assert.equal(controls.period.startDate.value, "2024-03-10"); assert.equal(controls.period.startTime.value, "00:00");
+    assert.equal(controls.period.endDate.value, "2024-03-12"); assert.equal(controls.period.endTime.value, "00:00");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, expected);
     editExactTime(controls, "start", "2024-03-10T12:30");
     editExactTime(controls, "end", "2024-03-11T05:15");
-    controls.periodMode.value = "days"; controls.periodMode.dispatchEvent(new Event("change"));
-    assert.equal(controls.firstDay.value, "2024-03-10"); assert.equal(controls.lastDay.value, "2024-03-11");
+    controls.period.periodMode.value = "days"; controls.period.periodMode.dispatchEvent(new Event("change"));
+    assert.equal(controls.period.firstDay.value, "2024-03-10"); assert.equal(controls.period.lastDay.value, "2024-03-11");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, expected);
     assert.equal(h.submitted.length, 0);
     await h.controller.submit();
@@ -243,47 +243,47 @@ test("precipitation inputs visibly round UTC hours and submit exactly those date
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
     const h = await periodFixture({getTemporalItem: async () => structuredClone(item)}, view);
     const draft = h.controller.state.draft, controls = view.setup.temporal;
-    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
+    controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
     await h.controller.chooseTemporalVariable("temperature");
     editExactTime(controls, "start", "2000-01-31T23:30");
     editExactTime(controls, "end", "2000-02-01T01:10");
     controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
-    controls.startTime.focus();
+    controls.period.startTime.focus();
     await h.controller.chooseTemporalVariable("water_flux");
-    assert.equal(controls.startDate.value, "2000-02-01");
-    assert.equal(controls.startTime.value, "00:00");
-    assert.equal(controls.endTime.value, "01:00");
+    assert.equal(controls.period.startDate.value, "2000-02-01");
+    assert.equal(controls.period.startTime.value, "00:00");
+    assert.equal(controls.period.endTime.value, "01:00");
     assert.equal(draft.reduction.reducer, "precipitation_total");
     assert.deepEqual(controls.statistic.children.map(option => option.value), ["precipitation_total"]);
     editExactTime(controls, "start", "2000-02-01T00:10");
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /whole UTC hours/);
     await h.controller.loadTemporalDates(undefined, true);
-    assert.equal(controls.startTime.value, "00:10");
+    assert.equal(controls.period.startTime.value, "00:10");
     assert.equal(draft.temporal.startTime, "2000-02-01T00:10");
-    controls.startTime.dispatchEvent(new Event("blur"));
-    assert.equal(controls.startTime.value, "00:00");
-    assert.equal(draft.temporal.startTime, `${controls.startDate.value}T${controls.startTime.value}`);
-    controls.endTime.focus(); editExactTime(controls, "end", "2000-02-01T00:20");
-    controls.endTime.dispatchEvent(new Event("blur"));
-    assert.equal(controls.endTime.value, "00:00");
+    controls.period.startTime.dispatchEvent(new Event("blur"));
+    assert.equal(controls.period.startTime.value, "00:00");
+    assert.equal(draft.temporal.startTime, `${controls.period.startDate.value}T${controls.period.startTime.value}`);
+    controls.period.endTime.focus(); editExactTime(controls, "end", "2000-02-01T00:20");
+    controls.period.endTime.dispatchEvent(new Event("blur"));
+    assert.equal(controls.period.endTime.value, "00:00");
     assert.match(controls.status.textContent, /end must be later/);
     assert.equal(view.setup.run.disabled, true);
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /end must be later/);
     editExactTime(controls, "end", "2000-02-01T00:30");
-    controls.endTime.dispatchEvent(new Event("change"));
-    assert.equal(controls.endTime.value, "01:00");
+    controls.period.endTime.dispatchEvent(new Event("change"));
+    assert.equal(controls.period.endTime.value, "01:00");
     assert.equal(view.setup.run.disabled, false);
     await h.controller.chooseTemporalVariable("temperature");
     assert.equal(draft.reduction.reducer, "mean");
     controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
     editExactTime(controls, "start", "2000-02-01T00:10");
-    controls.startTime.dispatchEvent(new Event("change")); controls.startTime.dispatchEvent(new Event("blur"));
+    controls.period.startTime.dispatchEvent(new Event("change")); controls.period.startTime.dispatchEvent(new Event("blur"));
     assert.equal(draft.temporal.startTime, "2000-02-01T00:10");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.statistic, {reducer: "sum"});
     await h.controller.chooseTemporalVariable("water_flux");
     const expected = captureModelSubmission(draft, "e".repeat(32));
-    assert.equal(expected.inputs.weather.startTime, `${controls.startDate.value}T${controls.startTime.value}:00.000Z`);
-    assert.equal(expected.inputs.weather.endTime, `${controls.endDate.value}T${controls.endTime.value}:00.000Z`);
+    assert.equal(expected.inputs.weather.startTime, `${controls.period.startDate.value}T${controls.period.startTime.value}:00.000Z`);
+    assert.equal(expected.inputs.weather.endTime, `${controls.period.endDate.value}T${controls.period.endTime.value}:00.000Z`);
     assert.equal(h.submitted.length, 0);
     await h.controller.submit();
     assert.deepEqual(h.submitted[0].inputs, expected.inputs);
@@ -327,7 +327,7 @@ test("recipe precipitation units determine supported variables and labels withou
     await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
     await h.controller.chooseTemporalVariable("rain");
     const controls = view.setup.temporal;
-    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
+    controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
     assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
     assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, true);
     assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (cm)"]);
@@ -355,14 +355,14 @@ test("area-series controls accept every observation type and capture scalar stat
     h.controller.chooseModel(h.controller.state.library.find(recipe => recipe.id === seriesModel.id));
     await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
     const controls = view.setup.temporal, draft = h.controller.state.draft;
-    controls.periodMode.value = "times"; controls.periodMode.dispatchEvent(new Event("change"));
+    controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
     editExactTime(controls, "start", "2000-01-31T23:30:15.250");
     editExactTime(controls, "end", "2000-02-01T01:10:22.500");
     for (const variable of ["temperature", "rain", "energy"]) {
         await h.controller.chooseTemporalVariable(variable);
         assert.equal(controls.variable.children.find(option => option.value === variable).disabled, false);
         assert.deepEqual(controls.statistic.children.map(option => option.value), ["mean", "sum", "min", "max", "stdev", "count"]);
-        for (const input of [controls.startTime, controls.endTime]) {
+        for (const input of [controls.period.startTime, controls.period.endTime]) {
             input.dispatchEvent(new Event("change")); input.dispatchEvent(new Event("blur"));
         }
         for (const statistic of ["mean", "sum", "min", "max", "stdev", "count"]) {
@@ -375,7 +375,7 @@ test("area-series controls accept every observation type and capture scalar stat
             assert.deepEqual(request.inputs.area, area);
             assert.deepEqual(request.parameters, {});
         }
-        assert.equal(controls.startTime.step, "any"); assert.equal(controls.endTime.step, "any");
+        assert.equal(controls.period.startTime.step, "any"); assert.equal(controls.period.endTime.step, "any");
         assert.equal(controls.percentileField.hidden, true);
         assert.equal(view.setup.run.disabled, false);
     }
@@ -404,9 +404,9 @@ test("copying an area series preserves its scalar statistic, exact period and ar
     await h.controller.loadTemporalDates(undefined, true);
     const draft = h.controller.state.draft;
     const controls = view.setup.temporal;
-    assert.equal(controls.periodMode.value, "times");
-    assert.equal(controls.startDate.value, "2000-01-31"); assert.equal(controls.startTime.value, "23:30:15.250");
-    assert.equal(controls.endDate.value, "2000-02-01"); assert.equal(controls.endTime.value, "01:10:22.500");
+    assert.equal(controls.period.periodMode.value, "times");
+    assert.equal(controls.period.startDate.value, "2000-01-31"); assert.equal(controls.period.startTime.value, "23:30:15.250");
+    assert.equal(controls.period.endDate.value, "2000-02-01"); assert.equal(controls.period.endTime.value, "01:10:22.500");
     assert.equal(draft.areaMode, "captured");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, saved.inputs);
     assert.equal(h.submitted.length, 0);

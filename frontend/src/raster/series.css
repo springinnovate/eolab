@@ -7,6 +7,10 @@
 }
 .raster-series-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; margin: 0.4rem 0; }
 .raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
+.raster-series-controls label[hidden] { display: none; }
+#raster-series-temporal { font-size: 0.78rem; }
+#raster-series-temporal label { display: grid; gap: 0.25rem; min-width: 0; }
+#raster-series-temporal input, #raster-series-temporal select { max-width: 100%; min-width: 0; }
 #raster-series-area-controls .raster-series-controls label { display: flex; align-items: center; }
 .raster-series-run-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.65rem; }
 .raster-series-run-controls .raster-series-actions { margin: 0; }

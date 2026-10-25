@@ -1,4 +1,4 @@
-/** Save each raster calculation's inputs and retry state for recovery after a tab reload. */
+/** Save raster and temporal calculation inputs for recovery after a tab reload. */
 import { labeledRasterSource } from "../raster-source.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
@@ -31,13 +31,15 @@ export function calculationPixelPoint(calculations, point) {
     return Object.freeze({ longitude: point.longitude, latitude: point.latitude });
 }
 
-/** Validate and freeze the source, area, formulas and optional clicked pixel for a calculation.
- * @param {Object} value Candidate source, area, formulas and optional pixelPoint.
+/** Capture a raster or temporal calculation for submission and reload recovery.
+ * Temporal calculations also retain their installed model identity and time zone offset.
+ * @param {Object} value Source, area, formulas, optional pixelPoint, and temporal model fields when kind is temporal.
  * @return {Readonly<Object>} Immutable snapshot.
- * @throws {TypeError|Error} If the source, formulas, area, chunk budget or point is invalid.
+ * @throws {TypeError|Error} If the source, model, formulas, area, chunk budget or point is invalid.
  */
 export function calculationIntent(value) {
-    const source = labeledRasterSource(value.source, value.source.label);
+    const temporal = value.kind === "temporal";
+    const source = temporal ? temporalIntervalReference(value.source) : labeledRasterSource(value.source, value.source.label);
     if (!Array.isArray(value.calculations) || value.calculations.length < 1 || value.calculations.length > 5) {
         throw new TypeError("Use one to five calculations.");
     }
@@ -50,9 +52,35 @@ export function calculationIntent(value) {
     });
     const pixelPoint = calculationPixelPoint(calculations, value.pixelPoint);
     return Object.freeze({ source,
+        ...(temporal ? {kind: "temporal", model: Object.freeze({...validateModelIdentity(value.model)}), utcOffsetMinutes: value.utcOffsetMinutes} : {}),
         ...(chunkPixels(value.targetChunkPixels) === null ? {} : { targetChunkPixels: value.targetChunkPixels }),
         ...(pixelPoint ? { pixelPoint } : {}),
         area: normalizeCalculationArea(value.area), calculations: Object.freeze(calculations) });
+}
+
+/** Copy the Catalog variable and UTC interval retained by a temporal calculation.
+ * @param {Object} source User-selected or recovered temporal interval.
+ * @return {Readonly<Object>} Path-free identity and interval boundaries.
+ * @throws {TypeError} If a source field or ordered UTC interval is missing.
+ */
+function temporalIntervalReference(source) {
+    if (![source?.collectionId, source?.itemId, source?.variable].every(value => typeof value === "string" && value.length > 0 && value.length <= 512) ||
+        ![source.startTime, source.endTime].every(value => typeof value === "string" && Number.isFinite(Date.parse(value))) ||
+        Date.parse(source.startTime) >= Date.parse(source.endTime)) throw new TypeError("Choose a temporal dataset, variable and valid period.");
+    return Object.freeze({collectionId: source.collectionId, itemId: source.itemId, variable: source.variable,
+        startTime: source.startTime, endTime: source.endTime});
+}
+
+/** Check a model identity before building URLs or recovering saved inputs.
+ * @param {Object} model Model ID, version and definition checksum.
+ * @return {Object} Validated identity.
+ * @throws {Error} If identity fields are malformed.
+ */
+export function validateModelIdentity(model) {
+    if (!model || !/^[a-z][a-z0-9_-]{0,63}$/.test(model.id) ||
+        !/^\d+\.\d+\.\d+$/.test(model.version) || model.version.length > 32 ||
+        !/^[a-f0-9]{64}$/.test(model.definitionSha256)) throw new Error("Invalid model identity.");
+    return {id: model.id, version: model.version, definitionSha256: model.definitionSha256};
 }
 
 /** Recover submitted calculations and requested cancellations after reloading the tab.

@@ -1,13 +1,13 @@
-/** Calculate area formulas independently for each raster in a composed query or stack. */
+/** Calculate formulas for selected rasters or one temporal interval through Processing. */
 import { labeledRasterSource, rasterSourceKey } from "../raster-source.js";
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { describeJobProgress } from "./presentation.js";
 
 /**
- * Calculate up to five formulas over one shared area for each selected raster.
- * Requests run independently through Processing's server queue. This
- * controller keeps per-raster results, pauses for recovery, and
+ * Calculate up to five formulas over selected rasters or a temporal interval.
+ * Ordinary rasters use independent requests; a temporal interval uses one model run.
+ * This controller keeps results, pauses for recovery, and
  * cancels obsolete work when the inputs change or its owning query is deactivated.
  */
 export class RasterSeriesCalculations {
@@ -17,13 +17,14 @@ export class RasterSeriesCalculations {
      * composition supplies the area. No browser sibling state is read here.
      * @param {Object} options Providers.
      * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
+     * @param {import("./api.js").ProcessingApiClient} [options.api] Temporal model discovery and owned CSV reader.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
      * @param {"raster-series"|"summary-query"} [options.clientName="raster-series"] Isolated recovery namespace.
      * @throws {TypeError} If the recovery namespace is unsupported.
      */
-    constructor({ requests, clock = globalThis, clientName = "raster-series" }) {
+    constructor({ requests, api, clock = globalThis, clientName = "raster-series" }) {
         if (!["raster-series", "summary-query"].includes(clientName)) throw new TypeError("Unsupported multi-raster calculation caller.");
-        Object.assign(this, { requests, clock, clientName });
+        Object.assign(this, { requests, api, clock, clientName });
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -38,6 +39,10 @@ export class RasterSeriesCalculations {
         this.busy = false;
         this.clients = new Map();
         this.progress = new Map();
+        this.temporalMode = false;
+        this.temporalSource = null;
+        this.temporalResult = null;
+        this.resultAbort = null;
     }
 
     /** Replace the callback that refreshes the plot when calculation state changes.
@@ -89,17 +94,21 @@ export class RasterSeriesCalculations {
      * @param {string} label Area description displayed beside the plot.
      * @param {{id:number,label:string,expression:string,calculationLabel?:string}[]} formulas Formulas and optional immutable export labels.
      * @param {{longitude:number,latitude:number}|null} [pixelPoint=null] Exact committed map click for pixelValue formulas.
+     * @param {Object|null} [temporalSource] Catalog interval; null retains temporal mode while inputs are incomplete.
      * @return {void}
      * @throws {TypeError|Error} If the area is not a supported Processing descriptor.
      */
-    updateCalculationInputs(sources, area, label, formulas, pixelPoint = null) {
+    updateCalculationInputs(sources, area, label, formulas, pixelPoint = null, temporalSource) {
         const normalized = area ? normalizeCalculationArea(area) : null;
         const point = calculationPixelPoint(formulas, pixelPoint);
         const formulaKey = formulas.map(({id,expression}) => [id,expression.trim()]);
         const formulasChanged = JSON.stringify(formulaKey) !==
             JSON.stringify(this.formulas.map(({id,expression}) => [id,expression.trim()]));
-        const key = JSON.stringify([sources.map(source => [source.key, rasterSourceKey(source)]).sort(),
+        const key = JSON.stringify([temporalSource === undefined ? "rasters" : "temporal", temporalSource,
+            sources.map(source => [source.key, rasterSourceKey(source)]).sort(),
             normalized, formulaKey, point]);
+        this.temporalMode = temporalSource !== undefined;
+        this.temporalSource = temporalSource;
         this.formulas = formulas.map(formula => ({ ...formula }));
         this.sources = sources.map(source => ({ ...source }));
         this.area = normalized;
@@ -109,9 +118,29 @@ export class RasterSeriesCalculations {
         else this.onChange();
     }
 
-    /** Schedule missing results when Raster series becomes visible; cancel unfinished work when hidden.
+    /** Replace a temporal slice without running it until the user chooses Calculate.
+     * @param {Object|null} sourceInterval Catalog variable and UTC interval, or null while incomplete.
+     * @param {Object|null} area Shared sampling area or whole raster.
+     * @param {string} label Readable sampling-area description.
+     * @param {{id:number,label:string,expression:string}[]} formulas Existing Raster stack formulas.
+     * @param {{longitude:number,latitude:number}|null} [pixelPoint=null] Clicked point when used by a formula.
+     * @return {void}
+     */
+    updateTemporalInputs(sourceInterval, area, label, formulas, pixelPoint = null) {
+        this.updateCalculationInputs([], area, label, formulas, pixelPoint, sourceInterval);
+    }
+
+    /** Clear temporal results after an explicit dataset refresh without recalculating.
+     * The next Calculate uses newly admitted observations even when the interval is unchanged.
+     * @return {void}
+     */
+    discardTemporalResults() {
+        if (this.temporalMode) this.resetResultsForChangedInputs(false);
+    }
+
+    /** Resume ordinary raster calculations when shown and cancel unfinished work when hidden.
      * Call when the Raster series panel opens or closes.
-     * Completed results remain available when the user returns to the panel.
+     * Temporal intervals require Calculate. Completed results remain available when the user returns.
      * @param {boolean} visible Whether the Raster series panel is active.
      * @return {void}
      */
@@ -119,10 +148,10 @@ export class RasterSeriesCalculations {
         if (this.active === visible) return;
         this.active = visible;
         if (!visible && (this.busy || this.pending.size)) this.cancelRemainingRasters();
-        else if (visible && !this.complete) this.scheduleRemainingCalculations();
+        else if (visible && !this.complete && !this.temporalMode) this.scheduleRemainingCalculations();
     }
 
-    /** Clear results after a calculation input changes and schedule replacements when visible.
+    /** Clear changed inputs' results and schedule only ordinary raster replacements.
      * Keep completed values separately for the faded previous plot. Cancel pending
      * work so each replacement is validated by its submission endpoint.
      * @param {boolean} debounce Whether changed formulas must wait for editing to pause.
@@ -130,11 +159,12 @@ export class RasterSeriesCalculations {
      */
     resetResultsForChangedInputs(debounce) {
         if (this.results.size) this.previousResults = new Map(this.results);
+        this.temporalResult = null;
         this.cancelRemainingRasters();
         this.results = new Map();
         this.complete = false;
-        if (this.active) this.scheduleRemainingCalculations(debounce);
-        else this.onChange();
+        if (this.active && !this.temporalMode) this.scheduleRemainingCalculations(debounce);
+        else { this.message = this.temporalMode ? "Choose Calculate to sample this period." : this.message; this.onChange(); }
     }
 
     /** Stop the unfinished series after cancellation, input replacement or hiding the plot.
@@ -146,6 +176,7 @@ export class RasterSeriesCalculations {
     cancelRemainingRasters() {
         this.version++;
         this.clock.clearTimeout(this.timer);
+        this.resultAbort?.abort();
         this.dispatching = false;
         this.pending.clear();
         this.progress.clear();
@@ -169,7 +200,7 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Submit all unfinished rasters directly; the server validates each request.
+    /** Calculate a temporal interval or submit all unfinished ordinary rasters.
      * Calculate retries failed rows. Active requests
      * continue unchanged; uncertain submissions require Recover first.
      * @param {boolean} [retryFailures=true] Retry failed rows when explicitly requested.
@@ -178,6 +209,7 @@ export class RasterSeriesCalculations {
     calculateRemainingRasters(retryFailures = true) {
         this.clock.clearTimeout(this.timer);
         if (!this.active || this.dispatching) return;
+        if (this.temporalMode) { void this.calculateTemporalInterval(); return; }
         if (!this.sources.length || !this.area) {
             this.busy = false;
             this.message = !this.area ? "Choose an area or click the map to calculate." : "Select at least one raster.";
@@ -222,6 +254,51 @@ export class RasterSeriesCalculations {
         }
     }
 
+    /** Submit one temporal model run through the existing recoverable executor.
+     * Model discovery occurs once per controller; retries retain the captured identity.
+     * @return {Promise<void>} Submission dispatch or a visible input/discovery failure.
+     */
+    async calculateTemporalInterval() {
+        if (this.pending.size || this.temporalResult || this.needsRecovery) return;
+        const unreadResult = this.results.get("temporal");
+        if (unreadResult?.job) {
+            const request = {...unreadResult, key: "temporal", submitted: true, phase: "reading", message: "Reading calculated observations…"};
+            this.pending.set(0, request);
+            this.updateSeriesProgress();
+            await this.readTemporalResult(0, request, unreadResult.job);
+            return;
+        }
+        if (!this.temporalSource || !this.area) {
+            this.message = !this.temporalSource ? "Choose a dataset, variable and period." : "Choose an area or click the map to calculate.";
+            this.onChange(); return;
+        }
+        if (!this.pixelPoint && this.formulas.some(({expression}) => /\bpixelValue\s*\(/.test(expression))) {
+            this.message = "Click the map to choose a pixel for pixelValue(a)."; this.onChange(); return;
+        }
+        const version = this.version;
+        this.results.delete("temporal");
+        this.busy = this.dispatching = true;
+        this.message = "Submitting temporal calculation…"; this.onChange();
+        try {
+            this.temporalModel ??= (await this.api.discoverModels()).find(model => model.id === "temporal-raster-stack");
+            if (version !== this.version || !this.active) return;
+            if (!this.temporalModel) throw new Error("Temporal Raster stack is not installed on this server.");
+            const calculationInputs = calculationIntent({kind: "temporal", model: this.temporalModel,
+                source: this.temporalSource, area: this.area, pixelPoint: this.pixelPoint,
+                calculations: this.formulas.map(formula => ({label: "stat-" + formula.id, expression: formula.expression.trim()})),
+                utcOffsetMinutes: -new Date().getTimezoneOffset()});
+            const client = this.getOrCreateRasterExecutor(0);
+            this.pending.set(0, {key: "temporal", calculationInputs, submitted: true,
+                previousJobId: client.snapshot.completedJob?.jobId, phase: "submitting", message: "Submitting temporal calculation…"});
+            client.submit(calculationInputs, {automatic: false, client: this.clientName});
+            this.dispatching = false;
+            this.updateSeriesProgress();
+        } catch (error) {
+            if (version !== this.version || error.name === "AbortError") return;
+            this.message = error.message; this.busy = this.dispatching = false; this.onChange();
+        }
+    }
+
     /** Capture the original raster reference and label for one calculation.
      * Called while building calculation requests.
      * @param {Object} source Selected raster snapshot with its original reference.
@@ -248,6 +325,13 @@ export class RasterSeriesCalculations {
         const matchesCalculationInputs = calculationInputs => JSON.stringify(calculationInputs) === JSON.stringify(request.calculationInputs);
         if (state.completedJob && matchesCalculationInputs(state.completedCalculation) && request.submitted &&
             state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
+            if (request.calculationInputs.kind === "temporal") {
+                if (request.phase !== "reading") {
+                    request.phase = "reading"; request.message = "Reading calculated observations…";
+                    void this.readTemporalResult(index, request, state.completedJob);
+                }
+                this.updateSeriesProgress(); return;
+            }
             this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs });
             this.pending.delete(index);
         } else if (state.recoverable) {
@@ -262,6 +346,28 @@ export class RasterSeriesCalculations {
         this.updateSeriesProgress();
     }
 
+    /** Load one completed temporal CSV, discarding replies after input replacement or cancellation.
+     * @param {number} index Executor holding this request.
+     * @param {Object} request Captured inputs and current request identity.
+     * @param {Object} job Completed owned model run.
+     * @return {Promise<void>} Result rows or a visible download error.
+     */
+    async readTemporalResult(index, request, job) {
+        const abort = this.resultAbort = new AbortController();
+        try {
+            const result = await this.api.readTemporalStackRows(job, abort.signal);
+            if (this.pending.get(index) !== request) return;
+            this.temporalResult = {job, calculationInputs: request.calculationInputs, ...result};
+            this.results.delete("temporal");
+            this.pending.delete(index);
+        } catch (error) {
+            if (this.pending.get(index) !== request || error.name === "AbortError") return;
+            this.results.set(request.key, {job, calculationInputs: request.calculationInputs, error: error.message});
+            this.pending.delete(index);
+        }
+        this.updateSeriesProgress();
+    }
+
     /** Update per-raster progress and whole-series status.
      * Read pending requests and finished results to set busy and completion flags and the overall message, then notify the plot listener.
      * This method uses existing state; it does not request server updates.
@@ -270,7 +376,14 @@ export class RasterSeriesCalculations {
     updateSeriesProgress() {
         this.progress = new Map([...this.pending.values()].map(request => [request.key, { phase: request.phase, message: request.message }]));
         this.busy = this.dispatching || [...this.pending.values()].some(request => request.phase !== "recovery");
-        this.complete = !!this.sources.length && this.results.size === this.sources.length;
+        this.complete = this.temporalMode ? !!this.temporalResult : !!this.sources.length && this.results.size === this.sources.length;
+        if (this.temporalMode) {
+            this.message = this.complete ? `${this.temporalResult.observations.length} observations calculated.`
+                : this.needsRecovery ? "Recover the interrupted request to confirm or cancel the same job."
+                : this.pending.size ? [...this.pending.values()][0].message
+                : this.results.get("temporal")?.error ?? "Choose Calculate to sample this period.";
+            this.onChange(); return;
+        }
         if (this.complete) {
             this.message = this.commonError || (this.hasErrors ? "Some rasters failed. Calculate to retry failed rasters." : "Raster series complete.");
         } else if (this.needsRecovery) {
@@ -307,6 +420,7 @@ export class RasterSeriesCalculations {
      */
     destroy() {
         this.clock.clearTimeout(this.timer);
+        this.resultAbort?.abort();
         for (const client of this.clients.values()) client.destroy();
     }
 }

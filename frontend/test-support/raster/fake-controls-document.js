@@ -9,6 +9,7 @@ export class FakeRasterControlElement extends EventTarget {
         super();
         this.ownerDocument = ownerDocument;
         this.type = type;
+        this.dataset = {};
         this.value = "";
         this.textContent = "";
         this.hidden = false;
@@ -76,6 +77,11 @@ export class FakeRasterControlElement extends EventTarget {
      * @return {FakeRasterControlElement} Attached child.
      */
     appendChild(child) { return this.insertBefore(child, null); }
+
+    /** Return the attached parent element for label-owned native controls.
+     * @return {FakeRasterControlElement|null} Parent element, or null when detached.
+     */
+    get parentElement() { return this.parentNode ?? null; }
 
     /** Insert children ahead of the existing contents.
      * @param {...FakeRasterControlElement} children Children to attach.
