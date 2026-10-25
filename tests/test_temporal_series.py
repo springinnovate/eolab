@@ -172,21 +172,21 @@ def test_series_combines_multiple_native_tiles(
     assert float(rows[0]["value"]) == pytest.approx(float(np.std(values)))
 
 
-def test_series_reads_two_observations_concurrently_and_writes_in_time_order(
+def test_series_replenishes_two_readers_and_writes_in_time_order(
     interval: ResolvedTemporalInterval,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Overlap real TIFF reads while retaining ordered values and complete progress.
+    """Keep reading later dates while a slow first TIFF waits, then write in order.
 
     Args:
-        interval: Three observations, including an odd final batch.
+        interval: Three observations whose first read waits for the third.
         tmp_path: Isolated result root.
-        monkeypatch: Coordinate the first two native reads without timing assertions.
+        monkeypatch: Coordinate native reads without elapsed-time assertions.
     """
     first, second, third = (item.path for item in interval.observations)
     together = Barrier(2, timeout=5)
-    second_finished = Event()
+    third_finished = Event()
     lock = Lock()
     active = peak = 0
     finished: list[Path] = []
@@ -195,7 +195,7 @@ def test_series_reads_two_observations_concurrently_and_writes_in_time_order(
     def read_out_of_order(
         dataset: TemporalRasterDataset, window: Window
     ) -> np.ma.MaskedArray:
-        """Read real pixels, making the second timestamp finish before the first.
+        """Read real pixels while holding the first timestamp until the third ends.
 
         Args:
             dataset: Observation handle owned by the calling read thread.
@@ -214,12 +214,12 @@ def test_series_reads_two_observations_concurrently_and_writes_in_time_order(
             if path in (first, second):
                 together.wait()
             if path == first:
-                assert second_finished.wait(5)
+                assert third_finished.wait(5)
             values = read_native_raster_window(dataset, window)
             with lock:
                 finished.append(path)
-            if path == second:
-                second_finished.set()
+            if path == third:
+                third_finished.set()
             return values
         finally:
             with lock:
@@ -234,7 +234,7 @@ def test_series_reads_two_observations_concurrently_and_writes_in_time_order(
         interval, "mean", AggregateArea(kind="wholeRaster"), directory
     )
     assert peak == 2 and active == 0
-    assert finished == [second, first, third]
+    assert finished == [second, third, first]
     assert all(dataset.native_dataset.closed for dataset in datasets)
     assert [float(row["value"]) for row in rows] == pytest.approx([2.75, 4, 43 / 6])
     assert [row["time_utc"] for row in rows] == [
@@ -410,13 +410,16 @@ def test_series_preserves_cyclic_cells_across_dates(tmp_path: Path) -> None:
 
 
 def test_unreadable_observation_returns_native_failure_without_artifact(
-    interval: ResolvedTemporalInterval, tmp_path: Path
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fail the whole attempt if a selected TIFF cannot be opened.
+    """Close active TIFF reads and leave no artifact when an observation fails.
 
     Args:
         interval: TIFF observations whose second file is removed before the attempt.
         tmp_path: Isolated private output root.
+        monkeypatch: Record successful native opens during the failing calculation.
     """
     spec, _, _ = calculate_series(
         interval,
@@ -425,6 +428,27 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
         tmp_path / "complete",
     )
     interval.observations[1].path.unlink()
+    datasets: list[TemporalRasterDataset] = []
+
+    def observe_read(
+        dataset: TemporalRasterDataset, window: Window
+    ) -> np.ma.MaskedArray:
+        """Record a live TIFF handle and return its original pixels.
+
+        Args:
+            dataset: Observation handle owned by the calling read thread.
+            window: The calculation's spatial crop.
+
+        Returns:
+            Native values and validity from the original reader.
+        """
+        datasets.append(dataset)
+        return read_native_raster_window(dataset, window)
+
+    monkeypatch.setattr(
+        "eolab_app.processing.temporal_series.read_native_raster_window",
+        observe_read,
+    )
     directory = tmp_path / "failed"
     directory.mkdir()
     queue: SimpleQueue[tuple[object, ...]] = SimpleQueue()
@@ -441,6 +465,7 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
     )
     assert not (directory / "provenance.json").exists()
     assert not (directory / "polygon-mask.tif").exists()
+    assert datasets and all(dataset.native_dataset.closed for dataset in datasets)
 
 
 @pytest.mark.parametrize("area_kind", ["bounds", "polygons"])
