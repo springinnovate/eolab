@@ -29,8 +29,10 @@ function fixture() {
         async submitCalculation(submission) {
             submitted.push(submission);
             const job = {jobId: String(++serial).padStart(32, "0"), requestId: submission.requestId,
-                operation: submission.kind === "temporal" ? "temporal.stack.v1" : "raster.aggregate.v1", status: "running",
-                progress: {phase: "calculating", completedBlocks: 0, totalBlocks: 3}, result: null};
+                operation: submission.kind === "temporal" ? "model.run.v1" : "raster.aggregate.v1", status: "running",
+                progress: submission.kind === "temporal"
+                    ? {phase: "summarizing", description: "Calculating each observation", completed: 0, total: 3, unit: "blocks"}
+                    : {phase: "calculating", completedBlocks: 0, totalBlocks: 3}, result: null};
             server.set(job.jobId, job); return job;
         },
         async listJobs() { return [...server.values()]; },
@@ -81,6 +83,10 @@ test("temporal stack explicitly samples one independent period and reuses comple
         h.view.actions.onCalculate(); await flush();
         assert.equal(h.submitted.length, 1);
         const request = h.submitted[0], job = [...h.server.values()][0];
+        assert.equal(h.view.state.message, "Calculating each observation · 0 of 3 blocks");
+        h.server.set(job.jobId, {...job, progress: {...job.progress, completed: 2}});
+        await h.finish(job.jobId, "running");
+        assert.equal(h.view.state.message, "Calculating each observation · 2 of 3 blocks");
         assert.deepEqual(request.source, {collectionId: DATASET.collectionId, itemId: DATASET.itemId, variable: "temperature",
             startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-02-01T00:00:00.000Z"});
         assert.deepEqual(request.area, AREA);

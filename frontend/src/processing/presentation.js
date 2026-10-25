@@ -32,8 +32,26 @@ export function describeClipArea(area) {
     return `${label} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
 }
 
-/** Describe measured blocks or a named phase, without invented percentages. @param {Object} job Server job snapshot. @return {string} User-facing progress. */
+/** Describe a model job's lifecycle or server-supplied stage and measured work.
+ * Stages without a description use a generic running label. Counts describe
+ * the current stage, never an estimated percentage of the whole run.
+ * @param {{status:string,expiresAt?:string|null,progress:{description?:string|null,completed?:number|null,total?:number|null,unit?:string|null}}} job Validated model run status.
+ * @return {string} Lifecycle label or stage description with measured work when available.
+ */
+export function describeModelProgress(job) {
+    const status = job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
+    if (status !== "running") return ({queued: "Queued", cancelling: "Cancelling…", ready: "Ready", failed: "Failed",
+        cancelled: "Cancelled", interrupted: "Interrupted", expired: "Results expired", deleted: "Deleted"})[status] ?? status;
+    const description = job.progress.description ?? "Running model";
+    return job.progress.total > 0 ? `${description} · ${job.progress.completed ?? 0} of ${job.progress.total} ${job.progress.unit ?? "units"}` : `${description}…`;
+}
+
+/** Describe a job's lifecycle and measured progress using its operation's response format.
+ * @param {Object} job Validated Processing job snapshot, including its operation and progress.
+ * @return {string} User-facing status or stage with measured work, without invented percentages.
+ */
 export function describeJobProgress(job) {
+    if (job.operation === "model.run.v1") return describeModelProgress(job);
     if (job.status !== "running") return ({ queued: "Queued", cancelling: "Cancelling…", ready: "Ready",
         failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted — submit a new job to retry",
         expired: "Expired — run again to download", deleted: "Deleted" })[job.status] ?? job.status;

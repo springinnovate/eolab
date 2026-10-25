@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ModelsView, describeModelProgress } from "../../src/models/view.js";
+import { ModelsView } from "../../src/models/view.js";
+import { describeModelProgress } from "../../src/processing/presentation.js";
 import { createModelDraft, modelSourceKey } from "../../src/models/inputs.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { model, raster, area, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
@@ -323,7 +324,7 @@ test("model progress uses the supplied description without reading operation pha
     assert.equal(describeModelProgress(run), "Measuring habitat…");
 });
 
-test("historical progress uses a generic running label while lifecycle states take precedence", () => {
+test("model stages without a description use a running label while lifecycle states take precedence", () => {
     for (const progress of [{phase: "preparing_polygon_mask"}, {phase: "unfamiliar_stage", description: null}, {}]) {
         assert.equal(describeModelProgress(job({status: "running", progress})), "Running model…");
         assert.equal(describeModelProgress(job({status: "running", progress: {...progress, completed: 2, total: 5, unit: "blocks"}})), "Running model · 2 of 5 blocks");
