@@ -726,6 +726,13 @@ async function initializeCatalog(
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
+    /** List each retained temporal dataset once, independent of its displayed observations.
+     * @param {Object[]} layers Map layer snapshots.
+     * @return {Object[]} Path-free dataset choices for analysis controls.
+     */
+    const temporalDatasets = layers => [...new Map(layers.filter(layer => layer.source?.collectionId === TEMPORAL_COLLECTION_ID)
+        .map(({source}) => [source.itemId, {key: getCatalogItemKey({collection: source.collectionId, id: source.itemId}),
+            collectionId: source.collectionId, itemId: source.itemId, label: source.itemId}])).values()];
     let models = null;
     let modelArea = null;
     let modelAreaDescription = "";
@@ -785,7 +792,7 @@ async function initializeCatalog(
             mapLegend.update(layers);
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
-            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations));
+            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.capabilities?.calculations), temporalDatasets(layers));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -1107,8 +1114,7 @@ async function initializeCatalog(
             return {
                 rasters: layers.filter(layer => layer.capabilities?.modelInput)
                     .map(layer => ({...describeCalculationSource(layer.source, layer.label), visible: layer.visible})),
-                temporalDatasets: [...new Map(layers.filter(layer => layer.source?.collectionId === TEMPORAL_COLLECTION_ID)
-                    .map(({source}) => [source.itemId, {collectionId: source.collectionId, itemId: source.itemId, label: source.itemId}])).values()],
+                temporalDatasets: temporalDatasets(layers),
                 vectors: getPolygonTargets().map(target => ({...target.item, key: target.key, label: target.label, filter: target.filter, fields: target.fields})),
                 area: modelArea, areaDescription: modelAreaDescription,
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
@@ -1361,9 +1367,11 @@ async function initializeCatalog(
         savedMapViewController?.scheduleRemember()
     );
     leafletMap.on("basemapchange", () => savedMapViewController?.scheduleRemember());
-    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests });
+    const rasterAreaSeries = new RasterSeriesCalculations({ requests: calculationRequests, api: processingApi });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
+        getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
+        loadTemporalTimes,
         onEditArea: () => calculations.open(),
         view: new RasterSeriesView(document, {
             onContextChange: context => mapInspection.setToolContext("raster-series", context),
@@ -1373,7 +1381,8 @@ async function initializeCatalog(
     rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
     void rasterAreaSeries.recoverAndCancelPreviousSeriesCalculations();
     void calculations.start();
-    rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.capabilities?.calculations));
+    rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.capabilities?.calculations),
+        temporalDatasets(mapLayerController.snapshots()));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram", "open-raster-series-summary"]) {
         document.querySelector(`#${id}`).addEventListener("click",
@@ -1917,7 +1926,8 @@ async function initializeCatalog(
      */
     async function refreshCatalogDatasets() {
         await loadCatalog(true);
-        await Promise.all([rasterVisualization.refreshTemporalLayers(), models.loadTemporalDates(undefined, true)]);
+        await Promise.all([rasterVisualization.refreshTemporalLayers(), models.loadTemporalDates(undefined, true),
+            rasterSeries.loadTemporalDates(undefined, true)]);
     }
     const scheduleCatalogSearch = createDebouncedAction(
         loadCatalog.bind(null, false),

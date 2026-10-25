@@ -2,7 +2,8 @@
 import { validateCalculationRows, validateModelResult } from "./model-results.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
-import { calculationPixelPoint, chunkPixels } from "./calculation-session.js";
+import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./calculation-session.js";
+import { csvParse } from "d3";
 
 /** Serialize one raster identity without carrying display state or file paths.
  * @param {Object} source Catalog item or owned run-file source.
@@ -181,18 +182,6 @@ function validateModelArtifacts(manifest, job) {
         throw new Error("Processing returned invalid result file sizes.");
 }
 
-/** Check a model identity before building URLs or recovering saved inputs.
- * @param {Object} model Model ID, version and definition checksum.
- * @return {Object} Validated identity.
- * @throws {Error} If identity fields are malformed.
- */
-function validateModelIdentity(model) {
-    if (!model || !/^[a-z][a-z0-9_-]{0,63}$/.test(model.id) ||
-        !/^\d+\.\d+\.\d+$/.test(model.version) || model.version.length > 32 ||
-        !/^[a-f0-9]{64}$/.test(model.definitionSha256)) throw new Error("Invalid model identity.");
-    return model;
-}
-
 /** Check the recipe fields used to construct a setup form.
  * @param {Object} model Installed recipe with its checksum.
  * @return {Object} Validated recipe.
@@ -349,13 +338,21 @@ export class ProcessingApiClient {
         return this.request(`/polygon-areas/${validateProcessingId(id)}`, "DELETE");
     }
 
-    /** Queue complete inputs, coalescing submissions ready in the same microtask turn.
+    /** Submit temporal formulas as one model run, or batch independent raster requests.
      * Each caller retains its independent promise, retry key and cancellation lifecycle.
-     * @param {Object} submission Source, area, formulas, optional pixelPoint and stable requestId.
+     * @param {Object} submission Captured calculation intent and stable requestId.
      * @return {Promise<Object>} Owned job with progress and results as the worker produces them.
      * @throws {ProcessingRequestError|Error} If admission fails or the response is invalid.
      */
     async submitCalculation(submission) {
+        if (submission.kind === "temporal") {
+            const {area, source, calculations, pixelPoint, model, requestId, utcOffsetMinutes} = submission;
+            return this.submitModelRun({requestId, model, label: "Temporal raster stack", utcOffsetMinutes, parameters: {}, inputs: {
+                source, area: area.kind === "catalogSelection" ? {kind: area.kind, selection: area.catalogSelection}
+                    : area.kind === "polygonArea" ? {kind: area.kind, reference: area.polygonArea} : area,
+                metrics: {calculations, ...(pixelPoint ? {pixelPoint} : {})},
+            }});
+        }
         await this.ensureSession();
         const area = normalizeCalculationArea(submission.area);
         const pixelPoint = calculationPixelPoint(submission.calculations, submission.pixelPoint);
@@ -454,6 +451,29 @@ export class ProcessingApiClient {
         const job = validateJob(await this.request("/model-runs", "POST", submission));
         if (job.operation !== "model.run.v1") throw new Error("Unexpected model submission response.");
         return job;
+    }
+
+    /** Read a temporal stack's owned CSV without converting exact scalar text.
+     * The current writer supplies chronological observations and named formula rows.
+     * @param {Object} job Completed, validated temporal stack job.
+     * @param {AbortSignal} [signal] Cancellation when the requested plot changes.
+     * @return {Promise<{csv:string, observations:{time:string,rows:Object[]}[]}>} Original download and plot rows grouped by observation.
+     * @throws {ProcessingRequestError|Error} If the owned download is unavailable, expired, cancelled or unreadable.
+     */
+    async readTemporalStackRows(job, signal) {
+        const response = await this.fetch.call(globalThis, processingDownloadUrl(job.result.url, job.jobId, "result"),
+            {credentials: "same-origin", cache: "no-store", headers: {Accept: "text/csv"}, signal});
+        if (!response.ok) throw new ProcessingRequestError("The temporal result is unavailable or has expired. Calculate again.", response.status);
+        const csv = await response.text();
+        const observations = new Map();
+        const expressions = new Map(job.result.calculations.map(value => [value.label, value.expression]));
+        for (const row of csvParse(csv)) {
+            if (!observations.has(row.time_utc)) observations.set(row.time_utc, {time: row.time_utc, rows: []});
+            observations.get(row.time_utc).rows.push({label: row.calculation, expression: expressions.get(row.calculation),
+                value: row.value === "" ? null : row.value, valueType: row.value_type, unit: row.unit,
+                state: row.state, aggregates: JSON.parse(row.aggregates)});
+        }
+        return {csv, observations: [...observations.values()]};
     }
 
     /** Read the exact recipe and inputs originally accepted for a run.

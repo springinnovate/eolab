@@ -2,7 +2,8 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
 import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
-import { supportsPrecipitationTotal, getTemporalStatistics, snapTemporalHour, getTemporalMonthBoundaries } from "./temporal-inputs.js";
+import { supportsPrecipitationTotal, getTemporalStatistics } from "./temporal-inputs.js";
+import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
 const RECOVERY_KEY = "eolab.models.pending.v1";
 const DELETIONS_KEY = "eolab.models.deletions.v1";

@@ -1,4 +1,5 @@
 /** Capture a temporal dataset, UTC period and observation statistic for model setup. */
+import { temporalPeriodError } from "../temporal-period.js";
 
 /** Statistics accepted by the temporal_reduction input contract. */
 export const TEMPORAL_STATISTICS = [
@@ -39,15 +40,6 @@ export function getTemporalStatistics(variable, temporal) {
         TEMPORAL_STATISTICS.filter(choice => choice.value !== "precipitation_total") : [];
 }
 
-/** Round a date-control value to the nearest UTC hour, with half hours rounded forward.
- * @param {string} value Editable date and time interpreted as UTC, possibly incomplete.
- * @return {string} Rounded boundary, or the unchanged incomplete entry for the user to finish.
- */
-export function snapTemporalHour(value) {
-    const time = Date.parse(`${value}Z`);
-    return Number.isFinite(time) ? new Date(Math.round(time / 3600000) * 3600000).toISOString().slice(0, 16) : value;
-}
-
 /** Create empty period choices independently of the observation displayed on the map.
  * @param {Object[]} datasets Catalog dataset identities retained in Map layers.
  * @param {"temporal_reduction"|"area_statistic"} statisticType Recipe input defining whether to summarize observations or pixels.
@@ -57,67 +49,6 @@ export function snapTemporalHour(value) {
 export function createTemporalDraft(datasets, statisticType, precipitation) {
     return {datasets: structuredClone(datasets), statisticType, precipitation, datasetKey: "", item: null, variable: "",
         periodMode: "month", startTime: "", endTime: "", choices: null, loading: false, error: "", datesError: ""};
-}
-
-/** Convert a calendar month to its UTC start and excluded end.
- * @param {string} month Native month-control value (YYYY-MM), or empty.
- * @return {{startTime:string,endTime:string}} Boundaries for the existing temporal input.
- */
-export function getTemporalMonthBoundaries(month) {
-    if (!month) return {startTime: "", endTime: ""};
-    const startTime = `${month}-01T00:00`, end = new Date(`${startTime}Z`);
-    end.setUTCMonth(end.getUTCMonth() + 1);
-    return {startTime, endTime: end.toISOString().slice(0, 16)};
-}
-
-/** Include both selected calendar days in a midnight-to-midnight UTC period.
- * @param {string} firstDay Native date-control value (YYYY-MM-DD), or empty.
- * @param {string} lastDay Included final date-control value, or empty.
- * @return {{startTime:string,endTime:string}} UTC boundaries; an unfilled side stays empty.
- */
-export function getTemporalDayBoundaries(firstDay, lastDay) {
-    const end = lastDay ? new Date(`${lastDay}T00:00Z`) : null;
-    end?.setUTCDate(end.getUTCDate() + 1);
-    return {startTime: firstDay ? `${firstDay}T00:00` : "", endTime: end ? end.toISOString().slice(0, 16) : ""};
-}
-
-/** Return the calendar days touched by the editable UTC period.
- * An excluded midnight belongs to the previous selected day.
- * @param {{startTime:string,endTime:string}} temporal Editable UTC boundaries, including incomplete entries.
- * @return {{firstDay:string,lastDay:string}} Included dates for the day-range controls.
- */
-export function getTemporalSelectedDays(temporal) {
-    const end = Date.parse(`${temporal.endTime}Z`);
-    return {firstDay: temporal.startTime.split("T")[0], lastDay: end % 86400000 === 0 ?
-        new Date(end - 86400000).toISOString().slice(0, 10) : temporal.endTime.split("T")[0]};
-}
-
-/** Change entry mode, expanding to the selected month or whole days when requested.
- * Exact times preserves the current boundaries. The caller displays the new period before submission.
- * @param {{startTime:string,endTime:string}} temporal Current editable UTC boundaries.
- * @param {"month"|"days"|"times"} periodMode Chosen entry mode.
- * @return {{periodMode:string,startTime:string,endTime:string}} Draft fields to replace.
- */
-export function selectTemporalPeriodMode(temporal, periodMode) {
-    const {firstDay, lastDay} = getTemporalSelectedDays(temporal);
-    const period = periodMode === "month" ? getTemporalMonthBoundaries(firstDay.slice(0, 7)) :
-        periodMode === "days" ? getTemporalDayBoundaries(firstDay, lastDay) :
-            {startTime: temporal.startTime, endTime: temporal.endTime};
-    return {periodMode, ...period};
-}
-
-/** Describe the requested calendar period or exact UTC boundaries beside its controls.
- * @param {{periodMode:string,startTime:string,endTime:string}} temporal Editable mode and UTC boundaries.
- * @return {string} Human-readable period, or guidance while boundaries are incomplete or reversed.
- */
-export function describeTemporalPeriod(temporal) {
-    const start = new Date(`${temporal.startTime}Z`), end = new Date(`${temporal.endTime}Z`);
-    if (!(end > start)) return "Choose a valid period.";
-    if (temporal.periodMode === "month") return new Intl.DateTimeFormat(undefined,
-        {month: "long", year: "numeric", timeZone: "UTC"}).format(start) + " · whole month · UTC";
-    const date = new Intl.DateTimeFormat(undefined, {day: "numeric", month: "short", year: "numeric", timeZone: "UTC"});
-    if (temporal.periodMode === "days") return `${date.format(start)} – ${date.format(new Date(end - 86400000))} · both days included · UTC`;
-    return `${date.format(start)} ${temporal.startTime.split("T")[1]} → ${date.format(end)} ${temporal.endTime.split("T")[1]} UTC · end excluded`;
 }
 
 /** Explain a missing or invalid temporal choice before submitting a calculation.
@@ -137,10 +68,9 @@ export function temporalSelectionError(temporal) {
     if (!variable) return "Choose a variable.";
     if (!getTemporalStatistics(variable, temporal).length)
         return `Choose instantaneous measurements or a mean precipitation rate in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
-    if (!temporal.startTime || !temporal.endTime) return "Choose a month, a date range or exact times in UTC.";
+    const periodError = temporalPeriodError(temporal);
+    if (periodError) return periodError;
     const start = Date.parse(`${temporal.startTime}Z`), end = Date.parse(`${temporal.endTime}Z`);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return "Enter a valid start and end date and time in UTC.";
-    if (start >= end) return "The end must be later than the start.";
     if (supportsPrecipitationTotal(variable, temporal) && (start % 3600000 !== 0 || end % 3600000 !== 0))
         return "Finish editing the dates to round them to whole UTC hours before running the precipitation total.";
     return "";
