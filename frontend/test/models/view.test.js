@@ -483,7 +483,7 @@ test("time-series runs show saved coverage, their statistic and the ordinary CSV
     for (const value of ["Area time series", "series.csv", "Statistic: Mean", "Units: K", "Observations in this run: 3",
         "First observation: 2000-01-01 00:00:00 UTC", "Last observation: 2000-01-03 12:00:00 UTC"])
         assert.ok(text.includes(value), value);
-    assert.match(text.at(-1), /Download the CSV.*one result per observation.*valid-pixel count/);
+    assert.equal(text.at(-1), "Download the CSV under Files from this run for values and per-calculation pixel counts.");
     assert.deepEqual(h.view.run.inputsBody.children[0].children.slice(-2).map(node => node.textContent), ["Statistic", "Mean"]);
     const actions = h.view.run.result.children[2].children[3];
     assert.equal(actions.children[0].hidden, true);

@@ -3,6 +3,7 @@
 import asyncio
 import csv
 from io import StringIO
+import json
 import time
 from typing import Any, Literal
 from unittest.mock import Mock
@@ -75,7 +76,7 @@ def submit_series(client: TestClient, request: dict[str, Any]) -> dict[str, Any]
 
     Args:
         client: Browser-session client owning the requested run.
-        request: Recipe identity, variable, period, area and statistic.
+        request: Recipe identity, variable, period, area and statistic or formulas.
 
     Returns:
         Queued Processing job after successful HTTP admission.
@@ -83,6 +84,37 @@ def submit_series(client: TestClient, request: dict[str, Any]) -> dict[str, Any]
     response = client.post("/api/processing/model-runs", json=request, headers=HEADERS)
     assert response.status_code == 202, response.text
     return response.json()
+
+
+def stack_request(client: TestClient) -> dict[str, Any]:
+    """Select February observations and named formulas through recipe discovery.
+
+    Args:
+        client: Browser-session client owning the requested calculation.
+
+    Returns:
+        Path-free submission with an area mean, clicked pixel and custom formula.
+    """
+    request = series_request(client)
+    definition = next(
+        model
+        for model in client.get("/api/processing/models").json()["models"]
+        if model["id"] == "temporal-raster-stack"
+    )
+    request["model"] = {
+        key: definition[key] for key in ("id", "version", "definitionSha256")
+    }
+    request["inputs"].pop("statistic")
+    request["inputs"]["metrics"] = {
+        "calculations": [
+            {"label": "Area mean", "expression": "mean(a)"},
+            {"label": "Clicked pixel", "expression": "pixelValue(a)"},
+            {"label": "One third of mean", "expression": "mean(a) / 3"},
+        ],
+        "pixelPoint": {"longitude": 0.0, "latitude": 0.0},
+    }
+    request["label"] = "February raster stack"
+    return request
 
 
 def test_series_csv_preserves_values_lineage_and_session_ownership(
@@ -118,7 +150,7 @@ def test_series_csv_preserves_values_lineage_and_session_ownership(
         "download",
         "text/csv",
     )
-    assert result["statistic"] == "mean"
+    assert result["calculations"] == [{"label": "mean", "expression": "mean(a)"}]
     assert "rows" not in result
     assert result["temporalCoverage"] == {
         "unit": "K",
@@ -177,6 +209,101 @@ def test_series_csv_preserves_values_lineage_and_session_ownership(
     assert client.get(csv_file["url"]).status_code == 409
     assert not list((worker.artifacts.root / "results").iterdir())
     assert not list((worker.artifacts.root / "attempts").iterdir())
+
+
+def test_stack_publishes_named_formulas_in_one_owned_job(
+    temporal_boundary: TemporalBoundary,
+) -> None:
+    """Retain formula identity, exact scalar strings and NoData through CSV publication.
+
+    Args:
+        temporal_boundary: Real catalog admission, PostgreSQL, HTTP and native worker.
+    """
+    client, worker, _, archive, _ = temporal_boundary
+    request = stack_request(client)
+    job = submit_series(client, request)
+    assert submit_series(client, request)["jobId"] == job["jobId"]
+    assert client.portal.call(worker.run_once)
+    base = f"/api/processing/jobs/{job['jobId']}"
+    ready = client.get(base).json()
+    assert ready["status"] == "ready", ready
+    assert len(client.get("/api/processing/model-runs").json()["jobs"]) == 1
+    result = ready["result"]
+    calculations = request["inputs"]["metrics"]["calculations"]
+    assert result["calculations"] == calculations
+    assert result["temporalCoverage"]["unit"] == ""
+    assert result["temporalCoverage"]["observationCount"] == 3
+    download = client.get(result["url"])
+    assert download.status_code == 200
+    rows = list(csv.DictReader(StringIO(download.text)))
+    assert len(rows) == 9
+    for offset in range(0, len(rows), 3):
+        assert [
+            {"label": row["calculation"], "expression": row["expression"]}
+            for row in rows[offset : offset + 3]
+        ] == calculations
+        assert len({row["time_utc"] for row in rows[offset : offset + 3]}) == 1
+    assert [float(row["value"]) for row in rows[::3]] == [11, 22, 31]
+    assert [row["value"] for row in rows[1::3]] == ["10.0", "", "30.0"]
+    assert [row["state"] for row in rows[1::3]] == ["ok", "no_valid_data", "ok"]
+    assert [row["value"] for row in rows[2::3]] == [
+        "3.6666666666666665",
+        "7.333333333333333",
+        "10.333333333333334",
+    ]
+    assert {row["value_type"] for row in rows[2::3]} == {"float"}
+    assert {row["unit"] for row in rows} == {""}
+    assert {row["variable"] for row in rows} == {TEMPERATURE}
+    assert [json.loads(row["aggregates"])[0]["validPixels"] for row in rows[::3]] == [
+        2,
+        1,
+        2,
+    ]
+    csv_file = next(
+        file for file in ready["artifacts"]["files"] if file["mediaType"] == "text/csv"
+    )
+    assert client.get(csv_file["url"]).content == download.content
+    run = parse_yaml(client.get(base + "/run-yaml").content, run=True)
+    RunDocument.model_validate(run)
+    assert run["invocation"]["inputs"] == request["inputs"]
+    provenance = client.get(result["provenanceUrl"])
+    assert provenance.json()["metrics"] == request["inputs"]["metrics"]
+    assert str(archive) not in provenance.text
+    with TestClient(client.app, base_url="https://testserver") as stranger:
+        for url in (base, result["url"], csv_file["url"], result["provenanceUrl"]):
+            assert stranger.get(url).status_code == 404
+
+
+def test_point_only_stack_does_not_authorize_an_unused_vector_area(
+    temporal_boundary: TemporalBoundary,
+) -> None:
+    """Calculate the clicked cell when an unrelated selected vector is unavailable.
+
+    Args:
+        temporal_boundary: Admitted observations and a catalog without the selected vector.
+    """
+    client, worker, _, _, _ = temporal_boundary
+    request = stack_request(client)
+    request["inputs"]["metrics"]["calculations"] = [
+        {"label": "Clicked pixel", "expression": "pixelValue(a)"}
+    ]
+    request["inputs"]["area"] = {
+        "kind": "catalogSelection",
+        "selection": {
+            "collectionId": "eolab-mounted-vectors",
+            "itemId": "unavailable",
+            "assetKey": "data",
+            "layerName": "unavailable",
+            "filter": {"enabled": False, "match": "all", "rules": []},
+        },
+    }
+    job = submit_series(client, request)
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    rows = list(csv.DictReader(StringIO(client.get(ready["result"]["url"]).text)))
+    assert [row["value"] for row in rows] == ["10.0", "", "30.0"]
+    assert [row["state"] for row in rows] == ["ok", "no_valid_data", "ok"]
 
 
 def test_rate_series_keeps_original_units_intervals_and_observation_gaps(

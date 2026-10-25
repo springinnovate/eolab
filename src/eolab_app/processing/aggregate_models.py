@@ -47,6 +47,7 @@ class AggregateValidationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     _uses_pixel_point: bool = PrivateAttr(default=False)
+    _uses_area: bool = PrivateAttr(default=True)
     alias: Alias = "a"
     calculations: Annotated[
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
@@ -85,6 +86,9 @@ class AggregateValidationRequest(BaseModel):
         self._uses_pixel_point = any(
             node.op == "pixelValue" for tree in trees for node in walk(tree)
         )
+        self._uses_area = {
+            node.op for tree in trees for node in walk(tree) if node.op in FUNCTIONS
+        } != {"pixelValue"}
         return self
 
 

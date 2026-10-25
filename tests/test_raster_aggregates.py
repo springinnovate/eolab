@@ -427,12 +427,10 @@ def test_prepared_area_tools_window_and_masks(
         if whole_raster
         else AggregateArea(kind="bounds", bounds=(2.25, 4.25, 5.75, 7.75))
     )
-    expressions = ["sum(a)"]
-    if include_hectares:
-        expressions.append("areaha(a>0)")
-    calculation_plan = make_spec(path, expressions, area)
     with rasterio.open(path) as dataset:
-        tools = kernel.prepare_raster_area_tools(dataset, calculation_plan, LIMITS)
+        tools = kernel.prepare_raster_area_tools(
+            dataset, area, LIMITS, measure_hectares=include_hectares
+        )
         expected_window = (
             (0, 0, 10, 10)
             if whole_raster

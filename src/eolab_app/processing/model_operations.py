@@ -28,6 +28,13 @@ from eolab_app.raster.source_models import (
 from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing import temporal_operation as temporal
 from eolab_app.processing import temporal_series_operation as series
+from eolab_app.processing import temporal_stack_operation as stack
+from eolab_app.processing.temporal_stack_models import (
+    QueuedTemporalStack,
+    TemporalStackMetrics,
+    TemporalStackRequest,
+    TemporalStackSpec,
+)
 from eolab_app.processing.temporal_series_models import (
     AreaStatistic,
     QueuedTemporalSeries,
@@ -195,6 +202,47 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[
+                TemporalStackRequest, QueuedTemporalStack, TemporalStackSpec
+            ](
+                id="temporal.stack.v1",
+                inputs=(
+                    ("source", "temporal_interval"),
+                    ("area", "summary_area"),
+                    ("metrics", "temporal_stack_metrics"),
+                ),
+                parameters=(),
+                output=OperationOutput(
+                    "series",
+                    "timeSeries",
+                    "download",
+                    "text/csv",
+                    "Temporal raster stack",
+                ),
+                execution_profile="temporal-area-series",
+                queued_type=QueuedTemporalStack,
+                prepared_type=TemporalStackSpec,
+                policy_type=stack.TemporalStackNumericalPolicy,
+                bind=stack.bind_temporal_stack,
+                source=series.get_series_source,
+                polygon=series.get_series_polygon,
+                selection=lambda request: request.catalogSelection,
+                queue=stack.build_stack_submission,
+                prepare=stack.prepare_temporal_stack,
+                execution=stack.select_stack_execution,
+                policy=stack.describe_stack_policy,
+                result=stack.describe_stack_result,
+                outcome=series.describe_series_outcome,
+                primary_input="source",
+                execution_inputs=series.prepare_series_execution,
+                input_adapters=(
+                    ("temporal_interval", TypeAdapter(TemporalIntervalSelection)),
+                    ("temporal_stack_metrics", TypeAdapter(TemporalStackMetrics)),
+                ),
+                progress_descriptions=(
+                    ("summarizing", "Calculating each observation"),
+                ),
+            ),
             ModelOperation[
                 TemporalSeriesRequest, QueuedTemporalSeries, TemporalSeriesSpec
             ](

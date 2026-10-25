@@ -8,6 +8,7 @@ from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.processing.downstream_calculation import downstream_process_target
 from eolab_app.processing.temporal_reduce import temporal_process_target
 from eolab_app.processing.temporal_series import temporal_series_process_target
+from eolab_app.processing.temporal_stack import temporal_stack_process_target
 
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
@@ -30,6 +31,7 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
             downstream_process_target,
             temporal_process_target,
             temporal_series_process_target,
+            temporal_stack_process_target,
             summary_process,
         ),
         recycle_bytes=1024**3,

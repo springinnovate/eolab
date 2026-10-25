@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderModelResult } from "../../src/models/result-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
-import { clipResult } from "../../test-support/models/fixtures.js";
+import { clipResult, timeSeriesResult } from "../../test-support/models/fixtures.js";
 
 /** Render one validated result without Catalog, map or controller collaborators.
  * @param {Object} result Saved result metadata.
- * @return {string[]} Text from the raster result card.
+ * @return {string[]} Text from the result card.
  */
 function getResultCardText(result) {
     const document = new FakeRasterControlDocument();
@@ -44,4 +44,17 @@ test("ordinary raster results do not show temporal coverage", () => {
     assert.equal(text.some(value => /observation|Units:/.test(value)), false);
     assert.ok(text.includes(clipResult.label));
     assert.ok(text.includes("10 × 10 pixels · 90 valid pixels"));
+});
+
+test("time-series results name each saved calculation and omit unspecified shared units", () => {
+    const text = getResultCardText({...timeSeriesResult,
+        calculations: [{label: "mean", expression: "mean(a)"}, {label: "Positive area", expression: "areaha(a > 0)"}],
+        temporalCoverage: {...timeSeriesResult.temporalCoverage, unit: ""}});
+    assert.ok(text.includes("Statistic: Mean"));
+    assert.ok(text.includes("Statistic: Positive area"));
+    assert.ok(text.includes("mean(a)"));
+    assert.ok(text.includes("areaha(a > 0)"));
+    assert.equal(text.some(value => value.startsWith("Units:")), false);
+    assert.ok(text.includes("Observations in this run: 3"));
+    assert.ok(text.includes("Download the CSV under Files from this run for values and per-calculation pixel counts."));
 });

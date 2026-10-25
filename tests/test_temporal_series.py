@@ -16,10 +16,20 @@ from affine import Affine
 from rasterio.crs import CRS
 from rasterio.windows import Window
 
-from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import (
+    AggregateArea,
+    NamedCalculation,
+    PixelPoint,
+    RasterAggregateLimits,
+)
 from eolab_app.processing.polygon_areas import PolygonSummaryInput
-from eolab_app.processing.temporal_grid import plan_temporal_grid
+from eolab_app.processing.raster_aggregate import calculate_raster_statistics_for_area
+from eolab_app.processing.temporal_grid import (
+    plan_temporal_calculation_grid,
+    plan_temporal_grid,
+)
 from eolab_app.processing.temporal_series import (
+    calculate_temporal_observations,
     create_temporal_series,
     temporal_series_process_target,
 )
@@ -27,6 +37,11 @@ from eolab_app.processing.temporal_series_models import (
     AreaStatistic,
     TemporalSeriesArtifact,
     TemporalSeriesSpec,
+)
+from eolab_app.processing.temporal_stack import create_temporal_stack
+from eolab_app.processing.temporal_stack_models import (
+    TemporalStackMetrics,
+    TemporalStackSpec,
 )
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.source_contract import read_native_raster_window
@@ -36,6 +51,7 @@ from eolab_app.raster.temporal import (
     TemporalRasterDataset,
 )
 from tests.test_temporal_reductions import _write_observation, interval
+from tests.test_raster_aggregates import make_spec
 
 
 def calculate_series(
@@ -366,6 +382,31 @@ def test_series_preserves_cyclic_cells_across_dates(tmp_path: Path) -> None:
     assert spec.grid.columnRotation != 0
     assert [float(row["value"]) for row in rows] == [0, 10, 20]
     assert [row["valid_pixels"] for row in rows] == ["1", "1", "1"]
+    with rasterio.open(observations[1].path, "r+") as dataset:
+        dataset.write(
+            np.array([[np.nan]], dtype="float32"), 1, window=Window(31, 1, 1, 1)
+        )
+    calculations = (
+        NamedCalculation(label="Area mean", expression="mean(a)"),
+        NamedCalculation(label="Point", expression="pixelValue(a)"),
+        NamedCalculation(label="Selected hectares", expression="areaha(a >= 0)"),
+    )
+    point = PixelPoint(longitude=179.0, latitude=0.0)
+    limits = RasterAggregateLimits()
+    grid, _ = plan_temporal_calculation_grid(
+        source, spec.area, limits, calculations, point
+    )
+    directory = tmp_path / "formulas"
+    directory.mkdir()
+    results = list(
+        calculate_temporal_observations(
+            source, spec.area, grid, calculations, point, directory, limits
+        )
+    )
+    assert [float(rows[0]["value"]) for _, rows in results] == [0, 10, 20]
+    assert [rows[1]["value"] for _, rows in results] == ["31.0", None, "51.0"]
+    hectares = [float(rows[2]["value"]) for _, rows in results]
+    assert hectares[0] > 0 and hectares == pytest.approx([hectares[0]] * 3)
 
 
 def test_unreadable_observation_returns_native_failure_without_artifact(
@@ -400,3 +441,261 @@ def test_unreadable_observation_returns_native_failure_without_artifact(
     )
     assert not (directory / "provenance.json").exists()
     assert not (directory / "polygon-mask.tif").exists()
+
+
+@pytest.mark.parametrize("area_kind", ["bounds", "polygons"])
+def test_temporal_formulas_match_ordinary_raster_calculations(
+    interval: ResolvedTemporalInterval, tmp_path: Path, area_kind: str
+) -> None:
+    """Reuse point, formula, cell-centre and fractional-hectare semantics per date.
+
+    Args:
+        interval: Native TIFFs with different NoData patterns on the same grid.
+        tmp_path: Separate temporal and ordinary calculation directories.
+        area_kind: A partial-cell box or triangular polygon.
+    """
+    bounds = (11.25, 10.25, 13.75, 11.75)
+    if area_kind == "polygons":
+        polygons = PolygonSummaryInput(
+            polygons=(
+                {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [(11.25, 10.25), (13.75, 10.25), (11.25, 11.75), (11.25, 10.25)]
+                    ],
+                },
+            )
+        )
+        area = AggregateArea(
+            kind="polygons",
+            bounds=polygons.bounds(),
+            geometryHash=polygons.geometry_hash(),
+            geometries=tuple(item.model_dump() for item in polygons.polygons),
+        )
+    else:
+        area = AggregateArea(kind="bounds", bounds=bounds)
+    expressions = [
+        "mean(a)",
+        "count(a > 3)",
+        "areaha(a > 0)",
+        "pixelValue(a)",
+        "(pixelValue(a) - mean(a)) / stdev(a)",
+    ]
+    calculations = tuple(
+        NamedCalculation(label=f"Result {index}", expression=expression)
+        for index, expression in enumerate(expressions)
+    )
+    point = PixelPoint(longitude=10.5, latitude=11.5)
+    limits = RasterAggregateLimits()
+    grid, ground_area = plan_temporal_calculation_grid(
+        interval, area, limits, calculations, point
+    )
+    assert ground_area is not None and ground_area.strategy == "rectilinear"
+    directory = tmp_path / "temporal"
+    directory.mkdir()
+    actual = list(
+        calculate_temporal_observations(
+            interval, area, grid, calculations, point, directory, limits
+        )
+    )
+    assert [observation.time for observation, _ in actual] == [
+        observation.time for observation in interval.observations
+    ]
+    for index, (observation, rows) in enumerate(actual):
+        reference_directory = tmp_path / f"ordinary-{index}"
+        reference_directory.mkdir()
+        spec = make_spec(observation.path, expressions, area, pixel_point=point)
+        reference = calculate_raster_statistics_for_area(
+            observation.path, spec, reference_directory, limits
+        )
+        for row, expected in zip(rows, reference.rows, strict=True):
+            assert {key: value for key, value in row.items() if key != "value"} == {
+                key: value for key, value in expected.items() if key != "value"
+            }
+            if expected["value"] is None:
+                assert row["value"] is None
+            else:
+                assert isinstance(row["value"], str)
+                assert float(row["value"]) == pytest.approx(float(expected["value"]))
+    assert [rows[3]["value"] for _, rows in actual] == ["1.0", "3.0", "5.0"]
+    assert all(rows[2]["unit"] == "ha" for _, rows in actual)
+    assert not (directory / "polygon-mask.tif").exists()
+
+
+@pytest.mark.parametrize("outside", [False, True])
+def test_temporal_point_formulas_ignore_area_and_read_only_the_selected_cell(
+    interval: ResolvedTemporalInterval,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outside: bool,
+) -> None:
+    """Read one native cell per observation and retain NoData or outside states.
+
+    Args:
+        interval: Native TIFFs whose selected cell is valid, NoData, then valid.
+        tmp_path: Isolated result directory.
+        monkeypatch: Observe native reads and reject unused area preparation.
+        outside: Place the point outside the grid, requiring no pixel reads.
+    """
+    import eolab_app.processing.raster_aggregate as aggregate
+    import eolab_app.processing.temporal_grid as planning
+    import eolab_app.processing.temporal_series as series
+
+    def reject_area(*args: object, **kwargs: object) -> None:
+        """Reject area preparation that point-only formulas must never request."""
+        pytest.fail("Point-only formulas must not prepare an area")
+
+    reads: list[Window] = []
+
+    def observe_read(
+        dataset: TemporalRasterDataset, window: Window
+    ) -> np.ma.MaskedArray:
+        """Record a requested native window and return its actual source values.
+
+        Args:
+            dataset: Observation-owned TIFF handle.
+            window: Exact selected native cell.
+
+        Returns:
+            Native values with their original validity mask.
+        """
+        reads.append(window)
+        return read_native_raster_window(dataset, window)
+
+    monkeypatch.setattr(planning, "prepare_raster_area_tools", reject_area)
+    monkeypatch.setattr(series, "prepare_raster_area_tools", reject_area)
+    monkeypatch.setattr(series, "read_native_raster_window", observe_read)
+    monkeypatch.setattr(aggregate, "read_native_raster_window", observe_read)
+    point = PixelPoint(longitude=0.5 if outside else 11.5, latitude=11.5)
+    area = AggregateArea(kind="bounds", bounds=(-20, -20, -19, -19))
+    calculations = (NamedCalculation(label="Point", expression="pixelValue(a)"),)
+    limits = RasterAggregateLimits()
+    grid, ground_area = plan_temporal_calculation_grid(
+        interval, area, limits, calculations, point
+    )
+    assert ground_area is None
+    assert reads == []
+    directory = tmp_path / "point"
+    directory.mkdir()
+    results = list(
+        calculate_temporal_observations(
+            interval, area, grid, calculations, point, directory, limits
+        )
+    )
+    assert len(results) == 3
+    if outside:
+        assert reads == []
+        assert [rows[0]["state"] for _, rows in results] == ["no_valid_data"] * 3
+    else:
+        assert len(reads) == 3 and all(window == Window(1, 0, 1, 1) for window in reads)
+        assert [rows[0]["value"] for _, rows in results] == ["2.0", None, "6.0"]
+        assert [rows[0]["state"] for _, rows in results] == [
+            "ok",
+            "no_valid_data",
+            "ok",
+        ]
+    assert not (directory / "polygon-mask.tif").exists()
+
+
+def test_temporal_stack_csv_preserves_named_results_and_path_free_provenance(
+    interval: ResolvedTemporalInterval, tmp_path: Path
+) -> None:
+    """Write ordered real-TIFF results without losing values, states or coverage.
+
+    Args:
+        interval: Gapped observations with a selected pixel that is NoData on one date.
+        tmp_path: Private native calculation and CSV publication directories.
+    """
+    metrics = TemporalStackMetrics(
+        calculations=(
+            NamedCalculation(label="Point", expression="pixelValue(a)"),
+            NamedCalculation(label="Area mean", expression="mean(a)"),
+            NamedCalculation(label="Difference", expression="pixelValue(a) - mean(a)"),
+            NamedCalculation(label="Positive hectares", expression="areaha(a > 0)"),
+            NamedCalculation(
+                label="Division by zero", expression="mean(a) / (max(a) - max(a))"
+            ),
+        ),
+        pixelPoint=PixelPoint(longitude=11.5, latitude=11.5),
+    )
+    area = AggregateArea(kind="wholeRaster")
+    limits = RasterAggregateLimits()
+    grid, ground_area = plan_temporal_calculation_grid(
+        interval, area, limits, metrics.calculations, metrics.pixelPoint
+    )
+    spec = TemporalStackSpec(
+        source=TemporalIntervalSelection(
+            collectionId="eolab-temporal-datasets",
+            itemId="weather",
+            variable="temperature",
+            startTime=interval.observations[0].time,
+            endTime=interval.observations[-1].time + timedelta(hours=1),
+        ),
+        metrics=metrics,
+        area=area,
+        grid=grid,
+        groundArea=ground_area,
+        sourceUnit=interval.unit,
+        timeSupport=interval.time_support,
+        observationCount=len(interval.observations),
+        firstObservation=interval.observations[0].time,
+        lastObservation=interval.observations[-1].time,
+    )
+    reference_directory = tmp_path / "reference"
+    reference_directory.mkdir()
+    expected = [
+        (observation, row)
+        for observation, rows in calculate_temporal_observations(
+            interval,
+            area,
+            grid,
+            metrics.calculations,
+            metrics.pixelPoint,
+            reference_directory,
+            limits,
+        )
+        for row in rows
+    ]
+    directory = tmp_path / "csv"
+    directory.mkdir()
+    artifact = create_temporal_stack(interval, spec, directory, limits)
+    result_path = directory / "result.csv"
+    with result_path.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert artifact.row_count == len(rows) == 15
+    for exported, (observation, result) in zip(rows, expected, strict=True):
+        assert {
+            key: value for key, value in exported.items() if key != "aggregates"
+        } == {
+            "time_utc": observation.time.isoformat(),
+            "interval_start_utc": observation.interval_start.isoformat(),
+            "interval_end_utc": observation.interval_end.isoformat(),
+            "variable": "temperature",
+            "calculation": result["label"],
+            "expression": result["expression"],
+            "value": result["value"] if result["value"] is not None else "",
+            "value_type": result["valueType"] or "",
+            "unit": result["unit"] or "",
+            "state": result["state"],
+        }
+        assert json.loads(exported["aggregates"]) == result["aggregates"]
+    assert [row["value"] for row in rows[::5]] == ["2.0", "", "6.0"]
+    assert [row["state"] for row in rows[::5]] == ["ok", "no_valid_data", "ok"]
+    assert all(row["state"] == "invalid_arithmetic" for row in rows[4::5])
+    assert all(row["unit"] == "ha" for row in rows[3::5])
+    assert artifact.sha256 == hashlib.sha256(result_path.read_bytes()).hexdigest()
+    assert artifact.size == result_path.stat().st_size
+    provenance_text = (directory / "provenance.json").read_text(encoding="utf-8")
+    provenance = json.loads(provenance_text)
+    assert provenance["metrics"] == metrics.model_dump(mode="json")
+    assert provenance["source"] == spec.source.model_dump(mode="json", by_alias=True)
+    assert provenance["sourceUnit"] == "K"
+    assert provenance["groundArea"]["strategy"] == "rectilinear"
+    assert provenance["temporalAggregation"] == "none"
+    assert [item["time"] for item in provenance["observations"]] == [
+        observation.time.isoformat() for observation in interval.observations
+    ]
+    assert all(
+        observation.path.name not in provenance_text
+        for observation in interval.observations
+    )

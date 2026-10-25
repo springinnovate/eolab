@@ -1,0 +1,33 @@
+schema: eolab.model/v1
+id: temporal-raster-stack
+version: "1.0.0"
+title: Plot a temporal raster stack
+description: Calculate named Raster stack formulas for each available observation in one variable and UTC period. Pixel values use the clicked cell; area formulas use the selected area. The CSV retains exact values, states and coverage without temporal integration or inferred formula units.
+inputs:
+  source:
+    type: temporal_interval
+    label: Dataset and period
+  area:
+    type: summary_area
+    label: Analysis area
+  metrics:
+    type: temporal_stack_metrics
+    label: Statistics and clicked point
+parameters: {}
+steps:
+  - id: calculate
+    operation: temporal.stack.v1
+    inputs:
+      source: {input: source}
+      area: {input: area}
+      metrics: {input: metrics}
+    parameters: {}
+outputs:
+  series:
+    type: timeSeries
+    label: Temporal raster stack
+    source: calculate.series
+    role: result
+    presentation: download
+    saveEligible: false
+executionProfile: temporal-area-series

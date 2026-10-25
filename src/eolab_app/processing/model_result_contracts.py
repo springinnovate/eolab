@@ -9,7 +9,7 @@ from pydantic import (
     FiniteFloat,
     model_validator,
 )
-from eolab_app.processing.aggregate_models import AggregateValue
+from eolab_app.processing.aggregate_models import AggregateValue, NamedCalculation
 from eolab_app.processing.models import JobResultResponse
 
 
@@ -43,7 +43,8 @@ class TemporalResultCoverage(BaseModel):
     """Describe the observations used to calculate a completed temporal result.
 
     Attributes:
-        unit: Unit of the resulting values recorded when the run was prepared.
+        unit: Shared output unit recorded during preparation, or an empty string
+            when named formulas have no inferred common unit.
         observationCount: Number of available observations in the requested period.
             Missing cell values are reported separately by each output type.
         firstObservation: UTC label of the first available observation used.
@@ -95,7 +96,7 @@ class ModelStatisticsResult(ModelResultFile):
 
 
 class ModelTimeSeriesResult(ModelResultFile):
-    """A downloadable spatial statistic for each available temporal observation.
+    """Downloadable named calculations for each available temporal observation.
 
     Rows remain in the CSV, avoiding an unbounded observation list in job status.
     Units and observed dates describe the actual calculation, including gaps.
@@ -104,7 +105,9 @@ class ModelTimeSeriesResult(ModelResultFile):
     kind: Literal["timeSeries"]
     mediaType: Literal["text/csv"]
     presentation: Literal["download"]
-    statistic: Literal["count", "sum", "mean", "min", "max", "stdev"]
+    calculations: Annotated[
+        tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
+    ]
     temporalCoverage: TemporalResultCoverage
 
 

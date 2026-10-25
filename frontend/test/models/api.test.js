@@ -203,8 +203,15 @@ test("time-series recipes and completed CSV runs coexist with the existing model
     assert.deepEqual(await h.api.discoverModels(), [model, seriesModel]);
     assert.deepEqual((await h.api.listModelRuns()).jobs, [ordinaryRun, run]);
     assert.deepEqual((await h.api.getJob(run.jobId)).result, result);
-    result.statistic = "median";
-    await assert.rejects(h.api.listModelRuns(), /invalid time-series statistic/);
-    result.statistic = "mean"; delete result.temporalCoverage;
+    result.calculations = [{label: "Scaled mean", expression: "mean(a) * 2"}, {label: "Positive area", expression: "areaha(a > 0)"}];
+    result.temporalCoverage.unit = "";
+    assert.deepEqual((await h.api.getJob(run.jobId)).result, result);
+    delete result.temporalCoverage;
     await assert.rejects(h.api.getJob(run.jobId), /invalid temporal coverage/);
+});
+
+test("time-series results require the current named-calculation contract", async () => {
+    const result = {...timeSeriesResult, calculations: []};
+    const h = fixture(() => job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", result}));
+    await assert.rejects(h.api.getJob(job().jobId), /invalid time-series calculations/);
 });

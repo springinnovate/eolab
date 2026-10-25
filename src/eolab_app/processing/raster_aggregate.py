@@ -56,6 +56,7 @@ from eolab_app.raster.source_contract import (
     read_native_raster_window,
 )
 from eolab_app.raster.models import RasterAreaMask
+from eolab_app.raster.reader import RasterDataset
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 
 # Evaluate at most 65,536 pixels per expression tile, even when the source's
@@ -69,9 +70,7 @@ GDAL_THREADS = 2
 PROGRESS_INTERVAL_SECONDS = 0.5
 
 
-def pixel_sample_window(
-    dataset: rasterio.io.DatasetReader, point: PixelPoint
-) -> Window:
+def pixel_sample_window(dataset: RasterDataset, point: PixelPoint) -> Window:
     """Locate the native band-one cell containing an exact WGS84 position.
 
     Args:
@@ -96,8 +95,27 @@ def pixel_sample_window(
     return Window(0, 0, 0, 0)
 
 
+def read_raster_pixel_value(dataset: RasterDataset, window: Window) -> float | None:
+    """Read one selected cell, returning None for NoData or an outside point.
+
+    Args:
+        dataset: Open native source containing the selected cell.
+        window: One-cell or empty window returned by pixel_sample_window.
+
+    Returns:
+        The stored valid value, or None when the point has no valid source cell.
+
+    Raises:
+        rasterio.errors.RasterioError: If the source cell cannot be read.
+    """
+    if not window.width:
+        return None
+    sample = read_native_raster_window(dataset, window)
+    return float(sample[0, 0]) if sample.count() else None
+
+
 def get_raster_window_and_mask_source(
-    dataset: rasterio.io.DatasetReader,
+    dataset: RasterDataset,
     area: AggregateArea,
     limits: RasterAggregateLimits,
     *,
@@ -159,22 +177,23 @@ class RasterAreaTools:
 
 
 def prepare_raster_area_tools(
-    dataset: rasterio.io.DatasetReader,
-    calculation_plan: AggregateSpec,
+    dataset: RasterDataset,
+    area: AggregateArea,
     limits: RasterAggregateLimits,
+    *,
+    measure_hectares: bool = False,
 ) -> RasterAreaTools:
     """Prepare the final window, selected polygons and optional hectare calculator.
 
-    The saved plan records whether its formulas require area measurement.
-    For those plans, use the hectare calculator's window, matching its cached
-    pixel coordinates. Other plans use the ordinary selection window. This
-    retains the existing projection and boundary rules of both tools.
+    For formulas requiring area measurement, use the hectare calculator's window,
+    matching its cached pixel coordinates. Other formulas use the ordinary
+    selection window. Both retain their existing projection and boundary rules.
 
     Args:
         dataset: Open, validated raster; it must remain open while tools are used.
-        calculation_plan: Accepted calculation plan, including its selected area
-            and the ground-area metadata produced by plan_aggregate.
+        area: Accepted box, polygons, vector selection or whole-raster area.
         limits: Limits used by the existing geometry readers and area calculator.
+        measure_hectares: Whether the formulas need fractional cell areas.
 
     Returns:
         Tools with one final pixel window.
@@ -185,19 +204,17 @@ def prepare_raster_area_tools(
         ProcessingError: If the area cannot be read or projected, does not
             overlap the raster.
     """
-    polygon_budget = None if calculation_plan.area.kind == "catalogSelection" else 0
+    polygon_budget = None if area.kind == "catalogSelection" else 0
     selection_window, selected_polygons = get_raster_window_and_mask_source(
         dataset,
-        calculation_plan.area,
+        area,
         limits,
         max_retained_polygon_bytes=polygon_budget,
     )
     try:
         pixel_area_calculator = None
-        if calculation_plan.grid.groundArea is not None:
-            pixel_area_calculator = PixelAreaCalculator(
-                dataset, calculation_plan.area, limits
-            )
+        if measure_hectares:
+            pixel_area_calculator = PixelAreaCalculator(dataset, area, limits)
             raster_window = pixel_area_calculator.window
         else:
             raster_window = selection_window
@@ -210,6 +227,33 @@ def prepare_raster_area_tools(
         selected_polygons=selected_polygons,
         pixel_area_calculator=pixel_area_calculator,
     )
+
+
+def accumulate_raster_tile(
+    calculations: list[Calculation],
+    values: np.ma.MaskedArray,
+    selection_valid: NDArray[np.bool_] | None,
+    hectares: NDArray[np.float64] | None,
+) -> None:
+    """Accumulate formulas using numeric cell centres and fractional hectare areas.
+
+    Hectare formulas include each valid cell's intersecting fraction even when
+    its centre is outside the selected area.
+
+    Args:
+        calculations: Scalar accumulators for this source observation.
+        values: Native values with source NoData and nonfinite values masked.
+        selection_valid: Cell-centre membership in the selected area, or None
+            when every cell in the tile belongs to it.
+        hectares: Each cell's selected ground area, or None when unused.
+    """
+    data = values.data.astype(np.float64)
+    valid = ~np.ma.getmaskarray(values)
+    area_valid = valid & (hectares > 0) if hectares is not None else None
+    if selection_valid is not None:
+        valid &= selection_valid
+    for calculation in calculations:
+        calculation.process_tile(data, valid, hectares, area_valid)
 
 
 def plan_statistics_grid(
@@ -444,13 +488,13 @@ def calculate_raster_statistics_for_area(
                 if "pixelValue" in functions
                 else None
             )
-            pixel_value = None
-            if pixel_window is not None and pixel_window.width:
-                sample = read_native_raster_window(dataset, pixel_window)
-                completed_blocks = 1
-                if sample.count():
-                    pixel_value = float(sample[0, 0])
-                del sample
+            pixel_value = (
+                read_raster_pixel_value(dataset, pixel_window)
+                if pixel_window is not None
+                else None
+            )
+            if pixel_window is not None:
+                completed_blocks = int(bool(pixel_window.width))
             calculations = [Calculation(root, pixel_value) for root in roots]
             write_progress(directory, "preparing_selected_polygons", 0, 0)
             raster_area_tools = (
@@ -460,7 +504,12 @@ def calculate_raster_statistics_for_area(
                     pixel_area_calculator=None,
                 )
                 if pixel_only
-                else prepare_raster_area_tools(dataset, calculation_plan, limits)
+                else prepare_raster_area_tools(
+                    dataset,
+                    calculation_plan.area,
+                    limits,
+                    measure_hectares=calculation_plan.grid.groundArea is not None,
+                )
             )
             polygons = raster_area_tools.selected_polygons
             if isinstance(polygons, PolygonRasterizer):
@@ -560,16 +609,12 @@ def calculate_raster_statistics_for_area(
                             tile.height,
                         )
                         values = native[local.toslices()]
-                        data = values.data.astype(np.float64)
-                        valid = ~np.ma.getmaskarray(values) & np.isfinite(data)
                         hectares = (
                             pixel_area_calculator.calculate_hectares(tile)
                             if pixel_area_calculator is not None
                             else None
                         )
-                        area_valid = (
-                            valid & (hectares > 0) if hectares is not None else None
-                        )
+                        tile_selection = None
                         if selection_valid is not None:
                             mask_local = Window(
                                 x - intersection.col_off,
@@ -577,12 +622,13 @@ def calculate_raster_statistics_for_area(
                                 tile.width,
                                 tile.height,
                             )
-                            valid &= selection_valid[mask_local.toslices()]
-                        for calculation in calculations:
-                            calculation.process_tile(data, valid, hectares, area_valid)
+                            tile_selection = selection_valid[mask_local.toslices()]
+                        accumulate_raster_tile(
+                            calculations, values, tile_selection, hectares
+                        )
                         # Release the tile before allocating the next one; no old
                         # source view may retain the previous combined read.
-                        del values, data, valid, hectares, area_valid
+                        del values, hectares, tile_selection
                 del native, selection_valid
                 completed_blocks += native_blocks
                 if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
