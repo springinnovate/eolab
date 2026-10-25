@@ -182,17 +182,23 @@ test("ready results show exact integer values and safe CSV/provenance/YAML links
     assert.equal(h.view.run.result.children.length, 0); assert.match(h.view.run.status.textContent, /expired/);
 });
 
-test("run files distinguish coverage from results and provide each download once", () => {
+test("primary output comes first even when the inventory lists supporting files first", () => {
     const h = fixture(), artifacts = fileManifest();
+    const [primary, coverage, provenance] = artifacts.files;
+    artifacts.files = [coverage, provenance, primary];
     h.state.page = "run"; h.state.selectedRun = artifacts.jobId;
     h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
     h.view.render(h.state);
     const children = h.view.run.result.children;
-    assert.equal(children.length, 5); // Primary scientific card, heading, three file cards.
-    assert.equal(children[1].textContent, "Files from this run");
-    assert.match(children[3].children[1].textContent, /Intermediate result/);
-    assert.equal(children[4].children[0].textContent, artifacts.files[2].displayName);
-    for (let index = 0; index < 3; index++) assert.equal(children[index + 2].children[3].children[1].href, artifacts.files[index].url);
+    assert.equal(children.length, 2);
+    assert.equal(children[0].children[0].textContent, clipResult.label);
+    const details = children[1];
+    assert.equal(details.className, "models-details"); assert.equal(Boolean(details.open), false);
+    assert.equal(details.children[0].textContent, "Details");
+    assert.match(details.children[1].children[1].textContent, /Intermediate result/);
+    assert.equal(details.children[2].children[0].textContent, provenance.displayName);
+    const cards = [children[0], ...details.children.slice(1)];
+    assert.deepEqual(cards.map(card => card.children.at(-2).children[1].href), [primary.url, coverage.url, provenance.url]);
     h.state.runs[0].expiresAt = "2000-01-01T00:00:00Z";
     h.view.render(h.state);
     assert.equal(h.view.run.result.children.length, 0);
@@ -235,13 +241,14 @@ test("run and output headings show complete names with separate download actions
     assert.equal(card.button.getAttribute("aria-label"), ready.label); assert.match(card.status.textContent, /2026-10-08 00:00:00/);
     assert.equal(h.view.run.title.textContent, ready.label);
     assert.equal(h.view.elements.run.querySelectorAll("summary").some(summary => summary.textContent === "Full name"), false);
+    const fileCards = [h.view.run.result.children[0], ...h.view.run.result.children[1].children.slice(1)];
     for (const [index, file] of artifacts.files.entries()) {
-        const fileCard = h.view.run.result.children[index + 2];
-        assert.equal(fileCard.children[0].textContent, file.displayName);
-        assert.equal(fileCard.children[2].textContent, file.filename);
-        const download = fileCard.children[3].children[1];
+        const fileCard = fileCards[index], label = index === 0 ? clipResult.label : file.displayName;
+        assert.equal(fileCard.children[0].textContent, label);
+        assert.equal(fileCard.children[index === 0 ? 1 : 2].textContent, index === 0 ? clipResult.filename : file.filename);
+        const download = fileCard.children.at(-2).children[1];
         assert.equal(download.textContent, "Download");
-        assert.equal(download.getAttribute("aria-label"), `Download ${file.displayName}`);
+        assert.equal(download.getAttribute("aria-label"), `Download ${label}`);
         assert.equal(download.href, file.url); assert.equal(download.download, "");
     }
     h.state.runs = [job({...ready, name: "Cuba biomass"})]; h.view.render(h.state);
@@ -277,21 +284,24 @@ test("file cards show independent opt-in map actions and display loading and map
     h.state.runs = [job({status: "ready", expiresAt: artifacts.expiresAt, result: clipResult, artifacts})];
     h.state.outputPreviews = Object.fromEntries(rasterFiles.map(file => [file.artifactId, {canShow: true}]));
     h.view.render(h.state);
+    const details = h.view.run.result.children[1], cards = [h.view.run.result.children[0], ...details.children.slice(1)];
+    details.open = true;
     for (const [index, file] of rasterFiles.entries()) {
-        const card = h.view.run.result.children[index + 2], button = card.children[3].children[0];
-        assert.equal(card.children[0].textContent, file.displayName);
-        assert.equal(card.children[3].children[1].href, file.url);
+        const card = cards[index], button = card.children.at(-2).children[0], label = index === 0 ? clipResult.label : file.displayName;
+        assert.equal(card.children[0].textContent, label);
+        assert.equal(card.children.at(-2).children[1].href, file.url);
         assert.equal(button.textContent, "Show on map");
-        assert.equal(button.getAttribute("aria-label"), `Show on map: ${file.displayName}`);
+        assert.equal(button.getAttribute("aria-label"), `Show on map: ${label}`);
         button.dispatchEvent(new Event("click"));
         assert.deepEqual(h.actions.at(-1), ["ShowOutput", file.artifactId]);
     }
-    const card = h.view.run.result.children[2], button = card.children[3].children[0];
-    const otherButton = h.view.run.result.children[3].children[3].children[0];
+    const card = cards[0], button = card.children.at(-2).children[0];
+    const otherButton = cards[1].children.at(-2).children[0];
     button.focus();
     const actionCount = h.actions.length;
     h.state.outputPreviews[firstFile.artifactId].busy = true; h.view.render(h.state);
-    assert.equal(h.view.run.result.children[2], card);
+    assert.equal(h.view.run.result.children[0], card);
+    assert.equal(h.view.run.result.children[1], details); assert.equal(details.open, true);
     assert.equal(h.view.run.result.contains(button), true);
     assert.equal(h.doc.activeElement, button);
     assert.equal(button.textContent, "Adding to map…"); assert.equal(button.getAttribute("aria-disabled"), "true");
@@ -302,14 +312,15 @@ test("file cards show independent opt-in map actions and display loading and map
     assert.equal(h.doc.activeElement, button); assert.equal(h.view.run.result.contains(button), true);
     button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount);
     assert.equal(otherButton.textContent, "Show on map"); assert.equal(otherButton.getAttribute("aria-disabled"), "false");
-    const download = card.children[3].children[1]; download.focus();
+    const download = card.children.at(-2).children[1]; download.focus();
     h.state.outputPreviews[firstFile.artifactId] = {canShow: true, error: "Could not add this output. Try again."}; h.view.render(h.state);
     assert.equal(h.doc.activeElement, download); assert.equal(h.view.run.result.contains(download), true);
-    assert.equal(card.children[4].hidden, false); assert.match(card.children[4].textContent, /Try again/);
+    const error = card.children.at(-1);
+    assert.equal(error.hidden, false); assert.match(error.textContent, /Try again/);
     assert.equal(button.getAttribute("aria-disabled"), "false");
     button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount + 1);
     h.state.outputPreviews[firstFile.artifactId] = {canShow: false}; h.view.render(h.state);
-    assert.equal(button.hidden, true); assert.equal(card.children[4].hidden, true);
+    assert.equal(button.hidden, true); assert.equal(error.hidden, true);
     button.dispatchEvent(new Event("click")); assert.equal(h.actions.length, actionCount + 1);
 });
 
@@ -484,9 +495,9 @@ test("time-series runs show saved coverage, their statistic and the ordinary CSV
     for (const value of ["Area time series", "series.csv", "Statistic: Mean", "Units: K", "Observations in this run: 3",
         "First observation: 2000-01-01 00:00:00 UTC", "Last observation: 2000-01-03 12:00:00 UTC"])
         assert.ok(text.includes(value), value);
-    assert.equal(text.at(-1), "Download the CSV under Files from this run for values and per-calculation pixel counts.");
+    assert.ok(text.includes("Download the CSV for values and per-calculation pixel counts."));
     assert.deepEqual(h.view.run.inputsBody.children[0].children.slice(-2).map(node => node.textContent), ["Statistic", "Mean"]);
-    const actions = h.view.run.result.children[2].children[3];
+    const actions = card.children.at(-2);
     assert.equal(actions.children[0].hidden, true);
     assert.equal(actions.children[1].textContent, "Download");
     assert.equal(actions.children[1].href, artifacts.files[0].url);
@@ -701,4 +712,32 @@ test("saved temporal run inputs describe the captured interval and statistic ind
     h.view.render(h.state);
     assert.equal(h.view.run.inputsBody.children[0].children[1], details[1]);
     assert.match(details[1].textContent, /vegetation_index/);
+});
+
+test("completed period maps acquire a descriptive title from saved inputs, not the current draft", () => {
+    const h = temporalFixture(), artifacts = fileManifest();
+    const result = {...clipResult, label: "Period map"};
+    Object.assign(h.state, {page: "run", selectedRun: artifacts.jobId,
+        runs: [job({model: h.draft.model, status: "ready", expiresAt: artifacts.expiresAt, result, artifacts})]});
+    h.view.render(h.state);
+    assert.equal(h.view.run.result.children[0].children[0].textContent, "Period map");
+    h.state.invocation = {model: {...h.draft.model, definition: h.draft.model}, parameters: {}, inputs: {
+        observations: {collectionId: "eolab-temporal-datasets", itemId: "vegetation", variable: "vegetation_index",
+            startTime: "2020-01-01T00:00:00Z", endTime: "2020-02-01T00:00:00Z"},
+        region: area, statistic: {reducer: "mean"},
+    }};
+    h.state.outputPreviews = {[artifacts.files[0].artifactId]: {canShow: true}};
+    h.view.render(h.state);
+    const card = h.view.run.result.children[0], actions = card.children.at(-2);
+    const title = "Mean · vegetation index · January 2020";
+    assert.equal(card.children[0].textContent, title);
+    assert.equal(actions.children[0].getAttribute("aria-label"), `Show on map: ${title}`);
+    assert.equal(actions.children[1].getAttribute("aria-label"), `Download ${title}`);
+    assert.equal(actions.children[1].href, artifacts.files[0].url);
+    actions.children[0].dispatchEvent(new Event("click"));
+    assert.deepEqual(h.actions.at(-1), ["ShowOutput", artifacts.files[0].artifactId]);
+    h.draft.temporal.variable = "precipitation"; h.draft.reduction.reducer = "max";
+    h.view.render(h.state);
+    assert.equal(h.view.run.result.children[0], card);
+    assert.equal(card.children[0].textContent, title);
 });

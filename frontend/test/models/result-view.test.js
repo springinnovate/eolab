@@ -23,7 +23,7 @@ function getResultCardText(result) {
         node.className = className;
         return node;
     }
-    renderModelResult(root, result, element);
+    renderModelResult(root, result, null, element, () => {});
     return root.children[0].children.map(node => node.textContent);
 }
 
@@ -56,5 +56,5 @@ test("time-series results name each saved calculation and omit unspecified share
     assert.ok(text.includes("areaha(a > 0)"));
     assert.equal(text.some(value => value.startsWith("Units:")), false);
     assert.ok(text.includes("Observations in this run: 3"));
-    assert.ok(text.includes("Download the CSV under Files from this run for values and per-calculation pixel counts."));
+    assert.ok(text.includes("Download the CSV for values and per-calculation pixel counts."));
 });
