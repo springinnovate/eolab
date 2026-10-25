@@ -30,6 +30,8 @@ from eolab_app.processing.temporal_reduce import create_temporal_map
 from eolab_app.processing.temporal_grid import plan_temporal_grid
 from eolab_app.raster.source_models import TemporalIntervalSelection
 from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
+from eolab_app.vector.filters import VectorFilter
+from catalog_selection_support import write_selection
 
 
 def _write_observation(
@@ -284,22 +286,25 @@ def test_all_missing_area_produces_zero_count_instead_of_failure(
         assert values.compressed().tolist() == [0.0]
 
 
+@pytest.mark.parametrize("area_kind", ["polygons", "catalogSelection"])
 def test_polygon_uses_cell_centres_and_masks_count_outside_area(
     interval: ResolvedTemporalInterval,
     tmp_path: Path,
+    area_kind: str,
 ) -> None:
     """Exclude touched-only cells from both ordinary outputs using one polygon mask.
 
     Args:
         interval: Regional native-grid source.
         tmp_path: Isolated attempt root.
+        area_kind: Inline polygons or a filtered original GeoPackage.
     """
     polygon = PolygonSummaryInput(
         polygons=(
             {
                 "type": "Polygon",
                 "coordinates": [
-                    [(10.1, 10.1), (11.8, 10.1), (10.1, 11.8), (10.1, 10.1)]
+                    [(10.1, 10.1), (12.1, 11.9), (10.1, 11.9), (10.1, 10.1)]
                 ],
             },
         )
@@ -310,13 +315,46 @@ def test_polygon_uses_cell_centres_and_masks_count_outside_area(
         geometryHash=polygon.geometry_hash(),
         geometries=tuple(item.model_dump() for item in polygon.polygons),
     )
+    if area_kind == "catalogSelection":
+        resolved = write_selection(
+            tmp_path / "polygons.gpkg",
+            [
+                polygon.polygons[0].model_dump(),
+                {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            (12.1, 10.1),
+                            (13.8, 10.1),
+                            (13.8, 11.8),
+                            (12.1, 11.8),
+                            (12.1, 10.1),
+                        ]
+                    ],
+                },
+            ],
+            values=[1, 0],
+            candidate=VectorFilter(
+                enabled=True,
+                match="all",
+                rules=[{"field": "selected", "operator": "eq", "value": 1}],
+            ),
+        )
+        area = AggregateArea(
+            kind="catalogSelection",
+            bounds=polygon.bounds(),
+            catalogSelection=resolved.selection,
+            resolved=resolved,
+        )
     directory = tmp_path / "polygon"
     _calculate(interval, TemporalReduction(reducer="sum"), area, directory)
     with rasterio.open(directory / "count.tif") as count:
-        # Only the lower-left cell centre is strictly inside the triangle.
+        # Three cell centres are inside; the lower-left has no observations.
         selected = count.read(1, masked=True)
-        assert selected.count() == 1
-        assert selected.compressed().tolist() == [0.0]
+        assert selected.count() == 3
+        assert selected.compressed().tolist() == [3.0, 2.0, 0.0]
+    with rasterio.open(directory / "result.tif") as result:
+        assert result.read(1, masked=True).compressed().tolist() == [9.0, 8.0]
     assert not (directory / "polygon-mask.tif").exists()
 
 
