@@ -136,7 +136,7 @@ def _reduce_window(
         interval: Authorized observations in increasing label order.
         reduction: Equal-weight statistic or integrated precipitation total.
         conversion_factor: Model-configured multiplier after rate times seconds;
-            unused by instantaneous statistics.
+            unused by ordinary statistics.
         window: Integral native tile in the planned longitude view.
         column_rotation: Source-column shift shared by every observation.
         scratch: Attempt-owned temporary file for exact order statistics.

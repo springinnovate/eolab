@@ -156,8 +156,9 @@ class TemporalMapSpec(BaseModel):
     The authorized observations and their file locations stay in worker memory.
     Detailed observation labels and support intervals belong in provenance.json.
     unit describes the output values; original units remain in source metadata.
+    timeSupport retains the admitted meaning of each observation.
     conversionFactor multiplies each rate after integration over interval seconds;
-    ordinary instantaneous statistics use 1.
+    ordinary statistics use 1.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -167,6 +168,7 @@ class TemporalMapSpec(BaseModel):
     area: AggregateArea
     grid: TemporalReadGrid
     unit: str
+    timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
     conversionFactor: float
     observationCount: int
     firstObservation: datetime

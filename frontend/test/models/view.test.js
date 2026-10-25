@@ -537,8 +537,7 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.equal(controls.statistic.parentNode.textContent, "Period statistic");
     assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
     assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
-    assert.equal(controls.variable.children[2].disabled, true);
-    assert.match(controls.support.textContent, /Other rates and accumulated values are not supported/);
+    assert.equal(controls.variable.children[2].disabled, false);
     assert.equal(Boolean(controls.availability.open), false);
     assert.match(controls.coverage.textContent, /^3 observations in 2020-01/);
     assert.match(controls.coverage.textContent, /UTC/);
@@ -633,7 +632,6 @@ test("area-series setup describes spatial statistics and complete overlapping in
     assert.equal(controls.period.startTime.parentNode.textContent, "Start time (UTC)");
     assert.equal(controls.period.endTime.parentNode.textContent, "End time (excluded, UTC)");
     assert.equal(controls.statistic.parentNode.textContent, "Statistic");
-    assert.equal(controls.support.hidden, true);
     assert.ok(controls.variable.children.slice(1).every(option => !option.disabled));
     assert.deepEqual(controls.statistic.children.map(option => option.value), ["mean", "sum", "min", "max", "stdev", "count"]);
     assert.match(controls.periodHelp.textContent, /start.*includ|at or after.*start/i);
@@ -663,7 +661,7 @@ test("precipitation controls explain duration totals and round changed dates vis
     h.draft.temporal.variable = "precipitation"; h.draft.reduction.reducer = "precipitation_total";
     h.view.render(h.state);
     assert.equal(controls.variable.children[2].disabled, false);
-    assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (mm)"]);
+    assert.equal(controls.statistic.children.at(-1).textContent, "Precipitation total (mm)");
     assert.equal(controls.period.startTime.step, "3600"); assert.equal(controls.period.endTime.step, "3600");
     assert.match(controls.periodHelp.textContent, /30 minutes rounds forward/);
     assert.match(controls.availabilityHelp.textContent, /observation labels, not the boundaries/);
@@ -681,6 +679,11 @@ test("precipitation controls explain duration totals and round changed dates vis
     controls.period.startTime.dispatchEvent(new Event("blur"));
     assert.equal(controls.period.startDate.value, "2019-12-31"); assert.equal(controls.period.startTime.value, "23:00");
     assert.deepEqual(h.actions.at(-1), ["TemporalEdit", {startTime: "2019-12-31T23:00"}]);
+    h.draft.reduction.reducer = "mean"; h.view.render(h.state);
+    assert.equal(controls.period.startTime.step, "any"); assert.equal(controls.period.endTime.step, "any");
+    assert.match(controls.periodHelp.textContent, /complete observation.*overlaps.*Dates are not rounded/);
+    assert.match(controls.reductionHelp.textContent, /equal weight.*Result units: kg m\*\*-2 s\*\*-1/);
+    assert.doesNotMatch(controls.reductionHelp.textContent, /converted to mm/);
     assert.equal(h.actions.some(([action]) => action === "Submit"), false);
 });
 

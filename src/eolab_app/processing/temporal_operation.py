@@ -31,7 +31,7 @@ class TemporalMapNumericalPolicy(BaseModel):
     grid: Literal["native"] = "native"
     resampling: Literal["none"] = "none"
     numericInclusion: Literal["cell_center"] = "cell_center"
-    timeSupport: Literal["instantaneous", "mean_rate"] = "instantaneous"
+    timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
     weighting: Literal["equal_observation", "interval_duration"] = "equal_observation"
     nodata: Literal["exclude_source_nodata_and_nonfinite"] = (
         "exclude_source_nodata_and_nonfinite"
@@ -131,7 +131,7 @@ async def prepare_temporal_map(
     queued: QueuedTemporalMap,
     source: ResolvedTemporalInterval,
 ) -> PreparedJobPlan:
-    """Prepare a native period map after matching the statistic to source metadata.
+    """Plan a period map using the selected area and admitted observation metadata.
 
     Ordinary statistics retain the source units. Precipitation totals use the
     model's configured source units, output units and conversion factor.
@@ -160,13 +160,6 @@ async def prepare_temporal_map(
             )
         output_unit = precipitation.outputUnit
         conversion_factor = precipitation.factor
-    elif source.time_support != "instantaneous":
-        raise ProcessingError(
-            "unsupported_time_support",
-            "This statistic requires instantaneous measurements. "
-            "Use Precipitation total for mean precipitation rates in "
-            f"{precipitation.inputUnit}.",
-        )
     if not source.observations:
         raise ProcessingError(
             "no_observations", "No observations are available in the selected period."
@@ -211,6 +204,7 @@ async def prepare_temporal_map(
         area=area,
         grid=grid,
         unit=output_unit,
+        timeSupport=source.time_support,
         conversionFactor=conversion_factor,
         observationCount=len(source.observations),
         firstObservation=source.observations[0].time,
@@ -285,7 +279,7 @@ def describe_temporal_policy(spec: TemporalMapSpec) -> TemporalMapNumericalPolic
     """
     total = spec.reduction.reducer == "precipitation_total"
     return TemporalMapNumericalPolicy(
-        timeSupport="mean_rate" if total else "instantaneous",
+        timeSupport=spec.timeSupport,
         weighting="interval_duration" if total else "equal_observation",
         reduction=spec.reduction,
         unit=spec.unit,

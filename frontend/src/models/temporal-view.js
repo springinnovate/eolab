@@ -1,6 +1,6 @@
 /** Present temporal period and statistic choices inside the existing Models form. */
 import { modelSourceKey } from "./inputs.js";
-import { getTemporalStatistics, supportsPrecipitationTotal, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
+import { getTemporalStatistics, temporalSelectionError, captureTemporalReduction } from "./temporal-inputs.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
 
 /** Format an available observation label without using the browser's timezone.
@@ -37,10 +37,8 @@ export class TemporalModelInputsView {
         this.dataset.addEventListener("change", () => handlers.onTemporalDataset(this.dataset.value));
         this.variable = element("select"); this.variable.required = true;
         this.variable.addEventListener("change", () => handlers.onTemporalVariable(this.variable.value));
-        this.support = element("p", "", "models-help"); this.support.id = "models-temporal-support";
-        this.variable.setAttribute("aria-describedby", this.support.id);
         this.sourceRoot.append(field("models-temporal-dataset", "Dataset", this.dataset),
-            field("models-temporal-variable", "Variable", this.variable), this.support);
+            field("models-temporal-variable", "Variable", this.variable));
         this.period = new TemporalPeriodView({element, field, options, document}, {onEdit: handlers.onTemporalEdit,
             idPrefix: "models-temporal", describedBy: "models-temporal-period-help models-temporal-status"});
         this.sourceRoot.append(this.period.root);
@@ -88,24 +86,21 @@ export class TemporalModelInputsView {
                 temporal.item.properties.title : dataset.label}))], temporal.datasetKey);
         const variables = Object.entries(temporal.item?.properties["cube:variables"] ?? {});
         this.options(this.variable, [{value: "", label: "Choose a variable…"}, ...variables.map(([id, value]) => ({value: id,
-            label: `${value.description} (${value.unit})${getTemporalStatistics(value, temporal).length ? "" : " — not supported"}`,
-            disabled: !getTemporalStatistics(value, temporal).length}))], temporal.variable);
+            label: `${value.description} (${value.unit})`}))], temporal.variable);
         this.variable.disabled = !temporal.item;
-        this.support.hidden = !variables.some(([, value]) => !getTemporalStatistics(value, temporal).length);
-        this.support.textContent = this.support.hidden ? "" : `Period maps support instantaneous measurements and mean precipitation rates in ${temporal.precipitation.inputUnit}. Other rates and accumulated values are not supported.`;
         const variable = temporal.item?.properties["cube:variables"][temporal.variable];
-        const precipitation = supportsPrecipitationTotal(variable, temporal);
+        const precipitation = reduction.reducer === "precipitation_total";
         const areaSeries = temporal.statisticType === "area_statistic";
-        const intervalSeries = areaSeries && variable && variable["eolab:time_support"] !== "instantaneous";
+        const intervalObservations = variable && variable["eolab:time_support"] !== "instantaneous";
         this.period.render(temporal, {roundToHour: precipitation});
         this.periodHelp.textContent = precipitation ?
             "Total precipitation between these dates. Dates round to the nearest whole UTC hour when you finish editing; 30 minutes rounds forward. The calculation uses the dates shown." :
-            (intervalSeries ? "Include each complete observation whose time interval overlaps this period. Dates are not rounded; values are not prorated or integrated over time." :
+            (intervalObservations ? "Include each complete observation whose time interval overlaps this period. Dates are not rounded; values are not prorated or integrated over time." :
                 temporal.periodMode === "times" ? "Include observations at or after the start and before the end." : "Include available observations throughout the selected whole UTC days.") +
             " Changing the observation displayed on the map does not change these dates.";
         this.availabilityHelp.textContent = "Browsing months does not change your period. Use this month sets the start to its first day and the end to the first day of the next month, both at 00:00 UTC. " +
             (precipitation ? "These are observation labels, not the boundaries of the intervals they represent. Missing intervals are omitted from the total." : "Missing observations are omitted from the calculation.");
-        const selectionError = temporalSelectionError(temporal);
+        const selectionError = temporalSelectionError(temporal, reduction.reducer);
         this.status.textContent = selectionError; this.status.hidden = !selectionError;
         this.sourceRoot.setAttribute("aria-busy", String(temporal.loading));
         const choices = temporal.choices;

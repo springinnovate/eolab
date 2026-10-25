@@ -34,10 +34,12 @@ from test_processing_jobs import HEADERS, store
 from tests.test_catalog_temporal import (
     ITEM_KEY,
     PRECIPITATION,
+    RADIATION,
     TEMPERATURE,
     create_scanner,
     era5_archive,
     observation_path,
+    publish_month,
     scan,
 )
 from tests.test_temporal_source_access import populate_month
@@ -322,23 +324,86 @@ def test_new_run_reads_refreshed_values_without_changing_completed_outputs(
     assert saved["result"]["temporalCoverage"] == first["result"]["temporalCoverage"]
 
 
-def test_period_map_rejects_rate_variables_without_publishing(
-    temporal_boundary: TemporalBoundary, store: PostgresJobStore
+@pytest.mark.parametrize(
+    "variable,time_support,unit",
+    [
+        (PRECIPITATION, "mean_rate", "kg m**-2 s**-1"),
+        (RADIATION, "accumulation", "W m**-2 s"),
+    ],
+)
+@pytest.mark.parametrize("reducer,expected_value", [("mean", 4), ("sum", 8)])
+def test_period_map_summarizes_complete_overlapping_observations(
+    temporal_boundary: TemporalBoundary,
+    store: PostgresJobStore,
+    variable: str,
+    time_support: str,
+    unit: str,
+    reducer: str,
+    expected_value: float,
 ) -> None:
-    """Fail unsupported interval-rate semantics explicitly without inventing a depth.
+    """Use complete overlapping observations in source units, preserving gaps.
 
     Args:
         temporal_boundary: Actual temporal admission, HTTP and native worker.
         store: Disposable real database required by this integration suite.
+        variable: Rate or accumulation variable to summarize.
+        time_support: Admitted interpretation of each source observation.
+        unit: Unconverted source and result units.
+        reducer: Ordinary statistic applied equally to available observations.
+        expected_value: Statistic of the two valid values at the western cell.
     """
-    client, worker, _, _, _ = temporal_boundary
-    job = submit_period(client, period_request(client, PRECIPITATION))
+    client, worker, _, archive, scanner = temporal_boundary
+    publish_month(archive, 2, {variable: (0, 2)})
+    populate_month(archive, variable, (1, 99, 3))
+    for hour, value in ((0, 0), (2, numpy.nan)):
+        path = observation_path(archive, variable, 2, hour)
+        _write_equatorial_cell(path, 720, value)
+        _write_equatorial_cell(path, 721, numpy.nan)
+    assert client.portal.call(scan, scanner)["errors"] == []
+    request = period_request(client, variable)
+    request["inputs"]["source"]["startTime"] = "2000-01-31T23:30:00Z"
+    request["inputs"]["source"]["endTime"] = "2000-02-01T01:30:00Z"
+    request["inputs"]["reduction"] = {"reducer": reducer}
+    job = submit_period(client, request)
     assert client.portal.call(worker.run_once)
-    failed = client.get(f"/api/processing/jobs/{job['jobId']}").json()
-    assert failed["status"] == "failed", failed
-    assert "instantaneous" in failed["error"]["detail"].lower()
-    assert failed["result"] is None
-    assert failed["artifacts"]["files"] == []
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    assert ready["result"]["temporalCoverage"] == {
+        "unit": unit,
+        "observationCount": 2,
+        "firstObservation": "2000-02-01T00:00:00Z",
+        "lastObservation": "2000-02-01T02:00:00Z",
+    }
+    rasters = {
+        item["name"]: item
+        for item in ready["artifacts"]["files"]
+        if item["mediaType"] == "image/tiff"
+    }
+    assert set(rasters) == {"raster", "count"}
+    for name, expected, output_unit in (
+        ("raster", [expected_value, 0, numpy.nan], unit),
+        ("count", [2, 1, 0], "observations"),
+    ):
+        with (
+            MemoryFile(client.get(rasters[name]["url"]).content) as memory,
+            memory.open() as raster,
+        ):
+            samples = [
+                value[0] for value in raster.sample([(-0.25, 0), (0, 0), (0.25, 0)])
+            ]
+            numpy.testing.assert_allclose(samples, expected, equal_nan=True)
+            assert raster.units == (output_unit,)
+    exported = parse_yaml(
+        client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
+    )
+    assert exported["invocation"]["inputs"] == request["inputs"]
+    source = exported["execution"]["sources"]["source"]
+    assert source["unit"] == unit
+    assert source["timeSupport"] == time_support
+    policy = exported["execution"]["numericalPolicy"]
+    assert policy["timeSupport"] == time_support
+    assert policy["weighting"] == "equal_observation"
+    assert policy["unit"] == unit
 
 
 @pytest.mark.parametrize(

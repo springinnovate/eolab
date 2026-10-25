@@ -92,6 +92,7 @@ function editExactTime(controls, boundary, value, event = "input") {
 test("calendar controls capture whole months and inclusive days as the existing UTC interval", async () => {
     const view = new ModelsView(new SummaryControlDocument());
     const h = await periodFixture({}, view), controls = view.setup.temporal, draft = h.controller.state.draft;
+    await h.controller.chooseTemporalVariable("temperature");
     assert.equal(controls.period.periodMode.value, "month");
     for (const [month, start, end] of [
         ["2000-02", "2000-02-01T00:00:00.000Z", "2000-03-01T00:00:00.000Z"],
@@ -134,7 +135,8 @@ test("calendar controls capture whole months and inclusive days as the existing 
 test("temporal setup captures typed inputs in UTC without raster publication or automatic jobs", async () => {
     const h = await periodFixture(), draft = h.controller.state.draft;
     assert.equal(draft.raster, null);
-    assert.equal(draft.temporal.variable, "temperature");
+    assert.equal(draft.temporal.variable, "");
+    await h.controller.chooseTemporalVariable("temperature");
     h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-02T13:00"});
     h.controller.editDraft({reduction: {reducer: "percentile", percentile: 95}});
     assert.equal(h.submitted.length, 0);
@@ -154,6 +156,7 @@ test("temporal setup captures typed inputs in UTC without raster publication or 
 test("refresh and map changes preserve the analysis interval; Use this month replaces it explicitly", async () => {
     let item = structuredClone(temporalItem), dates = structuredClone(temporalChoices);
     const h = await periodFixture({getTemporalItem: async () => structuredClone(item), loadTemporalTimes: async () => structuredClone(dates)});
+    await h.controller.chooseTemporalVariable("temperature");
     const draft = h.controller.state.draft;
     h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:15", endTime: "2000-03-04T20:00"});
     dates = {months: ["2000-03"], month: "2000-03", times: ["2000-03-12T00:00:00Z"]};
@@ -181,6 +184,7 @@ test("refresh and map changes preserve the analysis interval; Use this month rep
 
 test("availability replies preserve typed dates and cannot change a later model draft", async () => {
     const h = await periodFixture();
+    await h.controller.chooseTemporalVariable("temperature");
     let finishDates;
     h.api.loadTemporalTimes = () => new Promise(resolve => { finishDates = resolve; });
     const pending = h.controller.loadTemporalDates("2000-03");
@@ -196,18 +200,34 @@ test("availability replies preserve typed dates and cannot change a later model 
     h.controller.destroy();
 });
 
-test("temporal controls explain unsupported choices and date guidance does not authorize work", async () => {
-    const h = await periodFixture(), draft = h.controller.state.draft;
-    h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
-    await h.controller.chooseTemporalVariable("rain");
-    assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /instantaneous measurements/);
+test("period maps accept ordinary statistics for every observation type and date guidance does not authorize work", async () => {
+    const item = structuredClone(temporalItem);
+    item.properties["cube:variables"].energy = {description: "Stored energy", unit: "J m-2", "eolab:time_support": "accumulation"};
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({getTemporalItem: async () => structuredClone(item)}, view), draft = h.controller.state.draft;
+    const controls = view.setup.temporal, statistics = ["mean", "sum", "min", "max", "median", "percentile", "stdev"];
+    controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
+    editExactTime(controls, "start", "2000-01-01T00:10");
+    editExactTime(controls, "end", "2000-02-01T00:20");
+    for (const variable of ["temperature", "rain", "energy"]) {
+        await h.controller.chooseTemporalVariable(variable);
+        assert.deepEqual(controls.statistic.children.map(option => option.value), statistics);
+        for (const reducer of statistics) {
+            controls.statistic.value = reducer; controls.statistic.dispatchEvent(new Event("change"));
+            const request = captureModelSubmission(draft, "e".repeat(32));
+            assert.equal(request.inputs.weather.variable, variable);
+            assert.equal(request.inputs.weather.startTime, "2000-01-01T00:10:00.000Z");
+            assert.equal(request.inputs.weather.endTime, "2000-02-01T00:20:00.000Z");
+            assert.deepEqual(request.inputs.statistic, reducer === "percentile" ? {reducer, percentile: 90} : {reducer});
+        }
+    }
     h.api.loadTemporalTimes = async () => { throw new Error("Offline"); };
     await h.controller.chooseTemporalVariable("temperature");
     assert.match(draft.temporal.datesError, /You can still enter a period/);
     assert.doesNotThrow(() => captureModelSubmission(draft, "e".repeat(32)));
-    h.handlers.onTemporalEdit({endTime: "2000-01-01T00:00"});
+    editExactTime(controls, "end", "2000-01-01T00:10");
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /end must be later/);
-    h.handlers.onTemporalEdit({endTime: "2000-02-01T00:00"});
+    editExactTime(controls, "end", "2000-02-01T00:00");
     h.controller.editDraft({reduction: {reducer: "percentile", percentile: 101}});
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /percentile from 0 to 100/);
     h.controller.editDraft({reduction: {reducer: "mean", percentile: 101}});
@@ -237,7 +257,7 @@ test("copying a temporal run preserves its original period, statistic and fixed 
     h.controller.destroy();
 });
 
-test("precipitation inputs visibly round UTC hours and submit exactly those dates without changing the area", async () => {
+test("only selecting Precipitation total rounds UTC hours and submits those dates without changing the area", async () => {
     const item = structuredClone(temporalItem);
     item.properties["cube:variables"].water_flux = {description: "Precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
@@ -247,14 +267,19 @@ test("precipitation inputs visibly round UTC hours and submit exactly those date
     await h.controller.chooseTemporalVariable("temperature");
     editExactTime(controls, "start", "2000-01-31T23:30");
     editExactTime(controls, "end", "2000-02-01T01:10");
-    controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
     controls.period.startTime.focus();
     await h.controller.chooseTemporalVariable("water_flux");
+    assert.equal(draft.reduction.reducer, "mean");
+    assert.equal(draft.temporal.startTime, "2000-01-31T23:30");
+    assert.equal(draft.temporal.endTime, "2000-02-01T01:10");
+    assert.doesNotThrow(() => captureModelSubmission(draft, "e".repeat(32)));
+    assert.deepEqual(controls.statistic.children.map(option => option.value),
+        ["mean", "sum", "min", "max", "median", "percentile", "stdev", "precipitation_total"]);
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
     assert.equal(controls.period.startDate.value, "2000-02-01");
     assert.equal(controls.period.startTime.value, "00:00");
     assert.equal(controls.period.endTime.value, "01:00");
     assert.equal(draft.reduction.reducer, "precipitation_total");
-    assert.deepEqual(controls.statistic.children.map(option => option.value), ["precipitation_total"]);
     editExactTime(controls, "start", "2000-02-01T00:10");
     assert.throws(() => captureModelSubmission(draft, "e".repeat(32)), /whole UTC hours/);
     await h.controller.loadTemporalDates(undefined, true);
@@ -273,14 +298,13 @@ test("precipitation inputs visibly round UTC hours and submit exactly those date
     controls.period.endTime.dispatchEvent(new Event("change"));
     assert.equal(controls.period.endTime.value, "01:00");
     assert.equal(view.setup.run.disabled, false);
-    await h.controller.chooseTemporalVariable("temperature");
+    controls.statistic.value = "mean"; controls.statistic.dispatchEvent(new Event("change"));
     assert.equal(draft.reduction.reducer, "mean");
-    controls.statistic.value = "sum"; controls.statistic.dispatchEvent(new Event("change"));
     editExactTime(controls, "start", "2000-02-01T00:10");
     controls.period.startTime.dispatchEvent(new Event("change")); controls.period.startTime.dispatchEvent(new Event("blur"));
     assert.equal(draft.temporal.startTime, "2000-02-01T00:10");
-    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.statistic, {reducer: "sum"});
-    await h.controller.chooseTemporalVariable("water_flux");
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.statistic, {reducer: "mean"});
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
     const expected = captureModelSubmission(draft, "e".repeat(32));
     assert.equal(expected.inputs.weather.startTime, `${controls.period.startDate.value}T${controls.period.startTime.value}:00.000Z`);
     assert.equal(expected.inputs.weather.endTime, `${controls.period.endDate.value}T${controls.period.endTime.value}:00.000Z`);
@@ -291,12 +315,12 @@ test("precipitation inputs visibly round UTC hours and submit exactly those date
     h.controller.destroy();
 });
 
-test("a sole precipitation variable defaults to totals and copied runs preserve their exact period and area", async () => {
+test("a sole precipitation variable defaults to Mean and copied totals preserve their exact period and area", async () => {
     const item = structuredClone(temporalItem);
     item.properties["cube:variables"] = {water_flux: {description: "Precipitation rate", unit: "kg m**-2 s**-1", "eolab:time_support": "mean_rate"}};
     const h = await periodFixture({getTemporalItem: async () => structuredClone(item)});
     assert.equal(h.controller.state.draft.temporal.variable, "water_flux");
-    assert.equal(h.controller.state.draft.reduction.reducer, "precipitation_total");
+    assert.equal(h.controller.state.draft.reduction.reducer, "mean");
     const saved = {model: periodModel, label: "Rainfall", parameters: {}, inputs: {
         weather: {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "water_flux",
             startTime: "2000-01-31T23:00:00.000Z", endTime: "2000-02-01T01:00:00.000Z"},
@@ -313,7 +337,7 @@ test("a sole precipitation variable defaults to totals and copied runs preserve 
     h.controller.destroy();
 });
 
-test("recipe precipitation units determine supported variables and labels without adding conversion settings to requests", async () => {
+test("recipe units add a precipitation total without restricting ordinary statistics or adding conversion settings to requests", async () => {
     const recipe = structuredClone(periodModel);
     recipe.steps[0].inputs.precipitation.value = {inputUnit: "mm/hour", outputUnit: "cm", factor: 1 / 36000};
     const item = structuredClone(temporalItem);
@@ -325,13 +349,15 @@ test("recipe precipitation units determine supported variables and labels withou
     h.context.temporalDatasets = [temporalDataset, {...temporalDataset, itemId: "second-dataset"}];
     h.controller.chooseModel(recipe);
     await h.controller.chooseTemporalDataset(modelSourceKey(temporalDataset));
-    await h.controller.chooseTemporalVariable("rain");
     const controls = view.setup.temporal;
     controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));
+    await h.controller.chooseTemporalVariable("water_flux");
+    assert.deepEqual(controls.statistic.children.map(option => option.value), ["mean", "sum", "min", "max", "median", "percentile", "stdev"]);
+    await h.controller.chooseTemporalVariable("rain");
     assert.equal(controls.variable.children.find(option => option.value === "rain").disabled, false);
-    assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, true);
-    assert.deepEqual(controls.statistic.children.map(option => option.textContent), ["Precipitation total (cm)"]);
-    assert.match(controls.support.textContent, /mean precipitation rates in mm\/hour/);
+    assert.equal(controls.variable.children.find(option => option.value === "water_flux").disabled, false);
+    assert.equal(controls.statistic.children.at(-1).textContent, "Precipitation total (cm)");
+    controls.statistic.value = "precipitation_total"; controls.statistic.dispatchEvent(new Event("change"));
     assert.match(controls.reductionHelp.textContent, /rate in mm\/hour.*converted to cm/);
     editExactTime(controls, "start", "2000-01-01T00:10", "change");
     editExactTime(controls, "end", "2000-01-01T02:30", "change");

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -157,6 +158,7 @@ def _calculate(
         area=area,
         grid=grid,
         unit=conversion.outputUnit if conversion else interval.unit,
+        timeSupport=interval.time_support,
         conversionFactor=conversion.factor if conversion else 1.0,
         observationCount=len(interval.observations),
         firstObservation=interval.observations[0].time,
@@ -168,10 +170,16 @@ def _calculate(
 @pytest.mark.parametrize(
     "reducer", ["sum", "mean", "min", "max", "median", "percentile", "stdev"]
 )
+@pytest.mark.parametrize(
+    "support,unit",
+    [("instantaneous", "K"), ("mean_rate", "mm/hour"), ("accumulation", "J/m2")],
+)
 def test_reducers_match_native_values_and_preserve_count_nodata(
     interval: ResolvedTemporalInterval,
     tmp_path: Path,
     reducer: str,
+    support: Literal["instantaneous", "mean_rate", "accumulation"],
+    unit: str,
 ) -> None:
     """Match independent scalar references and publish ordinary native-grid COGs.
 
@@ -179,7 +187,10 @@ def test_reducers_match_native_values_and_preserve_count_nodata(
         interval: Gapped observations with mixed validity.
         tmp_path: Isolated attempt root.
         reducer: Each supported equal-weight statistic.
+        support: Admitted meaning of each observation's values.
+        unit: Source units retained by ordinary statistics.
     """
+    interval = replace(interval, time_support=support, unit=unit)
     reduction = TemporalReduction(
         reducer=reducer, percentile=25 if reducer == "percentile" else None
     )
@@ -212,7 +223,7 @@ def test_reducers_match_native_values_and_preserve_count_nodata(
         )
         assert result.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
         assert result.transform == interval.observations[0].transform
-        assert result.units == ("K",)
+        assert result.units == (unit,)
         assert result.dtypes == ("float64",)
     with rasterio.open(directory / "count.tif") as count:
         np.testing.assert_array_equal(count.read(1), [[3, 2, 0, 2], [0, 2, 3, 2]])
@@ -235,7 +246,11 @@ def test_reducers_match_native_values_and_preserve_count_nodata(
         item.time.isoformat() for item in interval.observations
     ]
     assert provenance["allTouched"] is False
-    assert provenance["unit"] == "K"
+    assert provenance["unit"] == unit
+    assert provenance["timeSupport"] == support
+    policy = describe_temporal_policy(spec)
+    assert policy.timeSupport == support
+    assert policy.weighting == "equal_observation"
     assert str(tmp_path / "archive") not in json.dumps(provenance)
     assert "observations" not in spec.model_dump()
     assert source_files == {path: path.read_bytes() for path in source_files}
@@ -532,7 +547,7 @@ def test_precipitation_total_requires_whole_utc_hours_at_request_boundary() -> N
         wholeRaster=True,
     )
     assert request.source.start_time.astimezone(timezone.utc).hour == 0
-    # Ordinary instantaneous statistics retain arbitrary half-open periods.
+    # Ordinary statistics retain arbitrary half-open periods.
     TemporalMapRequest(
         source={**source, "startTime": "2000-01-01T00:30:00Z"},
         reduction={"reducer": "mean"},

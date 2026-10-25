@@ -155,7 +155,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
         if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = draft.raster.kind === "runArtifact" ?
             {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
-        else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal);
+        else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;
         else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
