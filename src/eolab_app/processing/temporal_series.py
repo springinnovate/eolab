@@ -1,14 +1,14 @@
 """Summarize one selected area separately for each available observation."""
 
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 import csv
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
-from itertools import batched
+from itertools import islice
 from pathlib import Path
 from threading import Lock
 import time
@@ -76,7 +76,8 @@ def calculate_temporal_observations(
 ) -> Iterator[tuple[TemporalObservation, list[dict[str, Any]]]]:
     """Evaluate the same named formulas independently on each observation.
 
-    Two readers overlap native TIFF reads and yield results in timestamp order.
+    Two readers start the next observation as soon as either finishes. Scalar
+    results wait for earlier timestamps before being yielded in order.
     The selected-area mask and hectare calculator are prepared once and shared;
     their native reads are serialized. Point-only formulas read one cell per
     observation without preparing area geometry. Each observation retains the
@@ -239,11 +240,25 @@ def calculate_temporal_observations(
                 for item, result in zip(calculations, accumulators, strict=True)
             ]
 
-        with ThreadPoolExecutor(max_workers=2) as readers:
-            for observations in batched(interval.observations, 2):
-                yield from zip(
-                    observations, readers.map(summarize_observation, observations)
-                )
+        reader_count = 2
+        with ThreadPoolExecutor(max_workers=reader_count) as readers:
+            observations = iter(enumerate(interval.observations))
+            pending = {
+                readers.submit(summarize_observation, observation): index
+                for index, observation in islice(observations, reader_count)
+            }
+            completed: dict[int, list[dict[str, Any]]] = {}
+            next_result = 0
+            while pending:
+                finished, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    completed[pending.pop(future)] = future.result()
+                for index, observation in islice(observations, len(finished)):
+                    future = readers.submit(summarize_observation, observation)
+                    pending[future] = index
+                while next_result in completed:
+                    yield interval.observations[next_result], completed.pop(next_result)
+                    next_result += 1
         write_progress(directory, "summarizing", completed_tiles, total_tiles)
 
 
