@@ -23,7 +23,7 @@ from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.models import ProcessingError
-from eolab_app.processing.raster_aggregate import get_raster_window_and_mask_source
+from eolab_app.processing.raster_aggregate import prepare_raster_area_tools
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.temporal_grid import (
     TemporalReadGrid,
@@ -311,12 +311,15 @@ def create_temporal_map(
     ):
         source = stack.enter_context(TemporalRasterDataset(interval.observations[0]))
         source.prepare_column_view(grid.columnRotation)
-        _, polygons = get_raster_window_and_mask_source(source, spec.area, limits)
+        tools = prepare_raster_area_tools(source, spec.area, limits)
+        polygons = tools.selected_polygons
         if isinstance(polygons, PolygonRasterizer):
             stack.callback(polygons.close)
         mask = stack.enter_context(
             temporary_polygon_mask(source, crop, polygons, directory, limits)
         )
+        if isinstance(polygons, PolygonRasterizer):
+            polygons.close()
         profile = dict(
             driver="GTiff",
             width=grid.width,
