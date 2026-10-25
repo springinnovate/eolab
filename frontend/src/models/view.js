@@ -2,10 +2,10 @@
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
-import { renderModelResult, renderModelFiles, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
+import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
 import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
-import { describeTemporalInterval, describeTemporalReduction } from "./temporal-inputs.js";
+import { describeTemporalInterval, describeTemporalReduction, describeTemporalResult } from "./temporal-inputs.js";
 
 /** Show the creation time in the timezone captured when this run was started.
  * @param {Object} job Model run with its fixed naming timestamp.
@@ -415,22 +415,26 @@ export class ModelsView {
         r.confirm.textContent = state.actionBusy ? "Please wait…" : "Delete run and results";
         r.confirm.disabled = Boolean(state.actionBusy); r.keep.disabled = Boolean(state.actionBusy);
         r.feedback.textContent = state.actionMessage ?? ""; r.feedback.hidden = !r.feedback.textContent;
-        const signature = JSON.stringify([available, job?.result, job?.artifacts]);
+        const invocation = state.invocation;
+        let result = job?.result;
+        if (result?.kind === "raster" && invocation) {
+            const inputs = Object.entries(invocation.model.definition.inputs);
+            const interval = inputs.find(([, input]) => input.type === "temporal_interval");
+            const reduction = inputs.find(([, input]) => input.type === "temporal_reduction");
+            if (interval && reduction) result = {...result, label: describeTemporalResult(invocation.inputs[interval[0]], invocation.inputs[reduction[0]])};
+        }
+        const signature = JSON.stringify([available, result, job?.artifacts]);
         if (r.resultSignature !== signature) {
             r.resultSignature = signature; r.result.replaceChildren();
             r.fileActions = [];
-            if (available && job.result) {
-                const filesAvailable = job.artifacts?.availability === "available";
-                renderModelResult(r.result, job.result, this.element.bind(this));
-                if (filesAvailable) r.fileActions = renderModelFiles(r.result, job.artifacts, this.element.bind(this), this.handlers.onShowOutput);
-            }
+            if (available && result) r.fileActions = renderModelResult(r.result, result,
+                job.artifacts?.availability === "available" ? job.artifacts : null, this.element.bind(this), this.handlers.onShowOutput);
         }
         updateModelFileActions(r.fileActions, state.outputPreviews);
         r.expiry.hidden = job?.status === "deleted";
         r.inputs.hidden = job?.status === "deleted";
         r.expiry.textContent = job ? `Temporary run in this browser. Clearing cookies or losing this browser session loses access.${job.expiresAt ? ` Result files expire ${new Date(job.expiresAt).toLocaleString()}.` : ""}` +
             (job.metadataExpiresAt ? ` Saved inputs expire ${new Date(job.metadataExpiresAt).toLocaleString()}.` : "") : "";
-        const invocation = state.invocation;
         if (invocation && r.invocation !== invocation) {
             r.invocation = invocation;
             const list = this.element("dl");

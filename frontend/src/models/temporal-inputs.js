@@ -1,5 +1,5 @@
 /** Capture a temporal dataset, UTC period and observation statistic for model setup. */
-import { temporalPeriodError } from "../temporal-period.js";
+import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
 
 /** Statistics accepted by the temporal_reduction input contract. */
 export const TEMPORAL_STATISTICS = [
@@ -116,4 +116,20 @@ export function describeTemporalInterval(input) {
 export function describeTemporalReduction(input) {
     const label = TEMPORAL_STATISTICS.find(choice => choice.value === input.reducer).label;
     return input.reducer === "percentile" ? `${label} ${input.percentile}` : input.reducer === "stdev" ? `${label} (population)` : label;
+}
+
+/** Name a calculated period map using its saved statistic, variable and requested UTC period.
+ * Exact calendar months use their month and year. Other periods retain both exact
+ * boundaries and state that the end is excluded; current Catalog state is not consulted.
+ * @param {{variable:string,startTime:string,endTime:string}} input Validated saved temporal_interval input.
+ * @param {{reducer:string,percentile?:number}} reduction Validated saved temporal_reduction input.
+ * @return {string} Result heading with the statistic, readable variable identifier and requested period.
+ */
+export function describeTemporalResult(input, reduction) {
+    const start = new Date(input.startTime).toISOString(), end = new Date(input.endTime).toISOString();
+    const month = getTemporalMonthBoundaries(start.slice(0, 7));
+    const wholeMonth = Date.parse(start) === Date.parse(`${month.startTime}Z`) && Date.parse(end) === Date.parse(`${month.endTime}Z`);
+    const period = wholeMonth ? new Intl.DateTimeFormat(undefined, {month: "long", year: "numeric", timeZone: "UTC"}).format(new Date(start)) :
+        `${start.replace("T", " ").replace(/(?:\.000)?Z$/, "")} → ${end.replace("T", " ").replace(/(?:\.000)?Z$/, "")} UTC · end excluded`;
+    return `${describeTemporalReduction(reduction)} · ${input.variable.replaceAll("_", " ")} · ${period}`;
 }
