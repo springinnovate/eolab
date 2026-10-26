@@ -10,11 +10,10 @@ from eolab_app.processing.habitat_calculation import (
     habitat_process_target,
 )
 from eolab_app.processing.habitat_models import (
-    HabitatPlan,
+    HabitatCalculationInputs,
     HabitatRequest,
     HabitatSettings,
     QueuedHabitat,
-    RasterReferenceSites,
     VectorReferenceSites,
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
@@ -31,7 +30,7 @@ def bind_habitat(
     """Bind the recipe's explicit layer choices and settings to a Habitat request.
 
     Args:
-        inputs: Validated stack, references, habitat mask, area and fixed settings.
+        inputs: Validated layers, area, preparation choices and fixed settings.
         parameters: Empty mapping; scientific settings come from the recipe.
         request_id: Submission identifier retained by the model-run service.
         label: Run name retained by the model-run service.
@@ -46,15 +45,16 @@ def bind_habitat(
         stack=inputs["stack"],
         references=inputs["references"],
         habitat_mask=inputs["habitat_mask"],
+        preparation=inputs["preparation"],
         settings=inputs["settings"],
         **bind_area_arguments(inputs["area"]),
     )
 
 
 def get_habitat_request(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> HabitatRequest:
-    """Return the captured inputs from a request, queued job or prepared plan.
+    """Return the Habitat request from submitted, queued or prepared inputs.
 
     Args:
         value: Validated Habitat inputs at any stage of the job.
@@ -64,13 +64,13 @@ def get_habitat_request(
     """
     if isinstance(value, QueuedHabitat):
         return value.request
-    return value.inputs if isinstance(value, HabitatPlan) else value
+    return value.inputs if isinstance(value, HabitatCalculationInputs) else value
 
 
 def get_habitat_source(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> RasterSourceReference:
-    """Return the first predictor, which supplies the aligned stack's grid.
+    """Return the first predictor for admission and the whole-raster area choice.
 
     Args:
         value: Validated request or saved specification.
@@ -82,7 +82,7 @@ def get_habitat_source(
 
 
 def get_additional_habitat_sources(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> dict[str, RasterSourceReference]:
     """Declare the remaining rasters for ordinary authorization and retention.
 
@@ -95,21 +95,8 @@ def get_additional_habitat_sources(
     Returns:
         Additional predictors, responses, raster references and optional habitat mask.
     """
-    request = get_habitat_request(value)
-    sources = {
-        f"predictor_{index}": band.source
-        for index, band in enumerate(request.stack.predictors[1:], start=1)
-    }
-    sources.update(
-        {
-            f"response_{index}": band.source
-            for index, band in enumerate(request.stack.responses)
-        }
-    )
-    if isinstance(request.references, RasterReferenceSites):
-        sources["reference_mask"] = request.references.source
-    if request.habitat_mask is not None:
-        sources["habitat_mask"] = request.habitat_mask
+    sources = get_habitat_request(value).get_raster_sources()
+    sources.pop("predictor_0")
     return sources
 
 
@@ -203,7 +190,7 @@ async def resolve_habitat_sources(
 async def prepare_habitat(
     context: OperationContext, queued: QueuedHabitat, primary: AuthorizedRaster
 ) -> PreparedJobPlan:
-    """Prepare the selected area and native grid in the supervised worker process.
+    """Prepare the selected area and requested grid in the supervised worker process.
 
     Args:
         context: Existing source, lifecycle and native-execution capabilities.
@@ -211,10 +198,11 @@ async def prepare_habitat(
         primary: Authorized first predictor.
 
     Returns:
-        A saved Habitat plan with its area descriptor and aligned output grid.
+        Saved calculation inputs with the area descriptor and calculated output grid.
 
     Raises:
-        ProcessingError: If selected features or native planning cannot be read.
+        ProcessingError: If selected features cannot be read or the grid cannot
+            be calculated.
         SelectionUnavailableError: If a selected vector is unavailable.
     """
     request = queued.request
@@ -239,26 +227,26 @@ async def prepare_habitat(
             bounds=summary["bbox"],
             catalogSelection=request.catalogSelection,
         )
-    status, plan = await context.run_native(
+    status, prepared = await context.run_native(
         habitat_process_target,
-        ("plan", (sources, request, area)),
+        ("prepare", (sources, request, area)),
         None,
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*plan)
+        raise ProcessingError(*prepared)
     return PreparedJobPlan(
-        operation=plan.operation,
-        specification=plan.model_dump(mode="json", by_alias=True),
+        operation=prepared.operation,
+        specification=prepared.model_dump(mode="json", by_alias=True),
         summary={},
         reserved_bytes=0,
     )
 
 
 async def prepare_habitat_execution(
-    context: OperationContext, spec: HabitatPlan, primary: AuthorizedRaster
-) -> tuple[HabitatSources, HabitatPlan]:
-    """Resolve original sources for an accepted plan without changing its settings.
+    context: OperationContext, spec: HabitatCalculationInputs, primary: AuthorizedRaster
+) -> tuple[HabitatSources, HabitatCalculationInputs]:
+    """Resolve original sources for the saved Habitat calculation inputs.
 
     Args:
         context: Worker capabilities and authorized additional rasters.
@@ -266,7 +254,7 @@ async def prepare_habitat_execution(
         primary: Authorized first predictor.
 
     Returns:
-        Ephemeral native inputs and the unchanged execution plan.
+        Authorized file paths and vector readers, plus the saved calculation inputs.
 
     Raises:
         ProcessingError: If vector reading is unavailable.
@@ -276,12 +264,12 @@ async def prepare_habitat_execution(
 
 
 def select_habitat_execution(
-    spec: HabitatPlan, context: OperationContext
+    spec: HabitatCalculationInputs, context: OperationContext
 ) -> tuple[Callable[..., None], str, RasterAggregateLimits]:
     """Select the Habitat native target and existing Processing lifecycle settings.
 
     Args:
-        spec: Prepared Habitat plan.
+        spec: Saved Habitat calculation inputs.
         context: Worker execution capabilities.
 
     Returns:
@@ -290,11 +278,11 @@ def select_habitat_execution(
     return habitat_process_target, "calculate", context.aggregate_limits
 
 
-def describe_habitat_policy(spec: HabitatPlan) -> HabitatSettings:
+def describe_habitat_policy(spec: HabitatCalculationInputs) -> HabitatSettings:
     """Return the scientific settings captured for Run YAML provenance.
 
     Args:
-        spec: Prepared Habitat plan.
+        spec: Saved Habitat calculation inputs.
 
     Returns:
         The fixed settings used for sampling, fitting and prediction.

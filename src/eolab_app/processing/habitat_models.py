@@ -1,8 +1,9 @@
-"""Describe selected Habitat condition layers and fixed scientific settings."""
+"""Describe selected Habitat condition layers and fixed model settings."""
 
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rasterio.crs import CRS
 
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
@@ -15,6 +16,8 @@ OPERATION = "habitat.condition.v1"
 FiniteNumber = Annotated[float, Field(allow_inf_nan=False)]
 Fraction = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 PositiveInteger = Annotated[int, Field(strict=True, gt=0)]
+PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+ResamplingMethod = Literal["nearest", "bilinear", "cubic", "average", "mode"]
 FITTING_COLUMN_NAMES = frozenset(
     {
         "validation_block_column",
@@ -46,8 +49,8 @@ class NamedHabitatRaster(HabitatSchema):
 class HabitatRasterStack(HabitatSchema):
     """The final predictor and response choices, including one categorical predictor.
 
-    Names are unique across both roles. The first predictor supplies the shared
-    grid; every predictor and response must already be aligned with that grid.
+    Names are unique across both roles. Inputs are prepared on the run's requested
+    grid before sampling and fitting.
     """
 
     predictors: Annotated[tuple[NamedHabitatRaster, ...], Field(min_length=1)]
@@ -80,7 +83,7 @@ class HabitatRasterStack(HabitatSchema):
 
 
 class RasterReferenceSites(HabitatSchema):
-    """Use cells equal to one in an aligned raster as reference sites."""
+    """Use cells equal to one after the selected resampling as reference sites."""
 
     kind: Literal["raster"]
     source: RasterSourceReference
@@ -98,10 +101,28 @@ HabitatReferences = Annotated[
 ]
 
 
-class HabitatSettings(HabitatSchema):
-    """Scientific and sampling settings supplied by the administrator's recipe.
+class HabitatPreparation(HabitatSchema):
+    """Requested output grid and one resampling method for each selected raster.
 
     Attributes:
+        crs: Requested output coordinate system.
+        pixelSize: Positive X/Y pixel sizes in the requested CRS's units.
+        origin: Grid intersection anchoring the AOI's outward-snapped bounds.
+        resampling: Methods keyed by predictor_N, response_N, reference_mask or
+            habitat_mask, matching the selected source roles exactly.
+    """
+
+    crs: str
+    pixelSize: tuple[PositiveNumber, PositiveNumber]
+    origin: tuple[FiniteNumber, FiniteNumber]
+    resampling: dict[str, ResamplingMethod]
+
+
+class HabitatSettings(HabitatSchema):
+    """Projection, scientific and sampling settings fixed by the model recipe.
+
+    Attributes:
+        required_crs: Equal-area projection required by the current Habitat runner.
         fold_count: Number of spatial cross-validation folds.
         sampling_block_size_meters: Width of equal-area sampling blocks.
         validation_block_size_meters: Width of grouped validation blocks.
@@ -118,6 +139,7 @@ class HabitatSettings(HabitatSchema):
         tile_origin: EPSG:6933 origin anchoring the virtual sampling tiles.
     """
 
+    required_crs: Literal["EPSG:6933"]
     fold_count: Annotated[int, Field(strict=True, ge=2)]
     sampling_block_size_meters: PositiveInteger
     validation_block_size_meters: PositiveInteger
@@ -135,16 +157,61 @@ class HabitatSettings(HabitatSchema):
 
 
 class HabitatRequest(HabitatSchema):
-    """Capture the selected layers, assessment area and fixed settings for one run."""
+    """Capture layers, assessment area, raster preparation and settings for one run."""
 
     stack: HabitatRasterStack
     references: HabitatReferences
     habitat_mask: RasterSourceReference | None
+    preparation: HabitatPreparation
     settings: HabitatSettings
     selectedBounds: Wgs84Bounds | None = None
     catalogSelection: VectorSelection | None = None
     polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
+
+    def get_raster_sources(self) -> dict[str, RasterSourceReference]:
+        """Return all selected rasters under their preparation and retention roles.
+
+        Returns:
+            Predictor and response positions, plus selected raster-reference and
+            assessment-mask sources. Variable names remain in the selected stack.
+        """
+        sources = {
+            f"predictor_{index}": band.source
+            for index, band in enumerate(self.stack.predictors)
+        }
+        sources.update(
+            {
+                f"response_{index}": band.source
+                for index, band in enumerate(self.stack.responses)
+            }
+        )
+        if isinstance(self.references, RasterReferenceSites):
+            sources["reference_mask"] = self.references.source
+        if self.habitat_mask is not None:
+            sources["habitat_mask"] = self.habitat_mask
+        return sources
+
+    @model_validator(mode="after")
+    def check_preparation(self) -> Self:
+        """Require explicit methods for active rasters and the model's projection.
+
+        Returns:
+            This request with one method per raster and a supported target CRS.
+
+        Raises:
+            ValueError: If a method is missing or names an inactive source, or
+                the requested CRS differs from the model's requirement.
+        """
+        if set(self.preparation.resampling) != set(self.get_raster_sources()):
+            raise ValueError("Choose one resampling method for each selected raster.")
+        if CRS.from_user_input(self.preparation.crs) != CRS.from_user_input(
+            self.settings.required_crs
+        ):
+            raise ValueError(
+                f"Habitat condition requires {self.settings.required_crs}."
+            )
+        return self
 
     @model_validator(mode="after")
     def check_area_choice(self) -> Self:
@@ -182,8 +249,14 @@ class QueuedHabitat(HabitatSchema):
     polygonArea: AggregateArea | None = None
 
 
-class HabitatPlan(HabitatSchema):
-    """Captured Habitat inputs, exact area descriptor and source-aligned output grid."""
+class HabitatCalculationInputs(HabitatSchema):
+    """Captured Habitat inputs, exact area descriptor and the requested output grid.
+
+    Grid datatype and NoData describe the runner's primary Reference similarity
+    output: float32 with valid values from 0 to 1 and -9999 for missing values.
+    Temporary aligned inputs use float64 and NaN NoData on the same spatial grid.
+    The window starts at zero; nativeBlocks counts 512-pixel preparation tiles.
+    """
 
     operation: Literal["habitat.condition.v1"] = OPERATION
     inputs: HabitatRequest

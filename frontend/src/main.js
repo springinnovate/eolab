@@ -103,6 +103,7 @@ import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ModelsController } from "./models/controller.js";
+import { describeRasterSource } from "./raster/source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
 import { createArtifactPreviewLayer } from "./model-output-preview/leaflet.js";
 import { labeledRasterSource, rasterSourceKey } from "./raster-source.js";
@@ -1075,6 +1076,7 @@ async function initializeCatalog(
         });
     models = new ModelsController({
         api: processingApi, jobs: processingJobs, view: new ModelsView(document), storage: browserSessionStorage(),
+        describeSource: (source, signal, targetCrs) => describeRasterSource(source, signal, undefined, targetCrs),
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         loadTemporalTimes,
         showOutput: (job, file) => outputLayers.show(job, file),

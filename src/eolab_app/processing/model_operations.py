@@ -64,10 +64,11 @@ from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing.habitat_models import (
     HabitatRequest,
     QueuedHabitat,
-    HabitatPlan,
+    HabitatCalculationInputs,
     HabitatRasterStack,
     HabitatReferences,
     HabitatSettings,
+    HabitatPreparation,
 )
 
 Request = TypeVar("Request", bound=BaseModel)
@@ -213,13 +214,14 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
-            ModelOperation[HabitatRequest, QueuedHabitat, HabitatPlan](
+            ModelOperation[HabitatRequest, QueuedHabitat, HabitatCalculationInputs](
                 id="habitat.condition.v1",
                 inputs=(
                     ("stack", "habitat_stack"),
                     ("area", "summary_area"),
                     ("references", "habitat_references"),
                     ("habitat_mask", "optional_raster"),
+                    ("preparation", "raster_preparation"),
                     ("settings", "habitat_settings"),
                 ),
                 parameters=(),
@@ -242,7 +244,7 @@ OPERATIONS = MappingProxyType(
                 ),
                 execution_profile="habitat-condition",
                 queued_type=QueuedHabitat,
-                prepared_type=HabitatPlan,
+                prepared_type=HabitatCalculationInputs,
                 policy_type=HabitatSettings,
                 bind=habitat.bind_habitat,
                 source=habitat.get_habitat_source,
@@ -262,8 +264,12 @@ OPERATIONS = MappingProxyType(
                     ("habitat_stack", TypeAdapter(HabitatRasterStack)),
                     ("habitat_references", TypeAdapter(HabitatReferences)),
                     ("optional_raster", TypeAdapter(RasterSourceReference | None)),
+                    ("raster_preparation", TypeAdapter(HabitatPreparation)),
                 ),
-                progress_descriptions=tuple(
+                progress_descriptions=(
+                    ("preparing_rasters", "Preparing model rasters"),
+                )
+                + tuple(
                     (phase, phase)
                     for phase in (
                         "Selecting sample pixels",

@@ -12,17 +12,21 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 import rasterio
+from rasterio.features import geometry_mask
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
-from shapely.geometry import box, mapping
+from rasterio.warp import transform
+from shapely.geometry import Point, box, mapping
 
 from nhi_terrestrial_integrity_modeling.habitat_training import IntegrityConfiguration
 from nhi_terrestrial_integrity_modeling.prepared_rasters import RasterBand
 from nhi_terrestrial_integrity_modeling.prepared_runner import run_habitat_condition
 
 from eolab_app.catalog_selection import ResolvedCatalogSelection, VectorSelection
+from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.habitat_calculation import HabitatSources, read_habitat_area
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.model_run_contracts import (
@@ -70,21 +74,50 @@ def habitat_definition() -> ModelDefinition:
     return ModelDefinition.model_validate(document)
 
 
+def test_whole_raster_aoi_preserves_curved_projected_edges(tmp_path: Path) -> None:
+    """Keep source pixels beyond the straight lines between projected corners.
+
+    Args:
+        tmp_path: Original UTM raster whose north edge curves in EPSG:6933.
+    """
+    path = tmp_path / "utm.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        count=1,
+        width=24,
+        height=28,
+        dtype="float32",
+        crs="EPSG:32613",
+        transform=from_origin(200000, 5500000, 25000, 25000),
+    ):
+        pass
+    aoi = read_habitat_area(
+        AggregateArea(kind="wholeRaster"),
+        HabitatSources(rasters={"predictor_0": path}, vectors={}),
+        rasterio.crs.CRS.from_epsg(6933),
+    )
+    x, y = transform("EPSG:32613", "EPSG:6933", [500000, 500000], [5499900, 5500000])
+    assert aoi.contains(Point(x[0], y[0]))
+    assert aoi.bounds[3] == pytest.approx(y[1])
+
+
 @pytest.mark.parametrize("vector_references", [False, True])
 def test_habitat_worker_matches_library_and_publishes_outputs(
     tmp_path: Path, habitat_definition: ModelDefinition, vector_references: bool
 ) -> None:
-    """Preserve named inputs, exact polygons and all outputs through a real worker.
+    """Align mismatched inputs and match an independently prepared library run.
 
     Args:
         tmp_path: Isolated source files, direct library outputs and worker artifacts.
         habitat_definition: Installed recipe with settings suitable for this fixture.
         vector_references: Use independently filtered reference polygons and an
-            assessment mask instead of the aligned reference raster alone.
+            assessment mask instead of the coarse reference raster alone.
     """
     rows, columns = np.indices((16, 24))
     environment = rows * 0.3 + columns * 0.07
-    habitat_type = (rows + columns) % 3
+    habitat_type = (rows // 2 + columns // 2) % 3
     references = rows < 6
     values = {
         "environment": environment,
@@ -99,13 +132,21 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         - 0.15 * habitat_type
         + 0.03 * np.cos(rows * 2 + columns)
         + 0.1 * (rows % 3) * ~references,
-        "references": references,
-        "assessment": columns < 20,
+        "references": np.where(references, 1, 2),
+        "assessment": np.where(columns < 22, 1, 2),
     }
+    grid = from_origin(0, 16000, 1000, 1000)
+    aoi = box(100, 100, 23900, 15900).difference(box(6000, 2000, 10000, 5000))
+    outside = geometry_mask([mapping(aoi)], (16, 24), grid)
     paths = {name: tmp_path / f"{name}.tif" for name in values}
+    prepared_paths = {name: tmp_path / f"prepared-{name}.tif" for name in values}
     for name, data in values.items():
+        prepared = data.astype("float64")
+        prepared[outside] = np.nan
+        if name == "environment":
+            prepared[:, 20:] = np.nan
         with rasterio.open(
-            paths[name],
+            prepared_paths[name],
             "w",
             driver="GTiff",
             count=1,
@@ -113,7 +154,26 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             height=16,
             dtype="float64",
             crs="EPSG:6933",
-            transform=from_origin(0, 16000, 1000, 1000),
+            transform=grid,
+            nodata=np.nan,
+        ) as destination:
+            destination.write(prepared, 1)
+        spacing = 1000
+        if name == "environment":
+            data = data[:, :20]
+        elif name in {"habitat_type", "references", "assessment"}:
+            data = data[::2, ::2]
+            spacing = 2000
+        with rasterio.open(
+            paths[name],
+            "w",
+            driver="GTiff",
+            count=1,
+            width=data.shape[1],
+            height=data.shape[0],
+            dtype="float64",
+            crs="EPSG:6933",
+            transform=from_origin(0, 16000, spacing, spacing),
         ) as destination:
             destination.write(data.astype("float64"), 1)
     sources = {
@@ -124,7 +184,6 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         for index, name in enumerate(paths)
     }
     catalog_paths = {sources[name]["itemId"]: path for name, path in paths.items()}
-    aoi = box(100, 100, 23900, 15900).difference(box(6000, 2000, 10000, 5000))
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
     selected_references = write_selection(
         tmp_path / "references.gpkg",
@@ -165,6 +224,18 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
             else {"kind": "raster", "source": sources["references"]}
         ),
         "habitat_mask": sources["assessment"] if vector_references else None,
+        "preparation": {
+            "crs": "EPSG:6933",
+            "pixelSize": [1000, 1000],
+            "origin": [0, 16000],
+            "resampling": {
+                "predictor_0": "bilinear",
+                "predictor_1": "nearest",
+                "response_0": "nearest",
+                "response_1": "nearest",
+                ("habitat_mask" if vector_references else "reference_mask"): "nearest",
+            },
+        },
     }
     request = ModelRunRequest(
         requestId="habitat-boundary-run",
@@ -297,9 +368,12 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
 
     settings = calculation.settings
     expected = run_habitat_condition(
-        [RasterBand(name, paths[name]) for name in ("environment", "habitat_type")],
-        [RasterBand(name, paths[name]) for name in ("productivity", "canopy")],
-        RasterBand("references", paths["references"]),
+        [
+            RasterBand(name, prepared_paths[name])
+            for name in ("environment", "habitat_type")
+        ],
+        [RasterBand(name, prepared_paths[name]) for name in ("productivity", "canopy")],
+        RasterBand("references", prepared_paths["references"]),
         aoi,
         tmp_path / "direct",
         IntegrityConfiguration(
@@ -316,7 +390,9 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         window_size_pixels=settings.window_size_pixels,
         covariance_shrinkage=settings.covariance_shrinkage,
         assessment_mask=(
-            RasterBand("assessment", paths["assessment"]) if vector_references else None
+            RasterBand("assessment", prepared_paths["assessment"])
+            if vector_references
+            else None
         ),
     )
     diagnostic_names = (
@@ -326,6 +402,18 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         "inference_status",
     )
     actual_path = artifacts.artifact_path(row["attempt_id"], "result.tif")
+    with rasterio.open(actual_path) as similarity:
+        assert similarity.shape == (16, 24)
+        assert similarity.transform == grid
+        assert similarity.dtypes == (response.result.grid.dtype,) == ("float32",)
+        assert similarity.nodata == float(row["summary"]["grid"]["nodata"]) == -9999.0
+        similarity_values = similarity.read(1, masked=True)
+        assert similarity_values[6:, 20:22].count() > 0
+        assert 0 <= similarity_values.min() <= similarity_values.max() <= 1
+        assert similarity_values.mask[outside].all()
+        assert similarity_values.mask[references].all()
+        if vector_references:
+            assert similarity_values.mask[:, 22:].all()
     with ZipFile(
         artifacts.artifact_path(row["attempt_id"], "diagnostics.zip")
     ) as archive:
@@ -348,16 +436,23 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
 
 
 @pytest.mark.parametrize(
-    "invalid", ["duplicate-name", "missing-category", "reserved-name"]
+    "invalid",
+    [
+        "duplicate-name",
+        "missing-category",
+        "reserved-name",
+        "missing-resampling",
+        "wrong-crs",
+    ],
 )
-def test_habitat_rejects_ambiguous_public_stack(
+def test_habitat_rejects_ambiguous_stack_or_preparation(
     habitat_definition: ModelDefinition, invalid: str
 ) -> None:
-    """Reject variable choices that cannot identify the selected scientific roles.
+    """Reject ambiguous variables, incomplete resampling and the wrong target CRS.
 
     Args:
         habitat_definition: Installed Habitat recipe with fixture settings.
-        invalid: Ambiguous variable roles or a name overwritten during fitting.
+        invalid: Invalid variable choices or preparation submitted by the caller.
     """
     layer = {
         "name": "spatial_fold" if invalid == "reserved-name" else "environment",
@@ -366,6 +461,18 @@ def test_habitat_rejects_ambiguous_public_stack(
             "itemId": "geotiff-aaaaaaaaaaaaaaaaaaaaaaaa",
         },
     }
+    preparation = {
+        "crs": "EPSG:4326" if invalid == "wrong-crs" else "EPSG:6933",
+        "pixelSize": [1000, 1000],
+        "origin": [0, 0],
+        "resampling": {
+            "predictor_0": "nearest",
+            "response_0": "nearest",
+            "reference_mask": "nearest",
+        },
+    }
+    if invalid == "missing-resampling":
+        del preparation["resampling"]["reference_mask"]
     request = ModelRunRequest(
         requestId="invalid-habitat-run",
         label="Invalid stack",
@@ -395,6 +502,7 @@ def test_habitat_rejects_ambiguous_public_stack(
             "area": {"kind": "wholeRaster"},
             "references": {"kind": "raster", "source": layer["source"]},
             "habitat_mask": None,
+            "preparation": preparation,
         },
         parameters={},
     )
@@ -439,6 +547,16 @@ def test_habitat_exports_private_primary_source(
             "area": {"kind": "wholeRaster"},
             "references": {"kind": "raster", "source": catalog},
             "habitat_mask": None,
+            "preparation": {
+                "crs": "EPSG:6933",
+                "pixelSize": [1000, 1000],
+                "origin": [0, 0],
+                "resampling": {
+                    "predictor_0": "nearest",
+                    "response_0": "nearest",
+                    "reference_mask": "nearest",
+                },
+            },
         },
         parameters={},
     )
@@ -469,5 +587,6 @@ def test_habitat_exports_private_primary_source(
         )
     )
     assert document.invocation.inputs["stack"]["predictors"][0]["source"] == private
+    assert document.invocation.inputs["preparation"] == request.inputs["preparation"]
     assert document.execution.sources["stack"].sha256 == file.sha256
     assert document.execution.sources["stack"].bytes == file.size

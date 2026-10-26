@@ -52,6 +52,47 @@ export function getModelRasterFields(draft) {
     return fields;
 }
 
+/** List active raster roles and their independent preparation choices.
+ * @param {Object} draft Model draft with named stack, reference and mask inputs.
+ * @return {Array<{key:string,state:Object,raster:Object,label:string}>} Selected inputs keyed by the operation's raster roles.
+ */
+export function getRasterPreparationSources(draft) {
+    const sources = [];
+    const preparationName = Object.keys(draft.model.inputs).find(name => draft.model.inputs[name].type === "raster_preparation");
+    if (!preparationName) return sources;
+    const step = draft.model.steps.find(value => value.inputs.preparation?.input === preparationName);
+    for (const [argument, binding] of Object.entries(step.inputs)) {
+        if (!binding.input) continue;
+        const definition = draft.model.inputs[binding.input], state = draft.inputs[binding.input];
+        if (definition.type === "habitat_stack") {
+            for (const [role, prefix] of [["predictors", "predictor"], ["responses", "response"]]) {
+                state[role].forEach((row, index) => {
+                    if (row.raster) sources.push({key: `${prefix}_${index}`, state: row, raster: row.raster, label: row.name});
+                });
+            }
+        } else if (definition.type === "habitat_references" && state.areaMode === "raster" && state.maskRaster) {
+            sources.push({key: "reference_mask", state, raster: state.maskRaster, label: definition.label});
+        } else if (["raster", "catalog_raster", "optional_raster"].includes(definition.type) && state.raster) {
+            sources.push({key: argument, state, raster: state.raster, label: definition.label});
+        }
+    }
+    return sources;
+}
+
+/** Capture the chosen grid and each active raster's resampling method.
+ * Metadata lookup failures do not prevent a user from choosing a custom grid.
+ * @param {Object} value Editable grid choices.
+ * @param {Object} draft Model draft supplying active raster roles.
+ * @return {{crs:string,pixelSize:number[],origin:number[],resampling:Object}} Explicit preparation request.
+ * @throws {Error} If the projection or positive X/Y pixel sizes are missing.
+ */
+export function captureRasterPreparation(value, draft) {
+    if (!value.crs.trim()) throw new Error("Choose an output projection.");
+    if (!value.pixelSize.every(size => Number.isFinite(size) && size > 0)) throw new Error("Choose a pixel size or enter positive pixel width and height.");
+    return {crs: value.crs, pixelSize: [...value.pixelSize], origin: [...value.origin],
+        resampling: Object.fromEntries(getRasterPreparationSources(draft).map(source => [source.key, source.state.resampling]))};
+}
+
 /** Capture an available raster choice using the ordinary path-free source contract.
  * @param {Object|null} raster Selected map raster or owned run result.
  * @param {Object[]} sources Current source choices in this model setup.
@@ -161,16 +202,23 @@ export function createModelDraft(model, context, id) {
     const suggestedRaster = visibleCatalogRasters.length === 1 ? visibleCatalogRasters[0] : catalogRasters.length === 1 ? catalogRasters[0] : null;
     const usesStartingMask = modelHasInput(model, "mask_source");
     const usesTemporal = modelHasInput(model, "temporal_interval");
+    const preparation = modelHasInput(model, "raster_preparation") ? {resampling: "nearest"} : {};
     const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
     const inputs = {};
     for (const [name, input] of Object.entries(model.inputs)) {
         if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
             inputs[name] = {
+                ...preparation,
                 raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
                 sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
             };
         } else if (input.type === "habitat_stack") {
-            inputs[name] = {predictors: [{name: "predictor_1", raster: null}], responses: [{name: "response_1", raster: null}], categoricalPredictor: ""};
+            inputs[name] = {predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
+        } else if (input.type === "raster_preparation") {
+            const step = model.steps.find(value => value.inputs.preparation?.input === name);
+            const settings = step.inputs.settings.value;
+            inputs[name] = {requiredCrs: settings.required_crs, crs: settings.required_crs ?? "", pixelSize: [null, null], origin: [0, 0],
+                mode: "auto", sourceKey: "", unit: "", choices: [], loading: false, error: ""};
         } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
             const explicitSelection = ["mask_source", "habitat_references"].includes(input.type);
             let area = explicitSelection ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
@@ -182,6 +230,7 @@ export function createModelDraft(model, context, id) {
                 catch (error) { selectionError = error.message; }
             }
             inputs[name] = {
+                ...(explicitSelection ? preparation : {}),
                 area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
                 vectorKey: "", vectorInfo: null, selecting: false, selectionError, maskRaster: null,
                 vectors: structuredClone(context.vectors ?? []),
@@ -211,6 +260,7 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
             inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
         else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
+        else if (input.type === "raster_preparation") inputs[name] = captureRasterPreparation(state, draft);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;

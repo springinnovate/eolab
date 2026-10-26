@@ -41,7 +41,7 @@ class RasterGrid:
     height: int
 
 
-def plan_raster_grid(
+def calculate_raster_grid(
     bounds: tuple[float, float, float, float],
     crs: CRS,
     pixel_size: tuple[float, float],
@@ -159,7 +159,7 @@ def prepare_raster_stack(
         inputs: Nonempty mapping from input role/name to its authorized,
             admitted single-band raster path and requested resampling method.
             The caller retains source identities and settings for provenance.
-        grid: Common grid from plan_raster_grid; never reduced to source coverage.
+        grid: Common grid from calculate_raster_grid; never reduced to source coverage.
         polygons: Exact AOI polygons already projected to grid.crs, or empty for
             the grid rectangle. A PolygonRasterizer must retain its polygons;
             its creator owns closing it.
