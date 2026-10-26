@@ -164,6 +164,24 @@ datasets as immutable; publish changed data under a new identity.
 5. Search for a representative raster and vector, add both to the map, and
    verify their bounds and appearance.
 
+To prepare single-band rasters, run [prepare_rasters.py](scripts/prepare_rasters.py)
+with a Python environment containing GDAL's `osgeo` bindings (GDAL 3.10 or newer):
+
+```sh
+python scripts/prepare_rasters.py "input/*.tif" another.tif --destination prepared
+```
+
+It creates EPSG:3857 Cloud Optimized GeoTIFFs named `<name>_cog_epsg3857.tif`,
+with compression and overviews. Existing outputs are skipped. Quote glob patterns
+so the script expands them consistently across shells; multiple files and patterns
+can be combined. From the `scripts` directory, use `python prepare_rasters.py`.
+Nearest-neighbor resampling is the default; use `--resampling bilinear` for
+continuous data when appropriate. GDAL chooses the projected pixel size and
+retains the input data type. Failed conversions are reported and can be retried
+by rerunning the command. Distinct inputs must have distinct filename stems.
+The destination filesystem must support hard links (for example, NTFS or ext4)
+so completed files can be published without overwriting another batch's output.
+
 Scanning again updates files that are still present and removes Catalog items
 whose mounted source files have disappeared. The source mount remains
 read-only; EOLab stores Catalog metadata and generated GeoServer configuration
