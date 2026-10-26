@@ -46,7 +46,7 @@ def build_image(application_image: str | None) -> str:
     """Build an isolated test image using the application's pinned native dependencies.
 
     When no installed image is supplied, reuse the reviewed dependency lock files
-    and build the legacy EcoShard archive without an incomplete isolated backend.
+    and build the source packages with the pinned build tools.
 
     Args:
         application_image: Optional installed application image to verify unchanged.
@@ -75,7 +75,9 @@ def build_image(application_image: str | None) -> str:
             "--require-hashes -r /build-inputs/application-gdal-requirements.txt "
             "&& SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g6bd106862a2c "
             "python -m pip install --no-cache-dir --no-deps --no-build-isolation "
-            "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt\n"
+            "--require-hashes -r /build-inputs/application-ecoshard-requirements.txt "
+            "&& python -m pip install --no-cache-dir --no-deps --no-build-isolation "
+            "--require-hashes -r /build-inputs/application-habitat-requirements.txt\n"
             "COPY deployment/build-beneficiaries.py deployment/beneficiaries-source.json /build-inputs/\n"
             "RUN python /build-inputs/build-beneficiaries.py --manifest /build-inputs/beneficiaries-source.json --output /model-wheels "
             "&& python -m pip install --no-deps --no-index /model-wheels/*.whl\n"
@@ -84,6 +86,8 @@ def build_image(application_image: str | None) -> str:
             "&& python -m pip check\n"
         )
     recipe += (
+        'RUN python -c "from nhi_terrestrial_integrity_modeling.prepared_runner '
+        'import run_habitat_condition"\n'
         "RUN python -m venv --system-site-packages /test-venv "
         "&& /test-venv/bin/python -m pip install --no-cache-dir 'pytest==8.4.2'\n"
         "COPY pyproject.toml ./\nCOPY tests/ ./tests/\nCOPY scripts/ ./scripts/\n"

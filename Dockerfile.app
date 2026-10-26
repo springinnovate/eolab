@@ -59,6 +59,8 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ECOSHARD=0.7.0+g6bd106862a2c \
         python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --require-hashes --wheel-dir /wheels -r application-ecoshard-requirements.txt \
+    && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
+        --require-hashes --wheel-dir /wheels -r application-habitat-requirements.txt \
     && python build-beneficiaries.py --manifest beneficiaries-source.json --output /wheels \
     && (g++ --version; dpkg-query -W) > /gdal-build-packages.txt
 
@@ -110,6 +112,7 @@ RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
     && python -m pip check \
     && cd /tmp && python -c "from eolab_app.processing.model_definitions import ModelRegistry; assert ModelRegistry.load_installed().list_models()" && cd /app \
     && python -c "from eolab_app.processing.downstream_runner import load_beneficiaries; assert callable(load_beneficiaries().calculate_downstream_coverage_from_conditional_raster)" \
+    && python -c "from nhi_terrestrial_integrity_modeling.prepared_runner import run_habitat_condition" \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers; from osgeo import ogr, gdal_array; assert hasattr(ogr.Layer, 'GetArrowStreamAsNumPy'); from ecoshard.geoprocessing import routing; assert callable(routing.flow_dir_mfd)" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
     && mkdir -p /processing-data /vector-uploads \
