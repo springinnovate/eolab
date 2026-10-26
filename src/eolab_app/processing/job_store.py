@@ -490,12 +490,6 @@ class PostgresJobStore:
             raise ValueError("Submit between one and fifty jobs per transaction")
         if any(not item.request_hash for item in submissions):
             raise ValueError("Direct jobs require a request hash")
-        if any(
-            isinstance(item.prepared, PreparedJobPlan)
-            and len(item.prepared.input_files) > 16
-            for item in submissions
-        ):
-            raise ValueError("A job can retain at most sixteen input files")
         work_keys = list(
             {
                 item.prepared.work_key

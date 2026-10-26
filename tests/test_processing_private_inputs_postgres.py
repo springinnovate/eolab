@@ -16,13 +16,26 @@ import psycopg
 import pytest
 import rasterio
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from eolab_app.processing.model_yaml import parse_yaml
+from eolab_app.processing import model_definitions, model_operations
+from eolab_app.processing.aggregate_models import (
+    AggregateArea,
+    AggregateJobRequest,
+    AggregateSpec,
+    UnpreparedCalculation,
+)
+from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing.model_yaml import compute_document_checksum, parse_yaml
 from eolab_app.processing.models import ProcessingError, PreparedJobPlan
+from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.routes.processing import COOKIE
 from eolab_app.raster.source_identity import RasterSourceIdentity
+from eolab_app.raster.models import AuthorizedRaster
+from eolab_app.raster.source_models import RasterSourceReference
 from test_model_runs_postgres import model_boundary, model_request, submit
 from test_model_artifacts_postgres import multiple_boundary
 from test_processing_jobs import boundary, store, HEADERS, AREA
@@ -96,6 +109,374 @@ def input_counts(store: Any) -> tuple[int, int]:
         return connection.execute(
             "SELECT (SELECT count(*) FROM processing.input_files),(SELECT count(*) FROM processing.transfers)"
         ).fetchone()
+
+
+class SummaryWithAdditionalRasters(AggregateJobRequest):
+    """Carry named comparison rasters alongside an ordinary summary request."""
+
+    additional_rasters: dict[str, RasterSourceReference]
+
+
+class QueuedSummaryWithAdditionalRasters(UnpreparedCalculation):
+    """Preserve the fixture's comparison sources through database admission."""
+
+    request: SummaryWithAdditionalRasters
+
+
+class PreparedSummaryWithAdditionalRasters(AggregateSpec):
+    """Keep comparison sources available when the worker executes its prepared summary."""
+
+    additional_rasters: dict[str, RasterSourceReference]
+
+
+@pytest.fixture
+def additional_raster_model(
+    model_boundary: Any, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, dict[str, int]]:
+    """Read named raster inputs at both worker phases using the existing summary adapter.
+
+    Args:
+        model_boundary: Real HTTP, PostgreSQL and native worker components.
+        monkeypatch: Restore the fixture's operation and recipe after the test.
+
+    Returns:
+        First pixel of each additional source, recorded during preparation and execution.
+    """
+    _, _, service = model_boundary
+    registry = service.model_registry
+    document = registry.get("raster-summary", "1.1.0").to_document()
+    original = model_operations.get_model_operation("raster.aggregate.v1")
+    observed: dict[str, dict[str, int]] = {}
+
+    def bind_comparison_summary(
+        inputs: dict[str, Any], parameters: dict[str, Any], request_id: str, label: str
+    ) -> SummaryWithAdditionalRasters:
+        """Bind the ordinary summary and its independently named raster references.
+
+        Args:
+            inputs: Recipe inputs including a mapping of comparison rasters.
+            parameters: Ordinary summary formula setting.
+            request_id: Browser retry identifier.
+            label: Requested run label.
+
+        Returns:
+            Validated summary request with its additional sources.
+        """
+        request = original.bind(inputs, parameters, request_id, label)
+        return SummaryWithAdditionalRasters(
+            **request.model_dump(by_alias=True),
+            additional_rasters=inputs["additional_rasters"],
+        )
+
+    def queue_comparison_summary(
+        request: SummaryWithAdditionalRasters, polygons: AggregateArea | None
+    ) -> PreparedJobPlan:
+        """Persist the comparison sources with the existing summary submission.
+
+        Args:
+            request: Summary and named raster references selected for the run.
+            polygons: Ordinary owned-polygon area, when supplied.
+
+        Returns:
+            Queued summary plan preserving the additional raster descriptors.
+        """
+        return replace(
+            original.queue(request, polygons),
+            specification=QueuedSummaryWithAdditionalRasters(
+                request=request, polygonArea=polygons
+            ).model_dump(mode="json", by_alias=True),
+        )
+
+    def read_comparison_pixels(context: OperationContext, phase: str) -> None:
+        """Record source-specific values through the worker's authorized raster paths.
+
+        Args:
+            context: Current attempt's additional authorized sources.
+            phase: Preparation or execution phase being checked.
+        """
+        observed[phase] = {}
+        for name, source in context.rasters.items():
+            with rasterio.open(source.source_path) as raster:
+                observed[phase][name] = int(
+                    raster.read(1, window=((0, 1), (0, 1)))[0, 0]
+                )
+
+    async def prepare_comparison_summary(
+        context: OperationContext,
+        queued: QueuedSummaryWithAdditionalRasters,
+        authorized: AuthorizedRaster,
+    ) -> PreparedJobPlan:
+        """Read additional inputs and preserve their references in the prepared plan.
+
+        Args:
+            context: Real worker capabilities and authorized comparison sources.
+            queued: Persisted request restored from PostgreSQL.
+            authorized: Primary raster authorized for this attempt.
+
+        Returns:
+            Existing native summary plan plus the comparison source descriptors.
+
+        Raises:
+            ProcessingError: If ordinary summary preparation fails.
+        """
+        read_comparison_pixels(context, "preparation")
+        prepared = await original.prepare(context, queued, authorized)
+        specification = PreparedSummaryWithAdditionalRasters(
+            **prepared.specification,
+            additional_rasters=queued.request.additional_rasters,
+        )
+        return replace(
+            prepared, specification=specification.model_dump(mode="json", by_alias=True)
+        )
+
+    async def prepare_comparison_execution(
+        context: OperationContext,
+        spec: PreparedSummaryWithAdditionalRasters,
+        authorized: AuthorizedRaster,
+    ) -> tuple[Path, AggregateSpec]:
+        """Read the same comparison sources before ordinary native summary execution.
+
+        Args:
+            context: Execution capabilities with independently resolved raster inputs.
+            spec: Prepared summary and named comparison references.
+            authorized: Primary raster authorized for this attempt.
+
+        Returns:
+            Native primary source path and the existing summary execution plan.
+
+        Raises:
+            ProcessingError: If ordinary summary execution preparation fails.
+        """
+        read_comparison_pixels(context, "execution")
+        return await original.execution_inputs(context, spec, authorized)
+
+    operation = replace(
+        original,
+        inputs=(*original.inputs, ("additional_rasters", "fixture_rasters")),
+        input_adapters=(
+            ("fixture_rasters", TypeAdapter(dict[str, RasterSourceReference])),
+        ),
+        queued_type=QueuedSummaryWithAdditionalRasters,
+        prepared_type=PreparedSummaryWithAdditionalRasters,
+        bind=bind_comparison_summary,
+        queue=queue_comparison_summary,
+        prepare=prepare_comparison_summary,
+        execution_inputs=prepare_comparison_execution,
+        extra_sources=lambda value: (
+            value.request if isinstance(value, UnpreparedCalculation) else value
+        ).additional_rasters,
+    )
+    operations = {**model_operations.OPERATIONS, operation.id: operation}
+    monkeypatch.setattr(model_operations, "OPERATIONS", operations)
+    monkeypatch.setattr(model_definitions, "OPERATIONS", operations)
+    document["id"] = "comparison-summary"
+    document["inputs"]["additional_rasters"] = {
+        "type": "fixture_rasters",
+        "label": "Comparison rasters",
+    }
+    document["steps"][0]["inputs"]["additional_rasters"] = {
+        "input": "additional_rasters"
+    }
+    installed = tuple(
+        registry.get(item["id"], item["version"])
+        for item in registry.list_models()
+        if item["id"] != "raster-summary"
+    )
+    service.model_registry = ModelRegistry(
+        (*installed, ModelDefinition.model_validate(document))
+    )
+    return observed
+
+
+@pytest.mark.parametrize(
+    ("case", "parent_action"),
+    [
+        ("catalog", "expire"),
+        ("private", "delete"),
+        ("shared", "delete"),
+        ("many", "delete"),
+        ("cancel", "delete"),
+    ],
+)
+def test_additional_private_rasters_keep_their_sources_and_provenance(
+    model_boundary: Any,
+    additional_raster_model: dict[str, dict[str, int]],
+    store: PostgresJobStore,
+    case: str,
+    parent_action: str,
+) -> None:
+    """Retain every referenced output without confusing primary and additional rasters.
+
+    Args:
+        model_boundary: Existing Models HTTP, PostgreSQL and native worker fixture.
+        additional_raster_model: Source values observed at both worker phases.
+        store: Disposable database retaining the accepted input files.
+        case: Catalog primary, private primary, repeated file, seventeen files or cancellation.
+        parent_action: Delete or expire parent results before executing dependent work.
+    """
+    client, worker, _ = model_boundary
+    parents = [
+        publish_input(
+            model_boundary,
+            {
+                "kind": "selectedArea",
+                "selectedBounds": {
+                    "west": (index + 1) / 100,
+                    "south": 9.0,
+                    "east": 1.0,
+                    "north": 10.0,
+                },
+            },
+        )
+        for index in range(
+            17 if case == "many" else 2 if case in {"private", "cancel"} else 1
+        )
+    ]
+    primary = parents[0][1] if case in {"private", "shared", "cancel"} else SOURCE
+    extra_parents = parents[1:] if case in {"private", "cancel"} else parents
+    additional = {
+        f"comparison_{index}": source
+        for index, (_, source, _) in enumerate(extra_parents)
+    }
+    additional["catalog"] = SOURCE
+    if case == "shared":
+        additional["same_file_again"] = parents[0][1]
+    expected_pixels = {"catalog": 0}
+    for name, source in additional.items():
+        if source.get("kind") == "runArtifact":
+            path = next(path for _, reference, path in parents if reference == source)
+            with rasterio.open(path) as raster:
+                expected_pixels[name] = int(raster.read(1)[0, 0])
+    with rasterio.open(parents[0][2]) as raster:
+        expected_sum = (
+            int(raster.read(1, masked=True).sum(dtype="int64"))
+            if primary.get("kind") == "runArtifact"
+            else 49_995_000
+        )
+    body = model_request(
+        client,
+        "comparison-summary",
+        inputs={
+            "raster": primary,
+            "area": {"kind": "wholeRaster"},
+            "additional_rasters": additional,
+        },
+    )
+    child = submit(client, body)
+    assert input_counts(store) == (len(parents), 0)
+    pending = parse_yaml(
+        client.get(f"/api/processing/jobs/{child['jobId']}/run-yaml").content, run=True
+    )
+    primary_record = pending["execution"]["sources"]["raster"]
+    if primary.get("kind") != "runArtifact":
+        assert (
+            primary_record.get("sha256") is None and primary_record.get("bytes") is None
+        )
+        assert (
+            pending["execution"]["additionalSources"]["catalog"]["sourceSignature"]
+            == primary_record["sourceSignature"]
+        )
+    for name, source in {"primary": primary, **additional}.items():
+        record = (
+            primary_record
+            if name == "primary"
+            else pending["execution"]["additionalSources"][name]
+        )
+        if source.get("kind") == "runArtifact":
+            parent = next(
+                parent for parent, reference, _ in parents if reference == source
+            )
+            file = next(
+                file
+                for file in parent["artifacts"]["files"]
+                if file["artifactId"] == source["artifactId"]
+            )
+            assert (
+                record["sha256"] == file["sha256"] and record["bytes"] == file["bytes"]
+            )
+            assert record["sourceSignature"] == compute_document_checksum(
+                {"sha256": file["sha256"]}
+            )
+        else:
+            assert record.get("sha256") is None and record.get("bytes") is None
+        assert record["band"] == 1
+    assert set(pending["execution"]["additionalSources"]) == set(additional)
+    for parent, _, _ in parents:
+        if parent_action == "delete":
+            assert (
+                client.delete(
+                    f"/api/processing/jobs/{parent['jobId']}", headers=HEADERS
+                ).status_code
+                == 200
+            )
+        else:
+            with psycopg.connect(store.conninfo) as connection:
+                connection.execute(
+                    "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+                    (parent["jobId"],),
+                )
+    client.portal.call(worker.cleanup)
+    assert all(path.exists() for _, _, path in parents)
+    assert submit(client, body)["jobId"] == child["jobId"]
+    if case == "cancel":
+        assert (
+            client.post(
+                f"/api/processing/jobs/{child['jobId']}/cancel", headers=HEADERS
+            ).json()["status"]
+            == "cancelled"
+        )
+        assert not additional_raster_model
+    else:
+        assert client.portal.call(worker.run_once)
+        ready = client.get(f"/api/processing/jobs/{child['jobId']}").json()
+        assert ready["status"] == "ready", ready
+        assert Decimal(ready["result"]["rows"][0]["value"]) == expected_sum
+        assert additional_raster_model == {
+            "preparation": expected_pixels,
+            "execution": expected_pixels,
+        }
+        exported = client.get(f"/api/processing/jobs/{child['jobId']}/run-yaml")
+        completed = parse_yaml(exported.content, run=True)
+        assert (
+            completed["execution"]["additionalSources"]
+            == pending["execution"]["additionalSources"]
+        )
+        assert completed["invocation"]["inputs"] == body["inputs"]
+        assert str(worker.artifacts.root) not in exported.text
+    assert input_counts(store) == (0, 0)
+    client.portal.call(worker.cleanup)
+    assert all(not path.exists() for _, _, path in parents)
+
+
+def test_unowned_additional_raster_rejects_all_input_retention(
+    model_boundary: Any,
+    additional_raster_model: dict[str, dict[str, int]],
+    store: PostgresJobStore,
+) -> None:
+    """Reject a foreign second input without retaining the already inspected first file.
+
+    Args:
+        model_boundary: Real Models API and worker used to publish owned results.
+        additional_raster_model: Fixture recipe declaring independently named rasters.
+        store: Disposable database used to verify atomic input admission.
+    """
+    client, worker, service = model_boundary
+    _, owned, _ = publish_input(model_boundary)
+    with TestClient(client.app, base_url="https://testserver") as other:
+        _, foreign, _ = publish_input((other, worker, service))
+    body = model_request(
+        client,
+        "comparison-summary",
+        inputs={
+            "raster": SOURCE,
+            "area": {"kind": "wholeRaster"},
+            "additional_rasters": {"owned": owned, "foreign": foreign},
+        },
+    )
+    response = client.post("/api/processing/model-runs", json=body, headers=HEADERS)
+    assert response.status_code == 404, response.text
+    assert input_counts(store) == (0, 0)
+    assert not additional_raster_model
 
 
 @pytest.mark.parametrize("model_id", ["raster-summary", "raster-clip"])

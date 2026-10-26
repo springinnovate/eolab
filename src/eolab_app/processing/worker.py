@@ -177,12 +177,14 @@ class ProcessingWorker:
 
     async def _resolve_additional_sources(
         self,
+        row: dict[str, Any],
         spec: Any,
         operation: Any,
     ) -> dict[str, AuthorizedRaster]:
-        """Authorize every additional raster reference declared by the operation.
+        """Resolve additional Catalog or retained private rasters for this job.
 
         Args:
+            row: Claimed job with the active attempt and retained input identities.
             spec: Queued or prepared operation specification.
             operation: Registered adapter declaring the additional raster references.
 
@@ -197,7 +199,7 @@ class ProcessingWorker:
             operation.extra_sources(spec) if operation.extra_sources else {}
         ).items():
             try:
-                source = await self.authorizer.authorize(reference)
+                source, _ = await self._resolve_source(row, reference)
             except RasterFeatureError as error:
                 raise ProcessingError(
                     "source_unavailable",
@@ -241,7 +243,7 @@ class ProcessingWorker:
         )
         context = self._operation_context(row, model is None, checksum)
         context.rasters.update(
-            await self._resolve_additional_sources(calculation, operation)
+            await self._resolve_additional_sources(row, calculation, operation)
         )
         prepared = await operation.prepare(context, calculation, authorized)
         if model is not None:
@@ -304,7 +306,9 @@ class ProcessingWorker:
         if authorized is None:
             authorized, checksum = await self._resolve_source(row, source)
         context = self._operation_context(row, model is None, checksum)
-        context.rasters.update(await self._resolve_additional_sources(spec, handler))
+        context.rasters.update(
+            await self._resolve_additional_sources(row, spec, handler)
+        )
         native_sources, spec = await handler.execution_inputs(context, spec, authorized)
         directory = await asyncio.to_thread(
             self.artifacts.prepare,
