@@ -1,7 +1,7 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
@@ -17,6 +17,7 @@ export class ModelsController {
      * @param {Object} dependencies.view Models view.
      * @param {()=>Object} dependencies.getContext Catalog/map suggestions and plain viewport bounds, independent of rendering.
      * @param {(identity:{collectionId:string,itemId:string})=>Promise<Object>} dependencies.getTemporalItem Read the selected dataset's current Catalog metadata.
+     * @param {(source:Object,signal:AbortSignal,targetCrs?:string|null)=>Promise<Object>} dependencies.describeSource Read source grid metadata in the chosen CRS.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} dependencies.loadTemporalTimes Read actual observation labels for one month.
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
@@ -33,12 +34,13 @@ export class ModelsController {
      * @param {Object} [dependencies.clock=globalThis] Timeout scheduler for deletion notices.
      * @param {()=>string} [dependencies.newId] Generate draft and request identities.
      */
-    constructor({api, jobs, view, getContext, getTemporalItem, loadTemporalTimes, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
+    constructor({api, jobs, view, getContext, getTemporalItem, loadTemporalTimes, describeSource, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage = null, onOpen, onClose,
         showOutput = async () => {}, outputState = () => ({}), onRunChange = () => {},
         captureRunLayers = () => [], restoreRunLayers = async () => {}, clock = globalThis,
         newId = () => globalThis.crypto.randomUUID().replaceAll("-", "")}) {
         Object.assign(this, {api, jobs, view, getContext, prepareVector, editVectorFilter, closeVectorFilter, applyMapFilter, storage, onOpen, onClose, newId});
         Object.assign(this, {getTemporalItem, loadTemporalTimes});
+        this.describeSource = describeSource;
         this.outputState = outputState;
         this.onRunChange = onRunChange;
         Object.assign(this, {captureRunLayers, restoreRunLayers, clock});
@@ -53,6 +55,7 @@ export class ModelsController {
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onInput: (name, change) => this.editInput(name, change),
+            onRefreshGrid: () => this.refreshRasterPreparation(true),
             onArea: (name, mode) => this.chooseArea(name, mode),
             onTemporalDataset: key => void this.chooseTemporalDataset(key),
             onTemporalVariable: variable => void this.chooseTemporalVariable(variable),
@@ -119,7 +122,7 @@ export class ModelsController {
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
                 Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
+                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "raster_preparation", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
         }
         catch (error) { this.state.error = `Model library unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -136,6 +139,7 @@ export class ModelsController {
      * @return {void}
      */
     chooseModel(model) {
+        this.resetRasterPreparation();
         this.closeVectorFilter();
         this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
@@ -167,8 +171,87 @@ export class ModelsController {
      */
     editInput(name, change) {
         if (!this.state.draft || this.state.submitting) return;
-        Object.assign(this.state.draft.inputs[name], change);
+        const input = this.state.draft.inputs[name];
+        if (this.state.draft.model.inputs[name].type === "raster_preparation") {
+            if (change.crs !== undefined && change.crs !== input.crs) {
+                Object.assign(input, {pixelSize: [null, null], origin: [0, 0], unit: "", choices: []});
+            }
+            if (change.mode === "custom") input.origin = [0, 0];
+            if (change.mode === "source") {
+                const choice = input.choices.find(value => value.key === change.sourceKey);
+                Object.assign(input, {pixelSize: [...choice.grid.pixelSize], origin: [...choice.grid.origin], unit: choice.grid.unit});
+            }
+        }
+        Object.assign(input, change);
         this.editDraft({});
+    }
+
+    /** Stop obsolete grid requests when replacing the model draft.
+     * @return {void}
+     */
+    resetRasterPreparation() {
+        this.preparationAbort?.abort(); this.preparationKey = null;
+    }
+
+    /** Load grid choices for distinct active sources, without changing explicit choices.
+     * Requests run sequentially within the source metadata service's concurrency limit.
+     * @param {boolean} [retry=false] Retry failed lookups at the user's request.
+     * @return {void}
+     */
+    refreshRasterPreparation(retry = false) {
+        const draft = this.state.draft;
+        const name = draft && Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "raster_preparation");
+        if (!name) return;
+        const input = draft.inputs[name];
+        const sources = [...new Map(getRasterPreparationSources(draft).filter(value => value.raster.available !== false)
+            .map(value => [modelSourceKey(value.raster), value.raster])).values()];
+        const key = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
+        if (!retry && key === this.preparationKey) return;
+        this.preparationAbort?.abort();
+        const abort = new AbortController(); this.preparationAbort = abort; this.preparationKey = key;
+        input.choices = []; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
+        if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
+            Object.assign(input, {pixelSize: [null, null], origin: [0, 0], sourceKey: ""});
+        }
+        if (input.loading) void this.loadRasterPreparation(draft, input, sources, abort);
+        this.render();
+    }
+
+    /** Read native/projected source grids and retain errors as optional-choice feedback.
+     * @param {Object} draft Draft that requested the metadata.
+     * @param {Object} input Its shared grid state.
+     * @param {Object[]} sources Distinct available raster identities in input order.
+     * @param {AbortController} abort Request ownership, cancelled when the selection changes.
+     * @return {Promise<void>} Completion after the current choices or errors are displayed.
+     */
+    async loadRasterPreparation(draft, input, sources, abort) {
+        const isCurrent = () => !abort.signal.aborted && !this.destroyed && this.state.draft === draft;
+        const choices = [], errors = [];
+        for (const source of sources) {
+            try {
+                if (!input.crs) {
+                    const native = await this.describeSource(source, abort.signal);
+                    if (!isCurrent()) return;
+                    input.crs = native.crs;
+                    this.preparationKey = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
+                }
+                const key = modelSourceKey(source);
+                const metadata = await this.describeSource(source, abort.signal, input.crs);
+                if (!isCurrent()) return;
+                choices.push({key, label: source.label, sourceCrs: metadata.crs, grid: metadata.projectedGrid});
+            } catch (error) {
+                if (!isCurrent()) return;
+                errors.push(`${source.label}: ${error.message}`);
+            }
+        }
+        if (!isCurrent()) return;
+        input.choices = choices; input.loading = false; input.error = errors.join(" ");
+        if (choices.length) input.unit = choices[0].grid.unit;
+        const selected = choices.find(value => value.key === (input.mode === "auto" ? modelSourceKey(sources[0]) : input.sourceKey));
+        if (selected && (input.mode === "auto" || input.mode === "source" && input.pixelSize.some(value => value === null))) {
+            Object.assign(input, {pixelSize: [...selected.grid.pixelSize], origin: [...selected.grid.origin], sourceKey: selected.key});
+        }
+        this.render();
     }
 
     /** Update draft fields without changing a pending or accepted submission.
@@ -489,7 +572,7 @@ export class ModelsController {
                 if (input.raster?.available === false) input.sourceReason = "This raster is no longer available. Choose another input.";
                 continue;
             }
-            if (type === "habitat_stack") continue;
+            if (["habitat_stack", "raster_preparation"].includes(type)) continue;
             const previous = new Map(input.vectors.map(source => [modelSourceKey(source), source]));
             input.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
                 filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
@@ -500,7 +583,7 @@ export class ModelsController {
                 input.selectionError = "Add the vector layer to Map layers, or choose another layer.";
             }
         }
-        this.render();
+        this.refreshRasterPreparation(); this.render();
     }
 
     /** Submit once, or recover an uncertain response using its original request ID.
@@ -777,6 +860,7 @@ export class ModelsController {
      */
     async duplicateRun() {
         const saved = this.state.invocation; if (!saved) return;
+        this.resetRasterPreparation();
         this.closeVectorFilter();
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
@@ -796,6 +880,9 @@ export class ModelsController {
                 input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
                 input.responses = value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)}));
                 input.categoricalPredictor = value.categoricalPredictor;
+            } else if (definition.type === "raster_preparation") {
+                const {crs, pixelSize, origin} = saved.inputs[name];
+                Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
             } else if (definition.type === "temporal_interval") {
                 const value = saved.inputs[name];
                 Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,
@@ -824,6 +911,10 @@ export class ModelsController {
                     }
                 }
             }
+        }
+        const preparationName = Object.keys(model.inputs).find(name => model.inputs[name].type === "raster_preparation");
+        if (preparationName) {
+            for (const source of getRasterPreparationSources(draft)) source.state.resampling = saved.inputs[preparationName].resampling[source.key];
         }
         this.refreshMapLayers();
         this.render(); this.view.focusHeading();
@@ -856,6 +947,7 @@ export class ModelsController {
      * @return {void}
      */
     destroy() {
+        this.resetRasterPreparation();
         this.closeVectorFilter();
         this.destroyed = true; this.revision += 1; this.cancelVectorSelections();
         this.temporalAbort?.abort(); this.temporalRevision += 1;

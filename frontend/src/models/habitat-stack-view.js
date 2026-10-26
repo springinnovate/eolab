@@ -10,7 +10,7 @@ export class HabitatStackView {
      * @param {(label:string,action:()=>void,className?:string)=>HTMLButtonElement} helpers.button Create a button.
      * @param {(select:HTMLSelectElement,choices:Object[],selected:string)=>void} helpers.options Update select choices.
      * @param {Document} helpers.document Owning document, used to preserve focused edits.
-     * @param {(host:HTMLElement,id:string,input:Object,onChange:(raster:Object|null)=>void)=>Object} helpers.buildRasterInput Build the ordinary raster chooser with a row-specific change callback.
+     * @param {(host:HTMLElement,id:string,input:Object,onChange:(raster:Object|null)=>void,onResampling:(method:string)=>void)=>Object} helpers.buildRasterInput Build the ordinary raster chooser with row-specific source and method callbacks.
      * @param {(controls:Object,input:Object,value:Object,state:Object)=>boolean} helpers.renderRasterInput Update that chooser using current source availability.
      * @param {{onInput:(name:string,change:Object)=>void}} handlers Controller-owned input edits.
      * @param {string} name Recipe input name for this stack.
@@ -44,12 +44,12 @@ export class HabitatStackView {
             this.categoricalRow = this.categorical.value ? this.predictors.find(row => this.value.predictors[row.index].name === this.categorical.value) : null;
             handlers.onInput(name, {categoricalPredictor: this.categorical.value});
         });
-        const categoryHelp = element("p", "Choose the predictor whose values identify categories, such as habitat types. All other predictors are treated as continuous measurements.", "models-help");
+        const categoryHelp = element("p", "Choose the predictor whose values identify categories, such as habitat types. All other predictors are treated as continuous measurements. Nearest neighbor and mode preserve category values; interpolation can create intermediate values.", "models-help");
         categoryHelp.id = `models-${name}-categorical-help`;
         this.categorical.setAttribute("aria-describedby", categoryHelp.id);
         this.status = element("p", "", "models-error"); this.status.setAttribute("role", "status");
         this.root.append(field(`models-${name}-categorical`, "Categorical predictor", this.categorical), categoryHelp,
-            element("p", "The optional habitat assessment mask uses cells equal to 1. It limits where results are calculated; it does not limit the reference sites used for training.", "models-help"), this.status);
+            element("p", "The optional habitat assessment mask uses cells equal to 1. It limits where results are calculated; it does not limit the reference sites used for training. Nearest neighbor preserves mask values; interpolation can change which cells equal 1.", "models-help"), this.status);
 
         this.settings = element("details", "", "models-details");
         this.settings.append(element("summary", "Scientific settings"),
@@ -87,14 +87,14 @@ export class HabitatStackView {
         const names = new Set([...this.value.predictors, ...this.value.responses].map(row => row.name.trim()));
         let number = this.value[role].length + 1;
         while (names.has(`${prefix}_${number}`)) number += 1;
-        this.handlers.onInput(this.inputName, {[role]: [...this.value[role], {name: `${prefix}_${number}`, raster: null}]});
+        this.handlers.onInput(this.inputName, {[role]: [...this.value[role], {name: `${prefix}_${number}`, raster: null, resampling: "nearest"}]});
         this[role].at(-1).name.focus();
     }
 
     /** Replace one row and follow a renamed categorical predictor.
      * @param {"predictors"|"responses"} role Scientific role being edited.
      * @param {Object} controls Stable controls identifying the edited row.
-     * @param {{name?:string,raster?:Object|null}} change New variable name or raster choice.
+     * @param {{name?:string,raster?:Object|null,resampling?:string}} change New variable name, raster or preparation method.
      * @return {void}
      */
     editRow(role, controls, change) {
@@ -131,8 +131,9 @@ export class HabitatStackView {
         root.append(this.field(`models-${id}-name`, "Variable name", name));
         const definition = {type: "raster", label: role === "predictors" ? "Predictor raster" : "Observed response raster"};
         const controls = {root, legend, name, definition, index: this[role].length};
-        const raster = this.buildRasterInput(root, id, definition, value => this.editRow(role, controls, {raster: value}));
-        controls.raster = raster; controls.source = raster.source;
+        const raster = this.buildRasterInput(root, id, definition, value => this.editRow(role, controls, {raster: value}),
+            resampling => this.editRow(role, controls, {resampling}));
+        controls.raster = raster; controls.source = raster.source; controls.resampling = raster.resampling;
         name.addEventListener("input", () => this.editRow(role, controls, {name: name.value}));
         controls.remove = this.button(role === "predictors" ? "Remove predictor" : "Remove response", () => this.removeRow(role, controls), "models-action");
         root.append(controls.remove); this.groups[role].rows.append(root);
@@ -156,7 +157,7 @@ export class HabitatStackView {
                 controls.legend.textContent = label;
                 controls.remove.setAttribute("aria-label", `Remove ${label.toLowerCase()}`);
                 if (this.document.activeElement !== controls.name) controls.name.value = row.name;
-                this.renderRasterInput(controls.raster, controls.definition, {raster: row.raster,
+                this.renderRasterInput(controls.raster, controls.definition, {raster: row.raster, resampling: row.resampling,
                     sourceReason: row.raster?.available === false ? "This raster result is no longer available. Choose another input." : "Choose a raster from Map layers or a completed run."}, state);
             });
         }

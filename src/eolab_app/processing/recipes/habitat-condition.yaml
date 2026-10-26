@@ -2,7 +2,7 @@ schema: eolab.model/v1
 id: habitat-condition
 version: "1.0.0"
 title: Habitat condition
-description: Fit expected habitat responses from reference sites inside the analysis area, then map how closely observed conditions resemble those references. Predictors, responses and a raster reference mask must share an EPSG:6933 grid. The optional habitat mask limits assessment, not training. Scientific settings use the Montana Prairie configuration; choose the input layers explicitly.
+description: Fit expected habitat responses from reference sites inside the analysis area, then map how closely observed conditions resemble those references. Prepare the selected rasters on one EPSG:6933 grid using the chosen pixel size and resampling methods. The optional habitat mask limits assessment, not training. Scientific settings use the Montana Prairie configuration; choose the input layers explicitly.
 inputs:
   stack:
     type: habitat_stack
@@ -16,6 +16,9 @@ inputs:
   habitat_mask:
     type: optional_raster
     label: Habitat assessment mask
+  preparation:
+    type: raster_preparation
+    label: Raster preparation
 parameters: {}
 steps:
   - id: calculate
@@ -25,6 +28,10 @@ steps:
       area: {input: area}
       references: {input: references}
       habitat_mask: {input: habitat_mask}
+      preparation: {input: preparation}
+      preparation_settings:
+        value:
+          required_crs: EPSG:6933
       settings:
         value:
           fold_count: 5

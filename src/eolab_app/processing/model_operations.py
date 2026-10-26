@@ -68,6 +68,8 @@ from eolab_app.processing.habitat_models import (
     HabitatRasterStack,
     HabitatReferences,
     HabitatSettings,
+    HabitatPreparation,
+    HabitatPreparationSettings,
 )
 
 Request = TypeVar("Request", bound=BaseModel)
@@ -220,6 +222,8 @@ OPERATIONS = MappingProxyType(
                     ("area", "summary_area"),
                     ("references", "habitat_references"),
                     ("habitat_mask", "optional_raster"),
+                    ("preparation", "raster_preparation"),
+                    ("preparation_settings", "habitat_preparation_settings"),
                     ("settings", "habitat_settings"),
                 ),
                 parameters=(),
@@ -257,13 +261,20 @@ OPERATIONS = MappingProxyType(
                 primary_input="stack",
                 extra_sources=habitat.get_additional_habitat_sources,
                 execution_inputs=habitat.prepare_habitat_execution,
-                fixed_input_models=(("settings", HabitatSettings),),
+                fixed_input_models=(
+                    ("settings", HabitatSettings),
+                    ("preparation_settings", HabitatPreparationSettings),
+                ),
                 input_adapters=(
                     ("habitat_stack", TypeAdapter(HabitatRasterStack)),
                     ("habitat_references", TypeAdapter(HabitatReferences)),
                     ("optional_raster", TypeAdapter(RasterSourceReference | None)),
+                    ("raster_preparation", TypeAdapter(HabitatPreparation)),
                 ),
-                progress_descriptions=tuple(
+                progress_descriptions=(
+                    ("preparing_rasters", "Preparing model rasters"),
+                )
+                + tuple(
                     (phase, phase)
                     for phase in (
                         "Selecting sample pixels",

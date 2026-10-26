@@ -14,7 +14,6 @@ from eolab_app.processing.habitat_models import (
     HabitatRequest,
     HabitatSettings,
     QueuedHabitat,
-    RasterReferenceSites,
     VectorReferenceSites,
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
@@ -31,7 +30,7 @@ def bind_habitat(
     """Bind the recipe's explicit layer choices and settings to a Habitat request.
 
     Args:
-        inputs: Validated stack, references, habitat mask, area and fixed settings.
+        inputs: Validated layers, area, preparation choices and fixed settings.
         parameters: Empty mapping; scientific settings come from the recipe.
         request_id: Submission identifier retained by the model-run service.
         label: Run name retained by the model-run service.
@@ -46,6 +45,8 @@ def bind_habitat(
         stack=inputs["stack"],
         references=inputs["references"],
         habitat_mask=inputs["habitat_mask"],
+        preparation=inputs["preparation"],
+        preparation_settings=inputs["preparation_settings"],
         settings=inputs["settings"],
         **bind_area_arguments(inputs["area"]),
     )
@@ -70,7 +71,7 @@ def get_habitat_request(
 def get_habitat_source(
     value: HabitatRequest | QueuedHabitat | HabitatPlan,
 ) -> RasterSourceReference:
-    """Return the first predictor, which supplies the aligned stack's grid.
+    """Return the first predictor for admission and the whole-raster area choice.
 
     Args:
         value: Validated request or saved specification.
@@ -95,21 +96,8 @@ def get_additional_habitat_sources(
     Returns:
         Additional predictors, responses, raster references and optional habitat mask.
     """
-    request = get_habitat_request(value)
-    sources = {
-        f"predictor_{index}": band.source
-        for index, band in enumerate(request.stack.predictors[1:], start=1)
-    }
-    sources.update(
-        {
-            f"response_{index}": band.source
-            for index, band in enumerate(request.stack.responses)
-        }
-    )
-    if isinstance(request.references, RasterReferenceSites):
-        sources["reference_mask"] = request.references.source
-    if request.habitat_mask is not None:
-        sources["habitat_mask"] = request.habitat_mask
+    sources = get_habitat_request(value).get_raster_sources()
+    sources.pop("predictor_0")
     return sources
 
 
@@ -203,7 +191,7 @@ async def resolve_habitat_sources(
 async def prepare_habitat(
     context: OperationContext, queued: QueuedHabitat, primary: AuthorizedRaster
 ) -> PreparedJobPlan:
-    """Prepare the selected area and native grid in the supervised worker process.
+    """Prepare the selected area and requested grid in the supervised worker process.
 
     Args:
         context: Existing source, lifecycle and native-execution capabilities.

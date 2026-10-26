@@ -4,6 +4,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import cast
 
+from rasterio.crs import CRS
 from rasterio.warp import transform
 from rasterio.windows import Window
 
@@ -221,9 +222,7 @@ def selected_raster_area_for_wgs84_bounds(
     )
     projected_ring = tuple(zip(projected_x, projected_y, strict=True))
     if not all(
-        math.isfinite(coordinate)
-        for point in projected_ring
-        for coordinate in point
+        math.isfinite(coordinate) for point in projected_ring for coordinate in point
     ):
         raise ValueError("Selected bounds could not be projected")
 
@@ -278,10 +277,10 @@ def _densify_polygon_rings(
     rings: tuple[tuple[tuple[float, float], ...], ...],
     maximum_coordinates: int | None,
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Densify Polygon edges without exceeding transformed-coordinate capacity.
+    """Densify polygon edges without exceeding transformed-coordinate capacity.
 
     Args:
-        rings: Validated closed WGS 84 polygon rings.
+        rings: Validated closed polygon rings in their source coordinate system.
         maximum_coordinates: Hard limit on all transformed positions.
 
     Returns:
@@ -411,6 +410,44 @@ def project_wgs84_polygons(
             the explicit transformed-geometry ceiling.
         TypeError: If immutable geometry violates its owned contract.
     """
+    return _periodic_polygon_copies(
+        dataset,
+        project_polygons_to_crs(
+            "EPSG:4326",
+            dataset.crs,
+            geometries,
+            maximum_coordinates,
+            coordinate_transform,
+        ),
+        maximum_output_coordinates,
+    )
+
+
+def project_polygons_to_crs(
+    source_crs: CRS | str,
+    target_crs: CRS | str,
+    geometries: tuple[dict[str, object], ...],
+    maximum_coordinates: int | None,
+    coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+) -> tuple[dict[str, object], ...]:
+    """Densify and project polygons without depending on raster coverage.
+
+    Args:
+        source_crs: Coordinate system of the supplied polygons.
+        target_crs: Validated destination coordinate system.
+        geometries: Validated Polygon or MultiPolygon mappings in source_crs.
+        maximum_coordinates: Transformed-coordinate ceiling, or None for
+            caller-supervised unlimited geometry.
+        coordinate_transform: Injectable transformation between coordinate systems.
+
+    Returns:
+        Separate polygon mappings in the requested CRS, preserving holes and
+        all geometry outside any particular source raster's footprint.
+
+    Raises:
+        ValueError: If coordinates cannot be projected or exceed the ceiling.
+        TypeError: If the geometry violates the polygon input contract.
+    """
     geometry_ring_groups: list[
         tuple[str, tuple[tuple[tuple[float, float], ...], ...]]
     ] = []
@@ -420,13 +457,13 @@ def project_wgs84_polygons(
         geometry_ring_groups.append((str(geometry["type"]), rings))
         all_rings.extend(rings)
     densified_rings = _densify_polygon_rings(tuple(all_rings), maximum_coordinates)
-    longitudes = [point[0] for ring in densified_rings for point in ring]
-    latitudes = [point[1] for ring in densified_rings for point in ring]
+    x = [point[0] for ring in densified_rings for point in ring]
+    y = [point[1] for ring in densified_rings for point in ring]
     projected_x, projected_y = coordinate_transform(
-        "EPSG:4326",
-        dataset.crs,
-        longitudes,
-        latitudes,
+        source_crs,
+        target_crs,
+        x,
+        y,
     )
     projected_positions = tuple(zip(projected_x, projected_y, strict=True))
     if not all(
@@ -468,9 +505,7 @@ def project_wgs84_polygons(
             }
         )
 
-    return _periodic_polygon_copies(
-        dataset, tuple(projected_geometries), maximum_output_coordinates
-    )
+    return tuple(projected_geometries)
 
 
 def selected_raster_area_for_wgs84_polygons(
