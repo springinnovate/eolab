@@ -476,8 +476,9 @@ class OperationImplementation(ModelSchema):
 class ResolvedModelSource(ModelSchema):
     """A raster input's checksum, band and grid information recorded for a run.
 
-    The source checksum is recorded at submission; grid details are filled in
-    after the worker reads and prepares the raster.
+    Source identity is recorded at submission. Private rasters include their
+    published checksum and byte count. The primary raster's grid is added
+    during preparation; additional rasters retain their source identities.
     """
 
     sourceSignature: Digest
@@ -549,8 +550,8 @@ class ModelExecution(ModelSchema):
     sources: dict[Name, ResolvedModelSource | ResolvedTemporalModelSource] = Field(
         min_length=1, max_length=1
     )
-    additionalSources: dict[Name, Digest] = Field(
-        default_factory=dict, max_length=16, exclude_if=lambda value: not value
+    additionalSources: dict[Name, ResolvedModelSource] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
     )
     limits: ModelExecutionLimits | None = None
     numericalPolicy: SerializeAsAny[BaseModel] | None = None

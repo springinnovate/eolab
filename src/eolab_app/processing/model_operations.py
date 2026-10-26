@@ -122,7 +122,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         cached: Optional cache reader; None means the operation always computes results.
         reusable: Optional cache-value extractor; None disables result-cache writes.
         primary_input: Argument bound to the main raster source and its grid metadata.
-        extra_sources: Additional catalog rasters to capture and check with the run.
+        extra_sources: Additional raster references to authorize and retain with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
         fixed_input_models: Argument names and schemas for values fixed in Model YAML.
         input_adapters: Additional operation-owned types accepted by selected inputs.

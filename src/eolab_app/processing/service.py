@@ -16,6 +16,7 @@ from eolab_app.processing.shared_calculations import (
 from eolab_app.processing.statistics_csv import statistics_csv
 from eolab_app.processing.models import (
     ArtifactDownload,
+    JobInputFile,
     JobSubmission,
     ProcessingError,
     PreparedJobPlan,
@@ -263,44 +264,32 @@ class ProcessingService:
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
         source = operation.source(calculation)
-        source_metadata: tuple[int, int, int, int] | TemporalVariableMetadata | None = (
-            None
+        reference = operation.polygon(calculation)
+        polygons = await self.read_polygon_area(owner, reference) if reference else None
+        operation_plan = operation.queue(calculation, polygons)
+        source_metadata: (
+            tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile
         )
-        if not isinstance(source, RunArtifactReference):
+        if isinstance(source, TemporalIntervalSelection):
             if self.model_authorizer is None:
                 raise ProcessingError(
                     "models_unavailable",
                     "Model source authorization is unavailable.",
                     503,
                 )
-            if isinstance(source, TemporalIntervalSelection):
-                source_metadata = await self.model_authorizer.get_temporal_metadata(
-                    source
-                )
-            else:
-                authorized = await self.model_authorizer.authorize(source)
-                source_metadata = tuple(authorized.source_signature.to_catalog())
-        reference = operation.polygon(calculation)
-        polygons = await self.read_polygon_area(owner, reference) if reference else None
-        operation_plan = operation.queue(calculation, polygons)
-        operation_plan = await self.capture_input_file(owner, source, operation_plan)
-        additional_signatures = {}
+            source_metadata = await self.model_authorizer.get_temporal_metadata(source)
+        else:
+            operation_plan, source_metadata = await self._capture_model_raster_metadata(
+                owner, source, operation_plan
+            )
+        additional_sources: dict[str, tuple[int, int, int, int] | JobInputFile] = {}
         if operation.extra_sources:
             for name, additional_source in operation.extra_sources(calculation).items():
-                if isinstance(additional_source, RunArtifactReference):
-                    raise ProcessingError(
-                        "invalid_model_inputs",
-                        "Additional model inputs require catalog rasters.",
-                    )
-                if self.model_authorizer is None:
-                    raise ProcessingError(
-                        "models_unavailable",
-                        "Model source authorization is unavailable.",
-                        503,
-                    )
                 try:
-                    authorized_input = await self.model_authorizer.authorize(
-                        additional_source
+                    operation_plan, additional_sources[name] = (
+                        await self._capture_model_raster_metadata(
+                            owner, additional_source, operation_plan
+                        )
                     )
                 except RasterFeatureError as error:
                     raise ProcessingError(
@@ -308,14 +297,11 @@ class ProcessingService:
                         f"The model's {name} input is unavailable. {error.detail}",
                         422,
                     ) from error
-                additional_signatures[name] = tuple(
-                    authorized_input.source_signature.to_catalog()
-                )
         prepared = build_model_job_submission(
             operation_plan,
             invocation,
             source_metadata,
-            additional_signatures,
+            additional_sources,
         )
         prepared = replace(
             prepared, presentation={"utcOffsetMinutes": request.utcOffsetMinutes}
@@ -329,6 +315,46 @@ class ProcessingService:
             upload_owner,
         )
         return serialize_processing_job(row)
+
+    async def _capture_model_raster_metadata(
+        self,
+        owner: str,
+        source: RasterSourceReference,
+        prepared: PreparedJobPlan,
+    ) -> tuple[PreparedJobPlan, tuple[int, int, int, int] | JobInputFile]:
+        """Authorize a model raster, returning its metadata and updated job inputs.
+
+        Args:
+            owner: Processing session requesting the model run.
+            source: Catalog raster or owned published-file reference.
+            prepared: Queued plan containing any previously captured inputs.
+
+        Returns:
+            Plan retaining the private input when needed, and this source's
+            catalog metadata or published file identity for Run YAML.
+
+        Raises:
+            ProcessingError: If model authorization is unavailable or the
+                published file cannot be used by this session.
+            RasterFeatureError: If the Catalog raster cannot be authorized.
+        """
+        if isinstance(source, RunArtifactReference):
+            prepared = await self.capture_input_file(owner, source, prepared)
+            file = next(
+                file
+                for file in prepared.input_files
+                if (file.run_id, file.artifact_id)
+                == (source.job_id, source.artifact_id)
+            )
+            return prepared, file
+        if self.model_authorizer is None:
+            raise ProcessingError(
+                "models_unavailable",
+                "Model source authorization is unavailable.",
+                503,
+            )
+        authorized = await self.model_authorizer.authorize(source)
+        return prepared, tuple(authorized.source_signature.to_catalog())
 
     async def _submit_job(
         self,
@@ -504,7 +530,7 @@ class ProcessingService:
         source: RasterSourceReference | TemporalIntervalSelection,
         prepared: PreparedJobPlan,
     ) -> PreparedJobPlan:
-        """Capture a published raster identity for atomic job-input admission.
+        """Add a published raster identity to the files retained at job admission.
 
         Args:
             owner: Requesting browser session hash.
@@ -512,13 +538,19 @@ class ProcessingService:
             prepared: Operation-owned queued specification.
 
         Returns:
-            Plan with a private input identity when needed. Private work is not
-            coalesced with another submission; catalog sharing stays unchanged.
+            Plan retaining each distinct private file once, including inputs
+            already captured. Private work is not coalesced with another
+            submission; catalog sharing stays unchanged.
 
         Raises:
             ProcessingError: If the file is unavailable or is not published raster data.
         """
         if not isinstance(source, RunArtifactReference):
+            return prepared
+        if any(
+            (file.run_id, file.artifact_id) == (source.job_id, source.artifact_id)
+            for file in prepared.input_files
+        ):
             return prepared
         file = await asyncio.to_thread(
             self.jobs.inspect_input_file, owner, source.job_id, source.artifact_id
@@ -533,7 +565,9 @@ class ProcessingService:
                 "Choose a published raster result or scientific raster intermediate.",
                 422,
             )
-        return replace(prepared, input_files=(file,), work_key=None)
+        return replace(
+            prepared, input_files=(*prepared.input_files, file), work_key=None
+        )
 
     async def list_models(self) -> dict[str, Any]:
         """List every installed model recipe and its setup fields.
