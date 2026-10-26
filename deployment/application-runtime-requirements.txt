@@ -1,6 +1,11 @@
 # Linux x86_64 / CPython 3.12 wheels.
 # Generated from the deployed resolution; review changes before building.
 
+# Habitat condition fitting and scikit-learn's runtime dependencies.
+scikit-learn==1.6.1 --hash=sha256:2e69fab4ebfc9c9b580a7a80111b43d214ab06250f8a7ef590a4edf72464dd86
+joblib==1.5.0 --hash=sha256:206144b320246485b712fc8cc51f017de58225fa8b414a1fe1764a7231aca491
+threadpoolctl==3.6.0 --hash=sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb
+
 # Required by the pinned EcoShard package; pure Python wheel.
 filelock==3.20.0 --hash=sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2
 
