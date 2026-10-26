@@ -60,6 +60,15 @@ from eolab_app.processing.downstream_models import (
     VectorStartingMask,
 )
 from eolab_app.processing.prepared_hydrology import HydrologySources
+from eolab_app.processing import habitat_operation as habitat
+from eolab_app.processing.habitat_models import (
+    HabitatRequest,
+    QueuedHabitat,
+    HabitatPlan,
+    HabitatRasterStack,
+    HabitatReferences,
+    HabitatSettings,
+)
 
 Request = TypeVar("Request", bound=BaseModel)
 Queued = TypeVar("Queued", bound=BaseModel)
@@ -204,6 +213,68 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
+            ModelOperation[HabitatRequest, QueuedHabitat, HabitatPlan](
+                id="habitat.condition.v1",
+                inputs=(
+                    ("stack", "habitat_stack"),
+                    ("area", "summary_area"),
+                    ("references", "habitat_references"),
+                    ("habitat_mask", "optional_raster"),
+                    ("settings", "habitat_settings"),
+                ),
+                parameters=(),
+                output=OperationOutput(
+                    "reference_similarity",
+                    "raster",
+                    "map",
+                    "image/tiff",
+                    "Reference similarity",
+                ),
+                additional_outputs=(
+                    OperationOutput(
+                        "diagnostics",
+                        "raster",
+                        "download",
+                        "application/zip",
+                        "Response diagnostics",
+                        "intermediate",
+                    ),
+                ),
+                execution_profile="habitat-condition",
+                queued_type=QueuedHabitat,
+                prepared_type=HabitatPlan,
+                policy_type=HabitatSettings,
+                bind=habitat.bind_habitat,
+                source=habitat.get_habitat_source,
+                polygon=habitat.get_habitat_polygon,
+                vector_selections=habitat.get_habitat_vector_selections,
+                queue=habitat.build_habitat_submission,
+                prepare=habitat.prepare_habitat,
+                execution=habitat.select_habitat_execution,
+                policy=habitat.describe_habitat_policy,
+                result=raster.describe_clip_result,
+                outcome=raster.describe_clip_outcome,
+                primary_input="stack",
+                extra_sources=habitat.get_additional_habitat_sources,
+                execution_inputs=habitat.prepare_habitat_execution,
+                fixed_input_models=(("settings", HabitatSettings),),
+                input_adapters=(
+                    ("habitat_stack", TypeAdapter(HabitatRasterStack)),
+                    ("habitat_references", TypeAdapter(HabitatReferences)),
+                    ("optional_raster", TypeAdapter(RasterSourceReference | None)),
+                ),
+                progress_descriptions=tuple(
+                    (phase, phase)
+                    for phase in (
+                        "Selecting sample pixels",
+                        "Reading sample values",
+                        "Preparing model samples",
+                        "Fitting response models",
+                        "Calibrating reference departures",
+                        "Predicting raster windows",
+                    )
+                ),
+            ),
             ModelOperation[
                 TemporalStackRequest, QueuedTemporalStack, TemporalStackSpec
             ](

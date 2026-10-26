@@ -457,12 +457,6 @@ class RunDocument(ModelSchema):
         temporal = definition.inputs[source_name].type == "temporal_interval"
         if temporal != isinstance(recorded, ResolvedTemporalModelSource):
             raise ValueError("Execution source metadata does not match its input type")
-        if isinstance(recorded, ResolvedModelSource):
-            private = self.invocation.inputs[source_name].get("kind") == "runArtifact"
-            if private != (recorded.sha256 is not None and recorded.bytes is not None):
-                raise ValueError(
-                    "Private raster provenance requires its published checksum and size"
-                )
         return self
 
 
