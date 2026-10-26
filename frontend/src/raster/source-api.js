@@ -30,15 +30,18 @@ async function fetchRasterMetadata(url, body, signal, fetcher) {
     return value;
 }
 
-/** Read metadata used by the common raster layer and analysis controls.
+/** Read source metadata, optionally describing its pixel size in another CRS.
  * @param {Object} source Catalog or run-file identity.
  * @param {AbortSignal} signal Cancellation of an obsolete layer request.
  * @param {typeof fetch} [fetcher=globalThis.fetch] HTTP implementation.
- * @return {Promise<Object>} Checked metadata and declared format capabilities.
+ * @param {string|null} [targetCrs=null] Optional output CRS for projected grid information; null requests only original metadata.
+ * @return {Promise<Object & {projectedGrid:{crs:string,unit:string,pixelSize:[number,number],origin:[number,number],approximate:boolean}|null}>} Original metadata and reader support, plus the requested grid's X/Y pixel sizes and units when targetCrs is supplied.
  * @throws {Error} If metadata is unavailable or invalid.
  */
-export async function describeRasterSource(source, signal, fetcher = globalThis.fetch) {
-    const metadata = await fetchRasterMetadata("/api/raster-analysis/sources", {source: rasterSourceReference(source)}, signal, fetcher);
+export async function describeRasterSource(source, signal, fetcher = globalThis.fetch, targetCrs = null) {
+    const body = {source: rasterSourceReference(source)};
+    if (targetCrs !== null) body.targetCrs = targetCrs;
+    const metadata = await fetchRasterMetadata("/api/raster-analysis/sources", body, signal, fetcher);
     if (rasterSourceKey(metadata) !== rasterSourceKey(source) || !/^[a-f0-9]{64}$/.test(metadata.version) ||
         ![metadata.width, metadata.height, metadata.bands].every(n => Number.isSafeInteger(n) && n > 0) ||
         !["pixels", "statistics"].every(name => typeof metadata.capabilities?.[name]?.supported === "boolean") ||

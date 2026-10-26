@@ -154,6 +154,19 @@ class RasterAnalysisSourceRequest(BaseModel):
     source: RasterAnalysisSourceReference
 
 
+class RasterSourceDescriptionRequest(RasterAnalysisSourceRequest):
+    """Describe a source and optionally suggest its grid in another CRS.
+
+    Attributes:
+        target_crs: Coordinate system for the pixel-size suggestion; omitted
+            requests describe only the existing source metadata.
+    """
+
+    target_crs: str | None = Field(
+        default=None, alias="targetCrs", strict=True, min_length=1
+    )
+
+
 class RasterPixelSourceRequest(RasterAnalysisSourceRequest):
     """Read an original raster cell at a longitude and latitude."""
 
@@ -186,6 +199,26 @@ class RasterSourceCapabilities(BaseModel):
     statistics: RasterReadCapability
 
 
+class ProjectedRasterGrid(BaseModel):
+    """Pixel size and grid origin suggested for the requested coordinate system.
+
+    Attributes:
+        crs: Target coordinate system as a PROJ-readable CRS definition.
+        unit: Coordinate unit used by both pixel sizes and the origin.
+        pixelSize: Positive X/Y cell sizes. Different-CRS sizes measure the
+            projected source pixel axes at the source center, not a global average.
+        origin: Native grid intersection for an unrotated same-CRS source,
+            otherwise (0, 0) for a new north-up grid.
+        approximate: Whether the pixel sizes were estimated in another CRS.
+    """
+
+    crs: str
+    unit: str
+    pixelSize: tuple[float, float]
+    origin: tuple[float, float]
+    approximate: bool
+
+
 class RasterSourceDescription(RasterAnalysisSourceRequest):
     """Original raster metadata and current format support without private storage details."""
 
@@ -199,6 +232,7 @@ class RasterSourceDescription(RasterAnalysisSourceRequest):
     transform: tuple[float, float, float, float, float, float]
     nodata: float | None
     capabilities: RasterSourceCapabilities
+    projectedGrid: ProjectedRasterGrid | None = None
 
 
 def raster_source_reference(

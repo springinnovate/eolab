@@ -21,8 +21,8 @@ from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.raster.source_access import RasterSourceAccess
 from eolab_app.raster.source_models import (
-    RasterAnalysisSourceRequest,
     RasterSourceDescription,
+    RasterSourceDescriptionRequest,
     RasterPixelSourceRequest,
     RasterStatisticsSourceRequest,
     RasterPairSourceRequest,
@@ -116,17 +116,18 @@ def create_raster_analysis_router(
 
     @router.post("/sources", response_model=RasterSourceDescription)
     async def describe_raster_source(
-        body: RasterAnalysisSourceRequest, request: Request, response: Response
+        body: RasterSourceDescriptionRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         """Describe original raster data and reader support for the selected source.
 
         Args:
-            body: Path-free raster file or temporal observation reference.
+            body: Path-free raster or observation reference and optional target CRS.
             request: HTTP session and cancellation context.
             response: Private response headers.
 
         Returns:
-            Original grid metadata, selection identity and format capabilities.
+            Original metadata, source identity, reader capabilities and any
+            requested projected pixel-size suggestion.
 
         Raises:
             HTTPException: If authorization, inspection or cancellation fails.
@@ -136,7 +137,10 @@ def create_raster_analysis_router(
             raise HTTPException(503, "Raster metadata access is unavailable.")
         try:
             return await run_until_http_disconnect(
-                request, source_access.describe(body.source, **context)
+                request,
+                source_access.describe(
+                    body.source, target_crs=body.target_crs, **context
+                ),
             )
         except (RasterFeatureError, SourceFileError) as error:
             raise source_error(error) from error

@@ -58,12 +58,39 @@ test("temporary raster publication uses the ordinary rendering endpoint and path
 
 test("source metadata requires matching identity, version, dimensions and capabilities", async () => {
     const valid = {source, version: raster.version, bounds: raster.bbox, width: 2, height: 1, bands: 1,
-        capabilities: {pixels: {supported:true}, statistics: {supported:true}}};
+        capabilities: {pixels: {supported:true}, statistics: {supported:true}}, projectedGrid: null};
     const fetcher = value => async () => new Response(JSON.stringify(value));
     assert.deepEqual(await describeRasterSource(source, undefined, fetcher(valid)), valid);
     for (const change of [{version: "invalid"}, {source: {...source, jobId: "e".repeat(32)}}, {width: 0}, {bounds: [1]}, {capabilities: {}}]) {
         await assert.rejects(describeRasterSource(source, undefined, fetcher({...valid, ...change})), /invalid/);
     }
+});
+
+test("source metadata carries an optional target CRS through private transport and cancellation", async () => {
+    const requests = [], abort = new AbortController();
+    const projectedGrid = {crs: "EPSG:6933", unit: "metre", pixelSize: [25000, 50000], origin: [0, 0], approximate: true};
+    const metadata = {source, version: raster.version, bounds: raster.bbox, width: 2, height: 1, bands: 1,
+        crs: "EPSG:4326", transform: [.25, 0, 0, 0, -.5, 1],
+        capabilities: {pixels: {supported:true}, statistics: {supported:true}}};
+    const fetcher = async (url, options) => {
+        const body = JSON.parse(options.body); requests.push({url, ...options, body});
+        return new Response(JSON.stringify({...metadata, projectedGrid: body.targetCrs ? projectedGrid : null}));
+    };
+    const original = await describeRasterSource({...raster, path: "/private/source.tif"}, abort.signal, fetcher);
+    const projected = await describeRasterSource(raster, abort.signal, fetcher, "EPSG:6933");
+    assert.equal(original.projectedGrid, null);
+    assert.deepEqual(projected.projectedGrid, projectedGrid);
+    assert.deepEqual(projected.transform, metadata.transform);
+    assert.deepEqual(requests.map(request => request.body), [{source}, {source, targetCrs: "EPSG:6933"}]);
+    for (const request of requests) {
+        assert.equal(request.url, "/api/raster-analysis/sources");
+        assert.equal(request.credentials, "same-origin");
+        assert.equal(request.cache, "no-store");
+        assert.equal(request.headers["X-EOLab-Processing"], "1");
+        assert.equal(request.signal.aborted, false);
+    }
+    abort.abort();
+    assert.ok(requests.every(request => request.signal.aborted));
 });
 
 test("ordinary calculation, stack and clip recovery retain private identities without display data", () => {

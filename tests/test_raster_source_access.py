@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import numpy as np
 import pytest
 import rasterio
+from affine import Affine
 from rasterio.transform import from_origin
 
 from eolab_app.raster.models import (
@@ -23,7 +24,7 @@ from eolab_app.raster.models import (
 )
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.errors import RasterConflictError
-from eolab_app.raster.source_access import RasterSourceAccess
+from eolab_app.raster.source_access import RasterSourceAccess, describe_projected_grid
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.source_models import (
     RasterPixelSourceRequest,
@@ -107,6 +108,70 @@ def write_source(path: Path, masked: bool = False) -> Path:
             mask[0, 0] = 0
             target.write_mask(mask)
     return path
+
+
+@pytest.mark.parametrize(
+    "crs,transform,pixel_size,origin,approximate",
+    [
+        ("EPSG:6933", from_origin(1230, 4560, 30, 60), (30, 60), (1230, 4560), False),
+        (
+            "EPSG:4326",
+            from_origin(-0.5, 1, 0.25, 0.5),
+            (24121.57006, 63786.44733),
+            (0, 0),
+            True,
+        ),
+        ("EPSG:6933", Affine(3, -8, 1230, 4, 6, 4560), (5, 10), (0, 0), False),
+    ],
+)
+def test_projected_grid_uses_metadata_and_preserves_both_pixel_axes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crs: str,
+    transform: Affine,
+    pixel_size: tuple[float, float],
+    origin: tuple[float, float],
+    approximate: bool,
+) -> None:
+    """Read exact or projected grid dimensions without sampling raster values.
+
+    Args:
+        tmp_path: Original-raster storage.
+        monkeypatch: Reject any attempt to read source pixels or validity masks.
+        crs: Source coordinate system.
+        transform: Source alignment, including rectangular or rotated pixels.
+        pixel_size: Expected separate X/Y distances in metres.
+        origin: Native intersection or zero for a new north-up grid.
+        approximate: Whether the axes were transformed to another CRS.
+    """
+    path = write_source(tmp_path / "source.tif")
+    with rasterio.open(path, "r+") as dataset:
+        dataset.crs = crs
+        dataset.transform = transform
+
+    def reject_pixel_read(*args: Any, **kwargs: Any) -> None:
+        """Fail if metadata inspection reads raster values or masks.
+
+        Args:
+            args: Unexpected positional read arguments.
+            kwargs: Unexpected keyword read arguments.
+
+        Raises:
+            AssertionError: Always; projected grid metadata needs no pixel reads.
+        """
+        raise AssertionError("Projected grid metadata must not read pixels")
+
+    original = path.read_bytes()
+    with rasterio.open(path) as dataset:
+        monkeypatch.setattr(dataset, "read", reject_pixel_read)
+        monkeypatch.setattr(dataset, "read_masks", reject_pixel_read)
+        grid = describe_projected_grid(dataset, "EPSG:6933")
+    assert grid.crs == "EPSG:6933"
+    assert grid.unit == "metre"
+    assert grid.pixelSize == pytest.approx(pixel_size, rel=1e-8)
+    assert grid.origin == origin
+    assert grid.approximate is approximate
+    assert path.read_bytes() == original
 
 
 @dataclass
@@ -411,6 +476,73 @@ def test_private_analysis_requests_are_path_free_and_keep_legacy_catalog_request
             denied.status_code == 404 and "no-store" in denied.headers["cache-control"]
         )
     assert not authority.leases
+
+
+def test_projected_grid_metadata_keeps_source_authorization_and_releases_reads(
+    tmp_path: Path,
+) -> None:
+    """Describe both source kinds through HTTP and release reads on CRS errors.
+
+    Args:
+        tmp_path: Source file used by the existing Catalog and private authorities.
+    """
+    path = write_source(tmp_path / "source.tif")
+    authority = FileAuthority(path)
+    sources = RasterSourceAccess(CatalogAuthority(path), authority.files())
+    app = FastAPI()
+    app.include_router(
+        create_raster_analysis_router(
+            RasterPixelService(sources, 2),
+            RasterStatisticsService(sources, 2, 8),
+            source_access=sources,
+            session_owner=lambda request, response: request.cookies.get(
+                "session", "foreign"
+            ),
+        )
+    )
+    with TestClient(app) as client:
+        client.cookies.set("session", "owner")
+        ordinary = client.post("/api/raster-analysis/sources", json={"source": CATALOG})
+        assert ordinary.status_code == 200
+        assert ordinary.json()["projectedGrid"] is None
+        for reference in (CATALOG, PRIVATE):
+            response = client.post(
+                "/api/raster-analysis/sources",
+                json={"source": reference, "targetCrs": "EPSG:6933"},
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["source"] == reference
+            assert result["crs"] == "EPSG:4326"
+            grid = result["projectedGrid"]
+            assert grid["crs"] == "EPSG:6933" and grid["unit"] == "metre"
+            assert 90000 < grid["pixelSize"][0] < 110000
+            assert 120000 < grid["pixelSize"][1] < 140000
+            assert grid["approximate"] and grid["origin"] == [0, 0]
+            assert "no-store" in response.headers["cache-control"]
+            assert str(path) not in response.text and not authority.leases
+        for target in ("not-a-coordinate-system", "EPSG:4978"):
+            response = client.post(
+                "/api/raster-analysis/sources",
+                json={"source": PRIVATE, "targetCrs": target},
+            )
+            assert response.status_code == 409
+            assert "coordinate" in response.text.lower()
+            assert "no-store" in response.headers["cache-control"]
+            assert not authority.leases
+        client.cookies.clear()
+        denied = client.post(
+            "/api/raster-analysis/sources",
+            json={"source": PRIVATE, "targetCrs": "EPSG:6933"},
+        )
+        assert denied.status_code == 404 and not authority.leases
+        client.cookies.set("session", "owner")
+        authority.ready = False
+        expired = client.post(
+            "/api/raster-analysis/sources",
+            json={"source": PRIVATE, "targetCrs": "EPSG:6933"},
+        )
+        assert expired.status_code == 409 and not authority.leases
 
 
 def test_coalesced_private_read_retains_files_until_its_last_waiter_stops(
