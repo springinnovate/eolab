@@ -11,6 +11,8 @@ import sys
 from typing import Any
 
 import rasterio
+from pyproj import CRS, Transformer
+from pyproj.exceptions import ProjError
 
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
@@ -30,9 +32,10 @@ from eolab_app.raster.source_models import (
     RasterAnalysisSourceReference,
     TemporalRasterSelection,
     TemporalIntervalSelection,
+    ProjectedRasterGrid,
 )
 from eolab_app.raster.temporal import TemporalObservation
-from eolab_app.raster.reader import RasterData, open_raster_data
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.source_files import LeasedSourceFiles, SourceFileError
 
 
@@ -111,19 +114,92 @@ async def read_private_raster(reader: Callable[..., Any], *arguments: Any) -> An
     return result
 
 
-def describe_raster_data(data: RasterData) -> dict[str, Any]:
+def describe_projected_grid(
+    dataset: RasterDataset, target_crs: str
+) -> ProjectedRasterGrid:
+    """Suggest X/Y pixel sizes in a requested CRS without reading raster values.
+
+    Args:
+        dataset: Open, georeferenced source supplying its grid metadata.
+        target_crs: User-requested geographic or projected CRS understood by PROJ.
+
+    Returns:
+        Exact sizes and an aligned origin for an unrotated same-CRS grid.
+        Otherwise, a north-up grid anchored at (0, 0). For another CRS, each
+        size is the distance between a pixel axis's projected endpoints at
+        the source center, explicitly marked approximate. Rectangular pixels
+        retain separate X/Y sizes.
+
+    Raises:
+        ValueError: If the CRS or pixel-axis transformation is unavailable, or
+            cannot produce finite positive cell sizes in one coordinate unit.
+    """
+    try:
+        target = CRS.from_user_input(target_crs)
+        if not (target.is_geographic or target.is_projected):
+            raise ValueError(
+                "Choose a geographic or projected coordinate system for the raster grid."
+            )
+        source = CRS(dataset.crs)
+        x_axis, y_axis = target.axis_info[:2]
+        if x_axis.unit_name != y_axis.unit_name:
+            raise ValueError("Choose a coordinate system with matching X and Y units.")
+        same_crs = source.equals(target, ignore_axis_order=True)
+        affine = dataset.transform
+        origin = (0.0, 0.0)
+        if same_crs:
+            sizes = (math.hypot(affine.a, affine.d), math.hypot(affine.b, affine.e))
+            if affine.b == 0 and affine.d == 0:
+                origin = (affine.c, affine.f)
+        else:
+            column, row = dataset.width / 2, dataset.height / 2
+            positions = (
+                affine * (column - 0.5, row),
+                affine * (column + 0.5, row),
+                affine * (column, row - 0.5),
+                affine * (column, row + 0.5),
+            )
+            transformer = Transformer.from_crs(
+                source, target, always_xy=True, force_over=True
+            )
+            x, y = transformer.transform(*zip(*positions), errcheck=True)
+            sizes = (
+                math.hypot(x[1] - x[0], y[1] - y[0]),
+                math.hypot(x[3] - x[2], y[3] - y[2]),
+            )
+        if not all(math.isfinite(size) and size > 0 for size in sizes):
+            raise ValueError("The requested projection has no usable pixel size here.")
+        return ProjectedRasterGrid(
+            crs=target.to_string(),
+            unit=x_axis.unit_name,
+            pixelSize=sizes,
+            origin=origin,
+            approximate=not same_crs,
+        )
+    except ProjError as error:
+        raise ValueError(
+            "The raster pixel size could not be transformed. Check the requested coordinate system."
+        ) from error
+
+
+def describe_raster_data(
+    data: RasterData, target_crs: str | None = None
+) -> dict[str, Any]:
     """Inspect original raster metadata and report the current readers' supported operations.
 
     Args:
         data: Authorized original file or selected temporal observation.
+        target_crs: Optional CRS for a pixel-size and alignment suggestion.
 
     Returns:
         Path-free grid metadata and pixel/statistics capability explanations.
         Geographic bounds are null when extent projection is unavailable;
         this does not change the independent numerical capabilities.
+        A requested projectedGrid contains metadata only; no raster is prepared.
 
     Raises:
-        ValueError: If georeferencing or signed file dependencies are unsupported.
+        ValueError: If georeferencing, file dependencies or the requested grid
+            projection are unsupported.
         OSError: If native source metadata cannot be read.
         RasterioError: If native metadata cannot be read.
     """
@@ -150,7 +226,7 @@ def describe_raster_data(data: RasterData) -> dict[str, Any]:
                 bounds = None
         except (ValueError, rasterio.errors.RasterioError):
             bounds = None
-        return {
+        metadata = {
             "bounds": bounds,
             "width": dataset.width,
             "height": dataset.height,
@@ -167,6 +243,11 @@ def describe_raster_data(data: RasterData) -> dict[str, Any]:
                 },
             },
         }
+        if target_crs is not None:
+            metadata["projectedGrid"] = describe_projected_grid(
+                dataset, target_crs
+            ).model_dump()
+        return metadata
 
 
 class RasterSourceAccess:
@@ -290,13 +371,18 @@ class RasterSourceAccess:
         )
 
     async def describe(
-        self, reference: RasterAnalysisSourceReference, owner: str | None = None
+        self,
+        reference: RasterAnalysisSourceReference,
+        owner: str | None = None,
+        *,
+        target_crs: str | None = None,
     ) -> dict[str, Any]:
         """Return original metadata and capabilities without exposing source paths.
 
         Args:
             reference: Requested file identity or temporal observation selection.
             owner: Server-derived private session hash when required.
+            target_crs: Optional output CRS for a pixel-size suggestion.
 
         Returns:
             Source reference, selection version, grid metadata and current reader support.
@@ -311,7 +397,9 @@ class RasterSourceAccess:
             )
         async with self._metadata_slots, self.open(reference, owner) as source:
             try:
-                metadata = await read_private_raster(describe_raster_data, source.data)
+                metadata = await read_private_raster(
+                    describe_raster_data, source.data, target_crs
+                )
             except ValueError as error:
                 raise RasterConflictError(str(error)) from error
             return {
