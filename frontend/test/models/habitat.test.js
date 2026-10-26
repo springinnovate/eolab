@@ -15,7 +15,7 @@ const habitat = {...model, id: "habitat-condition", title: "Habitat condition",
     preparation: {type: "raster_preparation", label: "Raster preparation"},
 }, steps: [{id: "calculate", operation: "habitat.condition.v1", inputs: {
     stack: {input: "stack"}, area: {input: "area"}, references: {input: "references"}, habitat_mask: {input: "habitat_mask"},
-    preparation: {input: "preparation"}, preparation_settings: {value: {required_crs: "EPSG:6933"}}, settings: {value: {
+    preparation: {input: "preparation"}, settings: {value: {required_crs: "EPSG:6933",
     fold_count: 5, sampling_block_size_meters: 25000, validation_block_size_meters: 50000,
     minimum_predictor_coverage: 0.8, maximum_row_missing_fraction: 0.2, spline_knot_count: 6,
     minimum_response_coverage: 0.5, ridge_alpha: 1, samples_per_class_per_block: 100,
@@ -153,6 +153,7 @@ test("Habitat stack edits preserve other rows and require unambiguous roles befo
     const h = await fixture(), controls = h.view.setup.inputs.stack;
     const settings = controls.settings.children.at(-1).children.map(node => node.textContent);
     const folds = settings.indexOf("Spatial validation folds"), width = settings.indexOf("Sampling block width (m)");
+    assert.equal(settings[settings.indexOf("Required projection") + 1], "EPSG:6933");
     assert.equal(settings[folds + 1], String(habitat.steps[0].inputs.settings.value.fold_count));
     assert.equal(settings[width + 1], String(habitat.steps[0].inputs.settings.value.sampling_block_size_meters));
     assert.equal(h.view.setup.run.disabled, true);

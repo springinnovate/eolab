@@ -55,6 +55,7 @@ export class HabitatStackView {
         this.settings.append(element("summary", "Scientific settings"),
             element("p", "These settings come from the administrator's model recipe and are fixed for this run.", "models-help"));
         const labels = {
+            required_crs: "Required projection",
             fold_count: "Spatial validation folds",
             sampling_block_size_meters: "Sampling block width (m)",
             validation_block_size_meters: "Validation block width (m)",

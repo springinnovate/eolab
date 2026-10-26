@@ -216,7 +216,7 @@ export function createModelDraft(model, context, id) {
             inputs[name] = {predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);
-            const settings = step.inputs.preparation_settings.value;
+            const settings = step.inputs.settings.value;
             inputs[name] = {requiredCrs: settings.required_crs, crs: settings.required_crs ?? "", pixelSize: [null, null], origin: [0, 0],
                 mode: "auto", sourceKey: "", unit: "", choices: [], loading: false, error: ""};
         } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {

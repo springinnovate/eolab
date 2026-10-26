@@ -29,11 +29,9 @@ steps:
       references: {input: references}
       habitat_mask: {input: habitat_mask}
       preparation: {input: preparation}
-      preparation_settings:
-        value:
-          required_crs: EPSG:6933
       settings:
         value:
+          required_crs: EPSG:6933
           fold_count: 5
           sampling_block_size_meters: 25000
           validation_block_size_meters: 50000

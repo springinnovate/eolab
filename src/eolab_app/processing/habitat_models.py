@@ -1,4 +1,4 @@
-"""Describe selected Habitat condition layers and fixed scientific settings."""
+"""Describe selected Habitat condition layers and fixed model settings."""
 
 from typing import Annotated, Literal, Self
 
@@ -118,20 +118,11 @@ class HabitatPreparation(HabitatSchema):
     resampling: dict[str, ResamplingMethod]
 
 
-class HabitatPreparationSettings(HabitatSchema):
-    """Model-owned projection requirement published for the preparation controls.
+class HabitatSettings(HabitatSchema):
+    """Projection, scientific and sampling settings fixed by the model recipe.
 
     Attributes:
         required_crs: Equal-area projection required by the current Habitat runner.
-    """
-
-    required_crs: Literal["EPSG:6933"]
-
-
-class HabitatSettings(HabitatSchema):
-    """Scientific and sampling settings supplied by the administrator's recipe.
-
-    Attributes:
         fold_count: Number of spatial cross-validation folds.
         sampling_block_size_meters: Width of equal-area sampling blocks.
         validation_block_size_meters: Width of grouped validation blocks.
@@ -148,6 +139,7 @@ class HabitatSettings(HabitatSchema):
         tile_origin: EPSG:6933 origin anchoring the virtual sampling tiles.
     """
 
+    required_crs: Literal["EPSG:6933"]
     fold_count: Annotated[int, Field(strict=True, ge=2)]
     sampling_block_size_meters: PositiveInteger
     validation_block_size_meters: PositiveInteger
@@ -171,7 +163,6 @@ class HabitatRequest(HabitatSchema):
     references: HabitatReferences
     habitat_mask: RasterSourceReference | None
     preparation: HabitatPreparation
-    preparation_settings: HabitatPreparationSettings
     settings: HabitatSettings
     selectedBounds: Wgs84Bounds | None = None
     catalogSelection: VectorSelection | None = None
@@ -215,10 +206,10 @@ class HabitatRequest(HabitatSchema):
         if set(self.preparation.resampling) != set(self.get_raster_sources()):
             raise ValueError("Choose one resampling method for each selected raster.")
         if CRS.from_user_input(self.preparation.crs) != CRS.from_user_input(
-            self.preparation_settings.required_crs
+            self.settings.required_crs
         ):
             raise ValueError(
-                f"Habitat condition requires {self.preparation_settings.required_crs}."
+                f"Habitat condition requires {self.settings.required_crs}."
             )
         return self
 

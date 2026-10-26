@@ -69,7 +69,6 @@ from eolab_app.processing.habitat_models import (
     HabitatReferences,
     HabitatSettings,
     HabitatPreparation,
-    HabitatPreparationSettings,
 )
 
 Request = TypeVar("Request", bound=BaseModel)
@@ -223,7 +222,6 @@ OPERATIONS = MappingProxyType(
                     ("references", "habitat_references"),
                     ("habitat_mask", "optional_raster"),
                     ("preparation", "raster_preparation"),
-                    ("preparation_settings", "habitat_preparation_settings"),
                     ("settings", "habitat_settings"),
                 ),
                 parameters=(),
@@ -261,10 +259,7 @@ OPERATIONS = MappingProxyType(
                 primary_input="stack",
                 extra_sources=habitat.get_additional_habitat_sources,
                 execution_inputs=habitat.prepare_habitat_execution,
-                fixed_input_models=(
-                    ("settings", HabitatSettings),
-                    ("preparation_settings", HabitatPreparationSettings),
-                ),
+                fixed_input_models=(("settings", HabitatSettings),),
                 input_adapters=(
                     ("habitat_stack", TypeAdapter(HabitatRasterStack)),
                     ("habitat_references", TypeAdapter(HabitatReferences)),

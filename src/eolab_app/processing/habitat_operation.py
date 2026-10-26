@@ -46,7 +46,6 @@ def bind_habitat(
         references=inputs["references"],
         habitat_mask=inputs["habitat_mask"],
         preparation=inputs["preparation"],
-        preparation_settings=inputs["preparation_settings"],
         settings=inputs["settings"],
         **bind_area_arguments(inputs["area"]),
     )
