@@ -469,5 +469,5 @@ def test_habitat_exports_private_primary_source(
         )
     )
     assert document.invocation.inputs["stack"]["predictors"][0]["source"] == private
-    assert document.execution.source.sha256 == file.sha256
-    assert document.execution.source.bytes == file.size
+    assert document.execution.sources["stack"].sha256 == file.sha256
+    assert document.execution.sources["stack"].bytes == file.size
