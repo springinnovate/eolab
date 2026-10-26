@@ -6,6 +6,7 @@ from typing import Iterator
 
 import rasterio
 from rasterio.features import rasterize
+from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.bounded_vector import PolygonRasterizer
@@ -16,11 +17,13 @@ MASK_TILE_SIDE = 512
 
 @contextmanager
 def temporary_polygon_mask(
-    dataset: rasterio.io.DatasetReader,
+    dataset: rasterio.io.DatasetReader | WarpedVRT,
     raster_window: Window,
     polygons: tuple[dict[str, object], ...] | PolygonRasterizer,
     directory: Path,
     limits: RasterAggregateLimits,
+    *,
+    all_touched: bool = False,
 ) -> Iterator[rasterio.io.DatasetReader | None]:
     """Rasterize selected polygons to a tiled file and remove it after use.
 
@@ -35,6 +38,8 @@ def temporary_polygon_mask(
             the calculation's filtered polygons. Empty means no mask is needed.
         directory: Private directory owned by this calculation attempt.
         limits: Shared job and ground-area settings; writes have no byte ceiling.
+        all_touched: Include every pixel touched by a polygon when True;
+            otherwise use the existing pixel-center inclusion rule.
 
     Yields:
         Read-only byte mask (one inside, zero outside), or None when unnecessary.
@@ -58,7 +63,7 @@ def temporary_polygon_mask(
         rasterize(
             shapes,
             transform=transform,
-            all_touched=False,
+            all_touched=all_touched,
             default_value=1,
             fill=0,
             dtype="uint8",
