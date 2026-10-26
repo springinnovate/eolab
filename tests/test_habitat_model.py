@@ -405,8 +405,11 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     with rasterio.open(actual_path) as similarity:
         assert similarity.shape == (16, 24)
         assert similarity.transform == grid
+        assert similarity.dtypes == (response.result.grid.dtype,) == ("float32",)
+        assert similarity.nodata == float(row["summary"]["grid"]["nodata"]) == -9999.0
         similarity_values = similarity.read(1, masked=True)
         assert similarity_values[6:, 20:22].count() > 0
+        assert 0 <= similarity_values.min() <= similarity_values.max() <= 1
         assert similarity_values.mask[outside].all()
         assert similarity_values.mask[references].all()
         if vector_references:

@@ -170,6 +170,8 @@ def plan_habitat(
         window=(0, 0, width, height),
         width=width,
         height=height,
+        # The runner writes Reference similarity as float32/-9999, with values 0–1.
+        # Temporary aligned inputs instead use float64/NaN.
         dtype="float32",
         nodata="-9999",
         nativeBlocks=ceil(width / 512) * ceil(height / 512),

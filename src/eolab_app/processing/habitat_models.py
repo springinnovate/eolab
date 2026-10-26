@@ -252,8 +252,10 @@ class QueuedHabitat(HabitatSchema):
 class HabitatPlan(HabitatSchema):
     """Captured Habitat inputs, exact area descriptor and the requested output grid.
 
-    The existing raster-result grid contract describes the prepared target raster:
-    its window starts at zero and nativeBlocks counts its 512-pixel tiles.
+    Grid datatype and NoData describe the runner's primary Reference similarity
+    output: float32 with valid values from 0 to 1 and -9999 for missing values.
+    Temporary aligned inputs use float64 and NaN NoData on the same spatial grid.
+    The window starts at zero; nativeBlocks counts 512-pixel preparation tiles.
     """
 
     operation: Literal["habitat.condition.v1"] = OPERATION
