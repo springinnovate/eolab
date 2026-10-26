@@ -134,7 +134,7 @@ test("calendar controls capture whole months and inclusive days as the existing 
 
 test("temporal setup captures typed inputs in UTC without raster publication or automatic jobs", async () => {
     const h = await periodFixture(), draft = h.controller.state.draft;
-    assert.equal(draft.raster, null);
+    assert.equal(draft.inputs.raster, undefined);
     assert.equal(draft.temporal.variable, "");
     await h.controller.chooseTemporalVariable("temperature");
     h.handlers.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-02T13:00"});
@@ -245,7 +245,7 @@ test("copying a temporal run preserves its original period, statistic and fixed 
     h.controller.state.library = [periodModel]; h.controller.state.invocation = saved;
     await h.controller.duplicateRun();
     const draft = h.controller.state.draft;
-    assert.equal(draft.areaMode, "captured");
+    assert.equal(draft.inputs.region.areaMode, "captured");
     assert.equal(draft.temporal.periodMode, "times");
     h.context.area = {kind: "wholeRaster"};
     h.controller.refreshMapArea();
@@ -332,7 +332,7 @@ test("a sole precipitation variable defaults to Mean and copied totals preserve 
     await h.controller.loadTemporalDates(undefined, true);
     const request = captureModelSubmission(h.controller.state.draft, "e".repeat(32));
     assert.deepEqual(request.inputs, saved.inputs);
-    assert.equal(h.controller.state.draft.areaMode, "captured");
+    assert.equal(h.controller.state.draft.inputs.region.areaMode, "captured");
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });
@@ -433,7 +433,7 @@ test("copying an area series preserves its scalar statistic, exact period and ar
     assert.equal(controls.period.periodMode.value, "times");
     assert.equal(controls.period.startDate.value, "2000-01-31"); assert.equal(controls.period.startTime.value, "23:30:15.250");
     assert.equal(controls.period.endDate.value, "2000-02-01"); assert.equal(controls.period.endTime.value, "01:10:22.500");
-    assert.equal(draft.areaMode, "captured");
+    assert.equal(draft.inputs.area.areaMode, "captured");
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs, saved.inputs);
     assert.equal(h.submitted.length, 0);
     h.controller.destroy();
@@ -474,17 +474,17 @@ test("published results are explicit model choices without previews or map layer
     const recipe = {...model, inputs: {habitat: {type: "raster", label: "Habitat"}, area: model.inputs.area}};
     h.controller.chooseModel(recipe);
     const draft = h.controller.state.draft;
-    assert.equal(draft.raster, null);
+    assert.equal(draft.inputs.habitat.raster, null);
     assert.equal(draft.sources.length, 2);
     assert.ok(draft.sources.every(source => source.kind === "runArtifact"));
-    h.controller.editDraft({raster: draft.sources[1]});
+    h.controller.editInput("habitat", {raster: draft.sources[1]});
     const request = captureModelSubmission(draft, "request-private-result");
     assert.deepEqual(request.inputs.habitat, {kind: "runArtifact", jobId: parent.jobId, artifactId: artifacts.files[1].artifactId});
     assert.deepEqual(request.inputs.area, area);
     h.controller.rememberRun({...parent, status: "expired", artifacts: {...artifacts, availability: "unavailable", files: []}});
     h.controller.refreshMapLayers();
-    assert.equal(draft.raster.available, false);
-    assert.match(draft.sourceReason, /no longer available/);
+    assert.equal(draft.inputs.habitat.raster.available, false);
+    assert.match(draft.inputs.habitat.sourceReason, /no longer available/);
     assert.throws(() => captureModelSubmission(draft, "request-expired-result"), /no longer available/);
 });
 
@@ -677,17 +677,123 @@ test("legacy catalog recipes exclude results and late history loads preserve the
     h.controller.chooseModel({...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}});
     const draft = h.controller.state.draft;
     assert.equal(draft.sources.length, 3, "Displayed results and run history refer to the same original source");
-    h.controller.editDraft({raster: draft.sources[1]});
+    h.controller.editInput("raster", {raster: draft.sources[1]});
     await h.controller.loadRuns();
-    assert.equal(draft.raster.artifactId, artifacts.files[0].artifactId);
+    assert.equal(draft.inputs.raster.raster.artifactId, artifacts.files[0].artifactId);
 });
 
 test("multiple map rasters require a choice; catalog-only inputs cannot become suggestions", () => {
     const hidden = {...raster, itemId: "hidden", visible: false};
     let draft = createModelDraft(model, {rasters: [raster, {...raster, itemId: "second"}, hidden]}, "draft");
-    assert.equal(draft.raster, null); assert.equal(draft.sources.length, 3);
+    assert.equal(draft.inputs.raster.raster, null); assert.equal(draft.sources.length, 3);
     draft = createModelDraft(model, {rasters: [raster], selectedRaster: hidden}, "draft");
-    assert.equal(draft.raster.itemId, "population"); assert.equal(draft.sources.length, 1); assert.match(draft.sourceReason, /Map layers/);
+    assert.equal(draft.inputs.raster.raster.itemId, "population"); assert.equal(draft.sources.length, 1); assert.match(draft.inputs.raster.sourceReason, /Map layers/);
+});
+
+test("named raster and vector controls preserve distinct inputs through refresh, submission and duplication", async () => {
+    const recipe = {...model, inputs: {
+        observed: {type: "raster", label: "Observed values"}, expected: {type: "raster", label: "Expected values"},
+        study: {type: "summary_area", label: "Study area"}, reference: {type: "summary_area", label: "Reference area"},
+    }};
+    const doc = new SummaryControlDocument(), view = new ModelsView(doc), h = fixture({}, view);
+    h.context.rasters.push({...raster, itemId: "expected", label: "Expected values"});
+    h.context.vectors = [{...selection, label: "Basins", fields: [{name: "BASIN", type: "str"}]}];
+    h.controller.prepareVector = async source => ({selection: {...selection, filter: source.filter},
+        matched: source.filter.rules[0].value === "North" ? 3 : 1, total: 8});
+    h.controller.chooseModel(recipe);
+    const controls = view.setup.inputs;
+    for (const [name, index] of [["observed", 0], ["expected", 1]]) {
+        controls[name].source.value = modelSourceKey(h.context.rasters[index]);
+        controls[name].source.dispatchEvent(new Event("change"));
+    }
+    for (const [name, value, count] of [["study", "North", 3], ["reference", "South", 1]]) {
+        controls[name].areaMode.value = "vector"; controls[name].areaMode.dispatchEvent(new Event("change"));
+        controls[name].vector.value = modelSourceKey(selection); controls[name].vector.dispatchEvent(new Event("change"));
+        await new Promise(resolve => setImmediate(resolve));
+        controls[name].editFilter.dispatchEvent(new Event("click"));
+        await new Promise(resolve => setImmediate(resolve));
+        const editing = h.filterRequests.at(-1), filter = structuredClone(selection.filter);
+        assert.equal(editing.host, controls[name].filterHost);
+        filter.rules[0].value = value;
+        await editing.apply(filter); editing.complete();
+        assert.equal(controls[name].selectedCount.textContent, `${count} of 8 features selected`);
+    }
+    assert.notEqual(controls.study.filterHost.id, controls.reference.filterHost.id);
+    assert.notEqual(controls.observed.source.id, controls.expected.source.id);
+    controls.expected.source.focus(); h.controller.refreshMapLayers(); h.controller.refreshMapArea();
+    assert.equal(doc.activeElement, controls.expected.source);
+    const expected = {observed: {collectionId: raster.collectionId, itemId: raster.itemId},
+        expected: {collectionId: raster.collectionId, itemId: "expected"},
+        study: {kind: "catalogSelection", selection}, reference: {kind: "catalogSelection", selection: {...selection,
+            filter: {...selection.filter, rules: [{...selection.filter.rules[0], value: "South"}]}}}};
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "independent-inputs").inputs, expected);
+    h.api.readModelInvocation = async () => ({...h.submitted[0], model: {...recipe, definition: recipe}});
+    await h.controller.submit();
+    assert.deepEqual(h.submitted[0].inputs, expected);
+    await h.controller.duplicateRun();
+    h.context.vectors[0].filter = {enabled: false, match: "all", rules: []};
+    h.context.area = {kind: "wholeRaster"}; h.controller.refreshMapLayers(); h.controller.refreshMapArea();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "duplicate-inputs").inputs, expected);
+    assert.equal(view.setup.inputs.study.filterDescription.textContent, 'BASIN equals "North"');
+    assert.equal(view.setup.inputs.reference.filterDescription.textContent, 'BASIN equals "South"');
+    assert.equal(h.submitted.length, 1);
+    h.controller.destroy();
+});
+
+test("vector reads finish, cancel and fail independently for each named area", async () => {
+    const h = fixture(), recipe = {...model, inputs: {raster: model.inputs.raster,
+        study: model.inputs.area, reference: model.inputs.area}};
+    h.context.vectors = [{...selection, label: "Basins"}]; h.controller.chooseModel(recipe);
+    const pending = [];
+    h.controller.prepareVector = (source, signal) => new Promise((resolve, reject) => pending.push({source, signal, resolve, reject}));
+    const north = structuredClone(selection.filter), south = structuredClone(north); south.rules[0].value = "South";
+    for (const name of ["study", "reference"]) h.controller.chooseArea(name, "vector");
+    const study = h.controller.selectVectorFeatures("study", modelSourceKey(selection), north);
+    const reference = h.controller.selectVectorFeatures("reference", modelSourceKey(selection), south);
+    assert.equal(pending[0].signal.aborted, false);
+    pending[1].resolve({selection: {...selection, filter: pending[1].source.filter}, matched: 1, total: 8}); await reference;
+    assert.equal(h.controller.state.draft.inputs.study.selecting, true);
+    pending[0].resolve({selection: {...selection, filter: pending[0].source.filter}, matched: 3, total: 8}); await study;
+    const inputs = h.controller.state.draft.inputs;
+    assert.equal(inputs.study.vectorInfo.matched, 3); assert.equal(inputs.reference.vectorInfo.matched, 1);
+    assert.deepEqual(inputs.study.area.selection.filter, north); assert.deepEqual(inputs.reference.area.selection.filter, south);
+    const cancelled = h.controller.selectVectorFeatures("study", modelSourceKey(selection), south);
+    const replacement = h.controller.selectVectorFeatures("reference", modelSourceKey(selection), north);
+    h.controller.chooseArea("study", "whole");
+    assert.equal(pending[2].signal.aborted, true); assert.equal(pending[3].signal.aborted, false);
+    pending[2].resolve({selection: {...selection, filter: south}, matched: 1, total: 8}); await cancelled;
+    pending[3].resolve({selection: {...selection, filter: north}, matched: 3, total: 8}); await replacement;
+    const failed = h.controller.selectVectorFeatures("reference", modelSourceKey(selection), south);
+    pending[4].reject(new Error("Could not read features"));
+    await assert.rejects(failed, /Could not read features/);
+    assert.deepEqual(inputs.study.area, {kind: "wholeRaster"}); assert.equal(inputs.study.selectionError, "");
+    assert.deepEqual(inputs.reference.area.selection.filter, north); assert.equal(inputs.reference.vectorInfo.matched, 3);
+    assert.match(inputs.reference.selectionError, /previous selection is unchanged/);
+    h.controller.destroy();
+});
+
+test("a mixed raster recipe offers completed results only to fields that accept them", async () => {
+    const view = new ModelsView(new SummaryControlDocument()), h = fixture({}, view), artifacts = fileManifest();
+    const parent = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const recipe = {...model, inputs: {original: {type: "catalog_raster", label: "Original raster"},
+        processed: {type: "raster", label: "Processed raster"}, area: model.inputs.area}};
+    h.controller.rememberRun(parent); h.controller.chooseModel(recipe);
+    const controls = view.setup.inputs, draft = h.controller.state.draft;
+    assert.deepEqual(controls.original.source.children.map(option => option.value), ["", modelSourceKey(raster)]);
+    assert.deepEqual(controls.processed.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    const source = draft.sources.find(value => value.kind === "runArtifact");
+    controls.processed.source.value = modelSourceKey(source); controls.processed.source.dispatchEvent(new Event("change"));
+    assert.deepEqual(captureModelSubmission(draft, "mixed-inputs").inputs, {
+        original: {collectionId: raster.collectionId, itemId: raster.itemId},
+        processed: {kind: "runArtifact", jobId: source.jobId, artifactId: source.artifactId}, area});
+    controls.original.source.value = ""; controls.original.source.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, true); assert.equal(draft.inputs.processed.raster.artifactId, source.artifactId);
+    controls.original.source.value = modelSourceKey(raster); controls.original.source.dispatchEvent(new Event("change"));
+    assert.equal(view.setup.run.disabled, false);
+    h.context.rasters = []; h.controller.refreshMapLayers();
+    assert.equal(draft.inputs.original.raster, null); assert.equal(draft.inputs.processed.raster.artifactId, source.artifactId);
+    assert.equal(view.setup.run.disabled, true);
+    h.controller.destroy();
 });
 
 test("Run captures the current box while later map edits and closing leave accepted work unchanged", async () => {
@@ -775,11 +881,11 @@ test("duplicate uses the saved recipe and inputs without submitting or changing 
 
 test("a late vector preparation cannot overwrite a newer area choice", async () => {
     const h = fixture(); h.controller.chooseModel(model); const draft = h.controller.state.draft;
-    draft.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: selection.filter}];
+    draft.inputs.area.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: selection.filter}];
     let resolve; h.controller.prepareVector = () => new Promise(done => { resolve = done; });
-    h.controller.chooseArea("vector"); const reading = h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    h.controller.chooseArea("whole"); resolve({selection, matched: 3, total: 8}); await reading;
-    assert.deepEqual(draft.area, {kind: "wholeRaster"}); assert.equal(draft.selecting, false);
+    h.controller.chooseArea("area", "vector"); const reading = h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    h.controller.chooseArea("area", "whole"); resolve({selection, matched: 3, total: 8}); await reading;
+    assert.deepEqual(draft.inputs.area.area, {kind: "wholeRaster"}); assert.equal(draft.inputs.area.selecting, false);
 });
 
 test("model modules do not import sibling controllers, rendering or map state", () => {
@@ -798,19 +904,19 @@ test("duplicating a run cannot inherit an in-flight vector suggestion from the c
     let prepared = 0; h.controller.prepareVector = async () => { prepared += 1; return {selection, matched: 3, total: 8}; };
     await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
     await Promise.resolve();
-    assert.equal(prepared, 0); assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
-    h.controller.chooseArea("whole"); h.controller.chooseArea("captured");
-    assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
+    assert.equal(prepared, 0); assert.deepEqual(h.controller.state.draft.inputs.area.area, invocation.inputs.area);
+    h.controller.chooseArea("area", "whole"); h.controller.chooseArea("area", "captured");
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, invocation.inputs.area);
 });
 
 
 test("visible map area follows map changes and Run captures the latest viewport", async () => {
     const h = fixture(); h.context.area = null;
     h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5};
-    h.controller.chooseModel(model); h.controller.chooseArea("viewport");
-    assert.deepEqual(h.controller.state.draft.area, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "viewport");
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
     h.context.viewportBounds.west = -20; h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.area.selectedBounds.west, -20);
+    assert.equal(h.controller.state.draft.inputs.area.area.selectedBounds.west, -20);
     // Submission also reads the latest bounds if it precedes moveend.
     h.context.viewportBounds.west = -25;
     await h.controller.submit();
@@ -821,17 +927,17 @@ test("visible map area follows map changes and Run captures the latest viewport"
 
 test("map box follows clicks and resizing; a cleared selection cannot run the previous box", async () => {
     const h = fixture(); h.controller.chooseModel(model);
-    assert.equal(h.controller.state.draft.areaMode, "samplingArea");
+    assert.equal(h.controller.state.draft.inputs.area.areaMode, "samplingArea");
     h.context.area.selectedBounds.west = -10; h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.area.selectedBounds.west, -10);
+    assert.equal(h.controller.state.draft.inputs.area.area.selectedBounds.west, -10);
     h.context.area.selectedBounds.east = 10; h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.area.selectedBounds.east, 10);
+    assert.equal(h.controller.state.draft.inputs.area.area.selectedBounds.east, 10);
     h.context.area = null; h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.area, null);
-    assert.match(h.controller.state.draft.selectionError, /Click the map/);
+    assert.equal(h.controller.state.draft.inputs.area.area, null);
+    assert.match(h.controller.state.draft.inputs.area.selectionError, /Click the map/);
     await h.controller.submit(); assert.equal(h.submitted.length, 0);
     h.context.area = structuredClone(area); h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.selectionError, "");
+    assert.equal(h.controller.state.draft.inputs.area.selectionError, "");
     await h.controller.submit(); assert.equal(h.submitted.length, 1);
 });
 
@@ -839,28 +945,28 @@ test("map changes preserve duplicate areas, model vector filters and recoverable
     const h = fixture(); await h.controller.loadLibrary(); await h.controller.showRun(job().jobId);
     await h.controller.duplicateRun();
     h.context.area.selectedBounds.west = -10; h.controller.refreshMapArea();
-    assert.deepEqual(h.controller.state.draft.area, invocation.inputs.area);
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, invocation.inputs.area);
     await h.controller.submit(); assert.deepEqual(h.submitted[0].inputs.area, invocation.inputs.area);
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    const draft = h.controller.state.draft; draft.area = {kind: "catalogSelection", selection};
-    h.controller.refreshMapArea(); assert.deepEqual(draft.area, {kind: "catalogSelection", selection});
-    h.controller.chooseArea("samplingArea");
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    const draft = h.controller.state.draft; draft.inputs.area.area = {kind: "catalogSelection", selection};
+    h.controller.refreshMapArea(); assert.deepEqual(draft.inputs.area.area, {kind: "catalogSelection", selection});
+    h.controller.chooseArea("area", "samplingArea");
     h.api.submitModelRun = async () => { throw new TypeError("Connection lost"); };
     await h.controller.submit(); const pending = structuredClone(h.controller.state.pending);
     h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();
     assert.deepEqual(h.controller.state.pending, pending);
-    assert.deepEqual(draft.area, pending.inputs.area);
+    assert.deepEqual(draft.inputs.area.area, pending.inputs.area);
 });
 
 test("map-linked setup refreshes after navigation and an invalid viewport clears its old bounds", () => {
     const h = fixture(); h.controller.chooseModel(model);
     h.controller.navigate("library"); h.context.area.selectedBounds.west = -5;
-    h.controller.navigate("setup"); assert.equal(h.controller.state.draft.area.selectedBounds.west, -5);
-    h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5}; h.controller.chooseArea("viewport");
+    h.controller.navigate("setup"); assert.equal(h.controller.state.draft.inputs.area.area.selectedBounds.west, -5);
+    h.context.viewportBounds = {west: -10, south: -5, east: 10, north: 5}; h.controller.chooseArea("area", "viewport");
     h.context.viewportBounds = null; h.controller.refreshMapArea();
-    assert.equal(h.controller.state.draft.area, null); assert.match(h.controller.state.draft.selectionError, /unavailable/);
+    assert.equal(h.controller.state.draft.inputs.area.area, null); assert.match(h.controller.state.draft.inputs.area.selectionError, /unavailable/);
     h.context.viewportBounds = {west: -20, south: -5, east: 10, north: 5}; h.controller.setActive(true);
-    assert.equal(h.controller.state.draft.area.selectedBounds.west, -20);
+    assert.equal(h.controller.state.draft.inputs.area.area.selectedBounds.west, -20);
 });
 
 test("viewport capture excludes blank world margins and rejects unavailable or empty bounds", () => {
@@ -870,8 +976,8 @@ test("viewport capture excludes blank world margins and rejects unavailable or e
     assert.throws(() => modelViewportArea({west: 0, east: 0, south: 0, north: 10}), /no visible area/);
     assert.throws(() => modelViewportArea({west: NaN, south: 0, east: 20, north: 10}), /unavailable/);
     assert.throws(() => modelViewportArea({west: 190, south: 0, east: 200, north: 10}), /inside the world/);
-    const h = fixture(); h.controller.chooseModel(model); h.controller.chooseArea("viewport");
-    assert.equal(h.controller.state.draft.area, null); assert.match(h.controller.state.draft.selectionError, /unavailable/);
+    const h = fixture(); h.controller.chooseModel(model); h.controller.chooseArea("area", "viewport");
+    assert.equal(h.controller.state.draft.inputs.area.area, null); assert.match(h.controller.state.draft.inputs.area.selectionError, /unavailable/);
 });
 
 
@@ -879,8 +985,8 @@ test("model filtering checks features then updates the map through composition w
     const h = fixture();
     h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: structuredClone(selection.filter)}];
     h.controller.prepareVector = async source => ({selection: {...selection, filter: structuredClone(source.filter)}, matched: source.filter.rules[0]?.value === "South" ? 1 : 3, total: 8});
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
     const doc = new FakeRasterControlDocument(); let request;
     const controls = new VectorFilterControls({documentContext: doc,
         getTarget: () => ({label: "Basins", fields: [{name: "BASIN", type: "str"}], filter: selection.filter,
@@ -890,54 +996,54 @@ test("model filtering checks features then updates the map through composition w
     });
     h.controller.editVectorFilter = value => { request = value; controls.open(value.key, {...value, applyLabel: "Apply filter", filterLabel: "Selected features", onClose: value.close, help: "Choose features for this model."}); };
     h.controller.closeVectorFilter = () => controls.close();
-    await h.controller.openVectorFilter();
+    await h.controller.openVectorFilter("area");
     assert.match(request.key, /^model:/); assert.equal(controls.applyButton.textContent, "Apply filter");
     assert.match(controls.applied.textContent, /^Selected features:/); assert.equal(controls.help.textContent, "Choose features for this model.");
     const input = controls.rules.children[0].children[2]; input.value = "South"; input.dispatchEvent(new Event("input"));
-    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "North");
+    assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "North");
     controls.applyButton.dispatchEvent(new Event("click")); await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
-    assert.equal(h.controller.state.draft.vectorInfo.matched, 1); assert.equal(controls.key, null);
+    assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.controller.state.draft.inputs.area.vectorInfo.matched, 1); assert.equal(controls.key, null);
     assert.equal(h.context.vectors[0].filter.rules[0].value, "South"); assert.equal(h.submitted.length, 0);
-    await h.controller.openVectorFilter();
+    await h.controller.openVectorFilter("area");
     controls.rules.children[0].children[2].value = "West"; controls.rules.children[0].children[2].dispatchEvent(new Event("input"));
-    controls.close(); assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
-    await h.controller.openVectorFilter();
+    controls.close(); assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "South");
+    await h.controller.openVectorFilter("area");
     h.controller.prepareVector = (_source, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Closed", "AbortError"))));
     controls.applyButton.dispatchEvent(new Event("click")); controls.close(); await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
-    assert.equal(h.controller.state.draft.selecting, false);
+    assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "South");
+    assert.equal(h.controller.state.draft.inputs.area.selecting, false);
     await h.controller.submit(); assert.equal(h.submitted[0].inputs.area.selection.filter.rules[0].value, "South");
     assert.equal(h.context.vectors[0].filter.rules[0].value, "South"); controls.destroy();
 });
 
 test("failed and cancelled filter reads preserve the prior reviewed vector selection", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    const previous = structuredClone(h.controller.state.draft.area);
-    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    const previous = structuredClone(h.controller.state.draft.inputs.area.area);
+    await h.controller.openVectorFilter("area"); const action = h.filterRequests[0];
     h.controller.prepareVector = async () => { throw Error("No polygons match"); };
     await assert.rejects(action.apply(selection.filter), /No polygons match/);
-    assert.deepEqual(h.controller.state.draft.area, previous); assert.match(h.controller.state.draft.selectionError, /unchanged/);
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, previous); assert.match(h.controller.state.draft.inputs.area.selectionError, /unchanged/);
     h.controller.prepareVector = (_source, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError"))));
     const pending = action.apply(selection.filter); action.cancel(); assert.equal(await pending, null);
-    assert.deepEqual(h.controller.state.draft.area, previous); assert.equal(h.controller.state.draft.selecting, false);
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, previous); assert.equal(h.controller.state.draft.inputs.area.selecting, false);
     assert.equal(h.submitted.length, 0); assert.deepEqual(h.cancelled, []);
 });
 
 test("old filter actions and late selection replies cannot change a newer model area", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector(key);
-    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector("area", key);
+    await h.controller.openVectorFilter("area"); const action = h.filterRequests[0];
     let finish; h.controller.prepareVector = () => new Promise(resolve => { finish = resolve; });
-    const pending = action.apply(selection.filter); h.controller.chooseArea("whole");
+    const pending = action.apply(selection.filter); h.controller.chooseArea("area", "whole");
     finish({selection, matched: 3, total: 8}); assert.equal(await pending, null);
-    assert.deepEqual(h.controller.state.draft.area, {kind: "wholeRaster"});
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, {kind: "wholeRaster"});
     assert.throws(() => action.apply(selection.filter), /setup changed/);
-    h.controller.chooseArea("vector"); await h.controller.chooseVector("");
-    assert.equal(h.controller.state.draft.vectorKey, ""); assert.equal(h.controller.state.draft.area, null);
+    h.controller.chooseArea("area", "vector"); await h.controller.chooseVector("area", "");
+    assert.equal(h.controller.state.draft.inputs.area.vectorKey, ""); assert.equal(h.controller.state.draft.inputs.area.area, null);
 });
 
 test("duplicated vector runs expose their original filter directly in the vector controls", async () => {
@@ -945,8 +1051,8 @@ test("duplicated vector runs expose their original filter directly in the vector
     const h = fixture({readModelInvocation: async () => saved});
     h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
     await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.areaMode, "vector");
-    await h.controller.openVectorFilter(); assert.deepEqual(h.filterRequests[0].filter, selection.filter);
+    assert.equal(h.controller.state.draft.inputs.area.areaMode, "vector");
+    await h.controller.openVectorFilter("area"); assert.deepEqual(h.filterRequests[0].filter, selection.filter);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "another-request-id").inputs, saved.inputs);
     assert.equal(h.submitted.length, 0);
 });
@@ -962,10 +1068,10 @@ for (const recipe of [model, clipModel]) test(`${recipe.title} preserves uploade
     h.controller.prepareVector = async source => ({selection: {uploadId: source.uploadId, layerName: "basins", filter: source.filter}, matched: 1, total: 3});
     await h.controller.loadLibrary(); h.controller.chooseModel(recipe); await new Promise(resolve => setImmediate(resolve));
     assert.notEqual(modelSourceKey(h.context.vectors[0]), modelSourceKey(h.context.vectors[1]));
-    assert.equal(h.controller.state.draft.vectorKey, modelSourceKey(uploaded));
-    assert.deepEqual(h.controller.state.draft.area.selection, uploaded);
+    assert.equal(h.controller.state.draft.inputs.area.vectorKey, modelSourceKey(uploaded));
+    assert.deepEqual(h.controller.state.draft.inputs.area.area.selection, uploaded);
     const filter = structuredClone(uploaded.filter); filter.rules[0].value = "South";
-    await h.controller.selectVectorFeatures(modelSourceKey(uploaded), filter);
+    await h.controller.selectVectorFeatures("area", modelSourceKey(uploaded), filter);
     assert.equal(h.mapFilters[0].source.key, h.context.vectors[1].key);
     assert.deepEqual(h.context.vectors[0].filter, selection.filter);
     const submitted = captureModelSubmission(h.controller.state.draft, "uploaded-request");
@@ -976,47 +1082,47 @@ for (const recipe of [model, clipModel]) test(`${recipe.title} preserves uploade
     h.context.vectors[1].filter = structuredClone(selection.filter);
     await h.controller.duplicateRun();
     const duplicate = h.controller.state.draft;
-    assert.deepEqual(duplicate.vectors[1], {...h.context.vectors[1], filter});
+    assert.deepEqual(duplicate.inputs.area.vectors[1], {...h.context.vectors[1], filter});
     assert.deepEqual(captureModelSubmission(duplicate, "duplicate-upload").inputs, submitted.inputs);
     h.context.vectors.pop(); h.controller.refreshMapLayers();
-    assert.equal(duplicate.area, null);
-    assert.match(duplicate.selectionError, /Add the vector layer/);
+    assert.equal(duplicate.inputs.area.area, null);
+    assert.match(duplicate.inputs.area.selectionError, /Add the vector layer/);
 });
 
 
 test("late catalog metadata cannot open a filter after the Models panel closes", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
     h.controller.setActive(true); let release; let opened = false;
     h.controller.editVectorFilter = async request => { await new Promise(resolve => { release = resolve; }); opened = request.isCurrent(); };
-    const opening = h.controller.openVectorFilter(); h.controller.setActive(false); release(); await opening;
-    assert.equal(opened, false); assert.equal(h.controller.state.draft.filterOpening, false);
+    const opening = h.controller.openVectorFilter("area"); h.controller.setActive(false); release(); await opening;
+    assert.equal(opened, false); assert.equal(h.controller.state.draft.inputs.area.filterOpening, false);
 });
 
 
 test("cancelling a replacement filter read preserves the last reviewed selection", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    const previous = structuredClone(h.controller.state.draft.area); await h.controller.openVectorFilter();
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    const previous = structuredClone(h.controller.state.draft.inputs.area.area); await h.controller.openVectorFilter("area");
     const replies = []; h.controller.prepareVector = () => new Promise(resolve => replies.push(resolve));
     const action = h.filterRequests[0]; const first = action.apply(selection.filter); const second = action.apply(selection.filter);
     action.cancel(); replies[1]({selection, matched: 3, total: 8}); assert.equal(await second, null);
     replies[0]({selection, matched: 3, total: 8}); assert.equal(await first, null);
-    assert.deepEqual(h.controller.state.draft.area, previous); assert.equal(h.controller.state.draft.selecting, false);
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, previous); assert.equal(h.controller.state.draft.inputs.area.selecting, false);
 });
 
 test("map-layer refresh keeps the reviewed model filter", async () => {
     const h = fixture(); const source = {collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter};
-    h.context.vectors = [source]; h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector(key);
+    h.context.vectors = [source]; h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    const key = JSON.stringify([selection.collectionId, selection.itemId]); await h.controller.chooseVector("area", key);
     const edited = structuredClone(selection.filter); edited.rules[0].value = "South";
     h.controller.prepareVector = async value => ({selection: {...selection, filter: value.filter}, matched: 1, total: 8});
-    await h.controller.openVectorFilter(); await h.filterRequests[0].apply(edited);
+    await h.controller.openVectorFilter("area"); await h.filterRequests[0].apply(edited);
     h.controller.refreshMapLayers();
-    h.controller.chooseArea("whole"); h.controller.chooseArea("vector"); await h.controller.chooseVector(key);
-    assert.equal(h.controller.state.draft.area.selection.filter.rules[0].value, "South");
+    h.controller.chooseArea("area", "whole"); h.controller.chooseArea("area", "vector"); await h.controller.chooseVector("area", key);
+    assert.equal(h.controller.state.draft.inputs.area.area.selection.filter.rules[0].value, "South");
     assert.equal(h.context.vectors[0].filter.rules[0].value, "South");
 });
 
@@ -1024,14 +1130,14 @@ test("map-layer refresh keeps the reviewed model filter", async () => {
 test("removed raster and vector inputs must be added to Map layers again before Run", async () => {
     const h = fixture(); h.controller.chooseModel(model);
     h.context.rasters = []; h.controller.refreshMapLayers();
-    assert.equal(h.controller.state.draft.raster, null);
+    assert.equal(h.controller.state.draft.inputs.raster.raster, null);
     await h.controller.submit(); assert.equal(h.submitted.length, 0); assert.match(h.controller.state.error, /Map layers/);
-    h.context.rasters = [raster]; h.controller.refreshMapLayers(); h.controller.editDraft({raster});
+    h.context.rasters = [raster]; h.controller.refreshMapLayers(); h.controller.editInput("raster", {raster});
     h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.refreshMapLayers(); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
+    h.controller.refreshMapLayers(); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
     h.context.vectors = []; h.controller.refreshMapLayers();
-    assert.equal(h.controller.state.draft.area, null); assert.equal(h.controller.state.draft.vectorKey, "");
+    assert.equal(h.controller.state.draft.inputs.area.area, null); assert.equal(h.controller.state.draft.inputs.area.vectorKey, "");
     await h.controller.submit(); assert.equal(h.submitted.length, 0);
 });
 
@@ -1039,37 +1145,37 @@ test("duplication does not silently add missing original inputs to the map choic
     const saved = structuredClone(invocation); saved.inputs.area = {kind: "catalogSelection", selection};
     const h = fixture({readModelInvocation: async () => saved}); h.context.rasters = [];
     await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
-    assert.equal(h.controller.state.draft.raster, null); assert.equal(h.controller.state.draft.area, null);
-    assert.deepEqual(h.controller.state.draft.sources, []); assert.deepEqual(h.controller.state.draft.vectors, []);
-    assert.match(h.controller.state.draft.selectionError, /original vector layer/);
+    assert.equal(h.controller.state.draft.inputs.raster.raster, null); assert.equal(h.controller.state.draft.inputs.area.area, null);
+    assert.deepEqual(h.controller.state.draft.sources, []); assert.deepEqual(h.controller.state.draft.inputs.area.vectors, []);
+    assert.match(h.controller.state.draft.inputs.area.selectionError, /original vector layer/);
 });
 
 
 test("filters can be edited during initial selection; closing before Apply leaves that check running", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
     let finish, signal;
     h.controller.prepareVector = (_source, abort) => { signal = abort; return new Promise(resolve => { finish = resolve; }); };
-    const pending = h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    await h.controller.openVectorFilter();
-    assert.equal(h.filterRequests.length, 1); assert.equal(h.controller.state.draft.filterEditing, true);
+    const pending = h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter("area");
+    assert.equal(h.filterRequests.length, 1); assert.equal(h.controller.state.draft.inputs.area.filterEditing, true);
     h.filterRequests[0].close(); assert.equal(signal.aborted, false);
     finish({selection, matched: 3, total: 8}); await pending;
-    assert.equal(h.controller.state.draft.vectorInfo.matched, 3); assert.equal(h.controller.state.draft.filterEditing, false);
+    assert.equal(h.controller.state.draft.inputs.area.vectorInfo.matched, 3); assert.equal(h.controller.state.draft.inputs.area.filterEditing, false);
 });
 
 test("applying while the original check runs cancels it and ignores its late reply", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
     const requests = [];
     h.controller.prepareVector = (source, signal) => new Promise(resolve => requests.push({source, signal, resolve}));
-    const pending = h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    const pending = h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter("area"); const action = h.filterRequests[0];
     const changed = structuredClone(selection.filter); changed.rules[0].value = "South";
     const applying = action.apply(changed); assert.equal(requests[0].signal.aborted, true);
     requests[1].resolve({selection: {...selection, filter: changed}, matched: 1, total: 8}); await applying; action.complete();
     requests[0].resolve({selection, matched: 3, total: 8}); await pending;
-    assert.equal(h.controller.state.draft.vectorInfo.matched, 1);
+    assert.equal(h.controller.state.draft.inputs.area.vectorInfo.matched, 1);
     assert.equal(h.context.vectors[0].filter.rules[0].value, "South");
     assert.equal(h.mapFilters.length, 1); assert.equal(h.submitted.length, 0);
 });
@@ -1077,22 +1183,22 @@ test("applying while the original check runs cancels it and ignores its late rep
 test("map filter failures do not prevent a checked model selection from running", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
     h.controller.applyMapFilter = async () => { throw new Error("Map service unavailable"); };
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    await h.controller.openVectorFilter(); const action = h.filterRequests[0];
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter("area"); const action = h.filterRequests[0];
     await action.apply(selection.filter); action.complete();
-    assert.match(h.controller.state.draft.mapFilterMessage, /Could not update the map filter: Map service unavailable/);
+    assert.match(h.controller.state.draft.inputs.area.mapFilterMessage, /Could not update the map filter: Map service unavailable/);
     await h.controller.submit(); assert.equal(h.submitted.length, 1);
 });
 
 test("late map filter feedback cannot overwrite a newer setup", async () => {
     const h = fixture(); h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, filter: selection.filter}];
     let finish; h.controller.applyMapFilter = () => new Promise(resolve => { finish = resolve; });
-    h.controller.chooseModel(model); h.controller.chooseArea("vector");
-    await h.controller.chooseVector(JSON.stringify([selection.collectionId, selection.itemId]));
-    await h.controller.openVectorFilter(); await h.filterRequests[0].apply(selection.filter);
+    h.controller.chooseModel(model); h.controller.chooseArea("area", "vector");
+    await h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
+    await h.controller.openVectorFilter("area"); await h.filterRequests[0].apply(selection.filter);
     h.controller.chooseModel(model); finish(selection.filter); await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.controller.state.draft.mapFilterMessage, undefined);
+    assert.equal(h.controller.state.draft.inputs.area.mapFilterMessage, undefined);
 });
 
 
@@ -1100,10 +1206,10 @@ test("choosing or clearing a raster immediately refreshes Run availability", () 
     const view = new ModelsView(new SummaryControlDocument()); const h = fixture({}, view);
     h.context.rasters.push({...raster, itemId: "second"}); h.controller.chooseModel(model);
     assert.equal(view.setup.run.disabled, true);
-    view.setup.source.value = JSON.stringify([raster.collectionId, raster.itemId]);
-    view.setup.source.dispatchEvent(new Event("change"));
+    view.setup.inputs.raster.source.value = JSON.stringify([raster.collectionId, raster.itemId]);
+    view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
     assert.equal(view.setup.run.disabled, false);
-    view.setup.source.value = ""; view.setup.source.dispatchEvent(new Event("change"));
+    view.setup.inputs.raster.source.value = ""; view.setup.inputs.raster.source.dispatchEvent(new Event("change"));
     assert.equal(view.setup.run.disabled, true);
 });
 
@@ -1111,11 +1217,11 @@ test("choosing or clearing a raster immediately refreshes Run availability", () 
 test("clip setup defaults to the visible map when the current area is unsupported", () => {
     const context = {rasters: [raster], area: {kind: "wholeRaster"}, viewportBounds: {west: 1, south: 2, east: 3, north: 4}};
     const draft = createModelDraft(clipModel, context, "clip");
-    assert.equal(draft.areaMode, "viewport"); assert.deepEqual(draft.area.selectedBounds, context.viewportBounds);
+    assert.equal(draft.inputs.area.areaMode, "viewport"); assert.deepEqual(draft.inputs.area.area.selectedBounds, context.viewportBounds);
     assert.deepEqual(captureModelSubmission(draft, "request").parameters, {});
-    draft.area = {kind: "wholeRaster"}; assert.throws(() => captureModelSubmission(draft, "request"), /supported by this model/);
+    draft.inputs.area.area = {kind: "wholeRaster"}; assert.throws(() => captureModelSubmission(draft, "request"), /supported by this model/);
     const unavailable = createModelDraft(clipModel, {rasters: [raster]}, "no-view");
-    assert.equal(unavailable.area, null); assert.match(unavailable.selectionError, /extent is unavailable/);
+    assert.equal(unavailable.inputs.area.area, null); assert.match(unavailable.inputs.area.selectionError, /extent is unavailable/);
 });
 
 test("clip run duplication preserves its exact area and has no summary parameter", async () => {
@@ -1123,7 +1229,7 @@ test("clip run duplication preserves its exact area and has no summary parameter
     const h = fixture({discoverModels: async () => [clipModel], readModelInvocation: async () => saved});
     await h.controller.loadLibrary(); await h.controller.showRun(job().jobId); await h.controller.duplicateRun();
     h.context.area.selectedBounds.west = -20; h.controller.refreshMapArea();
-    assert.deepEqual(h.controller.state.draft.area, saved.inputs.area);
+    assert.deepEqual(h.controller.state.draft.inputs.area.area, saved.inputs.area);
     assert.deepEqual(h.controller.state.draft.parameters, {});
     await h.controller.submit(); assert.deepEqual(h.submitted[0].inputs, saved.inputs);
     assert.equal(h.submitted[0].model.id, "raster-clip");

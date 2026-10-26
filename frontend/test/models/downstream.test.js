@@ -38,14 +38,14 @@ function fixture(overrides = {}) {
  * @return {Promise<void>} Resolves after the selected vector has been captured.
  */
 async function chooseInputs(harness) {
-    harness.controller.editDraft({raster: harness.context.rasters[0]});
-    await harness.controller.chooseVector(modelSourceKey(harness.context.vectors[0]));
+    harness.controller.editInput("people", {raster: harness.context.rasters[0]});
+    await harness.controller.chooseVector("start", modelSourceKey(harness.context.vectors[0]));
 }
 
 test("model-configured hydrology has no setup control or eligibility request", async () => {
     const h = fixture(); await settle();
-    assert.equal(h.controller.state.draft.raster, null);
-    assert.equal(h.controller.state.draft.area, null);
+    assert.equal(h.controller.state.draft.inputs.people.raster, null);
+    assert.equal(h.controller.state.draft.inputs.start.area, null);
     assert.equal(h.view.setup.run.disabled, true);
     assert.equal(h.view.setup.hydrology, undefined);
     assert.equal(h.view.setup.fields.children.some(node => node.className === "models-hydrology"), false);
@@ -60,11 +60,11 @@ test("model-configured hydrology has no setup control or eligibility request", a
 test("explicit vector and values choices capture the YAML-named inputs and selected filter", async () => {
     const h = fixture(); await chooseInputs(h);
     const draft = h.controller.state.draft;
-    assert.equal(draft.raster.itemId, raster.itemId);
-    assert.equal(draft.vectorInfo.matched, 1);
+    assert.equal(draft.inputs.people.raster.itemId, raster.itemId);
+    assert.equal(draft.inputs.start.vectorInfo.matched, 1);
     assert.equal(h.view.setup.run.disabled, false);
-    assert.deepEqual(h.view.setup.areaMode.children.map(option => option.value), ["vector", "raster"]);
-    await h.controller.openVectorFilter();
+    assert.deepEqual(h.view.setup.inputs.start.areaMode.children.map(option => option.value), ["vector", "raster"]);
+    await h.controller.openVectorFilter("start");
     const filter = {...selection.filter, rules: [{field: "NAME", operator: "eq", value: "Cuba"}]};
     await h.filters[0].apply(filter); h.filters[0].complete();
     await h.controller.submit();
@@ -79,12 +79,12 @@ test("explicit vector and values choices capture the YAML-named inputs and selec
 test("raster masks have positive-cell semantics, do not follow map clicks, and reject removed inputs", async () => {
     const h = fixture(); await chooseInputs(h);
     h.context.rasters.push({...raster, itemId: "start", label: "Starting mask", visible: false}); h.controller.refreshMapLayers();
-    h.controller.chooseArea("raster");
-    h.controller.editDraft({maskRaster: h.controller.state.draft.sources[1]});
+    h.controller.chooseArea("start", "raster");
+    h.controller.editInput("start", {maskRaster: h.controller.state.draft.sources[1]});
     const body = captureModelSubmission(h.controller.state.draft, "a".repeat(32));
     assert.deepEqual(body.inputs.start, {kind: "catalogRaster", source: {collectionId: raster.collectionId, itemId: "start"}});
-    assert.equal(h.view.setup.maskGroup.hidden, false); assert.equal(h.view.setup.vectorGroup.hidden, true);
-    assert.match(h.view.setup.maskGroup.children[1].textContent, /valid cells greater than zero/);
+    assert.equal(h.view.setup.inputs.start.maskGroup.hidden, false); assert.equal(h.view.setup.inputs.start.vectorGroup.hidden, true);
+    assert.match(h.view.setup.inputs.start.maskGroup.children[1].textContent, /valid cells greater than zero/);
     h.context.area = {kind: "selectedArea", selectedBounds: {west: 0, east: 1, south: 0, north: 1}}; h.controller.refreshMapArea();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "b".repeat(32)).inputs, body.inputs);
     h.context.rasters.pop(); h.controller.refreshMapLayers();
@@ -97,14 +97,14 @@ test("map refresh does not guess or replace the user's mask and values choices",
     h.context.rasters.push({...raster, itemId: "another-value", visible: false});
     h.context.vectors.push({...selection, itemId: "another-mask"});
     h.controller.refreshMapLayers();
-    assert.equal(h.controller.state.draft.raster, null);
-    assert.equal(h.controller.state.draft.area, null);
+    assert.equal(h.controller.state.draft.inputs.people.raster, null);
+    assert.equal(h.controller.state.draft.inputs.start.area, null);
     await chooseInputs(h);
     h.controller.refreshMapLayers();
-    assert.equal(h.controller.state.draft.raster.itemId, raster.itemId);
-    assert.equal(h.controller.state.draft.area.selection.itemId, "starting-areas");
-    h.controller.editDraft({raster: null}); h.controller.refreshMapLayers();
-    assert.equal(h.controller.state.draft.raster, null);
+    assert.equal(h.controller.state.draft.inputs.people.raster.itemId, raster.itemId);
+    assert.equal(h.controller.state.draft.inputs.start.area.selection.itemId, "starting-areas");
+    h.controller.editInput("people", {raster: null}); h.controller.refreshMapLayers();
+    assert.equal(h.controller.state.draft.inputs.people.raster, null);
 });
 
 test("duplicate preserves mask, values and formula without a hydrology check or new run", async () => {
@@ -143,8 +143,9 @@ test("a raster-mask run can use a completed raster as values and duplicate those
     const previous = job({status: "ready", expiresAt: "2099-01-01T00:00:00Z", artifacts: fileManifest()});
     h.controller.rememberRun(previous); h.controller.refreshMapLayers();
     const source = h.controller.state.draft.sources.find(value => value.kind === "runArtifact");
-    h.controller.chooseArea("raster");
-    h.controller.editDraft({maskRaster: raster, raster: source});
+    h.controller.chooseArea("start", "raster");
+    h.controller.editInput("start", {maskRaster: raster});
+    h.controller.editInput("people", {raster: source});
     const expected = captureModelSubmission(h.controller.state.draft, "d".repeat(32));
     assert.deepEqual(expected.inputs.people, {kind: "runArtifact", jobId: source.jobId, artifactId: source.artifactId});
     assert.deepEqual(expected.inputs.start, {kind: "catalogRaster", source: {collectionId: raster.collectionId, itemId: raster.itemId}});
@@ -152,7 +153,7 @@ test("a raster-mask run can use a completed raster as values and duplicate those
     await h.controller.duplicateRun();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "e".repeat(32)).inputs, expected.inputs);
     assert.deepEqual(h.requests, []);
-    h.controller.editDraft({maskRaster: source});
+    h.controller.editInput("start", {maskRaster: source});
     assert.throws(() => captureModelSubmission(h.controller.state.draft, "f".repeat(32)), /starting raster/);
 });
 

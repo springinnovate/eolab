@@ -46,12 +46,14 @@ export class ModelsController {
         this.state = {page: "library", active: false, library: [], loading: false, error: "", query: "", draft: null,
             runs: [], nextCursor: null, historyLoading: false, selectedRun: null, invocation: null, invocationError: "", yaml: null,
             pending: null, submitting: false, actionBusy: false, renamingRun: null, deleteConfirmation: null, actionMessage: ""};
-        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.selectionRevision = 0; this.temporalRevision = 0;
+        this.runSnapshots = new Map(); this.revision = 0; this.historyRevision = 0; this.temporalRevision = 0;
+        this.vectorSelectionRequests = new Map();
         this.tracked = new Set(); this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.observeJobs());
         view.bind({onOpen: () => this.open(), onClose, onPage: page => this.navigate(page),
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
-            onEdit: change => this.editDraft(change), onArea: mode => this.chooseArea(mode),
+            onEdit: change => this.editDraft(change), onInput: (name, change) => this.editInput(name, change),
+            onArea: (name, mode) => this.chooseArea(name, mode),
             onTemporalDataset: key => void this.chooseTemporalDataset(key),
             onTemporalVariable: variable => void this.chooseTemporalVariable(variable),
             onTemporalMonth: month => void this.loadTemporalDates(month),
@@ -60,7 +62,7 @@ export class ModelsController {
             onTemporalEdit: change => {
                 Object.assign(this.state.draft.temporal, change); this.editDraft({});
             },
-            onVector: key => void this.chooseVector(key), onEditFilter: () => void this.openVectorFilter(),
+            onVector: (name, key) => void this.chooseVector(name, key), onEditFilter: name => void this.openVectorFilter(name),
             onSubmit: () => void this.submit(), onRetry: () => void this.submit(true), onRefresh: () => void this.loadLibrary(),
             onRefreshRuns: () => void this.loadRuns(), onMore: () => void this.loadRuns(true), onRun: id => void this.showRun(id),
             onCancel: () => void this.cancelRun(), onDuplicate: () => void this.duplicateRun(), onYaml: () => void this.showYaml(),
@@ -135,18 +137,38 @@ export class ModelsController {
      */
     chooseModel(model) {
         this.closeVectorFilter();
-        this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
+        this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.state.draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
-        if (draft.area?.kind === "catalogSelection") {
-            const key = modelSourceKey(draft.area.selection);
-            draft.areaMode = "vector";
-            if (draft.vectors.some(value => modelSourceKey(value) === key)) void this.chooseVector(key);
-            else { draft.area = null; draft.selectionError = "Choose a vector layer from Map layers."; this.render(); }
+        for (const [name, input] of Object.entries(draft.inputs)) {
+            if (input.area?.kind !== "catalogSelection") continue;
+            const key = modelSourceKey(input.area.selection);
+            input.areaMode = "vector";
+            if (input.vectors.some(value => modelSourceKey(value) === key)) void this.chooseVector(name, key);
+            else { input.area = null; input.selectionError = "Choose a vector layer from Map layers."; this.render(); }
         }
+    }
+
+    /** Stop vector checks when their entire model draft is replaced or destroyed.
+     * @return {void}
+     */
+    cancelVectorSelections() {
+        for (const request of this.vectorSelectionRequests.values()) request.abort();
+        this.vectorSelectionRequests.clear();
+    }
+
+    /** Change one named input without replacing another input's choices.
+     * @param {string} name Input name declared by the recipe.
+     * @param {Object} change Edited source or mask fields.
+     * @return {void}
+     */
+    editInput(name, change) {
+        if (!this.state.draft || this.state.submitting) return;
+        Object.assign(this.state.draft.inputs[name], change);
+        this.editDraft({});
     }
 
     /** Update draft fields without changing a pending or accepted submission.
@@ -262,18 +284,20 @@ export class ModelsController {
     }
 
     /** Choose whether setup uses the live map area, vector features or a fixed area.
+     * @param {string} name Input name declared by the recipe.
      * @param {string} mode Whole raster, viewport, samplingArea, mapPolygons, vector, starting raster or captured run area.
      * @return {void}
      */
-    chooseArea(mode) {
+    chooseArea(name, mode) {
         const draft = this.state.draft; if (!draft || this.state.submitting) return;
-        this.closeVectorFilter();
-        this.selectionAbort?.abort(); this.selectionRevision += 1; draft.selecting = false;
-        draft.areaMode = mode; draft.vectorInfo = null; draft.vectorKey = ""; draft.selectionError = ""; this.state.error = "";
-        if (mode === "whole") draft.area = {kind: "wholeRaster"};
-        else if (mode === "captured") draft.area = structuredClone(draft.capturedArea);
+        const input = draft.inputs[name];
+        if (input.filterEditing) this.closeVectorFilter();
+        this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name); input.selecting = false;
+        input.areaMode = mode; input.vectorInfo = null; input.vectorKey = ""; input.selectionError = ""; this.state.error = "";
+        if (mode === "whole") input.area = {kind: "wholeRaster"};
+        else if (mode === "captured") input.area = structuredClone(input.capturedArea);
         else if (["viewport", "samplingArea", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
-        else draft.area = null;
+        else input.area = null;
         this.render();
     }
 
@@ -284,127 +308,139 @@ export class ModelsController {
      */
     refreshMapArea() {
         const draft = this.state.draft;
-        if (!draft || this.destroyed || this.state.page !== "setup" || this.state.submitting || this.state.pending ||
-            !["viewport", "samplingArea", "mapPolygons"].includes(draft.areaMode)) return;
+        if (!draft || this.destroyed || this.state.page !== "setup" || this.state.submitting || this.state.pending) return;
         const context = this.getContext();
-        draft.area = null; draft.selectionError = "";
-        try {
-            if (draft.areaMode === "viewport") {
-                draft.area = modelViewportArea(context.viewportBounds);
-                draft.areaDescription = "Visible map area";
-            } else {
-                const kind = draft.areaMode === "samplingArea" ? "selectedArea" : "polygonArea";
-                if (context.area?.kind !== kind) throw new Error(draft.areaMode === "samplingArea"
-                    ? "Click the map to choose a sampling area for this analysis."
-                    : "Select polygons on the map to choose an area for this analysis.");
-                draft.area = modelAreaInput(context.area);
-                draft.areaDescription = draft.areaMode === "samplingArea" ? "Sampling area" : "Polygons selected on map";
-            }
-        } catch (error) { draft.selectionError = error.message; }
+        for (const input of Object.values(draft.inputs)) {
+            if (!["viewport", "samplingArea", "mapPolygons"].includes(input.areaMode)) continue;
+            input.area = null; input.selectionError = "";
+            try {
+                if (input.areaMode === "viewport") {
+                    input.area = modelViewportArea(context.viewportBounds);
+                    input.areaDescription = "Visible map area";
+                } else {
+                    const kind = input.areaMode === "samplingArea" ? "selectedArea" : "polygonArea";
+                    if (context.area?.kind !== kind) throw new Error(input.areaMode === "samplingArea"
+                        ? "Click the map to choose a sampling area for this analysis."
+                        : "Select polygons on the map to choose an area for this analysis.");
+                    input.area = modelAreaInput(context.area);
+                    input.areaDescription = input.areaMode === "samplingArea" ? "Sampling area" : "Polygons selected on map";
+                }
+            } catch (error) { input.selectionError = error.message; }
+        }
         this.render();
     }
 
     /** Select a vector's draft filter and show any feature-selection failure in setup.
+     * @param {string} name Input name declared by the recipe.
      * @param {string} key Choice-list identity, or empty to clear the choice.
      * @return {Promise<void>}
      */
-    async chooseVector(key) {
-        try { await this.selectVectorFeatures(key); }
+    async chooseVector(name, key) {
+        try { await this.selectVectorFeatures(name, key); }
         catch { /* The selection owner has already put the failure in setup. */ }
     }
 
     /** Read matching features and commit their predicate only after a successful selection.
      * Failed filter edits preserve the previous selection for the same vector.
+     * @param {string} name Input name declared by the recipe.
      * @param {string} key Catalog choice-list identity.
      * @param {Object|null} [filter=null] Explicit edited filter, otherwise this draft's saved filter.
      * @return {Promise<Object|null>} Reviewed selection, or null for a cleared or superseded request.
      * @throws {Error} If reading or validating the selected features fails.
      */
-    async selectVectorFeatures(key, filter = null) {
+    async selectVectorFeatures(name, key, filter = null) {
         const draft = this.state.draft;
-        const source = draft?.vectors.find(value => modelSourceKey(value) === key);
-        if (draft?.vectorKey !== key) { this.closeVectorFilter(); if (draft) draft.mapFilterMessage = ""; }
-        this.selectionAbort?.abort(); const revision = ++this.selectionRevision;
         if (!draft) return null;
-        const previous = draft.vectorKey === key ? {area: draft.area, info: draft.vectorInfo} : {area: null, info: null};
-        draft.vectorKey = source ? key : ""; draft.area = source ? previous.area : null; draft.vectorInfo = source ? previous.info : null; draft.selectionError = "";
-        if (!source) { draft.selecting = false; this.render(); return null; }
-        const abort = new AbortController(); this.selectionAbort = abort;
-        draft.selecting = true; this.render();
+        const input = draft.inputs[name];
+        const source = input.vectors.find(value => modelSourceKey(value) === key);
+        if (input.vectorKey !== key) { if (input.filterEditing) this.closeVectorFilter(); input.mapFilterMessage = ""; }
+        this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
+        const previous = input.vectorKey === key ? {area: input.area, info: input.vectorInfo} : {area: null, info: null};
+        input.vectorKey = source ? key : ""; input.area = source ? previous.area : null; input.vectorInfo = source ? previous.info : null; input.selectionError = "";
+        if (!source) { input.selecting = false; this.render(); return null; }
+        const abort = new AbortController(); this.vectorSelectionRequests.set(name, abort);
+        const isCurrent = () => this.vectorSelectionRequests.get(name) === abort && this.state.draft === draft;
+        input.selecting = true; this.render();
         try {
             const area = await this.prepareVector({...structuredClone(source), filter: structuredClone(filter ?? source.filter)}, abort.signal);
-            if (revision !== this.selectionRevision || this.state.draft !== draft) return null;
+            if (!isCurrent()) return null;
             if (abort.signal.aborted) {
-                draft.area = previous.area; draft.vectorInfo = previous.info; return null;
+                input.area = previous.area; input.vectorInfo = previous.info; return null;
             }
-            draft.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
-            draft.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
-            draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
-            if (filter !== null) void this.updateMapFilter(source, area.selection.filter, draft, revision);
-            else draft.mapFilterMessage = "";
+            input.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
+            input.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
+            input.vectors = input.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
+            if (filter !== null) void this.updateMapFilter(source, area.selection.filter, draft, name, abort);
+            else input.mapFilterMessage = "";
             return area;
         } catch (error) {
-            if (revision !== this.selectionRevision || this.state.draft !== draft) return null;
-            draft.area = previous.area; draft.vectorInfo = previous.info;
+            if (!isCurrent()) return null;
+            input.area = previous.area; input.vectorInfo = previous.info;
             if (abort.signal.aborted) return null;
-            draft.selectionError = `${error.message}${previous.area ? " The previous selection is unchanged." : ""}`;
+            input.selectionError = `${error.message}${previous.area ? " The previous selection is unchanged." : ""}`;
             throw error;
-        } finally { if (revision === this.selectionRevision) { draft.selecting = false; this.render(); } }
+        } finally { if (isCurrent()) { input.selecting = false; this.render(); } }
     }
 
     /** Apply a reviewed model filter to its map layer without gating analysis on rendering.
      * @param {Object} source Catalog identity of the chosen map layer.
      * @param {Object} filter Successfully checked attribute rules.
      * @param {Object} draft Setup that requested this change.
-     * @param {number} revision Selection revision, used to ignore obsolete display feedback.
+     * @param {string} name Input whose selected filter changed.
+     * @param {AbortController} request Selection request, used to ignore obsolete display feedback.
      * @return {Promise<void>}
      */
-    async updateMapFilter(source, filter, draft, revision) {
-        draft.mapFilterMessage = "Updating the map filter…"; this.render();
+    async updateMapFilter(source, filter, draft, name, request) {
+        const input = draft.inputs[name];
+        input.mapFilterMessage = "Updating the map filter…"; this.render();
         let message;
         try {
             const applied = await this.applyMapFilter(structuredClone(source), structuredClone(filter));
             message = applied ? "Filter applied to the map layer." : "The map filter changed before this update finished.";
         } catch (error) { message = `Features selected for this model. Could not update the map filter: ${error.message}`; }
-        if (this.state.draft === draft && this.selectionRevision === revision) {
-            draft.mapFilterMessage = message; this.render();
+        if (this.state.draft === draft && this.vectorSelectionRequests.get(name) === request) {
+            input.mapFilterMessage = message; this.render();
         }
     }
 
     /** Open the rule editor inside model setup, using fields already supplied by Map layers.
      * Editing is available while the initial geometry check runs. Applying rules
      * checks the selection, then updates the map separately without submitting a run.
+     * @param {string} name Input whose vector filter will be edited.
      * @return {Promise<void>}
      */
-    async openVectorFilter() {
+    async openVectorFilter(name) {
         const draft = this.state.draft;
-        const source = draft?.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
-        if (!source || draft.filterEditing || this.state.submitting) return;
-        const key = draft.vectorKey, openingRevision = this.selectionRevision;
+        if (!draft) return;
+        const input = draft.inputs[name];
+        const source = input.vectors.find(value => modelSourceKey(value) === input.vectorKey);
+        if (!source || input.filterEditing || this.state.submitting) return;
+        this.closeVectorFilter();
+        const key = input.vectorKey, openingRequest = this.vectorSelectionRequests.get(name);
         const isCurrent = () => !this.destroyed && this.state.draft === draft && this.state.page === "setup" &&
-            draft.areaMode === "vector" && draft.vectorKey === key && !this.state.submitting;
-        draft.filterOpening = true; draft.filterEditing = true; this.state.error = ""; this.render();
+            input.areaMode === "vector" && input.vectorKey === key && !this.state.submitting;
+        input.filterOpening = true; input.filterEditing = true; this.state.error = ""; this.render();
         try {
-            await this.editVectorFilter({key: `model:${draft.id}:${key}`, host: this.view.getVectorFilterHost(), source: structuredClone(source),
-                filter: structuredClone(draft.area?.selection?.filter ?? source.filter), isCurrent: () => isCurrent() && this.state.active,
+            await this.editVectorFilter({key: `model:${draft.id}:${name}:${key}`, host: this.view.getVectorFilterHost(name), source: structuredClone(source),
+                filter: structuredClone(input.area?.selection?.filter ?? source.filter), isCurrent: () => isCurrent() && this.state.active,
                 apply: candidate => {
                     if (!isCurrent()) throw new Error("This model setup changed. Open its filter again.");
-                    return this.selectVectorFeatures(key, candidate);
+                    return this.selectVectorFeatures(name, key, candidate);
                 },
-                complete: () => { if (isCurrent()) { draft.filterEditing = false; this.render(); } },
+                complete: () => { if (isCurrent()) { input.filterEditing = false; this.render(); } },
                 cancel: () => {
                     if (!isCurrent()) return;
-                    if (this.selectionRevision > openingRevision) this.selectionAbort?.abort();
+                    if (this.vectorSelectionRequests.get(name) !== openingRequest) this.vectorSelectionRequests.get(name)?.abort();
                 },
                 close: () => {
                     if (!isCurrent()) return;
-                    if (this.selectionRevision > openingRevision) this.selectionAbort?.abort();
-                    draft.filterEditing = false; this.render();
+                    if (this.vectorSelectionRequests.get(name) !== openingRequest) this.vectorSelectionRequests.get(name)?.abort();
+                    input.filterEditing = false; this.render();
                 },
             });
         } catch (error) {
-            if (isCurrent()) { draft.filterEditing = false; this.state.error = `Could not open the vector filter: ${error.message}`; }
-        } finally { draft.filterOpening = false; this.render(); }
+            if (isCurrent()) { input.filterEditing = false; this.state.error = `Could not open the vector filter: ${error.message}`; }
+        } finally { input.filterOpening = false; this.render(); }
     }
 
     /** Combine map inputs with this session's published raster results.
@@ -436,23 +472,29 @@ export class ModelsController {
             }
         }
         draft.sources = structuredClone(context.rasters ?? []);
-        const selected = draft.raster;
-        draft.raster = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
-        if (!draft.raster && selected?.kind === "runArtifact") {
-            draft.raster = {...selected, available: false}; draft.sources.push(draft.raster);
-        }
-        if (draft.maskRaster) draft.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(draft.maskRaster)) ?? null;
-        const previous = new Map(draft.vectors.map(source => [modelSourceKey(source), source]));
-        draft.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
-            filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
-        draft.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
-        if (Object.values(draft.model.inputs).some(input => input.type === "raster")) draft.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
-        if (draft.raster?.available === false) draft.sourceReason = "This raster result is no longer available. Choose another input.";
-        if (draft.vectorKey && !draft.vectors.some(source => modelSourceKey(source) === draft.vectorKey)) {
-            this.closeVectorFilter();
-            this.selectionAbort?.abort(); this.selectionRevision++;
-            draft.vectorKey = ""; draft.area = null; draft.vectorInfo = null; draft.selecting = false;
-            draft.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+        for (const [name, input] of Object.entries(draft.inputs)) {
+            const type = draft.model.inputs[name].type;
+            if (["raster", "catalog_raster"].includes(type)) {
+                const selected = input.raster;
+                input.raster = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
+                if (!input.raster && selected?.kind === "runArtifact") {
+                    input.raster = {...selected, available: false}; draft.sources.push(input.raster);
+                }
+                input.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
+                if (type === "raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
+                if (input.raster?.available === false) input.sourceReason = "This raster result is no longer available. Choose another input.";
+                continue;
+            }
+            if (input.maskRaster) input.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(input.maskRaster)) ?? null;
+            const previous = new Map(input.vectors.map(source => [modelSourceKey(source), source]));
+            input.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
+                filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
+            if (input.vectorKey && !input.vectors.some(source => modelSourceKey(source) === input.vectorKey)) {
+                if (input.filterEditing) this.closeVectorFilter();
+                this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
+                input.vectorKey = ""; input.area = null; input.vectorInfo = null; input.selecting = false;
+                input.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+            }
         }
         this.render();
     }
@@ -466,7 +508,7 @@ export class ModelsController {
         const draft = this.state.draft; const revision = this.revision;
         this.state.error = "";
         try {
-            if (!retry && draft?.filterEditing) throw new Error("Apply or close the filter before running the model.");
+            if (!retry && Object.values(draft.inputs).some(input => input.filterEditing)) throw new Error("Apply or close the filter before running the model.");
             if (!retry) { this.refreshMapLayers(); this.refreshMapArea(); }
             const submission = retry ? this.state.pending : captureModelSubmission(draft, this.newId());
             if (!submission) return;
@@ -507,7 +549,8 @@ export class ModelsController {
             this.state.yaml = null; this.state.deleteConfirmation = null;
             if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading(); }
         }
-        if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" && this.state.draft?.raster?.jobId === job.jobId)) {
+        if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
+            Object.values(this.state.draft?.inputs ?? {}).some(input => input.raster?.jobId === job.jobId))) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
         this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
@@ -734,40 +777,41 @@ export class ModelsController {
         const model = this.state.library.find(value => value.id === saved.model.id && value.version === saved.model.version &&
             value.definitionSha256 === saved.model.definitionSha256);
         if (!model) { this.state.error = "This model version is not available in model setup. Its YAML remains available until metadata expires."; this.render(); return; }
-        this.selectionAbort?.abort(); this.selectionRevision += 1; this.revision += 1;
+        this.cancelVectorSelections(); this.revision += 1;
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         const draft = createModelDraft(model, this.inputContext(model), this.newId());
         this.state.draft = draft; this.state.page = "setup"; this.state.error = ""; this.state.yaml = null;
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
-        for (const [name, input] of Object.entries(model.inputs)) {
-            if (["raster", "catalog_raster"].includes(input.type)) {
+        for (const [name, definition] of Object.entries(model.inputs)) {
+            const input = draft.inputs[name];
+            if (["raster", "catalog_raster"].includes(definition.type)) {
                 const value = saved.inputs[name];
-                draft.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ?? {...value, label: value.itemId};
-                if (!draft.sources.some(source => modelSourceKey(source) === modelSourceKey(value))) draft.raster = value.kind === "runArtifact" ? {...value, label: "Raster from original run", available: false} : null;
-                draft.sourceReason = "Copied from the original run; choose another raster to change it.";
-            } else if (input.type === "temporal_interval") {
+                input.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ??
+                    (value.kind === "runArtifact" ? {...value, label: "Raster from original run", available: false} : null);
+                input.sourceReason = "Copied from the original run; choose another raster to change it.";
+            } else if (definition.type === "temporal_interval") {
                 const value = saved.inputs[name];
                 Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,
                     periodMode: "times", startTime: new Date(value.startTime).toISOString().slice(0, -1), endTime: new Date(value.endTime).toISOString().slice(0, -1)});
-            } else if (input.type === "temporal_reduction") {
+            } else if (definition.type === "temporal_reduction") {
                 draft.reduction = {...draft.reduction, ...saved.inputs[name]};
-            } else if (input.type === "area_statistic") {
+            } else if (definition.type === "area_statistic") {
                 draft.reduction.reducer = saved.inputs[name];
-            } else if (input.type === "mask_source" && saved.inputs[name].kind === "catalogRaster") {
-                draft.area = null; draft.areaMode = "raster";
-                draft.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(saved.inputs[name].source)) ?? null;
-            } else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) {
-                draft.area = structuredClone(saved.inputs[name]); draft.capturedArea = structuredClone(draft.area); draft.areaMode = draft.area.kind === "wholeRaster" ? "whole" : "captured"; draft.areaOrigin = "run";
-                draft.areaDescription = "Exact area and filter copied from the original run.";
-                if (draft.area.kind === "catalogSelection") {
-                    const selection = draft.area.selection;
+            } else if (definition.type === "mask_source" && saved.inputs[name].kind === "catalogRaster") {
+                input.area = null; input.areaMode = "raster";
+                input.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(saved.inputs[name].source)) ?? null;
+            } else if (["summary_area", "clip_area", "mask_source"].includes(definition.type)) {
+                input.area = structuredClone(saved.inputs[name]); input.capturedArea = structuredClone(input.area); input.areaMode = input.area.kind === "wholeRaster" ? "whole" : "captured"; input.areaOrigin = "run";
+                input.areaDescription = "Exact area and filter copied from the original run.";
+                if (input.area.kind === "catalogSelection") {
+                    const selection = input.area.selection;
                     const key = modelSourceKey(selection);
-                    draft.vectorKey = key; draft.areaMode = "vector";
-                    if (draft.vectors.some(value => modelSourceKey(value) === key)) {
-                        draft.vectors = draft.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(selection.filter)} : value);
+                    input.vectorKey = key; input.areaMode = "vector";
+                    if (input.vectors.some(value => modelSourceKey(value) === key)) {
+                        input.vectors = input.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(selection.filter)} : value);
                     } else {
-                        draft.vectorKey = ""; draft.area = null;
-                        draft.selectionError = "Add the original vector layer to Map layers, or choose another layer.";
+                        input.vectorKey = ""; input.area = null;
+                        input.selectionError = "Add the original vector layer to Map layers, or choose another layer.";
                     }
                 }
             }
@@ -804,7 +848,7 @@ export class ModelsController {
      */
     destroy() {
         this.closeVectorFilter();
-        this.destroyed = true; this.revision += 1; this.selectionRevision += 1; this.selectionAbort?.abort();
+        this.destroyed = true; this.revision += 1; this.cancelVectorSelections();
         this.temporalAbort?.abort(); this.temporalRevision += 1;
         this.clock.clearTimeout(this.deletionTimer);
         this.unsubscribe(); for (const id of this.tracked) this.jobs.tracked.delete(id); this.view.destroy();
