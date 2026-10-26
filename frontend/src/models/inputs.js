@@ -28,6 +28,66 @@ export function modelResultSources(runs) {
             .map(file => ({kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, label: file.displayName ?? `${file.label} · ${run.label}`, available: true, expiresAt: run.expiresAt})));
 }
 
+/** List the editable raster values used by a draft's declared inputs.
+ * Refresh and run observation use these locations to follow every selected file,
+ * including stack rows and reference rasters. Inactive reference-raster choices
+ * are left alone until the user switches that input back to raster mode.
+ * @param {Object} draft Model setup with named input state.
+ * @return {Array<{state:Object,field:"raster"|"maskRaster",optional:boolean}>} Mutable source
+ * locations. Optional choices retain a missing source so it cannot become an
+ * omitted mask without the user clearing it.
+ */
+export function getModelRasterFields(draft) {
+    const fields = [];
+    for (const [name, definition] of Object.entries(draft.model.inputs)) {
+        const state = draft.inputs[name];
+        if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
+            fields.push({state, field: "raster", optional: definition.type === "optional_raster"});
+        } else if (["mask_source", "habitat_references"].includes(definition.type) && state.areaMode === "raster") {
+            fields.push({state, field: "maskRaster", optional: false});
+        } else if (definition.type === "habitat_stack") {
+            for (const row of [...state.predictors, ...state.responses]) fields.push({state: row, field: "raster", optional: false});
+        }
+    }
+    return fields;
+}
+
+/** Capture an available raster choice using the ordinary path-free source contract.
+ * @param {Object|null} raster Selected map raster or owned run result.
+ * @param {Object[]} sources Current source choices in this model setup.
+ * @param {string} [type="raster"] Input type; catalog_raster and mask_source exclude run results.
+ * @return {Object} Catalog identity or owned run-artifact reference.
+ * @throws {Error} If the source is absent, expired or ineligible for this input.
+ */
+function captureModelRaster(raster, sources, type = "raster") {
+    const startingMask = type === "mask_source";
+    if (!raster || !sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
+        throw new Error(startingMask ? "Choose a starting raster from Map layers." : "Choose a raster from Map layers or a completed run.");
+    if ((type === "catalog_raster" || startingMask) && raster.kind === "runArtifact")
+        throw new Error(startingMask ? "Choose a starting raster from Map layers." : "This recipe requires a raster from Map layers.");
+    if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
+        throw new Error("This raster is no longer available. Choose another input.");
+    return raster.kind === "runArtifact" ?
+        {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
+}
+
+/** Capture the named predictor and response choices required by Habitat condition.
+ * @param {{predictors:Array<{name:string,raster:Object|null}>,responses:Array<{name:string,raster:Object|null}>,categoricalPredictor:string}} state Editable stack.
+ * @param {Object[]} sources Current source choices in this model setup.
+ * @return {{predictors:Array<{name:string,source:Object}>,responses:Array<{name:string,source:Object}>,categoricalPredictor:string}} Explicit stack with trimmed names and ordinary raster references.
+ * @throws {Error} If roles, names, categorical choice or raster selections are invalid.
+ */
+export function captureHabitatStack(state, sources) {
+    if (!state.predictors.length || !state.responses.length) throw new Error("Choose at least one predictor and one observed response.");
+    const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
+    if (names.some(name => !name)) throw new Error("Name each predictor and observed response.");
+    if (new Set(names).size !== names.length) throw new Error("Give each predictor and observed response a different name.");
+    const categoricalPredictor = state.categoricalPredictor.trim();
+    if (!state.predictors.some(row => row.name.trim() === categoricalPredictor)) throw new Error("Choose the categorical predictor.");
+    return {predictors: state.predictors.map(row => ({name: row.name.trim(), source: captureModelRaster(row.raster, sources)})),
+        responses: state.responses.map(row => ({name: row.name.trim(), source: captureModelRaster(row.raster, sources)})), categoricalPredictor};
+}
+
 /** Explain the saved polygon selection without exposing server paths.
  * @param {Object} filter Typed catalog filter.
  * @return {string} Readable predicate, including its all/any rule.
@@ -73,14 +133,14 @@ export function modelViewportArea(bounds) {
 }
 
 /** Check whether an area is accepted by one declared input type.
- * @param {string} type Recipe input type: summary_area, clip_area or mask_source.
+ * @param {string} type Recipe area, starting-mask or reference-sites input type.
  * @param {Object|null} area Explicit area descriptor.
  * @return {boolean} Whether this field accepts the area kind.
  */
 export function modelSupportsArea(type, area) {
     const supportedAreaKinds = type === "clip_area" ? ["selectedArea", "catalogSelection"] :
         type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
-            type === "mask_source" ? ["catalogSelection"] : [];
+            ["mask_source", "habitat_references"].includes(type) ? ["catalogSelection"] : [];
     return supportedAreaKinds.includes(area?.kind);
 }
 
@@ -104,17 +164,19 @@ export function createModelDraft(model, context, id) {
     const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
     const inputs = {};
     for (const [name, input] of Object.entries(model.inputs)) {
-        if (["raster", "catalog_raster"].includes(input.type)) {
+        if (["raster", "catalog_raster", "optional_raster"].includes(input.type)) {
             inputs[name] = {
-                raster: !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
-                sourceReason: input.type === "raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
+                raster: input.type !== "optional_raster" && !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
+                sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
             };
-        } else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) {
-            const startingMask = input.type === "mask_source";
-            let area = startingMask ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
-            let areaMode = startingMask ? "vector" : ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
+        } else if (input.type === "habitat_stack") {
+            inputs[name] = {predictors: [{name: "predictor_1", raster: null}], responses: [{name: "response_1", raster: null}], categoricalPredictor: ""};
+        } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
+            const explicitSelection = ["mask_source", "habitat_references"].includes(input.type);
+            let area = explicitSelection ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
+            let areaMode = explicitSelection ? "vector" : ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
             let selectionError = "";
-            if (!startingMask && (!modelSupportsArea(input.type, area) || usesTemporal && !context.area)) {
+            if (!explicitSelection && (!modelSupportsArea(input.type, area) || usesTemporal && !context.area)) {
                 areaMode = "viewport"; area = null;
                 try { area = modelViewportArea(context.viewportBounds); }
                 catch (error) { selectionError = error.message; }
@@ -146,37 +208,29 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
         const state = draft.inputs[name];
-        if (["raster", "catalog_raster"].includes(input.type)) {
-            const raster = state.raster;
-            if (!raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
-                throw new Error("Choose a raster from Map layers or a completed run.");
-            if (input.type === "catalog_raster" && raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
-            if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
-                throw new Error("This raster result is no longer available. Choose another input.");
-            inputs[name] = raster.kind === "runArtifact" ?
-                {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
-        }
+        if (["raster", "catalog_raster", "optional_raster"].includes(input.type))
+            inputs[name] = input.type === "optional_raster" && state.raster === null ? null : captureModelRaster(state.raster, draft.sources, input.type);
+        else if (input.type === "habitat_stack") inputs[name] = captureHabitatStack(state, draft.sources);
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;
-        else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) {
+        else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(input.type)) {
             if (state.selecting) throw new Error("Wait for the selected features to finish loading.");
             const startingMask = input.type === "mask_source";
-            if (startingMask && state.areaMode === "raster") {
+            const references = input.type === "habitat_references";
+            if ((startingMask || references) && state.areaMode === "raster") {
                 const raster = state.maskRaster;
-                if (!raster || raster.kind === "runArtifact" || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
-                    throw new Error("Choose a starting raster from Map layers.");
-                inputs[name] = {kind: "catalogRaster", source: {collectionId: raster.collectionId, itemId: raster.itemId}};
+                inputs[name] = {kind: references ? "raster" : "catalogRaster", source: captureModelRaster(raster, draft.sources, input.type)};
             } else {
                 const area = state.area;
-                if (!area) throw new Error(state.selectionError || (startingMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
+                if (!area) throw new Error(state.selectionError || (startingMask ? "Choose the vector features where flow should start." : references ? "Choose the reference sites." : "Choose an analysis area before running the model."));
                 if (!modelSupportsArea(input.type, area)) throw new Error("Choose an area supported by this model.");
                 if (area.kind === "catalogSelection" && !state.vectors.some(source => modelSourceKey(source) === modelSourceKey(area.selection)))
                     throw new Error("Add the selected vector layer to Map layers before running this model.");
                 if (area.kind === "selectedArea") modelAreaInput(area);
                 else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
                 else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
-                inputs[name] = structuredClone(area);
+                inputs[name] = references ? {kind: "vector", selection: structuredClone(area.selection)} : structuredClone(area);
             }
         }
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);

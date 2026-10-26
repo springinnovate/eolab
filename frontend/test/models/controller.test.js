@@ -880,8 +880,9 @@ test("duplicate uses the saved recipe and inputs without submitting or changing 
 });
 
 test("a late vector preparation cannot overwrite a newer area choice", async () => {
-    const h = fixture(); h.controller.chooseModel(model); const draft = h.controller.state.draft;
-    draft.inputs.area.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: selection.filter}];
+    const h = fixture();
+    h.context.vectors = [{collectionId: selection.collectionId, itemId: selection.itemId, label: "Basins", filter: selection.filter}];
+    h.controller.chooseModel(model); const draft = h.controller.state.draft;
     let resolve; h.controller.prepareVector = () => new Promise(done => { resolve = done; });
     h.controller.chooseArea("area", "vector"); const reading = h.controller.chooseVector("area", JSON.stringify([selection.collectionId, selection.itemId]));
     h.controller.chooseArea("area", "whole"); resolve({selection, matched: 3, total: 8}); await reading;

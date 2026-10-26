@@ -1,7 +1,7 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
@@ -119,7 +119,7 @@ export class ModelsController {
         try {
             this.state.library = (await this.api.discoverModels()).filter(model =>
                 Object.values(model.inputs).every(input =>
-                    ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
+                    ["raster", "catalog_raster", "optional_raster", "summary_area", "clip_area", "mask_source", "habitat_references", "habitat_stack", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type)));
         }
         catch (error) { this.state.error = `Model library unavailable: ${error.message}`; }
         finally { this.state.loading = false; this.render(); }
@@ -298,7 +298,7 @@ export class ModelsController {
         else if (mode === "captured") input.area = structuredClone(input.capturedArea);
         else if (["viewport", "samplingArea", "mapPolygons"].includes(mode)) { this.refreshMapArea(); return; }
         else input.area = null;
-        this.render();
+        this.editDraft({});
     }
 
     /** Refresh a map-linked setup from composition's latest area and viewport.
@@ -449,7 +449,7 @@ export class ModelsController {
      */
     inputContext(model) {
         const context = this.getContext();
-        const acceptsResults = Object.values(model.inputs).some(input => input.type === "raster");
+        const acceptsResults = Object.values(model.inputs).some(input => ["raster", "optional_raster", "habitat_references", "habitat_stack"].includes(input.type));
         const choices = [...(context.rasters ?? []).filter(source => acceptsResults || source.kind !== "runArtifact"),
             ...(acceptsResults ? modelResultSources([...this.runSnapshots.values()]) : [])];
         return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
@@ -472,20 +472,24 @@ export class ModelsController {
             }
         }
         draft.sources = structuredClone(context.rasters ?? []);
+        for (const {state, field, optional} of getModelRasterFields(draft)) {
+            const selected = state[field];
+            state[field] = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
+            if (!state[field] && selected && (optional || selected.kind === "runArtifact")) {
+                state[field] = {...selected, available: false,
+                    label: selected.label ?? (selected.kind === "runArtifact" ? "Raster from original run" : `${selected.collectionId} / ${selected.itemId}`)};
+                draft.sources.push(state[field]);
+            }
+        }
         for (const [name, input] of Object.entries(draft.inputs)) {
             const type = draft.model.inputs[name].type;
-            if (["raster", "catalog_raster"].includes(type)) {
-                const selected = input.raster;
-                input.raster = draft.sources.find(source => selected && modelSourceKey(source) === modelSourceKey(selected)) ?? null;
-                if (!input.raster && selected?.kind === "runArtifact") {
-                    input.raster = {...selected, available: false}; draft.sources.push(input.raster);
-                }
+            if (["raster", "catalog_raster", "optional_raster"].includes(type)) {
                 input.sourceReason = draft.sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.";
-                if (type === "raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
-                if (input.raster?.available === false) input.sourceReason = "This raster result is no longer available. Choose another input.";
+                if (type !== "catalog_raster") input.sourceReason = "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map.";
+                if (input.raster?.available === false) input.sourceReason = "This raster is no longer available. Choose another input.";
                 continue;
             }
-            if (input.maskRaster) input.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(input.maskRaster)) ?? null;
+            if (type === "habitat_stack") continue;
             const previous = new Map(input.vectors.map(source => [modelSourceKey(source), source]));
             input.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
                 filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
@@ -550,7 +554,7 @@ export class ModelsController {
             if (this.state.page === "run") { this.state.page = "runs"; this.view.focusHeading(); }
         }
         if (ACTIVE_JOB_STATES.has(job.status) || this.state.active && (this.state.page === "run" && this.state.selectedRun === job.jobId || this.state.page === "setup" &&
-            Object.values(this.state.draft?.inputs ?? {}).some(input => input.raster?.jobId === job.jobId))) {
+            this.state.draft && getModelRasterFields(this.state.draft).some(({state, field}) => state[field]?.jobId === job.jobId))) {
             this.jobs.tracked.add(job.jobId); this.tracked.add(job.jobId);
         } else { this.jobs.tracked.delete(job.jobId); this.tracked.delete(job.jobId); }
         this.state.runs = [...this.runSnapshots.values()].filter(value => value.status !== "deleted")
@@ -784,11 +788,14 @@ export class ModelsController {
         draft.label = this.runSnapshots.get(this.state.selectedRun)?.name ?? saved.label; draft.parameters = structuredClone(saved.parameters);
         for (const [name, definition] of Object.entries(model.inputs)) {
             const input = draft.inputs[name];
-            if (["raster", "catalog_raster"].includes(definition.type)) {
-                const value = saved.inputs[name];
-                input.raster = draft.sources.find(source => modelSourceKey(source) === modelSourceKey(value)) ??
-                    (value.kind === "runArtifact" ? {...value, label: "Raster from original run", available: false} : null);
+            if (["raster", "catalog_raster", "optional_raster"].includes(definition.type)) {
+                input.raster = structuredClone(saved.inputs[name]);
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
+            } else if (definition.type === "habitat_stack") {
+                const value = saved.inputs[name];
+                input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
+                input.responses = value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)}));
+                input.categoricalPredictor = value.categoricalPredictor;
             } else if (definition.type === "temporal_interval") {
                 const value = saved.inputs[name];
                 Object.assign(draft.temporal, {datasetKey: modelSourceKey(value), variable: value.variable,
@@ -797,11 +804,13 @@ export class ModelsController {
                 draft.reduction = {...draft.reduction, ...saved.inputs[name]};
             } else if (definition.type === "area_statistic") {
                 draft.reduction.reducer = saved.inputs[name];
-            } else if (definition.type === "mask_source" && saved.inputs[name].kind === "catalogRaster") {
+            } else if (definition.type === "mask_source" && saved.inputs[name].kind === "catalogRaster" ||
+                definition.type === "habitat_references" && saved.inputs[name].kind === "raster") {
                 input.area = null; input.areaMode = "raster";
-                input.maskRaster = draft.sources.find(source => source.kind !== "runArtifact" && modelSourceKey(source) === modelSourceKey(saved.inputs[name].source)) ?? null;
-            } else if (["summary_area", "clip_area", "mask_source"].includes(definition.type)) {
-                input.area = structuredClone(saved.inputs[name]); input.capturedArea = structuredClone(input.area); input.areaMode = input.area.kind === "wholeRaster" ? "whole" : "captured"; input.areaOrigin = "run";
+                input.maskRaster = structuredClone(saved.inputs[name].source);
+            } else if (["summary_area", "clip_area", "mask_source", "habitat_references"].includes(definition.type)) {
+                input.area = definition.type === "habitat_references" ? {kind: "catalogSelection", selection: structuredClone(saved.inputs[name].selection)} : structuredClone(saved.inputs[name]);
+                input.capturedArea = structuredClone(input.area); input.areaMode = input.area.kind === "wholeRaster" ? "whole" : "captured"; input.areaOrigin = "run";
                 input.areaDescription = "Exact area and filter copied from the original run.";
                 if (input.area.kind === "catalogSelection") {
                     const selection = input.area.selection;
