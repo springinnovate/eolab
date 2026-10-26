@@ -12,8 +12,8 @@ import { model, raster, area, invocation, job, clipModel, clipResult, statistics
 function fixture() {
     const doc = new SummaryControlDocument(); const actions = [];
     const view = new ModelsView(doc);
-    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
-        .map(name => [`on${name}`, value => actions.push([name, value])]));
+    const callbacks = Object.fromEntries(["Open", "Close", "Page", "Query", "Choose", "Edit", "Input", "Area", "Vector", "EditFilter", "Submit", "Retry", "Refresh", "RefreshRuns", "More", "Run", "Cancel", "Duplicate", "Yaml", "ShowOutput", "Renew", "Rename", "Delete", "ConfirmDelete", "KeepRun", "UndoDelete", "DismissDelete", "TemporalDataset", "TemporalVariable", "TemporalMonth", "UseTemporalMonth", "RefreshTemporal", "TemporalEdit"]
+        .map(name => [`on${name}`, (...values) => actions.push([name, ...values])]));
     view.bind(callbacks);
     const state = {page: "setup", library: [model], query: "", draft: createModelDraft(model, {rasters: [raster], area}, "draft-1"),
         runs: [], selectedRun: null, pending: null, error: "", yaml: null};
@@ -69,16 +69,16 @@ test("raster choices separate map layers from completed runs and explain unavail
     const h = fixture(), recipe = {...model, inputs: {...model.inputs, raster: {type: "raster", label: "Raster"}}};
     const result = {kind: "runArtifact", jobId: "1".repeat(32), artifactId: "a".repeat(32), label: "Cuba clip · Clipped raster", expiresAt: "2099-01-01T00:00:00Z"};
     h.state.draft = createModelDraft(recipe, {rasters: [raster, result], area}, "private-draft");
-    h.state.draft.raster = result; h.state.nextCursor = "older";
+    h.state.draft.inputs.raster.raster = result; h.state.nextCursor = "older";
     h.view.render(h.state);
-    assert.deepEqual(h.view.setup.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
+    assert.deepEqual(h.view.setup.inputs.raster.source.children.slice(1).map(group => group.label), ["Map layers", "Completed runs"]);
     assert.equal(h.view.setup.run.disabled, false);
-    assert.equal(h.view.setup.resultActions.hidden, false);
-    assert.equal(h.view.setup.olderResults.hidden, false);
-    h.state.draft.raster.available = false; h.state.draft.sources[1].available = false; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.raster.resultActions.hidden, false);
+    assert.equal(h.view.setup.inputs.raster.olderResults.hidden, false);
+    h.state.draft.inputs.raster.raster.available = false; h.state.draft.sources[1].available = false; h.view.render(h.state);
     assert.equal(h.view.setup.run.disabled, true);
-    assert.match(h.view.setup.source.children[2].children[0].textContent, /unavailable/);
-    assert.equal(h.view.setup.source.children[2].children[0].disabled, true);
+    assert.match(h.view.setup.inputs.raster.source.children[2].children[0].textContent, /unavailable/);
+    assert.equal(h.view.setup.inputs.raster.source.children[2].children[0].disabled, true);
 });
 
 test("removed history entries leave the DOM while unrelated run cards retain their controls", () => {
@@ -165,8 +165,8 @@ test("all model controls exist in production markup and progress retains field f
     h.state.runs = [job({status: "running", progress: {phase: "calculating", completed: 5, total: 10, unit: "blocks"}})];
     h.view.render(h.state);
     assert.equal(h.doc.activeElement, field); assert.equal(field.value, "mean(a)"); assert.equal(h.view.setup.parameters.summary, field);
-    assert.match(h.view.setup.areaDescription.textContent, /Box/);
-    assert.match(h.view.setup.areaDescription.textContent, /W 0\.0000°/);
+    assert.match(h.view.setup.inputs.area.areaDescription.textContent, /Box/);
+    assert.match(h.view.setup.inputs.area.areaDescription.textContent, /W 0\.0000°/);
 });
 
 test("ready results show exact integer values and safe CSV/provenance/YAML links", () => {
@@ -371,30 +371,30 @@ test("run and history progress render descriptions as text and keep unknown tota
 
 test("area choices use histogram terminology and follow the map without Update controls", () => {
     const h = fixture();
-    const labels = () => h.view.setup.areaMode.children.map(option => option.textContent);
+    const labels = () => h.view.setup.inputs.area.areaMode.children.map(option => option.textContent);
     assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
     assert.equal(h.view.setup.bounds, undefined); assert.equal(h.view.setup.updateArea, undefined);
-    assert.match(h.view.setup.mapHelp.textContent, /sampling area shown in Raster distributions/);
-    h.state.draft.areaOrigin = "run"; h.state.draft.areaMode = "captured"; h.view.render(h.state);
-    assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.mapHelp.textContent, /exact area from the original run/);
+    assert.match(h.view.setup.inputs.area.mapHelp.textContent, /sampling area shown in Raster distributions/);
+    h.state.draft.inputs.area.areaOrigin = "run"; h.state.draft.inputs.area.areaMode = "captured"; h.view.render(h.state);
+    assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.inputs.area.mapHelp.textContent, /exact area from the original run/);
     h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);
     assert.ok(labels().includes("Sampling area"));
-    h.state.draft.areaMode = "viewport"; h.state.draft.area = area; h.view.render(h.state);
-    assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.mapHelp.textContent, /Pan or zoom/);
-    h.state.draft.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
+    h.state.draft.inputs.area.areaMode = "viewport"; h.state.draft.inputs.area.area = area; h.view.render(h.state);
+    assert.equal(h.view.setup.run.disabled, false); assert.match(h.view.setup.inputs.area.mapHelp.textContent, /Pan or zoom/);
+    h.state.draft.inputs.area.area = null; h.view.render(h.state); assert.equal(h.view.setup.run.disabled, true);
 });
 
 
 test("vector setup offers Edit filter and describes the predicate belonging to this run", () => {
-    const h = fixture(); h.state.draft.areaMode = "vector"; h.view.render(h.state);
-    assert.equal(h.view.setup.editFilter.disabled, true);
+    const h = fixture(); h.state.draft.inputs.area.areaMode = "vector"; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.editFilter.disabled, true);
     const source = {collectionId: "eolab-mounted-vectors", itemId: "basins", label: "Basins", filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
-    h.state.draft.vectors = [source]; h.state.draft.vectorKey = JSON.stringify([source.collectionId, source.itemId]);
-    h.state.draft.area = null; h.view.render(h.state);
-    assert.equal(h.view.setup.editFilter.disabled, false); assert.match(h.view.setup.filterDescription.textContent, /BASIN equals "North"/);
-    h.view.setup.editFilter.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "EditFilter");
-    h.state.draft.filterOpening = true; h.state.draft.filterEditing = true; h.view.render(h.state);
-    assert.equal(h.view.setup.editFilter.disabled, true); assert.equal(h.view.setup.editFilter.textContent, "Opening filter…");
+    h.state.draft.inputs.area.vectors = [source]; h.state.draft.inputs.area.vectorKey = JSON.stringify([source.collectionId, source.itemId]);
+    h.state.draft.inputs.area.area = null; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.editFilter.disabled, false); assert.match(h.view.setup.inputs.area.filterDescription.textContent, /BASIN equals "North"/);
+    h.view.setup.inputs.area.editFilter.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "EditFilter");
+    h.state.draft.inputs.area.filterOpening = true; h.state.draft.inputs.area.filterEditing = true; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.editFilter.disabled, true); assert.equal(h.view.setup.inputs.area.editFilter.textContent, "Opening filter…");
 });
 
 
@@ -402,55 +402,55 @@ test("setup offers only map layers and explains how to add a missing raster", ()
     const h = fixture();
     assert.equal(h.view.setup.rasterSearch, undefined); assert.equal(h.view.setup.vectorSearch, undefined);
     h.state.draft = createModelDraft(model, {}, "empty-map"); h.view.render(h.state);
-    assert.match(h.view.setup.reason.textContent, /Add a raster to Map layers/);
+    assert.match(h.view.setup.inputs.raster.reason.textContent, /Add a raster to Map layers/);
     assert.equal(h.view.setup.run.disabled, true);
 });
 
 
 test("vector checks leave Edit filter available and show selection errors next to the count", () => {
     const h = fixture(); const draft = h.state.draft;
-    draft.areaMode = "vector"; draft.vectorKey = '["vectors","countries"]';
-    draft.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries"}];
-    draft.area = null; draft.selecting = true; h.view.render(h.state);
-    assert.equal(h.view.setup.editFilter.textContent, "Edit filter");
-    assert.equal(h.view.setup.editFilter.disabled, false);
-    assert.match(h.view.setup.selectedCount.textContent, /Checking selected features/);
-    assert.equal(h.view.setup.vectorStatus.getAttribute("role"), "status");
-    assert.match(h.view.setup.vectorStatus.textContent, /You can edit the filter while this check runs/);
+    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = '["vectors","countries"]';
+    draft.inputs.area.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries"}];
+    draft.inputs.area.area = null; draft.inputs.area.selecting = true; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.editFilter.textContent, "Edit filter");
+    assert.equal(h.view.setup.inputs.area.editFilter.disabled, false);
+    assert.match(h.view.setup.inputs.area.selectedCount.textContent, /Checking selected features/);
+    assert.equal(h.view.setup.inputs.area.vectorStatus.getAttribute("role"), "status");
+    assert.match(h.view.setup.inputs.area.vectorStatus.textContent, /You can edit the filter while this check runs/);
     assert.equal(h.view.setup.run.disabled, true);
-    draft.selecting = false; draft.selectionError = "Could not read this layer."; h.view.render(h.state);
-    assert.equal(h.view.setup.vectorStatus.textContent, "Could not read this layer.");
-    assert.equal(h.view.setup.editFilter.textContent, "Edit filter");
-    assert.equal(h.view.setup.editFilter.disabled, false);
-    assert.equal(h.view.setup.areaDescription.hidden, true);
+    draft.inputs.area.selecting = false; draft.inputs.area.selectionError = "Could not read this layer."; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.vectorStatus.textContent, "Could not read this layer.");
+    assert.equal(h.view.setup.inputs.area.editFilter.textContent, "Edit filter");
+    assert.equal(h.view.setup.inputs.area.editFilter.disabled, false);
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, true);
 });
 
 
 test("selected features have one prominent count and predicate; removed layers keep their error visible", () => {
     const h = fixture(), draft = h.state.draft;
     const filter = {enabled: true, match: "all", rules: [{field: "NAME", operator: "eq", value: "Cuba"}]};
-    draft.areaMode = "vector"; draft.vectorKey = '["vectors","countries"]';
-    draft.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries", filter}];
-    draft.area = {kind: "catalogSelection", selection: {filter}}; draft.vectorInfo = {matched: 1, total: 253};
+    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = '["vectors","countries"]';
+    draft.inputs.area.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries", filter}];
+    draft.inputs.area.area = {kind: "catalogSelection", selection: {filter}}; draft.inputs.area.vectorInfo = {matched: 1, total: 253};
     h.view.render(h.state);
-    assert.equal(h.view.setup.selectedCount.textContent, "1 of 253 features selected");
-    assert.equal(h.view.setup.filterDescription.textContent, 'NAME equals "Cuba"');
-    assert.equal(h.view.setup.areaDescription.hidden, true);
-    draft.filterEditing = true; h.view.render(h.state);
-    assert.equal(h.view.getVectorFilterHost().hidden, false);
-    assert.equal(h.view.setup.editFilter.getAttribute("aria-expanded"), "true");
+    assert.equal(h.view.setup.inputs.area.selectedCount.textContent, "1 of 253 features selected");
+    assert.equal(h.view.setup.inputs.area.filterDescription.textContent, 'NAME equals "Cuba"');
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, true);
+    draft.inputs.area.filterEditing = true; h.view.render(h.state);
+    assert.equal(h.view.getVectorFilterHost("area").hidden, false);
+    assert.equal(h.view.setup.inputs.area.editFilter.getAttribute("aria-expanded"), "true");
     assert.equal(h.view.setup.run.disabled, true);
-    draft.vectors = []; draft.vectorKey = ""; draft.area = null;
-    draft.selectionError = "Add the vector layer to Map layers, or choose another layer."; h.view.render(h.state);
-    assert.equal(h.view.setup.selectionCard.hidden, true);
-    assert.equal(h.view.setup.areaDescription.hidden, false);
-    assert.equal(h.view.setup.areaDescription.textContent, draft.selectionError);
+    draft.inputs.area.vectors = []; draft.inputs.area.vectorKey = ""; draft.inputs.area.area = null;
+    draft.inputs.area.selectionError = "Add the vector layer to Map layers, or choose another layer."; h.view.render(h.state);
+    assert.equal(h.view.setup.inputs.area.selectionCard.hidden, true);
+    assert.equal(h.view.setup.inputs.area.areaDescription.hidden, false);
+    assert.equal(h.view.setup.inputs.area.areaDescription.textContent, draft.inputs.area.selectionError);
 });
 
 
 test("clip setup shows supported areas and no summary formula", () => {
     const h = fixture(); h.state.draft = createModelDraft(clipModel, {rasters: [raster], area}, "clip"); h.view.render(h.state);
-    assert.deepEqual(h.view.setup.areaMode.children.map(option => option.textContent), ["Visible map area", "Sampling area", "Vector layer"]);
+    assert.deepEqual(h.view.setup.inputs.area.areaMode.children.map(option => option.textContent), ["Visible map area", "Sampling area", "Vector layer"]);
     assert.deepEqual(h.view.setup.parameters, {}); assert.equal(h.view.setup.run.disabled, false);
 });
 
@@ -532,13 +532,12 @@ function temporalFixture() {
 
 test("temporal recipes show UTC period fields and reuse area choices without an ordinary raster", () => {
     const h = temporalFixture(), controls = h.controls;
-    assert.equal(h.view.setup.form.contains(h.view.setup.source), false);
-    assert.equal(h.view.setup.resultActions.hidden, true);
+    assert.equal(h.view.setup.inputs.raster, undefined);
     assert.equal(h.view.setup.run.textContent, "Run analysis");
     assert.equal(h.view.setup.run.disabled, false);
-    assert.deepEqual(h.view.setup.areaMode.children.map(option => option.textContent),
+    assert.deepEqual(h.view.setup.inputs.region.areaMode.children.map(option => option.textContent),
         ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
-    assert.match(h.view.setup.mapHelp.textContent, /Run analysis/);
+    assert.match(h.view.setup.inputs.region.mapHelp.textContent, /Run analysis/);
     assert.equal(controls.period.startDate.type, "date"); assert.equal(controls.period.endDate.type, "date");
     assert.equal(controls.period.startTime.type, "time"); assert.equal(controls.period.startTime.step, "any");
     assert.equal(controls.period.endTime.type, "time"); assert.equal(controls.period.endTime.step, "any");
@@ -639,7 +638,7 @@ test("area-series setup describes spatial statistics and complete overlapping in
         }}}});
     h.state.draft = draft; h.view.render(h.state);
     const controls = h.view.setup.temporal;
-    assert.equal(h.view.setup.form.contains(h.view.setup.source), false);
+    assert.equal(h.view.setup.inputs.raster, undefined);
     assert.equal(controls.period.startTime.parentNode.textContent, "Start time (UTC)");
     assert.equal(controls.period.endTime.parentNode.textContent, "End time (excluded, UTC)");
     assert.equal(controls.statistic.parentNode.textContent, "Statistic");

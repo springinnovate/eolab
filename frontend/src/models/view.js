@@ -122,12 +122,78 @@ export class ModelsView {
         select.value = selected;
     }
 
+    /** Build one named raster chooser and its result-history actions.
+     * @param {HTMLElement} fields Owning setup fieldset.
+     * @param {string} name Recipe input name.
+     * @param {{type:string,label:string}} input Declared raster input.
+     * @return {Object} Stable controls for this input.
+     */
+    buildRasterInput(fields, name, input) {
+        const source = this.element("select"); source.required = true;
+        source.addEventListener("change", () => this.handlers.onInput(name, {
+            raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
+            sourceReason: "Choose a raster from Map layers.",
+        }));
+        const reason = this.element("p", "", "models-help"); reason.id = `models-${name}-source-reason`;
+        source.setAttribute("aria-describedby", reason.id);
+        const resultActions = this.element("div", "", "models-actions");
+        const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns, "models-action");
+        const olderResults = this.button("Load older results", this.handlers.onMore, "models-action");
+        refreshResults.setAttribute("aria-label", `Refresh results for ${input.label}`);
+        olderResults.setAttribute("aria-label", `Load older results for ${input.label}`);
+        resultActions.append(refreshResults, olderResults);
+        fields.append(this.field(`models-${name}-raster`, input.label, source), reason, resultActions);
+        return {source, reason, resultActions, refreshResults, olderResults};
+    }
+
+    /** Build one named area or starting-mask chooser with its own vector editor host.
+     * @param {HTMLElement} fields Owning setup fieldset.
+     * @param {string} name Recipe input name.
+     * @param {{type:string,label:string}} input Declared area or mask input.
+     * @return {Object} Stable controls for this input only.
+     */
+    buildSpatialInput(fields, name, input) {
+        const areaMode = this.element("select");
+        areaMode.addEventListener("change", () => this.handlers.onArea(name, areaMode.value));
+        fields.append(this.field(`models-${name}-area`, input.label, areaMode));
+        const maskGroup = this.element("div", "", "models-vector");
+        const maskRaster = this.element("select");
+        maskRaster.addEventListener("change", () => this.handlers.onInput(name, {
+            maskRaster: this.state.draft.sources.find(value => value.kind !== "runArtifact" && modelSourceKey(value) === maskRaster.value) ?? null,
+        }));
+        maskGroup.append(this.field(`models-${name}-starting-raster`, `${input.label}: raster layer`, maskRaster),
+            this.element("p", "Flow starts at valid cells greater than zero. Zero, negative and NoData cells are excluded. Choose a raster from Map layers.", "models-help"));
+        maskGroup.hidden = true; fields.append(maskGroup);
+        const vectorGroup = this.element("div", "", "models-vector");
+        const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(name, vector.value));
+        vectorGroup.append(this.field(`models-${name}-vector`, `${input.label}: vector layer`, vector));
+        const selectionCard = this.element("section", "", "models-selection");
+        selectionCard.setAttribute("aria-label", `${input.label}: selected features`);
+        const selectionHeader = this.element("div", "", "models-selection-header");
+        const selectedCount = this.element("strong"); selectedCount.setAttribute("role", "status");
+        const editFilter = this.button("Edit filter", () => this.handlers.onEditFilter(name)); editFilter.classList.add("models-edit-filter");
+        editFilter.setAttribute("aria-label", `Edit filter for ${input.label}`);
+        editFilter.setAttribute("aria-controls", `models-${name}-filter-editor`);
+        selectionHeader.append(selectedCount, editFilter);
+        const filterDescription = this.element("p", "", "models-selection-filter");
+        const vectorStatus = this.element("p", "", "models-help"); vectorStatus.setAttribute("role", "status");
+        const mapFilterStatus = this.element("p", "", "models-help"); mapFilterStatus.setAttribute("role", "status");
+        selectionCard.append(selectionHeader, filterDescription, vectorStatus, mapFilterStatus);
+        const filterHost = this.element("div", "", "models-filter-editor"); filterHost.id = `models-${name}-filter-editor`;
+        vectorGroup.append(selectionCard, filterHost);
+        const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
+        const mapHelp = this.element("p", "", "models-help");
+        fields.append(vectorGroup, areaDescription, mapHelp);
+        if (input.type === "mask_source") fields.append(this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help"));
+        return {areaMode, maskGroup, maskRaster, vectorGroup, vector, selectionCard, selectedCount, editFilter,
+            filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
+    }
+
     /** Construct the editable fields for one draft, retaining their DOM identities.
      * @param {Object} draft New draft.
      * @return {void}
      */
     buildSetup(draft) {
-        const usesStartingMask = modelHasInput(draft.model, "mask_source");
         const form = this.element("form", "", "models-form");
         const fields = this.element("fieldset"); const legend = this.element("legend", draft.model.title); fields.append(legend);
         const description = this.element("p", draft.model.description, "models-help"); fields.append(description);
@@ -136,50 +202,15 @@ export class ModelsView {
         fields.append(this.field("models-run-label", "Run name", label));
         const nameHelp = this.element("p", "The start date and time are added automatically to this name and its output files.", "models-help");
         nameHelp.id = "models-run-name-help"; label.setAttribute("aria-describedby", nameHelp.id); fields.append(nameHelp);
-        const source = this.element("select"); source.required = true;
-        source.addEventListener("change", () => this.handlers.onEdit({raster: this.state.draft.sources.find(value => modelSourceKey(value) === source.value) ?? null,
-            sourceReason: "Choose a raster from Map layers."}));
-        const reason = this.element("p", "", "models-help"); reason.id = "models-source-reason"; source.setAttribute("aria-describedby", reason.id);
-        const sourceField = this.field("models-raster", Object.values(draft.model.inputs).find(input => ["raster", "catalog_raster"].includes(input.type))?.label ?? "Raster", source);
-        if (!usesStartingMask && !draft.temporal) fields.append(sourceField, reason);
-        const resultActions = this.element("div", "", "models-actions");
-        const refreshResults = this.button("Refresh results", this.handlers.onRefreshRuns, "models-action");
-        const olderResults = this.button("Load older results", this.handlers.onMore, "models-action");
-        resultActions.append(refreshResults, olderResults); if (!usesStartingMask && !draft.temporal) fields.append(resultActions);
         const temporal = draft.temporal ? new TemporalModelInputsView({element: this.element.bind(this), field: this.field.bind(this),
             button: this.button.bind(this), options: this.options.bind(this), document: this.document}, this.handlers,
             Object.values(draft.model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type)).label) : null;
         if (temporal) fields.append(temporal.sourceRoot);
-        const areaMode = this.element("select");
-        areaMode.addEventListener("change", () => this.handlers.onArea(areaMode.value));
-        fields.append(this.field("models-area", Object.values(draft.model.inputs).find(input => ["summary_area", "clip_area", "mask_source"].includes(input.type))?.label ?? "Analysis area", areaMode));
-        const maskGroup = this.element("div", "", "models-vector");
-        const maskRaster = this.element("select");
-        maskRaster.addEventListener("change", () => this.handlers.onEdit({maskRaster: this.state.draft.sources.find(value => value.kind !== "runArtifact" && modelSourceKey(value) === maskRaster.value) ?? null}));
-        maskGroup.append(this.field("models-starting-raster", "Starting raster", maskRaster),
-            this.element("p", "Flow starts at valid cells greater than zero. Zero, negative and NoData cells are excluded. Choose a raster from Map layers.", "models-help"));
-        maskGroup.hidden = true; fields.append(maskGroup);
-        const vectorGroup = this.element("div", "", "models-vector");
-        const vector = this.element("select"); vector.addEventListener("change", () => this.handlers.onVector(vector.value));
-        vectorGroup.append(this.field("models-vector", "Vector layer", vector));
-        const selectionCard = this.element("section", "", "models-selection");
-        selectionCard.setAttribute("aria-label", "Selected features");
-        const selectionHeader = this.element("div", "", "models-selection-header");
-        const selectedCount = this.element("strong"); selectedCount.setAttribute("role", "status");
-        const editFilter = this.button("Edit filter", this.handlers.onEditFilter); editFilter.classList.add("models-edit-filter");
-        editFilter.setAttribute("aria-controls", "models-filter-editor");
-        selectionHeader.append(selectedCount, editFilter);
-        const filterDescription = this.element("p", "", "models-selection-filter");
-        const vectorStatus = this.element("p", "", "models-help"); vectorStatus.setAttribute("role", "status");
-        const mapFilterStatus = this.element("p", "", "models-help"); mapFilterStatus.setAttribute("role", "status");
-        selectionCard.append(selectionHeader, filterDescription, vectorStatus, mapFilterStatus);
-        const filterHost = this.element("div", "", "models-filter-editor"); filterHost.id = "models-filter-editor";
-        vectorGroup.append(selectionCard, filterHost);
-        const areaDescription = this.element("p", "", "models-help"); areaDescription.setAttribute("role", "status");
-        const mapHelp = this.element("p", "", "models-help");
-        fields.append(vectorGroup, areaDescription, mapHelp);
-        const maskHelp = usesStartingMask ? this.element("p", "All selected features or positive raster cells form one combined starting mask and one overall result. Changing map visibility does not change these choices.", "models-help") : null;
-        if (maskHelp) fields.append(maskHelp, sourceField, reason, resultActions);
+        const inputs = {};
+        for (const [name, input] of Object.entries(draft.model.inputs)) {
+            if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = this.buildRasterInput(fields, name, input);
+            else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) inputs[name] = this.buildSpatialInput(fields, name, input);
+        }
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
@@ -190,7 +221,7 @@ export class ModelsView {
                 [name]: parameter.type === "summary_expression" ? input.value : input.value === "" ? null : Number(input.value)}}));
             parameters[name] = input;
             fields.append(this.field(`models-parameter-${name}`, `${parameter.label}${parameter.unit ? ` (${parameter.unit})` : ""}${parameter.type === "optional_number" ? " — optional" : ""}`, input));
-            if (usesStartingMask && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
+            if (modelHasInput(draft.model, "mask_source") && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
             if (parameter.type === "summary_expression") fields.append(this.element("p", "a is the selected raster. Examples: sum(a), mean(a), stdev(a), min(a), max(a), count(a), areaha(a > 10), sum(a, where=a > 10).", "models-help"));
         }
         const runLabel = temporal ? "Run analysis" : "Run model";
@@ -200,15 +231,14 @@ export class ModelsView {
         form.addEventListener("submit", event => { event.preventDefault(); this.handlers.onSubmit(); });
         const details = this.recipeDetails();
         this.elements.setup.replaceChildren(form, details.root);
-        this.setup = {id: draft.id, form, fields, label, source, reason, areaMode, vectorGroup, vector, areaDescription,
-            parameters, run, details, mapHelp, editFilter, vectorStatus, filterDescription, selectedCount, selectionCard, filterHost, mapFilterStatus, resultActions, refreshResults, olderResults,
-            maskGroup, maskRaster, temporal};
+        this.setup = {id: draft.id, form, fields, label, inputs, parameters, run, details, temporal};
     }
 
     /** Provide an inline location for the independently owned vector filter editor.
-     * @return {HTMLElement} Stable host inside the current model setup.
+     * @param {string} name Recipe input whose filter will be edited.
+     * @return {HTMLElement} Stable host belonging to that input.
      */
-    getVectorFilterHost() { return this.setup.filterHost; }
+    getVectorFilterHost(name) { return this.setup.inputs[name].filterHost; }
 
     /** Create the secondary YAML actions without expanding permanent setup chrome.
      * @return {Object} Details wrapper and download controls.
@@ -224,7 +254,78 @@ export class ModelsView {
         return {root, preview, model, run, message};
     }
 
-    /** Update form values while leaving the field being typed into untouched.
+    /** Refresh one raster chooser without changing another input's source.
+     * @param {Object} controls Stable controls for this raster input.
+     * @param {{type:string,label:string}} input Declared raster input.
+     * @param {Object} value This input's selected raster and help text.
+     * @param {Object} state Controller snapshot supplying shared source choices.
+     * @return {boolean} Whether this input has an available selected raster.
+     */
+    renderRasterInput(controls, input, value, state) {
+        const acceptsResults = input.type === "raster";
+        const sources = state.draft.sources.filter(source => acceptsResults || source.kind !== "runArtifact");
+        this.options(controls.source, [{value: "", label: "Choose a raster…"}, ...sources.map(source => ({value: modelSourceKey(source),
+            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map layers" : undefined,
+            disabled: source.available === false,
+            label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], value.raster ? modelSourceKey(value.raster) : "");
+        controls.reason.textContent = value.sourceReason;
+        controls.resultActions.hidden = !acceptsResults;
+        controls.refreshResults.disabled = Boolean(state.historyLoading); controls.refreshResults.textContent = state.historyLoading ? "Loading results…" : "Refresh results";
+        controls.olderResults.hidden = !state.nextCursor; controls.olderResults.disabled = Boolean(state.historyLoading);
+        return Boolean(value.raster) && value.raster.available !== false;
+    }
+
+    /** Refresh one area or mask chooser from its independent selection state.
+     * @param {Object} controls Stable controls for this spatial input.
+     * @param {{type:string,label:string}} input Declared area or mask input.
+     * @param {Object} value This input's area, filter and selection feedback.
+     * @param {Object} draft Shared raster choices and temporal form state.
+     * @return {boolean} Whether this input has a usable area or raster mask.
+     */
+    renderSpatialInput(controls, input, value, draft) {
+        const usesStartingMask = input.type === "mask_source";
+        const runLabel = draft.temporal ? "Run analysis" : "Run model";
+        const areaChoices = usesStartingMask ? [{value: "vector", label: "Vector layer"}, {value: "raster", label: "Raster cells greater than zero"}] :
+            [{value: "viewport", label: "Visible map area"}, {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
+        if (modelSupportsArea(input.type, {kind: "wholeRaster"})) areaChoices.unshift({value: "whole", label: "Entire raster"});
+        if (value.capturedArea?.kind === "polygonArea" && value.areaOrigin === "map" && modelSupportsArea(input.type, value.capturedArea)) {
+            areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
+        }
+        if (!usesStartingMask && value.areaOrigin === "run" && value.capturedArea?.kind !== "wholeRaster") {
+            areaChoices.push({value: "captured", label: "Area from original run"});
+        }
+        this.options(controls.areaMode, areaChoices, value.areaMode);
+        controls.maskGroup.hidden = !usesStartingMask || value.areaMode !== "raster";
+        this.options(controls.maskRaster, [{value: "", label: "Choose a starting raster…"}, ...draft.sources.filter(source => source.kind !== "runArtifact")
+            .map(source => ({value: modelSourceKey(source), label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], value.maskRaster ? modelSourceKey(value.maskRaster) : "");
+        controls.vectorGroup.hidden = value.areaMode !== "vector";
+        this.options(controls.vector, [{value: "", label: "Choose a vector layer…"}, ...value.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], value.vectorKey);
+        controls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(value.areaMode);
+        controls.mapHelp.textContent = ({
+            viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
+            samplingArea: `Uses the sampling area shown in Raster distributions. Click the map to move the box. ${runLabel} uses its latest position and size.`,
+            mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
+            captured: "Uses the exact area from the original run. Choose another area above to change it.",
+        })[value.areaMode] ?? "";
+        const vectorSource = value.vectors.find(source => modelSourceKey(source) === value.vectorKey);
+        controls.selectionCard.hidden = !vectorSource;
+        controls.editFilter.disabled = !vectorSource || Boolean(value.filterEditing);
+        controls.editFilter.textContent = value.filterOpening ? "Opening filter…" : "Edit filter";
+        controls.editFilter.setAttribute("aria-expanded", String(Boolean(value.filterEditing)));
+        controls.filterHost.hidden = !value.filterEditing;
+        controls.selectedCount.textContent = value.selecting ? "Checking selected features…" : value.vectorInfo ?
+            `${value.vectorInfo.matched} of ${value.vectorInfo.total} features selected` : value.area?.kind === "catalogSelection" ? "Features from original run" : "Selection needs checking";
+        controls.filterDescription.textContent = vectorSource ? describeModelFilter(value.area?.selection?.filter ?? vectorSource.filter) : "";
+        controls.vectorStatus.textContent = value.selecting ? "You can edit the filter while this check runs." : value.selectionError || "";
+        controls.mapFilterStatus.textContent = value.mapFilterMessage ?? "";
+        controls.areaDescription.hidden = value.areaMode === "vector" && Boolean(vectorSource) || usesStartingMask && value.areaMode === "raster";
+        controls.areaDescription.textContent = value.selectionError || (value.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
+            `${describeModelArea(value.area)}${value.areaMode === "captured" ? ` · ${value.areaDescription}` : ""}`;
+        const areaReady = usesStartingMask && value.areaMode === "raster" ? Boolean(value.maskRaster) : Boolean(value.area);
+        return areaReady && !value.selecting && !value.filterEditing;
+    }
+
+    /** Update named form inputs while leaving the field being typed into untouched.
      * @param {Object} state Controller snapshot.
      * @return {void}
      */
@@ -234,59 +335,16 @@ export class ModelsView {
         const setupControls = this.setup;
         const temporalError = setupControls.temporal?.render(draft.temporal, draft.reduction) ?? "";
         const runLabel = draft.temporal ? "Run analysis" : "Run model";
-        const usesStartingMask = modelHasInput(draft.model, "mask_source");
         setupControls.fields.disabled = state.submitting;
         if (this.document.activeElement !== setupControls.label) setupControls.label.value = draft.label;
-        const acceptsResults = Object.values(draft.model.inputs).some(input => input.type === "raster");
-        this.options(setupControls.source, [{value: "", label: "Choose a raster…"}, ...draft.sources.map(source => ({value: modelSourceKey(source),
-            group: acceptsResults ? source.kind === "runArtifact" ? "Completed runs" : "Map layers" : undefined,
-            disabled: source.available === false,
-            label: source.label + (source.available === false ? " (unavailable)" : source.visible === false ? " (hidden on map)" : "")}))], draft.raster ? modelSourceKey(draft.raster) : "");
-        setupControls.reason.textContent = draft.sourceReason;
-        setupControls.resultActions.hidden = Boolean(draft.temporal) || !acceptsResults;
-        setupControls.refreshResults.disabled = Boolean(state.historyLoading); setupControls.refreshResults.textContent = state.historyLoading ? "Loading results…" : "Refresh results";
-        setupControls.olderResults.hidden = !state.nextCursor; setupControls.olderResults.disabled = Boolean(state.historyLoading);
-        const areaChoices = usesStartingMask ? [{value: "vector", label: "Vector layer"}, {value: "raster", label: "Raster cells greater than zero"}] :
-            [{value: "viewport", label: "Visible map area"}, {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
-        if (modelSupportsArea(draft.model, {kind: "wholeRaster"})) areaChoices.unshift({value: "whole", label: "Entire raster"});
-        if (draft.capturedArea?.kind === "polygonArea" && draft.areaOrigin === "map" && modelSupportsArea(draft.model, draft.capturedArea)) {
-            areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
+        let inputsReady = !temporalError;
+        for (const [name, input] of Object.entries(draft.model.inputs)) {
+            if (["raster", "catalog_raster"].includes(input.type)) inputsReady = this.renderRasterInput(setupControls.inputs[name], input, draft.inputs[name], state) && inputsReady;
+            else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) inputsReady = this.renderSpatialInput(setupControls.inputs[name], input, draft.inputs[name], draft) && inputsReady;
         }
-        if (!usesStartingMask && draft.areaOrigin === "run" && draft.capturedArea?.kind !== "wholeRaster") {
-            areaChoices.push({value: "captured", label: "Area from original run"});
-        }
-        this.options(setupControls.areaMode, areaChoices, draft.areaMode);
-        setupControls.maskGroup.hidden = !usesStartingMask || draft.areaMode !== "raster";
-        this.options(setupControls.maskRaster, [{value: "", label: "Choose a starting raster…"}, ...draft.sources.filter(source => source.kind !== "runArtifact")
-            .map(source => ({value: modelSourceKey(source), label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], draft.maskRaster ? modelSourceKey(draft.maskRaster) : "");
-        setupControls.vectorGroup.hidden = draft.areaMode !== "vector";
-        this.options(setupControls.vector, [{value: "", label: "Choose a vector layer…"}, ...draft.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], draft.vectorKey);
-        setupControls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(draft.areaMode);
-        setupControls.mapHelp.textContent = ({
-            viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
-            samplingArea: `Uses the sampling area shown in Raster distributions. Click the map to move the box. ${runLabel} uses its latest position and size.`,
-            mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
-            captured: "Uses the exact area from the original run. Choose another area above to change it.",
-        })[draft.areaMode] ?? "";
-        const vectorSource = draft.vectors.find(value => modelSourceKey(value) === draft.vectorKey);
-        setupControls.selectionCard.hidden = !vectorSource;
-        setupControls.editFilter.disabled = !vectorSource || Boolean(draft.filterEditing);
-        setupControls.editFilter.textContent = draft.filterOpening ? "Opening filter…" : "Edit filter";
-        setupControls.editFilter.setAttribute("aria-expanded", String(Boolean(draft.filterEditing)));
-        setupControls.filterHost.hidden = !draft.filterEditing;
-        setupControls.selectedCount.textContent = draft.selecting ? "Checking selected features…" : draft.vectorInfo ?
-            `${draft.vectorInfo.matched} of ${draft.vectorInfo.total} features selected` : draft.area?.kind === "catalogSelection" ? "Features from original run" : "Selection needs checking";
-        setupControls.filterDescription.textContent = vectorSource ? describeModelFilter(draft.area?.selection?.filter ?? vectorSource.filter) : "";
-        setupControls.vectorStatus.textContent = draft.selecting ? "You can edit the filter while this check runs." : draft.selectionError || "";
-        setupControls.mapFilterStatus.textContent = draft.mapFilterMessage ?? "";
-        setupControls.areaDescription.hidden = draft.areaMode === "vector" && Boolean(vectorSource) || usesStartingMask && draft.areaMode === "raster";
-        setupControls.areaDescription.textContent = draft.selectionError || (draft.areaMode === "vector" && !vectorSource ? "Choose a vector layer from Map layers." : "") ||
-            `${describeModelArea(draft.area)}${draft.areaMode === "captured" ? ` · ${draft.areaDescription}` : ""}`;
         for (const [name, input] of Object.entries(setupControls.parameters)) if (this.document.activeElement !== input) input.value = draft.parameters[name] ?? "";
         const supported = Object.values(draft.model.inputs).every(input => ["raster", "catalog_raster", "summary_area", "clip_area", "mask_source", "temporal_interval", "temporal_reduction", "area_statistic"].includes(input.type));
-        const areaReady = usesStartingMask && draft.areaMode === "raster" ? Boolean(draft.maskRaster) : Boolean(draft.area);
-        const sourceReady = draft.temporal ? !temporalError : Boolean(draft.raster) && draft.raster.available !== false;
-        setupControls.run.disabled = state.submitting || Boolean(state.pending) || draft.selecting || draft.filterEditing || !areaReady || !sourceReady || !supported;
+        setupControls.run.disabled = state.submitting || Boolean(state.pending) || !inputsReady || !supported;
         setupControls.run.textContent = state.submitting ? "Submitting…" : runLabel;
         setupControls.details.model.href = `/api/processing/models/${draft.model.id}/versions/${draft.model.version}/yaml`;
         setupControls.details.run.hidden = true;

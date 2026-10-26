@@ -72,26 +72,27 @@ export function modelViewportArea(bounds) {
     return modelAreaInput({kind: "selectedArea", selectedBounds});
 }
 
-/** Check whether an area is accepted by this model's declared input type.
- * @param {Object} model Installed model definition.
+/** Check whether an area is accepted by one declared input type.
+ * @param {string} type Recipe input type: summary_area, clip_area or mask_source.
  * @param {Object|null} area Explicit area descriptor.
- * @return {boolean} Whether the area kind can be submitted to this model.
+ * @return {boolean} Whether this field accepts the area kind.
  */
-export function modelSupportsArea(model, area) {
-    const areaInput = Object.values(model.inputs).find(input => ["summary_area", "clip_area"].includes(input.type));
-    const supportedAreaKinds = areaInput?.type === "clip_area" ? ["selectedArea", "catalogSelection"] :
-        areaInput?.type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
-            modelHasInput(model, "mask_source") ? ["catalogSelection"] : [];
+export function modelSupportsArea(type, area) {
+    const supportedAreaKinds = type === "clip_area" ? ["selectedArea", "catalogSelection"] :
+        type === "summary_area" ? ["selectedArea", "catalogSelection", "wholeRaster", "polygonArea"] :
+            type === "mask_source" ? ["catalogSelection"] : [];
     return supportedAreaKinds.includes(area?.kind);
 }
 
-/** Create model setup values and suggest an input when only one raster fits.
+/** Create independent setup state for each declared raster and spatial input.
  * The selectedArea input is the sampling area used by raster histograms.
  * Models with a starting mask require the user to choose that mask explicitly.
  * @param {Object} model Installed recipe.
  * @param {Object} context Catalog and map choices supplied by browser composition.
  * @param {string} id Local draft identity.
- * @return {Object} Draft values and independent copies of suggested inputs.
+ * @return {Object} Draft with field state in inputs[name], shared source choices,
+ * temporal controls and parameters. Each spatial field owns its vector filters.
+ * @throws {Error} If the supplied map selection is invalid.
  */
 export function createModelDraft(model, context, id) {
     const sources = structuredClone(context.rasters ?? []);
@@ -101,22 +102,31 @@ export function createModelDraft(model, context, id) {
     const usesStartingMask = modelHasInput(model, "mask_source");
     const usesTemporal = modelHasInput(model, "temporal_interval");
     const statisticType = Object.values(model.inputs).find(input => ["temporal_reduction", "area_statistic"].includes(input.type))?.type;
-    let area = context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
-    let areaMode = ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
-    let selectionError = "";
-    if (usesStartingMask) {
-        area = null; areaMode = "vector";
-    } else if (!modelSupportsArea(model, area) || usesTemporal && !context.area) {
-        areaMode = "viewport"; area = null;
-        try { area = modelViewportArea(context.viewportBounds); }
-        catch (error) { selectionError = error.message; }
+    const inputs = {};
+    for (const [name, input] of Object.entries(model.inputs)) {
+        if (["raster", "catalog_raster"].includes(input.type)) {
+            inputs[name] = {
+                raster: !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
+                sourceReason: input.type === "raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
+            };
+        } else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) {
+            const startingMask = input.type === "mask_source";
+            let area = startingMask ? null : context.area ? modelAreaInput(context.area) : {kind: "wholeRaster"};
+            let areaMode = startingMask ? "vector" : ({wholeRaster: "whole", selectedArea: "samplingArea", polygonArea: "mapPolygons"})[area.kind] ?? "captured";
+            let selectionError = "";
+            if (!startingMask && (!modelSupportsArea(input.type, area) || usesTemporal && !context.area)) {
+                areaMode = "viewport"; area = null;
+                try { area = modelViewportArea(context.viewportBounds); }
+                catch (error) { selectionError = error.message; }
+            }
+            inputs[name] = {
+                area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
+                vectorKey: "", vectorInfo: null, selecting: false, selectionError, maskRaster: null,
+                vectors: structuredClone(context.vectors ?? []),
+            };
+        }
     }
-    return {id, model, label: model.title, sources, vectors: structuredClone(context.vectors ?? []),
-        raster: !usesStartingMask && suggestedRaster ? structuredClone(suggestedRaster) : null,
-        sourceReason: Object.values(model.inputs).some(input => input.type === "raster") ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : sources.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
-        area, capturedArea: structuredClone(area), areaMode, areaOrigin: "map", areaDescription: context.areaDescription ?? "Area selected on the map.",
-        vectorKey: "", vectorInfo: null, selecting: false, selectionError,
-        maskRaster: null,
+    return {id, model, label: model.title, sources, inputs,
         temporal: usesTemporal ? createTemporalDraft(context.temporalDatasets ?? [], statisticType,
             statisticType === "temporal_reduction" ? model.steps[0].inputs.precipitation.value : null) : null,
         reduction: statisticType ? {reducer: "mean", percentile: 90} : null,
@@ -124,8 +134,8 @@ export function createModelDraft(model, context, id) {
     };
 }
 
-/** Capture one draft as a model request, validating area and source choices.
- * @param {Object} draft Editable model setup.
+/** Capture each declared field as a model request with independent input choices.
+ * @param {Object} draft Editable model setup with raster and spatial state in inputs[name].
  * @param {string} requestId Stable retry identity generated before dispatch.
  * @param {number} [utcOffsetMinutes=-new Date().getTimezoneOffset()] Local minutes east of UTC, captured once for this submission and its retries.
  * @return {Object} Independent submission, unaffected by later map or draft edits.
@@ -133,41 +143,43 @@ export function createModelDraft(model, context, id) {
  */
 export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new Date().getTimezoneOffset()) {
     if (!draft.label.trim() || [...draft.label.trim()].length > 80) throw new Error("Name this run using 1–80 characters.");
-    if (modelHasInput(draft.model, "raster") || modelHasInput(draft.model, "catalog_raster")) {
-        if (!draft.raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.raster)))
-            throw new Error("Choose a raster from Map layers or a completed run.");
-        if (draft.raster.available === false || draft.raster.kind === "runArtifact" && Date.parse(draft.raster.expiresAt) <= Date.now())
-            throw new Error("This raster result is no longer available. Choose another input.");
-    }
-    if (draft.area?.kind === "catalogSelection" && !draft.vectors.some(source => modelSourceKey(source) === modelSourceKey(draft.area.selection)))
-        throw new Error("Add the selected vector layer to Map layers before running this model.");
-    if (draft.selecting) throw new Error("Wait for the selected features to finish loading.");
-    const usesStartingMask = modelHasInput(draft.model, "mask_source");
-    if (usesStartingMask && draft.areaMode === "raster") {
-        if (!draft.maskRaster || draft.maskRaster.kind === "runArtifact" || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(draft.maskRaster)))
-            throw new Error("Choose a starting raster from Map layers.");
-    } else {
-        if (!draft.area) throw new Error(draft.selectionError || (usesStartingMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
-        if (!modelSupportsArea(draft.model, draft.area)) throw new Error("Choose an area supported by this model.");
-    }
     const inputs = {};
     for (const [name, input] of Object.entries(draft.model.inputs)) {
-        if (input.type === "catalog_raster" && draft.raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
-        if (["raster", "catalog_raster"].includes(input.type)) inputs[name] = draft.raster.kind === "runArtifact" ?
-            {kind: "runArtifact", jobId: draft.raster.jobId, artifactId: draft.raster.artifactId} : {collectionId: draft.raster.collectionId, itemId: draft.raster.itemId};
+        const state = draft.inputs[name];
+        if (["raster", "catalog_raster"].includes(input.type)) {
+            const raster = state.raster;
+            if (!raster || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
+                throw new Error("Choose a raster from Map layers or a completed run.");
+            if (input.type === "catalog_raster" && raster.kind === "runArtifact") throw new Error("This recipe requires a raster from Map layers.");
+            if (raster.available === false || raster.kind === "runArtifact" && Date.parse(raster.expiresAt) <= Date.now())
+                throw new Error("This raster result is no longer available. Choose another input.");
+            inputs[name] = raster.kind === "runArtifact" ?
+                {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
+        }
         else if (input.type === "temporal_interval") inputs[name] = captureTemporalInput(draft.temporal, draft.reduction.reducer);
         else if (input.type === "temporal_reduction") inputs[name] = captureTemporalReduction(draft.reduction);
         else if (input.type === "area_statistic") inputs[name] = draft.reduction.reducer;
-        else if (["summary_area", "clip_area"].includes(input.type)) inputs[name] = structuredClone(draft.area);
-        else if (input.type === "mask_source") inputs[name] = draft.areaMode === "raster" ?
-            {kind: "catalogRaster", source: {collectionId: draft.maskRaster.collectionId, itemId: draft.maskRaster.itemId}} : structuredClone(draft.area);
+        else if (["summary_area", "clip_area", "mask_source"].includes(input.type)) {
+            if (state.selecting) throw new Error("Wait for the selected features to finish loading.");
+            const startingMask = input.type === "mask_source";
+            if (startingMask && state.areaMode === "raster") {
+                const raster = state.maskRaster;
+                if (!raster || raster.kind === "runArtifact" || !draft.sources.some(source => modelSourceKey(source) === modelSourceKey(raster)))
+                    throw new Error("Choose a starting raster from Map layers.");
+                inputs[name] = {kind: "catalogRaster", source: {collectionId: raster.collectionId, itemId: raster.itemId}};
+            } else {
+                const area = state.area;
+                if (!area) throw new Error(state.selectionError || (startingMask ? "Choose the vector features where flow should start." : "Choose an analysis area before running the model."));
+                if (!modelSupportsArea(input.type, area)) throw new Error("Choose an area supported by this model.");
+                if (area.kind === "catalogSelection" && !state.vectors.some(source => modelSourceKey(source) === modelSourceKey(area.selection)))
+                    throw new Error("Add the selected vector layer to Map layers before running this model.");
+                if (area.kind === "selectedArea") modelAreaInput(area);
+                else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
+                else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
+                inputs[name] = structuredClone(area);
+            }
+        }
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
-    }
-    const area = draft.area;
-    if (!usesStartingMask || draft.areaMode === "vector") {
-        if (area.kind === "selectedArea") modelAreaInput(area);
-        else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});
-        else if (area.kind === "polygonArea") modelAreaInput({kind: area.kind, polygonArea: area.reference});
     }
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
