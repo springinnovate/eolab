@@ -247,7 +247,10 @@ returns values and a CSV; Raster clip returns a GeoTIFF for the selected area.
 The downstream model's DEM, watershed layer and topology fields are configured
 in its [bundled YAML recipe](src/eolab_app/processing/recipes/downstream-beneficiaries.yaml),
 under `steps[0].inputs.hydrology.value`. Set these Catalog references for your
-deployment before building it.
+deployment before building it. The pit-filling search cutoff is in
+`steps[0].inputs.settings.value.pit_fill_search_limit` in the same recipe;
+-1 and 0 allow unlimited searches. This replaces the former
+`PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT` environment setting.
 
 EOLab is open-source software under the [Apache License 2.0](LICENSE). Bivariate
 palette definitions originate in the

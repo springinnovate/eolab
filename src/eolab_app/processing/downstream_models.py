@@ -1,13 +1,11 @@
 """Describe one downstream calculation's inputs, native grids and numerical rules."""
 
-from dataclasses import asdict, dataclass, fields
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
 from eolab_app.catalog_selection import CatalogSelection, VectorSelection
-from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
-from eolab_app.processing.models import ProcessingLimits
+from eolab_app.processing.clip_models import ClipGrid
 from eolab_app.processing.prepared_hydrology import (
     HydrologySchema,
     HydrologySources,
@@ -19,47 +17,21 @@ from eolab_app.raster.source_models import RasterSourceReference
 OPERATION = "hydrology.downstream_beneficiaries.v1"
 ECOSHARD_REVISION = "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
 BENEFICIARIES_REVISION = "3f577e27deb347cd4520977eb99474fb81e990fc"
-DEFAULT_PIT_FILL_SEARCH_LIMIT = 1000
 PIT_FILL_TREAT_NODATA_AS_CLOSED = True
 
 PitFillSearchLimit = Annotated[int, Field(strict=True, ge=-1, le=2**63 - 1)]
 """EcoShard's signed-64-bit pit-search cutoff; -1 and 0 allow unlimited searches."""
 
 
-@dataclass(frozen=True)
-class DownstreamLimits(RasterClipLimits):
-    """Configure downstream job scheduling, result retention and pit filling.
-
-    The original WWF model runs without EOlab cell, geometry, memory, disk or
-    total-runtime admission ceilings. The worker captures the pit-search cutoff
-    in each prepared plan; it controls terrain conditioning, not job admission.
+class DownstreamSettings(HydrologySchema):
+    """Configure pit filling from the downstream model YAML.
 
     Attributes:
         pit_fill_search_limit: EcoShard's maximum search steps for one pit.
             Values -1 and 0 leave the search unlimited.
     """
 
-    pit_fill_search_limit: int = DEFAULT_PIT_FILL_SEARCH_LIMIT
-
-    @classmethod
-    def with_lifecycle(cls, limits: ProcessingLimits) -> "DownstreamLimits":
-        """Copy shared job lifecycle settings for downstream calculations.
-
-        Args:
-            limits: Worker lifecycle settings, possibly with another operation's
-                additional budgets; matching downstream fields are preserved.
-
-        Returns:
-            Downstream settings with the same job lifecycle policy.
-        """
-        accepted = {field.name for field in fields(cls)}
-        return cls(
-            **{
-                name: value
-                for name, value in asdict(limits).items()
-                if name in accepted
-            }
-        )
+    pit_fill_search_limit: PitFillSearchLimit
 
 
 class RasterStartingMask(HydrologySchema):
@@ -84,13 +56,15 @@ StartingMask = Annotated[
 class DownstreamRequest(HydrologySchema):
     """Capture the starting area, configured sources, values and formula for one run.
 
-    Model YAML supplies hydrology sources. Geometry and filesystem paths are absent.
+    Model YAML supplies hydrology sources and pit-filling settings. Geometry and
+    filesystem paths are absent.
     """
 
     requestId: str
     label: Annotated[str, Field(min_length=1, max_length=80)]
     starting_mask: StartingMask
     hydrology: HydrologySources
+    settings: DownstreamSettings
     values: RasterSourceReference
     buffer_m: Annotated[float, Field(ge=0)]
     cutoff_m: Annotated[float, Field(gt=0)] | None
@@ -129,8 +103,8 @@ class DownstreamPlan(HydrologySchema):
 
     Resolved selections are ephemeral worker arguments and never enter storage.
     The original model constructs its own calculation grid using the captured
-    pixel-size setting. The worker saves its pit-search cutoff during preparation;
-    execution uses this value even if supplied different worker settings later.
+    pixel-size setting. Captured inputs include the model's pit-search cutoff;
+    execution uses that saved value.
     """
 
     operation: Literal["hydrology.downstream_beneficiaries.v1"] = OPERATION
@@ -138,7 +112,6 @@ class DownstreamPlan(HydrologySchema):
     grid: ClipGrid
     watershedSelection: CatalogSelection
     reservedBytes: Annotated[int, Field(ge=0)]
-    pit_fill_search_limit: PitFillSearchLimit
 
     @model_validator(mode="after")
     def check_watershed_selection(self) -> "DownstreamPlan":

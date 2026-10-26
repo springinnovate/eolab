@@ -4,14 +4,11 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
-from pydantic import TypeAdapter
-
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.downstream_models import DownstreamLimits, PitFillSearchLimit
 
 APPLICATION_VERSION_PATH = Path("/app/version")
 
@@ -54,37 +51,6 @@ def load_processing_limits() -> RasterClipLimits:
     if values["worker_count"] > 32:
         raise ValueError("PROCESSING_WORKER_COUNT must not exceed 32")
     return RasterClipLimits(**values)
-
-
-def load_downstream_limits(limits: RasterClipLimits) -> DownstreamLimits:
-    """Load downstream pit-filling settings alongside the shared job lifecycle.
-
-    An omitted or blank pit-search setting uses the default. The worker captures
-    it when preparing a run; changing the environment requires redeployment.
-
-    Args:
-        limits: Validated job concurrency, retention and cache settings.
-
-    Returns:
-        Downstream lifecycle and pit-filling settings without work-size ceilings.
-
-    Raises:
-        ValueError: If the pit-search setting is not an integer from -1 through
-            the largest native signed-64-bit value. EcoShard treats -1 and 0 as
-            unlimited searches.
-    """
-    defaults = DownstreamLimits.with_lifecycle(limits)
-    environment_name = "PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT"
-    raw = os.environ.get(environment_name, "").strip()
-    if not raw:
-        return defaults
-    try:
-        search_limit = TypeAdapter(PitFillSearchLimit).validate_python(int(raw))
-    except ValueError as error:
-        raise ValueError(
-            f"{environment_name} must be an integer from -1 through {2**63 - 1}"
-        ) from error
-    return replace(defaults, pit_fill_search_limit=search_limit)
 
 
 @dataclass(frozen=True)

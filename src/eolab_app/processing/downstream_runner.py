@@ -24,11 +24,11 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.downstream_models import (
     BENEFICIARIES_REVISION,
     ECOSHARD_REVISION,
     PIT_FILL_TREAT_NODATA_AS_CLOSED,
-    DownstreamLimits,
     DownstreamPlan,
 )
 from eolab_app.processing.ground_area import PixelAreaCalculator
@@ -113,7 +113,6 @@ def prepare_starting_inputs(
     spec: DownstreamPlan,
     starting: BaseGeometry,
     directory: Path,
-    limits: DownstreamLimits,
 ) -> tuple[Path, Path]:
     """Write the selected AOI and adapt vector starts to the model's raster input.
 
@@ -126,7 +125,6 @@ def prepare_starting_inputs(
         spec: Captured model settings, including the upstream grid resolution.
         starting: Validated WGS84 geometry from the existing selection reader.
         directory: Private per-run input directory.
-        limits: Shared job lifecycle settings; rasterization uses the requested grid.
 
     Returns:
         AOI GeoJSON path and original or rasterized starting-mask path.
@@ -182,7 +180,7 @@ def summarize_downstream_covered_values(
     covered_values_path: Path,
     expression: str,
     original_model_sum: float,
-    limits: DownstreamLimits,
+    limits: RasterClipLimits,
 ) -> dict[str, Any]:
     """Summarize raster values inside the downstream coverage produced by the WWF model.
 
@@ -272,7 +270,7 @@ def run_original_downstream(
     sources: "DownstreamSources",
     spec: DownstreamPlan,
     directory: Path,
-    limits: DownstreamLimits,
+    limits: RasterClipLimits,
     starting: BaseGeometry,
 ) -> AggregateArtifact:
     """Call the pinned model's existing functions in its original calculation order.
@@ -308,7 +306,7 @@ def run_original_downstream(
     model_working_directory.mkdir()
     write_progress(directory, "preparing_starting_mask", 0, 0)
     starting_area_path, starting_mask_path = prepare_starting_inputs(
-        sources, spec, starting, model_working_directory, limits
+        sources, spec, starting, model_working_directory
     )
     watershed_view_path = write_watershed_view(sources, spec, model_working_directory)
     try:
@@ -363,7 +361,7 @@ def run_original_downstream(
             partition_dem_path,
             partition_directory,
             flow_direction_path,
-            max_pixel_fill_count=spec.pit_fill_search_limit,
+            max_pixel_fill_count=spec.inputs.settings.pit_fill_search_limit,
             treat_nodata_as_closed=PIT_FILL_TREAT_NODATA_AS_CLOSED,
         )
         partition_downstream_coverage_path = partition_directory / "coverage.tif"
@@ -462,7 +460,7 @@ def run_original_downstream(
                     mode="json", by_alias=True
                 ),
                 "numericalPolicy": {
-                    "pitFillSearchLimit": spec.pit_fill_search_limit,
+                    "pitFillSearchLimit": spec.inputs.settings.pit_fill_search_limit,
                     "pitFillTreatNodataAsClosed": PIT_FILL_TREAT_NODATA_AS_CLOSED,
                     "wgs84PixelSize": model_inputs.wgs84_pixel_size,
                     "distancePixelSizeMetres": model_inputs.travel_time_pixel_size_m,

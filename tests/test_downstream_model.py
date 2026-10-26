@@ -19,7 +19,8 @@ from eolab_app.processing.downstream_calculation import (
     calculate_downstream,
     plan_downstream,
 )
-from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamLimits
+from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.downstream_models import DownstreamRequest, DownstreamSettings
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.prepared_hydrology import HydrologySources
 from eolab_app.raster.models import AuthorizedRaster
@@ -29,7 +30,7 @@ from test_prepared_hydrology import prepare_sources
 
 def scaled_downstream_fixture(
     directory: Path, width: int, height: int
-) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
+) -> tuple[DownstreamSources, DownstreamRequest, RasterClipLimits]:
     """Generate the same three-basin reference at a larger native resolution.
 
     Args:
@@ -38,7 +39,7 @@ def scaled_downstream_fixture(
         height: Bounded native row count.
 
     Returns:
-        Configured terrain, captured inputs and deployment limits.
+        Configured terrain, captured inputs and shared job lifecycle settings.
     """
     sources, request, limits = downstream_fixture(directory)
     for name in ("dem", "starting_mask", "values"):
@@ -76,7 +77,8 @@ def downstream_fixture(
     values: np.ndarray | None = None,
     formula: str = "sum(a)",
     records: list[dict[str, Any]] | None = None,
-) -> tuple[DownstreamSources, DownstreamRequest, DownstreamLimits]:
+    pit_fill_search_limit: int = 1000,
+) -> tuple[DownstreamSources, DownstreamRequest, RasterClipLimits]:
     """Create a prepared three-basin eastward slope and a first-column raster mask.
 
     Args:
@@ -84,9 +86,10 @@ def downstream_fixture(
         values: Optional native 4-by-6 values raster.
         formula: Scalar result formula.
         records: Optional complete network with different coverage or connections.
+        pit_fill_search_limit: Numerical pit-search cutoff captured in the request.
 
     Returns:
-        Native sources, captured request and test deployment limits.
+        Native sources, captured request and shared job lifecycle settings.
     """
     definition, dem, network, _ = prepare_sources(directory, records=records)
     hydrology = HydrologySources(
@@ -122,6 +125,7 @@ def downstream_fixture(
             },
         },
         hydrology=hydrology,
+        settings=DownstreamSettings(pit_fill_search_limit=pit_fill_search_limit),
         values={
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-" + "2" * 24,
@@ -141,7 +145,7 @@ def downstream_fixture(
         network,
         None,
     )
-    return sources, request, DownstreamLimits()
+    return sources, request, RasterClipLimits()
 
 
 @pytest.mark.parametrize(
@@ -191,7 +195,7 @@ def test_configured_network_is_delegated_without_a_suitability_scan(
     monkeypatch.setattr(
         "eolab_app.processing.downstream_runner.run_original_downstream", original_model
     )
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     assert calculate_downstream(sources, plan, directory, limits) is expected
@@ -224,7 +228,7 @@ def test_configured_network_runs_despite_unrelated_duplicate_ids(
         * 2
     )
     sources, request, limits = downstream_fixture(tmp_path, records=records)
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     assert plan.watershedSelection == sources.network.selection
     directory = tmp_path / "run"
     directory.mkdir()
@@ -245,14 +249,13 @@ def test_downstream_mask_crosses_watersheds_and_sums_upstream_positive_values(
     """
     pytest.importorskip("ecoshard.geoprocessing.routing")
     data = np.arange(-12, 12, dtype="int16").reshape(4, 6)
-    sources, request, limits = downstream_fixture(tmp_path / "sources", values=data)
-    limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
-    spec = plan_downstream(sources, request, limits)
+    sources, request, limits = downstream_fixture(
+        tmp_path / "sources", values=data, pit_fill_search_limit=pit_fill_search_limit
+    )
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
-    artifact = calculate_downstream(
-        sources, spec, directory, replace(limits, pit_fill_search_limit=1)
-    )
+    artifact = calculate_downstream(sources, spec, directory, limits)
     assert float(artifact.rows[0]["value"]) == float(data[data > 0].sum())
     assert spec.watershedSelection == sources.network.selection
     provenance = json.loads((directory / "provenance.json").read_text())
@@ -300,7 +303,7 @@ def test_downstream_progress_counts_drainage_groups(
             for index in range(2)
         ],
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
     attempt = "a" * 32
@@ -364,7 +367,7 @@ def test_nodata_values_preserve_original_zero_total(tmp_path: Path) -> None:
     sources, request, limits = downstream_fixture(
         tmp_path / "sources", values=np.full((4, 6), -9999, dtype="int16")
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -383,37 +386,35 @@ def test_empty_starting_raster_is_rejected_before_routing(tmp_path: Path) -> Non
     sources, request, limits = downstream_fixture(tmp_path)
     with rasterio.open(sources.rasters["starting_mask"], "r+") as dataset:
         dataset.write(np.zeros((4, 6), dtype="int16"), 1)
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     with pytest.raises(ProcessingError, match="no positive valid cells"):
         calculate_downstream(sources, plan, directory, limits)
 
 
-@pytest.mark.parametrize("pit_fill_search_limit", [None, 100, 1000, -1, 0, 2**63 - 1])
+@pytest.mark.parametrize("pit_fill_search_limit", [100, 1000, -1, 0, 2**63 - 1])
 def test_closed_edge_policy_records_current_filling_settings(
-    tmp_path: Path, pit_fill_search_limit: int | None
+    tmp_path: Path, pit_fill_search_limit: int
 ) -> None:
     """Record the configured filling behavior in the current numerical policy.
 
     Args:
         tmp_path: Isolated native source metadata for a prepared plan.
-        pit_fill_search_limit: Configured EcoShard search cutoff, or deployment default.
+        pit_fill_search_limit: EcoShard search cutoff from the model settings.
     """
     from eolab_app.processing.downstream_operation import describe_downstream_policy
     from eolab_app.processing.downstream_models import (
         ClosedEdgeDownstreamNumericalPolicy,
     )
 
-    sources, request, limits = downstream_fixture(tmp_path)
-    if pit_fill_search_limit is not None:
-        limits = replace(limits, pit_fill_search_limit=pit_fill_search_limit)
-    policy = describe_downstream_policy(plan_downstream(sources, request, limits))
+    sources, request, _ = downstream_fixture(
+        tmp_path, pit_fill_search_limit=pit_fill_search_limit
+    )
+    policy = describe_downstream_policy(plan_downstream(sources, request))
     saved = policy.model_dump(mode="json")
     assert saved["version"] == "hydrology.downstream_beneficiaries.v3"
-    assert saved["pitFillSearchLimit"] == (
-        1000 if pit_fill_search_limit is None else pit_fill_search_limit
-    )
+    assert saved["pitFillSearchLimit"] == pit_fill_search_limit
     assert saved["pitFillTreatNodataAsClosed"] is True
     assert saved["ecoshardRevision"] == "6bd106862a2cb2517f91f9bd7ca8bb071ccb6013"
     assert saved["beneficiariesRevision"] == "3f577e27deb347cd4520977eb99474fb81e990fc"
@@ -425,10 +426,10 @@ def test_closed_edge_policy_records_current_filling_settings(
     )
 
 
-def test_saved_plan_preserves_pit_filling_after_settings_change(
+def test_saved_model_settings_reach_downstream_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Execute the saved cutoff even when source checks use different worker settings.
+    """Pass the model's saved pit-search cutoff to execution and numerical provenance.
 
     Args:
         tmp_path: Isolated prepared sources and run directory.
@@ -437,12 +438,12 @@ def test_saved_plan_preserves_pit_filling_after_settings_change(
     from eolab_app.processing.downstream_models import DownstreamPlan
     from eolab_app.processing.downstream_operation import describe_downstream_policy
 
-    sources, request, limits = downstream_fixture(tmp_path / "sources")
-    planned = plan_downstream(
-        sources, request, replace(limits, pit_fill_search_limit=17)
+    sources, request, limits = downstream_fixture(
+        tmp_path / "sources", pit_fill_search_limit=17
     )
+    planned = plan_downstream(sources, request)
     saved = DownstreamPlan.model_validate_json(planned.model_dump_json(by_alias=True))
-    assert saved.pit_fill_search_limit == 17
+    assert saved.inputs.settings.pit_fill_search_limit == 17
     runner = Mock(side_effect=RuntimeError("observed saved plan"))
     monkeypatch.setattr(
         "eolab_app.processing.downstream_runner.run_original_downstream", runner
@@ -450,10 +451,8 @@ def test_saved_plan_preserves_pit_filling_after_settings_change(
     directory = tmp_path / "run"
     directory.mkdir()
     with pytest.raises(RuntimeError, match="observed saved plan"):
-        calculate_downstream(
-            sources, saved, directory, replace(limits, pit_fill_search_limit=1000)
-        )
-    assert runner.call_args.args[1].pit_fill_search_limit == 17
+        calculate_downstream(sources, saved, directory, limits)
+    assert runner.call_args.args[1].inputs.settings.pit_fill_search_limit == 17
     assert describe_downstream_policy(saved).pitFillSearchLimit == 17
 
 
@@ -476,9 +475,9 @@ def test_saved_pit_fill_cutoff_rejects_invalid_values(
     from eolab_app.processing.downstream_operation import describe_downstream_policy
 
     sources, request, limits = downstream_fixture(tmp_path)
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     saved_plan = plan.model_dump(mode="json", by_alias=True)
-    saved_plan["pit_fill_search_limit"] = value
+    saved_plan["inputs"]["settings"]["pit_fill_search_limit"] = value
     with pytest.raises(ValidationError, match="pit_fill_search_limit"):
         DownstreamPlan.model_validate(saved_plan)
     saved_policy = describe_downstream_policy(plan).model_dump(mode="json")
@@ -487,21 +486,23 @@ def test_saved_pit_fill_cutoff_rejects_invalid_values(
         ClosedEdgeDownstreamNumericalPolicy.model_validate(saved_policy)
 
 
+@pytest.mark.parametrize("pit_fill_search_limit", [1000, -1, 0])
 def test_upstream_relative_scratch_stays_in_run_after_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pit_fill_search_limit: int
 ) -> None:
     """Upstream relative scratch stays private and the worker's directory is restored.
 
     Args:
         tmp_path: Original inputs and an isolated run workspace.
         monkeypatch: Inject a failure at the external model boundary.
+        pit_fill_search_limit: Configured cutoff passed unchanged to the native model.
     """
     from eolab_app.processing.downstream_runner import load_beneficiaries
 
-    sources, request, limits = downstream_fixture(tmp_path / "inputs")
-    spec = plan_downstream(
-        sources, request, replace(limits, pit_fill_search_limit=1000)
+    sources, request, limits = downstream_fixture(
+        tmp_path / "inputs", pit_fill_search_limit=pit_fill_search_limit
     )
+    spec = plan_downstream(sources, request)
     workspace = tmp_path / "attempt"
     workspace.mkdir()
     previous = Path.cwd()
@@ -517,7 +518,7 @@ def test_upstream_relative_scratch_stays_in_run_after_failure(
             OSError: Always, after creating a run-local scratch marker.
         """
         assert Path.cwd() == workspace.resolve()
-        assert kwargs["max_pixel_fill_count"] == 1000
+        assert kwargs["max_pixel_fill_count"] == pit_fill_search_limit
         assert kwargs["treat_nodata_as_closed"] is True
         Path("upstream-relative-scratch").write_text("private")
         raise OSError("upstream fixture failure")
@@ -560,7 +561,7 @@ def test_formulas_summarize_the_original_masked_values_grid(
         transform=from_origin(0, 4, 0.5, 1),
     ) as target:
         target.write(np.ones((4, 12), dtype="int16"), 1)
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -576,7 +577,7 @@ def test_cutoff_is_measured_from_original_seeds(tmp_path: Path) -> None:
     pytest.importorskip("ecoshard.geoprocessing.routing")
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     request = request.model_copy(update={"cutoff_m": 1000})
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -613,7 +614,7 @@ def test_filtered_vectors_form_one_mask_without_expanded_seeds(tmp_path: Path) -
             "starting_mask": {"kind": "catalogSelection", "selection": selection},
         }
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -623,7 +624,7 @@ def test_filtered_vectors_form_one_mask_without_expanded_seeds(tmp_path: Path) -
 
 
 def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) -> None:
-    """Registered dispatch uses the real supervised worker and ordinary artifact inventory.
+    """Execute YAML-configured pit filling and publish its results and numerical policy.
 
     Args:
         tmp_path: Isolated catalog and owned artifact fixtures.
@@ -656,6 +657,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     document["steps"][0]["inputs"]["hydrology"]["value"] = request.hydrology.model_dump(
         mode="json", by_alias=True
     )
+    document["steps"][0]["inputs"]["settings"]["value"]["pit_fill_search_limit"] = 17
     definition = ModelDefinition.model_validate(document)
     registry = ModelRegistry((definition,))
     submitted = ModelRunRequest(
@@ -682,6 +684,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         },
     )
     calculation, invocation = build_model_calculation_request(submitted, registry)
+    assert calculation.settings.pit_fill_search_limit == 17
     operation = get_model_operation(definition.steps[0].operation)
     identities = {
         name: tuple(RasterSourceIdentity.read(path).to_catalog())
@@ -743,7 +746,6 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
         artifacts,
         limits,
         native=native,
-        downstream_limits=replace(limits, pit_fill_search_limit=1000),
         areas=SimpleNamespace(
             resolve_for_sampling=AsyncMock(return_value=sources.network),
             resolve_source=AsyncMock(return_value=sources.network),
@@ -764,6 +766,15 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     assert asyncio.run(execute())
     artifact = store.finish.call_args.args[2]
     assert artifact is not None, store.finish.call_args
+    provenance_file = next(
+        file for file in artifact.manifest.files if file.name == "provenance"
+    )
+    provenance = json.loads(
+        artifacts.artifact_path(
+            row["attempt_id"], provenance_file.storage_name
+        ).read_text()
+    )
+    assert provenance["numericalPolicy"]["pitFillSearchLimit"] == 17
     ready = {
         **row,
         "status": "ready",
@@ -792,7 +803,7 @@ def test_model_worker_publishes_downstream_outputs_and_run_yaml(tmp_path: Path) 
     assert set(document.execution.additionalSources) == {"dem", "starting_mask"}
     policy = document.execution.numericalPolicy.model_dump(mode="json")
     assert policy["version"] == "hydrology.downstream_beneficiaries.v3"
-    assert policy["pitFillSearchLimit"] == 1000
+    assert policy["pitFillSearchLimit"] == 17
     assert policy["pitFillTreatNodataAsClosed"] is True
     assert str(tmp_path) not in export_model_job_yaml(ready, run=True).decode()
 
@@ -814,7 +825,7 @@ def test_cancel_reaps_real_downstream_native_work_before_cleanup(
     sources, request, limits = scaled_downstream_fixture(
         tmp_path / "sources", 1500, 1000
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
     attempt = "d" * 32
@@ -880,7 +891,7 @@ def test_overlapping_starting_features_count_each_value_once(tmp_path: Path) -> 
             },
         }
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     artifact = calculate_downstream(sources, spec, directory, limits)
@@ -899,7 +910,7 @@ def test_native_seed_mask_excludes_zero_negative_and_nodata(tmp_path: Path) -> N
     sources, request, limits = downstream_fixture(tmp_path / "sources")
     with rasterio.open(sources.rasters["starting_mask"], "r+") as dataset:
         dataset.write(np.tile([1, 0, -1, -9999, 0, 0], (4, 1)).astype("int16"), 1)
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     calculate_downstream(sources, spec, directory, limits)
@@ -939,7 +950,7 @@ def test_regional_dem_runs_with_network_extending_beyond_it(
         }
     )
     sources, request, limits = downstream_fixture(tmp_path, records=records)
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     assert spec.watershedSelection == sources.network.selection
     directory = tmp_path / "run"
     directory.mkdir()
@@ -991,7 +1002,7 @@ def test_configured_dem_extent_is_left_to_the_original_model(
     monkeypatch.setattr(
         "eolab_app.processing.downstream_runner.run_original_downstream", original_model
     )
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     assert calculate_downstream(sources, plan, directory, limits) is expected
@@ -1051,7 +1062,7 @@ def test_run_delegates_terrain_values_without_reading_dem_pixels(
     monkeypatch.setattr(
         "eolab_app.processing.downstream_runner.run_original_downstream", original_model
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     assert calculate_downstream(sources, spec, directory, limits) is expected
@@ -1097,7 +1108,7 @@ def test_configured_watershed_boundaries_are_left_to_the_original_model(
         "eolab_app.processing.downstream_runner.run_original_downstream",
         original_model,
     )
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     assert calculate_downstream(sources, spec, directory, limits) is expected
@@ -1119,7 +1130,7 @@ def test_missing_configured_raster_names_the_runtime_input(
     sources = replace(sources, rasters={**sources.rasters, missing: absent})
     label = "configured DEM" if missing == "dem" else "values raster"
     with pytest.raises(ProcessingError, match=label) as failure:
-        plan_downstream(sources, request, limits)
+        plan_downstream(sources, request)
     assert failure.value.code == "source_unavailable"
     assert str(absent) not in failure.value.detail
     assert "validat" not in failure.value.detail
@@ -1158,7 +1169,7 @@ def test_worker_captures_configured_watershed_then_keeps_that_identity(
     resolved = asyncio.run(resolve_downstream_sources(context, request, values))
     reader.resolve_source.assert_awaited_once_with(request.hydrology.watersheds)
     reader.resolve_for_sampling.assert_not_awaited()
-    plan = plan_downstream(resolved, request, limits)
+    plan = plan_downstream(resolved, request)
     assert plan.watershedSelection == sources.network.selection
     restored = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
     assert restored.watershedSelection == sources.network.selection
@@ -1215,7 +1226,7 @@ def test_native_source_failure_identifies_configured_input(
     from eolab_app.processing import downstream_runner
 
     sources, request, limits = downstream_fixture(tmp_path / "sources")
-    spec = plan_downstream(sources, request, limits)
+    spec = plan_downstream(sources, request)
     directory = tmp_path / "run"
     directory.mkdir()
     upstream = Mock()

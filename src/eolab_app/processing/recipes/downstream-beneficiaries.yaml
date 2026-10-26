@@ -67,6 +67,10 @@ steps:
               equalsField: HYBAS_ID
             terminalIdField: NEXT_SINK
       values: {input: values}
+      settings:
+        value:
+          # EcoShard search steps per pit; -1 and 0 allow unlimited searches.
+          pit_fill_search_limit: 1000
     parameters:
       buffer_m: {parameter: buffer_m}
       cutoff_m: {parameter: cutoff_m}

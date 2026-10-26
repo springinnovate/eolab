@@ -573,8 +573,8 @@ def test_saved_policy_must_include_the_registered_numerical_facts(
         )
 
 
-def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() -> None:
-    """Capture configured sources from YAML while users supply only mask and values."""
+def test_downstream_recipe_binds_fixed_sources_and_settings() -> None:
+    """Read sources and numerical settings from YAML while users supply mask and values."""
     from eolab_app.processing.downstream_models import DownstreamRequest
     from eolab_app.processing.model_definitions import FixedInputBinding
     from eolab_app.processing.model_run_contracts import ModelInvocation
@@ -584,6 +584,9 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     assert set(definition.inputs) == {"starting_mask", "values"}
     binding = definition.steps[0].inputs["hydrology"]
     assert isinstance(binding, FixedInputBinding)
+    settings = definition.steps[0].inputs["settings"]
+    assert isinstance(settings, FixedInputBinding)
+    assert settings.value.pit_fill_search_limit == 1000
     submitted = ModelRunRequest(
         utcOffsetMinutes=0,
         requestId="a" * 32,
@@ -610,6 +613,7 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     calculation, invocation = build_model_calculation_request(submitted, registry)
     assert isinstance(calculation, DownstreamRequest)
     assert calculation.hydrology == binding.value
+    assert calculation.settings == settings.value
     assert "hydrology" not in invocation.model_dump(mode="json", by_alias=True)
     saved_invocation = invocation.model_dump(mode="json", by_alias=True)
     with pytest.raises(ValidationError, match="hydrology"):
@@ -621,7 +625,7 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
     configured = definition.to_document()["steps"][0]["inputs"]["hydrology"]["value"]
     assert set(configured) == {"dem", "watersheds", "topology"}
     assert set(configured["dem"]) == {"collectionId", "itemId"}
-    for unknown in ("hydrology", "dem", "watersheds"):
+    for unknown in ("hydrology", "dem", "watersheds", "settings"):
         changed = submitted.model_copy(
             update={"inputs": {**submitted.inputs, unknown: configured}}
         )
@@ -630,13 +634,22 @@ def test_downstream_recipe_binds_fixed_sources_without_a_hydrology_submission() 
 
 
 @pytest.mark.parametrize(
-    "problem", ["missing_source", "path", "unknown_field", "wrong_argument"]
+    "problem",
+    [
+        "missing_source",
+        "path",
+        "unknown_field",
+        "wrong_argument",
+        "missing_settings",
+        "missing_cutoff",
+        "invalid_cutoff",
+    ],
 )
-def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) -> None:
-    """Fixed source bindings retain typed catalog identities and operation arguments.
+def test_fixed_downstream_inputs_reject_invalid_recipe_contracts(problem: str) -> None:
+    """Reject invalid configured sources or numerical settings when loading a recipe.
 
     Args:
-        problem: Invalid field, missing identity or mismatched operation argument.
+        problem: Missing configuration, invalid value or mismatched operation argument.
     """
     document = (
         ModelRegistry.load_installed()
@@ -650,6 +663,14 @@ def test_fixed_hydrology_binding_rejects_invalid_recipe_contracts(problem: str) 
         binding["value"]["dem"] = {"path": "/private/terrain.tif"}
     elif problem == "unknown_field":
         binding["value"]["eligibility"] = True
+    elif problem == "missing_settings":
+        del document["steps"][0]["inputs"]["settings"]
+    elif problem == "missing_cutoff":
+        document["steps"][0]["inputs"]["settings"]["value"] = {}
+    elif problem == "invalid_cutoff":
+        document["steps"][0]["inputs"]["settings"]["value"][
+            "pit_fill_search_limit"
+        ] = True
     else:
         document["steps"][0]["inputs"]["values"] = binding
         document["inputs"].pop("values")

@@ -53,6 +53,7 @@ from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing import downstream_operation as downstream
 from eolab_app.processing.downstream_models import (
     DownstreamRequest,
+    DownstreamSettings,
     QueuedDownstream,
     DownstreamPlan,
     ClosedEdgeDownstreamNumericalPolicy,
@@ -423,6 +424,7 @@ OPERATIONS = MappingProxyType(
                 inputs=(
                     ("starting_mask", "mask_source"),
                     ("hydrology", "hydrology_sources"),
+                    ("settings", "downstream_settings"),
                     ("values", "raster"),
                 ),
                 parameters=(
@@ -489,7 +491,10 @@ OPERATIONS = MappingProxyType(
                 primary_input="values",
                 extra_sources=downstream.get_additional_sources,
                 execution_inputs=downstream.resolve_downstream_execution_inputs,
-                fixed_input_models=(("hydrology", HydrologySources),),
+                fixed_input_models=(
+                    ("hydrology", HydrologySources),
+                    ("settings", DownstreamSettings),
+                ),
                 input_adapters=(("mask_source", TypeAdapter(StartingMask)),),
                 progress_descriptions=downstream.DOWNSTREAM_PROGRESS_DESCRIPTIONS,
             ),

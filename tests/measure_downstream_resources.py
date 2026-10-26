@@ -60,7 +60,7 @@ async def measure(
         update={"buffer_m": buffer_metres, "cutoff_m": cutoff_metres}
     )
     start = time.monotonic()
-    plan = plan_downstream(sources, request, limits)
+    plan = plan_downstream(sources, request)
     preparation_seconds = time.monotonic() - start
     scratch = directory / "attempt"
     scratch.mkdir()
