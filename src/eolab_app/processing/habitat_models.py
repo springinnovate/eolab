@@ -249,7 +249,7 @@ class QueuedHabitat(HabitatSchema):
     polygonArea: AggregateArea | None = None
 
 
-class HabitatPlan(HabitatSchema):
+class HabitatCalculationInputs(HabitatSchema):
     """Captured Habitat inputs, exact area descriptor and the requested output grid.
 
     Grid datatype and NoData describe the runner's primary Reference similarity

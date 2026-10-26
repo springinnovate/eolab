@@ -64,7 +64,7 @@ from eolab_app.processing import habitat_operation as habitat
 from eolab_app.processing.habitat_models import (
     HabitatRequest,
     QueuedHabitat,
-    HabitatPlan,
+    HabitatCalculationInputs,
     HabitatRasterStack,
     HabitatReferences,
     HabitatSettings,
@@ -214,7 +214,7 @@ OPERATIONS = MappingProxyType(
     {
         operation.id: operation
         for operation in (
-            ModelOperation[HabitatRequest, QueuedHabitat, HabitatPlan](
+            ModelOperation[HabitatRequest, QueuedHabitat, HabitatCalculationInputs](
                 id="habitat.condition.v1",
                 inputs=(
                     ("stack", "habitat_stack"),
@@ -244,7 +244,7 @@ OPERATIONS = MappingProxyType(
                 ),
                 execution_profile="habitat-condition",
                 queued_type=QueuedHabitat,
-                prepared_type=HabitatPlan,
+                prepared_type=HabitatCalculationInputs,
                 policy_type=HabitatSettings,
                 bind=habitat.bind_habitat,
                 source=habitat.get_habitat_source,

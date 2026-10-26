@@ -31,12 +31,12 @@ from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregate
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.clip_models import ClipGrid
-from eolab_app.processing.habitat_models import HabitatPlan, HabitatRequest
+from eolab_app.processing.habitat_models import HabitatCalculationInputs, HabitatRequest
 from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_preparation import (
     RasterGrid,
-    plan_raster_grid,
+    calculate_raster_grid,
     prepare_raster_stack,
 )
 from eolab_app.raster.bounded_window import project_polygons_to_crs
@@ -140,10 +140,10 @@ def read_habitat_area(
     return unary_union([shape(geometry) for geometry in polygons])
 
 
-def plan_habitat(
+def prepare_habitat_inputs(
     sources: HabitatSources, request: HabitatRequest, area: AggregateArea
-) -> HabitatPlan:
-    """Plan the requested grid over the whole AOI without reading raster values.
+) -> HabitatCalculationInputs:
+    """Calculate the AOI grid and collect the inputs for a Habitat calculation.
 
     Args:
         sources: Authorized input paths and AOI vector reader.
@@ -151,7 +151,7 @@ def plan_habitat(
         area: Prepared area descriptor; filtered geometry is not persisted.
 
     Returns:
-        Path-free input plan and common output grid for Processing and Run YAML.
+        Selected inputs, area descriptor and output grid for Processing and Run YAML.
 
     Raises:
         ValueError: If selected polygons are empty or cannot be projected.
@@ -160,7 +160,7 @@ def plan_habitat(
     """
     crs = CRS.from_user_input(request.preparation.crs)
     aoi = read_habitat_area(area, sources, crs)
-    target = plan_raster_grid(
+    target = calculate_raster_grid(
         aoi.bounds, crs, request.preparation.pixelSize, request.preparation.origin
     )
     width, height = target.width, target.height
@@ -177,7 +177,7 @@ def plan_habitat(
         nativeBlocks=ceil(width / 512) * ceil(height / 512),
         estimatedRawBytes=width * height * 4,
     )
-    return HabitatPlan(inputs=request, area=area, grid=grid)
+    return HabitatCalculationInputs(inputs=request, area=area, grid=grid)
 
 
 def describe_habitat_file(path: Path, name: str, media_type: str) -> ProducedFile:
@@ -205,7 +205,7 @@ def describe_habitat_file(path: Path, name: str, media_type: str) -> ProducedFil
 
 def calculate_habitat(
     sources: HabitatSources,
-    plan: HabitatPlan,
+    prepared: HabitatCalculationInputs,
     directory: Path,
     limits: RasterAggregateLimits,
 ) -> HabitatArtifact:
@@ -213,7 +213,7 @@ def calculate_habitat(
 
     Args:
         sources: Authorized raster paths and independently filtered vector inputs.
-        plan: Captured stack, AOI, output grid, resampling and scientific settings.
+        prepared: Captured stack, AOI, output grid, resampling and scientific settings.
         directory: Private attempt directory owned and cleaned by Processing.
         limits: Existing Processing settings used by temporary polygon rasterization.
 
@@ -225,16 +225,16 @@ def calculate_habitat(
         RasterioError: If a raster cannot be read or written.
         OSError: If result creation or cleanup fails.
     """
-    request = plan.inputs
+    request = prepared.inputs
     settings = request.settings
     with ExitStack() as resources:
         grid = RasterGrid(
-            crs=CRS.from_user_input(plan.grid.crs),
-            transform=Affine(*plan.grid.transform),
-            width=plan.grid.width,
-            height=plan.grid.height,
+            crs=CRS.from_user_input(prepared.grid.crs),
+            transform=Affine(*prepared.grid.transform),
+            width=prepared.grid.width,
+            height=prepared.grid.height,
         )
-        aoi = read_habitat_area(plan.area, sources, grid.crs)
+        aoi = read_habitat_area(prepared.area, sources, grid.crs)
         rasters = resources.enter_context(
             prepare_raster_stack(
                 {
@@ -332,7 +332,7 @@ def calculate_habitat(
     )
     fitted = result.fitted
     provenance = {
-        **plan.model_dump(mode="json", by_alias=True),
+        **prepared.model_dump(mode="json", by_alias=True),
         "fit": {
             "predictorCoverage": json.loads(
                 fitted.prepared_data.predictor_coverage.to_json(orient="records")
@@ -359,20 +359,20 @@ def calculate_habitat(
 
 def habitat_process_target(
     queue: ProcessResultWriter,
-    operation: Literal["plan", "calculate"],
+    operation: Literal["prepare", "calculate"],
     arguments: tuple[Any, ...],
 ) -> None:
-    """Execute Habitat planning or calculation under the existing supervisor.
+    """Prepare Habitat inputs or run the calculation under the worker supervisor.
 
     Args:
         queue: Worker-owned result writer.
-        operation: Requested planning or calculation phase.
+        operation: Prepare calculation inputs or calculate the Habitat outputs.
         arguments: Validated, authorized arguments for that phase.
     """
     try:
         value = (
-            plan_habitat(*arguments)
-            if operation == "plan"
+            prepare_habitat_inputs(*arguments)
+            if operation == "prepare"
             else calculate_habitat(*arguments)
         )
         queue.put(("ok", value))

@@ -13,7 +13,7 @@ from rasterio.transform import from_origin
 
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.processing.raster_preparation import (
-    plan_raster_grid,
+    calculate_raster_grid,
     prepare_raster_stack,
 )
 from test_raster_clips import write_source
@@ -64,7 +64,7 @@ def test_grid_covers_aoi_and_preserves_requested_alignment(
         expected_transform: Independently specified output pixel alignment.
         expected_shape: Expected height and width covering the AOI.
     """
-    grid = plan_raster_grid(bounds, PROJECTED, pixel_size, origin)
+    grid = calculate_raster_grid(bounds, PROJECTED, pixel_size, origin)
     assert grid.crs == PROJECTED
     assert grid.transform == expected_transform
     assert (grid.height, grid.width) == expected_shape
@@ -90,7 +90,7 @@ def test_different_source_grids_share_the_aoi_without_cropping_to_overlap(
         transform=from_origin(0.01, 0.04, 0.01, 0.01),
     )
     originals = {path: path.read_bytes() for path in (projected, geographic)}
-    grid = plan_raster_grid((0, 0, 4000, 4000), PROJECTED, (1000, 1000), (0, 0))
+    grid = calculate_raster_grid((0, 0, 4000, 4000), PROJECTED, (1000, 1000), (0, 0))
     attempt = tmp_path / "attempt"
     attempt.mkdir()
     inputs = {
@@ -140,7 +140,7 @@ def test_each_input_uses_its_requested_resampling(tmp_path: Path) -> None:
         transform=from_origin(0, 4000, 1000, 1000),
         crs="EPSG:3857",
     )
-    grid = plan_raster_grid(
+    grid = calculate_raster_grid(
         (250, 750, 3250, 3750), PROJECTED, (1000, 1000), (250, 3750)
     )
     attempt = tmp_path / "attempt"
@@ -198,7 +198,7 @@ def test_masks_nodata_and_missing_coverage_are_excluded_from_resampling(
         crs="EPSG:3857",
     )
     originals = {path: path.read_bytes() for path in (source, disjoint)}
-    grid = plan_raster_grid((0, 0, 4, 4), PROJECTED, (0.5, 0.5), (0, 0))
+    grid = calculate_raster_grid((0, 0, 4, 4), PROJECTED, (0.5, 0.5), (0, 0))
     attempt = tmp_path / "attempt"
     attempt.mkdir()
     with prepare_raster_stack(
@@ -263,7 +263,7 @@ def test_polygon_holes_follow_the_callers_pixel_inclusion_rule(
         },
     )
     expected_mask = geometry_mask(polygons, (4, 4), transform, all_touched=all_touched)
-    grid = plan_raster_grid((0.2, 0.2, 3.2, 3.2), PROJECTED, (1, 1), (0, 0))
+    grid = calculate_raster_grid((0.2, 0.2, 3.2, 3.2), PROJECTED, (1, 1), (0, 0))
     attempt = tmp_path / "attempt"
     attempt.mkdir()
     with prepare_raster_stack(
@@ -300,7 +300,7 @@ def test_failed_preparation_or_consumer_removes_only_owned_files(
         crs="EPSG:3857",
     )
     original = source.read_bytes()
-    grid = plan_raster_grid((0, 0, 4, 4), PROJECTED, (1, 1), (0, 0))
+    grid = calculate_raster_grid((0, 0, 4, 4), PROJECTED, (1, 1), (0, 0))
     attempt = tmp_path / "attempt"
     attempt.mkdir()
     sibling = attempt / "other-output.txt"

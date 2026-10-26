@@ -10,7 +10,7 @@ from eolab_app.processing.habitat_calculation import (
     habitat_process_target,
 )
 from eolab_app.processing.habitat_models import (
-    HabitatPlan,
+    HabitatCalculationInputs,
     HabitatRequest,
     HabitatSettings,
     QueuedHabitat,
@@ -52,9 +52,9 @@ def bind_habitat(
 
 
 def get_habitat_request(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> HabitatRequest:
-    """Return the captured inputs from a request, queued job or prepared plan.
+    """Return the Habitat request from submitted, queued or prepared inputs.
 
     Args:
         value: Validated Habitat inputs at any stage of the job.
@@ -64,11 +64,11 @@ def get_habitat_request(
     """
     if isinstance(value, QueuedHabitat):
         return value.request
-    return value.inputs if isinstance(value, HabitatPlan) else value
+    return value.inputs if isinstance(value, HabitatCalculationInputs) else value
 
 
 def get_habitat_source(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> RasterSourceReference:
     """Return the first predictor for admission and the whole-raster area choice.
 
@@ -82,7 +82,7 @@ def get_habitat_source(
 
 
 def get_additional_habitat_sources(
-    value: HabitatRequest | QueuedHabitat | HabitatPlan,
+    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> dict[str, RasterSourceReference]:
     """Declare the remaining rasters for ordinary authorization and retention.
 
@@ -198,10 +198,11 @@ async def prepare_habitat(
         primary: Authorized first predictor.
 
     Returns:
-        A saved Habitat plan with its area descriptor and aligned output grid.
+        Saved calculation inputs with the area descriptor and calculated output grid.
 
     Raises:
-        ProcessingError: If selected features or native planning cannot be read.
+        ProcessingError: If selected features cannot be read or the grid cannot
+            be calculated.
         SelectionUnavailableError: If a selected vector is unavailable.
     """
     request = queued.request
@@ -226,26 +227,26 @@ async def prepare_habitat(
             bounds=summary["bbox"],
             catalogSelection=request.catalogSelection,
         )
-    status, plan = await context.run_native(
+    status, prepared = await context.run_native(
         habitat_process_target,
-        ("plan", (sources, request, area)),
+        ("prepare", (sources, request, area)),
         None,
         context.native,
     )
     if status != "ok":
-        raise ProcessingError(*plan)
+        raise ProcessingError(*prepared)
     return PreparedJobPlan(
-        operation=plan.operation,
-        specification=plan.model_dump(mode="json", by_alias=True),
+        operation=prepared.operation,
+        specification=prepared.model_dump(mode="json", by_alias=True),
         summary={},
         reserved_bytes=0,
     )
 
 
 async def prepare_habitat_execution(
-    context: OperationContext, spec: HabitatPlan, primary: AuthorizedRaster
-) -> tuple[HabitatSources, HabitatPlan]:
-    """Resolve original sources for an accepted plan without changing its settings.
+    context: OperationContext, spec: HabitatCalculationInputs, primary: AuthorizedRaster
+) -> tuple[HabitatSources, HabitatCalculationInputs]:
+    """Resolve original sources for the saved Habitat calculation inputs.
 
     Args:
         context: Worker capabilities and authorized additional rasters.
@@ -253,7 +254,7 @@ async def prepare_habitat_execution(
         primary: Authorized first predictor.
 
     Returns:
-        Ephemeral native inputs and the unchanged execution plan.
+        Authorized file paths and vector readers, plus the saved calculation inputs.
 
     Raises:
         ProcessingError: If vector reading is unavailable.
@@ -263,12 +264,12 @@ async def prepare_habitat_execution(
 
 
 def select_habitat_execution(
-    spec: HabitatPlan, context: OperationContext
+    spec: HabitatCalculationInputs, context: OperationContext
 ) -> tuple[Callable[..., None], str, RasterAggregateLimits]:
     """Select the Habitat native target and existing Processing lifecycle settings.
 
     Args:
-        spec: Prepared Habitat plan.
+        spec: Saved Habitat calculation inputs.
         context: Worker execution capabilities.
 
     Returns:
@@ -277,11 +278,11 @@ def select_habitat_execution(
     return habitat_process_target, "calculate", context.aggregate_limits
 
 
-def describe_habitat_policy(spec: HabitatPlan) -> HabitatSettings:
+def describe_habitat_policy(spec: HabitatCalculationInputs) -> HabitatSettings:
     """Return the scientific settings captured for Run YAML provenance.
 
     Args:
-        spec: Prepared Habitat plan.
+        spec: Saved Habitat calculation inputs.
 
     Returns:
         The fixed settings used for sampling, fitting and prediction.
