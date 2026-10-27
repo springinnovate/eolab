@@ -93,19 +93,10 @@ class PublishedRasterAuthorization:
     """Raster-owned WMS request policy for an authorized published layer.
 
     Attributes:
-        style_name: Only public WMS style authorized for this raster.
+        style_names: Public WMS styles authorized for this raster.
     """
 
-    style_name: str = RASTER_WMS_STYLE_NAME
-
-    @property
-    def style_names(self) -> tuple[str]:
-        """Return the dynamic raster style approved for this layer.
-
-        Returns:
-            A singleton containing the raster's existing WMS style name.
-        """
-        return (self.style_name,)
+    style_names: tuple[str, ...] = (RASTER_WMS_STYLE_NAME,)
 
     def validate_parameters(
         self,
@@ -202,7 +193,7 @@ class PublishedRasterAuthorization:
             PublishedLayerRequestError: If the appearance is not a complete
                 authorized dynamic raster style.
         """
-        if style_name != self.style_name:
+        if style_name not in self.style_names:
             raise PublishedLayerRequestError(
                 "Composite raster rendering requires its dynamic raster style"
             )
