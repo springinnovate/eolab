@@ -211,7 +211,7 @@ def test_categorical_input_cannot_replace_layer_authority_or_supply_sld(
     ):
         assert client.get("/geoserver/eolab/wms", params=query).status_code == 400
     assert requests == []
-    vector = PublishedVectorAuthorization(source=object(), style_name="vector-polygon")  # type: ignore[arg-type]
+    vector = PublishedVectorAuthorization(source=object(), styles={"vector-polygon": None})  # type: ignore[arg-type]
     with pytest.raises(PublishedLayerRequestError, match="not supported for vector"):
         vector.validate_parameters("getmap", {"raster_style": style})
 

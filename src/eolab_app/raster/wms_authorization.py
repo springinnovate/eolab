@@ -98,6 +98,15 @@ class PublishedRasterAuthorization:
 
     style_name: str = RASTER_WMS_STYLE_NAME
 
+    @property
+    def style_names(self) -> tuple[str]:
+        """Return the dynamic raster style approved for this layer.
+
+        Returns:
+            A singleton containing the raster's existing WMS style name.
+        """
+        return (self.style_name,)
+
     def validate_parameters(
         self,
         operation: str,

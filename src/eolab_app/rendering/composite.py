@@ -169,7 +169,7 @@ class CompositeMapRenderingService:
         Raises:
             CompositeMapPlanUnavailableError: If this process lacks the plan.
             PublishedLayerChangedError: If a filter expired or source binding changed.
-            PublishedLayerRequestError: If an authorized style was superseded.
+            PublishedLayerRequestError: If a style is no longer approved.
         """
         plan = self._store.get(plan_id)
         await asyncio.to_thread(self._require_current_plan, plan.request)
@@ -204,13 +204,13 @@ class CompositeMapRenderingService:
         Raises:
             PublishedLayerNotAuthorizedError: If a layer is no longer known.
             PublishedLayerChangedError: If a filter expired or source binding changed.
-            PublishedLayerRequestError: If a style was superseded.
+            PublishedLayerRequestError: If a style is no longer approved.
         """
         for layer in request.layers:
             authorization = self._require_authorization(layer.layer_name)
-            if authorization.style_name != layer.style_name:
+            if layer.style_name not in authorization.style_names:
                 raise PublishedLayerRequestError(
-                    f"Composite style must be {authorization.style_name}"
+                    "Composite style is not authorized for this layer"
                 )
 
     def _build_layer_sld(
@@ -225,12 +225,12 @@ class CompositeMapRenderingService:
             One complete single-layer SLD and its trusted interpolation override.
 
         Raises:
-            PublishedLayerRequestError: If its current style does not match.
+            PublishedLayerRequestError: If its requested style is not approved.
         """
         authorization = self._require_authorization(layer.layer_name)
-        if authorization.style_name != layer.style_name:
+        if layer.style_name not in authorization.style_names:
             raise PublishedLayerRequestError(
-                f"Composite style must be {authorization.style_name}"
+                "Composite style is not authorized for this layer"
             )
         document = authorization.build_composite_sld(
             layer.layer_name,

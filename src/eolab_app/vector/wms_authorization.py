@@ -1,6 +1,6 @@
 """Vector-owned authorization for fixed public WMS parameters."""
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -20,21 +20,29 @@ from eolab_app.vector.styles import (
 
 @dataclass(frozen=True)
 class PublishedVectorAuthorization:
-    """Current vector source plus its feature-owned WMS request policy.
+    """Vector source and approved appearances for independent map views.
 
     Attributes:
         source: Exact mounted source and native layer identity.
-        style_name: Only WMS style authorized for this layer.
-        geometry_name: GeoServer geometry attribute retained with the style.
+        styles: Approved WMS style names mapped to their GeoServer geometry
+            attributes for labels; None means the style needs no label geometry.
         upstream_layer_name: Original authorized publication for a filtered view.
         filter: Validated per-view predicate, never an arbitrary expression.
     """
 
     source: ResolvedVectorSource
-    style_name: str
-    geometry_name: str | None = None
+    styles: Mapping[str, str | None]
     upstream_layer_name: str | None = None
     filter: VectorFilter | None = None
+
+    @property
+    def style_names(self) -> Collection[str]:
+        """Return every WMS style approved for this source.
+
+        Returns:
+            Published style names usable by any authorized view of this source.
+        """
+        return self.styles.keys()
 
     def validate_parameters(
         self,
@@ -114,7 +122,7 @@ class PublishedVectorAuthorization:
 
         Args:
             layer_name: Current workspace-qualified vector layer identity.
-            style_name: Current feature-owned content style identity.
+            style_name: Approved feature-owned content style identity.
             style_environment: Unsupported raster-style representation.
             style_definition: Required complete vector appearance.
             opacity: Neutral retained-layer opacity from zero through one.
@@ -124,15 +132,15 @@ class PublishedVectorAuthorization:
 
         Raises:
             PublishedLayerRequestError: If the style definition is invalid or
-                does not produce the currently authorized style identity.
+                does not produce the requested approved style identity.
         """
         if (
-            style_name != self.style_name
+            style_name not in self.styles
             or style_environment is not None
             or style_definition is None
         ):
             raise PublishedLayerRequestError(
-                "Composite vector rendering requires its current vector style"
+                "Composite vector rendering requires an approved vector style"
             )
         try:
             style = VectorStyle.model_validate(style_definition)
@@ -142,6 +150,7 @@ class PublishedVectorAuthorization:
             ) from error
         layer_name = self.upstream_layer_name or layer_name
         resource_name = layer_name.partition(":")[2]
+        geometry_name = self.styles[style_name]
         default_style_name = f"vector-{style.geometry_kind}"
         is_default_style = (
             style_name == default_style_name
@@ -149,7 +158,7 @@ class PublishedVectorAuthorization:
         )
         try:
             matches_style = is_default_style or vector_style_name(
-                resource_name, style, geometry_name=self.geometry_name,
+                resource_name, style, geometry_name=geometry_name,
             ) == style_name
         except ValueError as error:
             raise PublishedLayerRequestError("Composite vector label geometry is unavailable") from error
@@ -162,6 +171,6 @@ class PublishedVectorAuthorization:
             style,
             layer_name=layer_name,
             opacity_multiplier=opacity,
-            geometry_name=self.geometry_name,
+            geometry_name=geometry_name,
         )
         return filter_vector_sld(document, self.filter) if self.filter is not None else document

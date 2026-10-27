@@ -321,12 +321,13 @@ def create_wms_proxy_router(
                 and requested_style in VECTOR_HIGHLIGHT_STYLE_NAMES
             )
             if (
-                requested_style not in {"", authorization.style_name}
+                requested_style != ""
+                and requested_style not in authorization.style_names
                 and not is_vector_highlight
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"WMS style must be {authorization.style_name}",
+                    detail="WMS style is not authorized for this layer",
                 )
             try:
                 authorization.validate_parameters(operation, normalized_query)

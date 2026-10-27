@@ -1,6 +1,6 @@
 """Neutral contracts used by the restricted WMS delivery boundary."""
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Protocol
 
 import httpx2
@@ -39,7 +39,14 @@ class MapRenderQueue(Protocol):
 class PublishedLayerAuthorization(Protocol):
     """Browser-safe policy returned for one current published layer."""
 
-    style_name: str
+    @property
+    def style_names(self) -> Collection[str]:
+        """Return the WMS styles approved for this published layer.
+
+        Returns:
+            Style names accepted by the owning feature's rendering policy.
+        """
+        ...
 
     def validate_parameters(
         self,
@@ -122,7 +129,7 @@ class PublishedLayerRegistry(Protocol):
             layer_name: Workspace-qualified GeoServer layer name.
 
         Returns:
-            Current authorization including the allowed fixed style.
+            Current authorization including the approved styles.
 
         Raises:
             PublishedLayerNotAuthorizedError: If this registry does not own the

@@ -10,6 +10,7 @@ from hashlib import sha256
 from threading import Lock
 from pathlib import Path
 import re
+from types import MappingProxyType
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -358,10 +359,7 @@ class PublishedVectorRegistry:
         """Create an empty process-local vector authorization registry."""
         self._filters: OrderedDict[str, tuple[str, ResolvedVectorSource, VectorFilter]] = OrderedDict()
         self._filter_lock = Lock()
-        self._sources: dict[
-            str,
-            tuple[ResolvedVectorSource, str, str | None],
-        ] = {}
+        self._sources: dict[str, PublishedVectorAuthorization] = {}
 
     def get_upload_id(self, layer_name: str) -> UUID | None:
         """Return the upload behind a published layer or one of its filtered views.
@@ -397,21 +395,30 @@ class PublishedVectorRegistry:
         style_name: str,
         geometry_name: str | None = None,
     ) -> None:
-        """Authorize an immutable vector layer and its published style.
+        """Retain a published style alongside the source's other approved styles.
+
+        Publishing or styling the same source preserves existing map appearances.
+        A different source binding replaces the previous source's style approvals.
 
         Args:
             layer_name: Workspace-qualified GeoServer WMS layer name.
             source: Exact mounted source and native layer identity.
-            style_name: Geometry-specific initialized WMS style.
-            geometry_name: Authorized GeoServer geometry attribute for labels.
+            style_name: Initialized WMS style or validated content-addressed style.
+            geometry_name: GeoServer geometry attribute used by this style's labels.
 
         Returns:
-            None. Retains the current authorized vector rendering state.
+            None. Stores an immutable snapshot of the source's approved styles.
         """
-        self._sources[layer_name] = (
+        previous = self._sources.get(layer_name)
+        styles = (
+            dict(previous.styles)
+            if previous is not None and previous.source == source
+            else {}
+        )
+        styles[style_name] = geometry_name
+        self._sources[layer_name] = PublishedVectorAuthorization(
             source,
-            style_name,
-            geometry_name,
+            MappingProxyType(styles),
         )
 
     def authorize_filter(self, layer_name: str, candidate: VectorFilter) -> str:
@@ -450,7 +457,7 @@ class PublishedVectorRegistry:
             layer_name: Workspace-qualified GeoServer WMS layer name.
 
         Returns:
-            Exact immutable source and allowed style.
+            Exact immutable source and its approved styles.
 
         Raises:
             PublishedLayerNotAuthorizedError: If this process did not authorize
@@ -474,9 +481,4 @@ class PublishedVectorRegistry:
             raise PublishedLayerNotAuthorizedError(
                 "The WMS layer has not been approved for visualization"
             )
-        source, style_name, geometry_name = authorization
-        return PublishedVectorAuthorization(
-            source,
-            style_name,
-            geometry_name,
-        )
+        return authorization

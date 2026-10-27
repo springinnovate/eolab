@@ -48,7 +48,7 @@ class _NoRasterAuthorization:
 class _FixedVectorAuthorization:
     """Authorize exactly one fixed-style vector layer."""
 
-    style_name = "vector-polygon"
+    style_names: frozenset[str] = frozenset({"vector-polygon"})
 
     def require_current(self, layer_name: str) -> "_FixedVectorAuthorization":
         """Return the fixed vector authorization.
@@ -295,7 +295,7 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
     )
     assert raster_style_response.status_code == 400
     assert raster_style_response.json() == {
-        "detail": "WMS style must be vector-polygon"
+        "detail": "WMS style is not authorized for this layer"
     }
     assert env_response.status_code == 400
     assert env_response.json() == {
@@ -596,7 +596,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
     assert exception_response.headers["content-type"] == "application/xml"
     assert wrong_style_response.status_code == 400
     assert wrong_style_response.json() == {
-        "detail": "WMS style must be dynamic-raster"
+        "detail": "WMS style is not authorized for this layer"
     }
     assert malformed_environment_response.status_code == 400
     assert malformed_environment_response.json() == {

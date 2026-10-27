@@ -59,8 +59,9 @@ class RecordingStyler:
             Style identity and published geometry attribute.
         """
         self.requests.append((resource_name, style))
+        geometry_name = "shape" if style.label is not None else None
         return VectorStylePublication(
-            vector_style_name(resource_name, style, geometry_name="shape"), "shape",
+            vector_style_name(resource_name, style, geometry_name=geometry_name), geometry_name,
         )
 
 
@@ -592,10 +593,10 @@ def test_style_service_uses_catalog_identity_and_current_publication(
     authorization = registry.require_current(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}"
     )
-    assert authorization.style_name == vector_style_name(
+    assert result.style_name == vector_style_name(
         item["id"], request.style, geometry_name="shape",
     )
-    assert authorization.geometry_name == "shape"
+    assert authorization.styles[result.style_name] == "shape"
     composite = authorization.build_composite_sld(
         f"eolab:{item['id']}", result.style_name, None,
         result.style.model_dump(by_alias=True), 0.5,
