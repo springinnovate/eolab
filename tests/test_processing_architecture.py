@@ -85,6 +85,17 @@ def test_hydrology_sources_use_neutral_readers_without_sibling_services() -> Non
     }
 
 
+def test_shared_worker_does_not_import_downstream_settings() -> None:
+    """Keep downstream numerical configuration out of shared execution capabilities."""
+    for name in ("worker.py", "operation_context.py"):
+        dependencies = imports(Path("src/eolab_app/processing") / name)
+        assert not {
+            module
+            for module in dependencies
+            if module.startswith("eolab_app.processing.downstream")
+        }, name
+
+
 def test_mechanisms_and_storage_never_import_application_services() -> None:
     """Keep neutral native execution and storage below their workflow owners."""
     paths = [
@@ -167,12 +178,11 @@ def test_processing_deployment_preserves_concurrency_without_work_ceilings() -> 
     limits = worker.get("deploy", {}).get("resources", {}).get("limits", {})
     assert not {"memory", "pids"}.intersection(limits)
     environment = dict(entry.split("=", 1) for entry in worker["environment"])
-    # Processing exposes storage, concurrency, numerical policy and retention,
+    # Processing exposes storage, concurrency and retention,
     # not total calculation budgets. New settings must preserve that policy.
     assert {name for name in environment if name.startswith("PROCESSING_")} == {
         "PROCESSING_DATA_PATH",
         "PROCESSING_WORKER_COUNT",
-        "PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT",
         "PROCESSING_RESULT_TTL_SECONDS",
         "PROCESSING_METADATA_TTL_SECONDS",
     }

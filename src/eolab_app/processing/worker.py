@@ -31,7 +31,6 @@ from eolab_app.raster.temporal import ResolvedTemporalInterval
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
-from eolab_app.processing.downstream_models import DownstreamLimits
 from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -66,7 +65,6 @@ class ProcessingWorker:
         native: ReusableProcess | None = None,
         areas: CatalogSelectionReader | None = None,
         uploads: VectorUploadStore | None = None,
-        downstream_limits: DownstreamLimits | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
 
@@ -78,7 +76,6 @@ class ProcessingWorker:
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
             uploads: Storage for original uploaded vectors retained by accepted jobs.
-            downstream_limits: Optional downstream job lifecycle settings.
         """
         self.areas = areas
         self.uploads = uploads
@@ -88,9 +85,6 @@ class ProcessingWorker:
         self.limits = limits
         self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
-        self.downstream_limits = downstream_limits or DownstreamLimits.with_lifecycle(
-            limits
-        )
         # Fail startup for invalid packaged definitions rather than hiding them
         # from discovery or accepting work the worker cannot dispatch.
         ModelRegistry.load_installed()
@@ -134,7 +128,6 @@ class ProcessingWorker:
             run_process,
             reuse_results,
             source_checksum,
-            downstream_limits=self.downstream_limits,
         )
 
     async def _resolve_source(

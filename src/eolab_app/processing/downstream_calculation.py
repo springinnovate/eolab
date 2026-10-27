@@ -24,9 +24,8 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArtifact
-from eolab_app.processing.clip_models import ClipGrid
+from eolab_app.processing.clip_models import ClipGrid, RasterClipLimits
 from eolab_app.processing.downstream_models import (
-    DownstreamLimits,
     DownstreamRequest,
     DownstreamPlan,
 )
@@ -53,14 +52,11 @@ class DownstreamSources:
     starting: ResolvedCatalogSelection | None
 
 
-def read_starting_area_geometry(
-    sources: DownstreamSources, limits: DownstreamLimits
-) -> BaseGeometry:
+def read_starting_area_geometry(sources: DownstreamSources) -> BaseGeometry:
     """Read the selected vector polygons or positive raster mask cells as a starting area.
 
     Args:
         sources: Authorized native inputs.
-        limits: Shared job lifecycle settings.
 
     Returns:
         Process-local geometry used to find intersecting watershed partitions.
@@ -137,7 +133,7 @@ def describe_values_grid(dataset: rasterio.io.DatasetReader) -> ClipGrid:
 
 
 def plan_downstream(
-    sources: DownstreamSources, request: DownstreamRequest, limits: DownstreamLimits
+    sources: DownstreamSources, request: DownstreamRequest
 ) -> DownstreamPlan:
     """Capture readable source metadata and leave hydrology decisions to the model.
 
@@ -147,7 +143,6 @@ def plan_downstream(
     Args:
         sources: Authorized native source paths and vector descriptors.
         request: Model-configured sources and user inputs for this calculation.
-        limits: Job lifecycle settings and pit-search cutoff saved for this run.
 
     Returns:
         Source grid, current watershed identity and effective pit-filling setting.
@@ -175,7 +170,6 @@ def plan_downstream(
         grid=grid,
         watershedSelection=sources.network.selection,
         reservedBytes=0,
-        pit_fill_search_limit=limits.pit_fill_search_limit,
     )
 
 
@@ -183,7 +177,7 @@ def calculate_downstream(
     sources: DownstreamSources,
     spec: DownstreamPlan,
     directory: Path,
-    limits: DownstreamLimits,
+    limits: RasterClipLimits,
 ) -> AggregateArtifact:
     """Invoke the unchanged WWF calculation with the captured source files.
 
@@ -212,7 +206,7 @@ def calculate_downstream(
             spec,
             workspace,
             limits,
-            read_starting_area_geometry(sources, limits),
+            read_starting_area_geometry(sources),
         )
 
 

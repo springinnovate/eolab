@@ -3,8 +3,8 @@
 from typing import Any, Callable
 
 from eolab_app.processing.aggregate_models import AggregateArea
+from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.downstream_models import (
-    DownstreamLimits,
     DownstreamRequest,
     QueuedDownstream,
     DownstreamPlan,
@@ -39,7 +39,7 @@ def bind_downstream(
     """Bind a recipe's selected inputs and parameters to a downstream request.
 
     Args:
-        inputs: Mask, model-configured hydrology sources and values raster.
+        inputs: Mask, values raster, configured hydrology sources and pit-filling settings.
         parameters: Buffer, optional cutoff and summary formula.
         request_id: Stable model submission identifier.
         label: User's result label.
@@ -207,7 +207,7 @@ async def prepare_downstream(
     sources = await resolve_downstream_sources(context, queued.request, authorized)
     status, result = await context.run_native(
         downstream_process_target,
-        ("plan", (sources, queued.request, context.downstream_limits)),
+        ("plan", (sources, queued.request)),
         None,
         context.native,
     )
@@ -252,7 +252,7 @@ async def resolve_downstream_execution_inputs(
 
 def select_downstream_execution(
     spec: DownstreamPlan, context: OperationContext
-) -> tuple[Callable[..., None], str, DownstreamLimits]:
+) -> tuple[Callable[..., None], str, RasterClipLimits]:
     """Select the original downstream model target for supervised execution.
 
     Args:
@@ -262,7 +262,7 @@ def select_downstream_execution(
     Returns:
         The supervised native target, action and worker limits.
     """
-    return downstream_process_target, "calculate", context.downstream_limits
+    return downstream_process_target, "calculate", context.limits
 
 
 def describe_downstream_policy(
@@ -278,7 +278,7 @@ def describe_downstream_policy(
     """
     return ClosedEdgeDownstreamNumericalPolicy(
         version="hydrology.downstream_beneficiaries.v3",
-        pitFillSearchLimit=spec.pit_fill_search_limit,
+        pitFillSearchLimit=spec.inputs.settings.pit_fill_search_limit,
         bufferMetres=spec.inputs.buffer_m,
         cutoffMetres=spec.inputs.cutoff_m,
         wgs84PixelSize=spec.inputs.wgs84_pixel_size,
