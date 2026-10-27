@@ -14,6 +14,7 @@ function setup(request = async () => snapshot()) {
     const local = []; const events = []; const stored = new Map();
     const view = { busy() {}, connected() {}, showLayers: layers => events.push(["memberships", layers]), open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
     const controller = new AnnotationSessionsController({ document: {}, api: { request }, getLayers: () => local,
+        saveLocalLayers: async () => {},
         isLayerOnMap: id => local.some(layer => layer.id === id),
         createLayer: async (name, collection, options = {}) => {
             const existing = local.find(layer => layer.id === options.localId);
@@ -316,6 +317,60 @@ test("creator and joiner both receive one layer and automatically see all shared
             assert.equal(local.length, 1, "rejoining does not duplicate the existing layer");
         } finally { controller.destroy(); }
     }
+});
+
+test("local storage failures prevent create, join and contribute requests and remain visible in the dialog", async () => {
+    for (const mode of ["create", "join", "contribute"]) {
+        for (const message of ["Saved polygons could not be opened", "Browser storage is full"]) {
+            const requests = [];
+            const { controller, local, events, stored } = setup(async (...args) => { requests.push(args); return snapshot(); });
+            controller.saveLocalLayers = async () => { throw new Error(message); };
+            try {
+                await controller.connect(mode, "ABCDEFGH", "Rich");
+                assert.deepEqual(requests, []);
+                assert.equal(local.length, 0);
+                assert.equal(stored.size, 0);
+                assert.deepEqual(events.at(-1), ["error", message]);
+                assert.equal(controller.connecting, false);
+            } finally { controller.destroy(); }
+        }
+    }
+});
+
+test("create, join and contribute wait for the local save before contacting the server", async () => {
+    for (const mode of ["create", "join", "contribute"]) {
+        const requests = [];
+        const { controller, local, events } = setup(async (path, method, body) => {
+            requests.push([path, method, body]);
+            return method === "PUT" ? { revision: 1 } : snapshot();
+        });
+        let finishSaving;
+        controller.saveLocalLayers = () => new Promise(resolve => { finishSaving = resolve; });
+        try {
+            const connecting = controller.connect(mode, "ABCDEFGH", "Rich");
+            assert.deepEqual(requests, []);
+            finishSaving();
+            await connecting;
+            assert.deepEqual(requests[0], [mode === "create" ? "" : "/join", "POST", mode === "create"
+                ? { name: "ABCDEFGH", contributorName: "Rich" } : { joinCode: "ABCDEFGH", contributorName: "Rich" }]);
+            assert.equal(local.length, 1);
+            assert.ok(events.some(event => event[0] === "reveal"));
+            if (mode === "contribute") assert.deepEqual(events.at(-1), ["draw", "local-0"]);
+        } finally { controller.destroy(); }
+    }
+});
+
+test("closing while local polygons are saving prevents the create request", async () => {
+    const requests = [];
+    const { controller, local } = setup(async (...args) => { requests.push(args); return snapshot(); });
+    let finishSaving;
+    controller.saveLocalLayers = () => new Promise(resolve => { finishSaving = resolve; });
+    const connecting = controller.connect("create", "Watersheds", "Rich");
+    controller.destroy();
+    finishSaving();
+    await connecting;
+    assert.deepEqual(requests, []);
+    assert.equal(local.length, 0);
 });
 
 test("failed joins create no layer and preserve the server's duplicate-name message", async () => {

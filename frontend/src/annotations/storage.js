@@ -15,10 +15,12 @@ export class AnnotationStorage {
 
     /**
      * Open this origin's annotation database and validate its saved document.
+     * Save cleared unreadable filters before returning drawings to the editor.
+     * @param {(layerId:string)=>void} [onFilterCleared] Receives repaired layer IDs after the document is saved.
      * @return {Promise<import("./model.js").AnnotationLayer[]>} Saved layers, or an empty collection.
-     * @throws {Error} If storage is unavailable or the saved document is invalid.
+     * @throws {Error} If storage is unavailable, drawing data is invalid or saving cleared filters fails.
      */
-    async load() {
+    async load(onFilterCleared = () => {}) {
         if (!this.indexedDB) throw new Error("This browser does not support polygon storage.");
         this.database = await new Promise((resolve, reject) => {
             const request = this.indexedDB.open("eolab-annotations", 1);
@@ -33,9 +35,14 @@ export class AnnotationStorage {
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
-        const layers = saved ? readAnnotationLayers(saved.document) : [];
+        const clearedFilters = [];
+        const layers = saved ? readAnnotationLayers(saved.document, id => clearedFilters.push(id)) : [];
         if (saved && (!Number.isSafeInteger(saved.revision) || saved.revision < 0)) throw new Error("Saved layer revision is invalid.");
         this.revision = saved?.revision ?? 0;
+        if (clearedFilters.length) {
+            await this.save({ version: 1, layers });
+            clearedFilters.forEach(onFilterCleared);
+        }
         return layers;
     }
 

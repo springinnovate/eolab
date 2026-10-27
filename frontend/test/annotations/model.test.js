@@ -112,21 +112,48 @@ test("storage round trip preserves layer appearance, filter rules and notes", ()
     assert.equal(layer.filter.rules[0].value, "priority");
 });
 
-test("stored identities, filters, appearance and drawing limits are validated", () => {
+test("unreadable stored filters are cleared while drawings and supported filters remain unchanged", () => {
+    const annotations = model();
+    const layer = annotations.createLayer();
+    const polygon = triangle(annotations, layer.id);
+    layer.name = "Reference sites";
+    polygon.name = "North site"; polygon.note = "Retain these vertices and notes.";
+    layer.position = 3; layer.opacity = 0.4; layer.visible = false;
+    layer.style.color = "#123456";
+    const filtered = annotations.createLayer();
+    triangle(annotations, filtered.id);
+    filtered.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "contains", value: "site" }] };
+    for (const filter of ["", "Forest", null, { enabled: true, match: "all", rules: [{ field: "obsolete", operator: "eq", value: "x" }] }]) {
+        const saved = annotations.document();
+        saved.layers.find(candidate => candidate.id === layer.id).filter = filter;
+        const original = structuredClone(saved);
+        const cleared = [];
+        const restored = readAnnotationLayers(saved, id => cleared.push(id));
+        assert.deepEqual(restored, annotations.layers);
+        assert.deepEqual(cleared, [layer.id]);
+        assert.deepEqual(saved, original);
+        const repeatedClears = [];
+        assert.deepEqual(readAnnotationLayers({ version: 1, layers: restored }, id => repeatedClears.push(id)), restored);
+        assert.deepEqual(repeatedClears, []);
+    }
+});
+
+test("stored identities, appearance and drawing limits are validated", () => {
     const annotations = model();
     const layer = annotations.createLayer();
     triangle(annotations, layer.id);
-    for (const filter of ["", " ", "Forest"]) {
-        const saved = annotations.document();
-        saved.layers[0].filter = filter;
-        assert.throws(() => readAnnotationLayers(saved), TypeError);
-    }
     const invalid = annotations.document();
     invalid.layers[0].polygons[0].id = layer.id;
     assert.throws(() => readAnnotationLayers(invalid), /identifiers/);
     invalid.layers[0].polygons[0].id = "polygon";
     invalid.layers[0].style.fillOpacity = 5;
     assert.throws(() => readAnnotationLayers(invalid), /style/);
+    invalid.layers[0].style.fillOpacity = 0.25;
+    invalid.layers[0].filter = "obsolete filter";
+    invalid.layers[0].polygons[0].vertices = [[0, 0], [1, 1]];
+    const original = structuredClone(invalid);
+    assert.throws(() => readAnnotationLayers(invalid), /invalid polygon/);
+    assert.deepEqual(invalid, original);
     annotations.beginPolygon(layer.id);
     annotations.draft.polygon.vertices = Array.from({length: MAX_POLYGON_VERTICES}, () => [0, 0]);
     assert.throws(() => annotations.addVertex([0, 0]), /at most/);
