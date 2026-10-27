@@ -437,7 +437,8 @@ class RunDocument(ModelSchema):
         """Check that execution details describe the recipe and inputs saved for this run.
 
         Returns:
-            This run document after matching its operation and raster input names.
+            This run document after matching its operation and declared primary
+            source, including an empty source mapping when none is declared.
 
         Raises:
             ValueError: If the recorded operation or sources do not match the saved recipe.
@@ -450,13 +451,21 @@ class RunDocument(ModelSchema):
         ):
             raise ValueError("Execution operation does not match the captured recipe")
         operation = get_model_operation(step.operation)
-        source_name = step.inputs[operation.primary_input].input
-        if set(self.execution.sources) != {source_name}:
+        source_name = (
+            step.inputs[operation.primary_input].input
+            if operation.primary_input is not None
+            else None
+        )
+        expected_sources = {source_name} if source_name is not None else set()
+        if set(self.execution.sources) != expected_sources:
             raise ValueError("Execution sources do not match the captured recipe")
-        recorded = self.execution.sources[source_name]
-        temporal = definition.inputs[source_name].type == "temporal_interval"
-        if temporal != isinstance(recorded, ResolvedTemporalModelSource):
-            raise ValueError("Execution source metadata does not match its input type")
+        if source_name is not None:
+            recorded = self.execution.sources[source_name]
+            temporal = definition.inputs[source_name].type == "temporal_interval"
+            if temporal != isinstance(recorded, ResolvedTemporalModelSource):
+                raise ValueError(
+                    "Execution source metadata does not match its input type"
+                )
         return self
 
 
@@ -535,14 +544,15 @@ class ModelExecution(ModelSchema):
     executed grid directly to this record, along with numerical policy and
     result retention; completion adds the outcome. The grid describes the
     calculation, not necessarily an input raster's original grid. Temporal
-    sources record variable metadata without archive checksums.
+    sources record variable metadata without archive checksums. The sources
+    mapping is empty only when the operation declares no primary raster.
     """
 
     state: Literal["pending", "prepared"]
     applicationBuild: Annotated[str, Field(min_length=1, max_length=160)]
     operations: dict[Name, OperationImplementation] = Field(min_length=1, max_length=1)
     sources: dict[Name, ResolvedModelSource | ResolvedTemporalModelSource] = Field(
-        min_length=1, max_length=1
+        max_length=1
     )
     additionalSources: dict[Name, ResolvedModelSource] = Field(
         default_factory=dict, exclude_if=lambda value: not value

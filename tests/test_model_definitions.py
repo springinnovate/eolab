@@ -27,6 +27,30 @@ import eolab_app.processing.model_operations as operation_registry
 import eolab_app.processing.model_definitions as definitions
 
 
+@pytest.mark.parametrize("missing_field", ["source", "primary_input"])
+def test_registry_requires_matching_primary_source_declarations(
+    monkeypatch: pytest.MonkeyPatch, missing_field: str
+) -> None:
+    """Require the primary-source callback and its input name together or neither.
+
+    Args:
+        monkeypatch: Isolated trusted-operation registration.
+        missing_field: Half of the primary-source declaration to remove.
+    """
+    definition = ModelRegistry.load_installed().get("raster-clip", "1.1.0")
+    original = operation_registry.get_model_operation("raster.clip.v1")
+    monkeypatch.setattr(
+        definitions,
+        "OPERATIONS",
+        {
+            **operation_registry.OPERATIONS,
+            original.id: replace(original, **{missing_field: None}),
+        },
+    )
+    with pytest.raises(ProcessingError, match="operation contract"):
+        ModelRegistry((definition,))
+
+
 @pytest.mark.parametrize("explicit_type", [False, True])
 def test_registry_rejects_a_vector_primary_result(
     monkeypatch: pytest.MonkeyPatch, explicit_type: bool
@@ -272,6 +296,10 @@ def test_run_example_has_typed_path_free_execution_and_round_trips() -> None:
         ValidationError, match="Prepared execution must include its grid"
     ):
         RunDocument.model_validate(incomplete)
+    missing_source = copy.deepcopy(normalized)
+    missing_source["execution"]["sources"] = {}
+    with pytest.raises(ValidationError, match="Execution sources do not match"):
+        RunDocument.model_validate(missing_source)
     for field in ("runtimeSeconds", "processMemoryBytes", "reservedBytes"):
         retired = copy.deepcopy(normalized)
         retired["execution"]["limits"][field] = 600
