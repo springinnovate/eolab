@@ -117,11 +117,12 @@ export class AnnotationController {
 
     /**
      * Restore saved polygons without opening their editor or moving focus.
-     * Failed loads show an expandable notice in Map layers and leave stored data untouched.
+     * Failed loads leave stored data untouched. Show a notice only when restoring
+     * private saved layers onto this map; saved-map owners report their own layer failures.
      * @param {Object} [options] Startup presentation policy.
-     * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them stored but off the shared map.
+     * @param {boolean} [options.attachSavedLayers=true] Display private saved layers and their load errors; false keeps both off the shared map.
      * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
-     * @return {Promise<void>} Completion, including a visible storage error if needed.
+     * @return {Promise<void>} Completion with failed loads retained in the editor's status.
      */
     async load({ attachSavedLayers = true, sharedLayerIds = [] } = {}) {
         try {
@@ -138,7 +139,7 @@ export class AnnotationController {
         } catch (error) {
             this.status.textContent = `Cannot open saved polygons: ${error.message}`;
             this.loadError.textContent = error.message;
-            this.loadNotice.hidden = false;
+            this.loadNotice.hidden = !attachSavedLayers;
         }
     }
 

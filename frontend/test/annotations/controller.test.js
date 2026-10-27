@@ -442,7 +442,19 @@ test("startup reports storage failure without opening the editor and clears the 
     assert.equal(annotations.importButton.disabled, false);
 });
 
-test("invalid saved filters leave authoring and published-map startup closed and cannot overwrite unread polygons", async () => {
+test("no saved polygons leaves authoring and published maps free of polygon notices", async () => {
+    for (const attachSavedLayers of [true, false]) {
+        const annotations = controller();
+        annotations.loaded = false;
+        await annotations.load({ attachSavedLayers });
+        assert.equal(annotations.loaded, true);
+        assert.equal(annotations.panel.open, false);
+        assert.equal(annotations.loadNotice.hidden, true);
+        assert.equal(annotations.status.textContent, "");
+    }
+});
+
+test("invalid private filters report only in authoring and cannot overwrite unread polygons", async () => {
     const model = new AnnotationModel();
     model.createLayer();
     const saved = model.document();
@@ -458,7 +470,7 @@ test("invalid saved filters leave authoring and published-map startup closed and
         assert.equal(annotations.panel.open, false);
         assert.equal(annotations.loaded, false);
         assert.equal(annotations.importButton.disabled, true);
-        assert.equal(annotations.loadNotice.hidden, false);
+        assert.equal(annotations.loadNotice.hidden, !attachSavedLayers);
         assert.match(annotations.loadError.textContent, /Use Match all or Match any/);
         await annotations.save();
         assert.equal(writes, 0);
