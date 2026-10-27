@@ -256,7 +256,7 @@ def test_publication_service_uses_stable_exact_layer_identity(
     assert first.layer_name == f"eolab:{item['id']}"
     authorization = registry.require_current(first.layer_name)
     assert authorization.source.layer_name == "selected"
-    assert authorization.style_name == "vector-polygon"
+    assert authorization.is_style_authorized("vector-polygon")
 
 
 def test_shapefile_flows_from_handler_assessment_to_publication(

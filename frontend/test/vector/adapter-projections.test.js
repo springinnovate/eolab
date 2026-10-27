@@ -39,7 +39,7 @@ function createFixture({ geometryKind = "polygon", properties = {
     const adapter = createVectorMapLayerAdapter({
         leaflet: { tileLayer: { wms: () => {
             calls.push("create WMS layer");
-            return { once: () => {}, setParams: parameters => updates.push(parameters) };
+            return { once: () => {}, on() {}, setParams: parameters => updates.push(parameters) };
         } } },
         leafletMap: {}, wmsUrl: "/wms", onTileError: () => {},
         publish: async () => { calls.push("publish"); return publication; },
@@ -178,7 +178,7 @@ test("style descriptions are detached and refresh after the existing style comma
     changed.style.categorical.rules[0].value.value = "Other";
     changed.style.categorical.rules[0].color = "#ff0000";
     assert.deepEqual(adapter.describeStyle(record), { style: candidate, notice: "" });
-    assert.deepEqual(updates, [{ styles: "changed-style" }]);
+    assert.deepEqual(updates, [{ styles: "changed-style", vector_style: JSON.stringify(candidate) }]);
     assert.deepEqual(calls, ["create WMS layer", "apply style"]);
 });
 

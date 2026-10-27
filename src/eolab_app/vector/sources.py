@@ -10,6 +10,7 @@ from hashlib import sha256
 from threading import Lock
 from pathlib import Path
 import re
+from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -358,10 +359,7 @@ class PublishedVectorRegistry:
         """Create an empty process-local vector authorization registry."""
         self._filters: OrderedDict[str, tuple[str, ResolvedVectorSource, VectorFilter]] = OrderedDict()
         self._filter_lock = Lock()
-        self._sources: dict[
-            str,
-            tuple[ResolvedVectorSource, str, str | None],
-        ] = {}
+        self._sources: dict[str, PublishedVectorAuthorization] = {}
 
     def get_upload_id(self, layer_name: str) -> UUID | None:
         """Return the upload behind a published layer or one of its filtered views.
@@ -395,24 +393,55 @@ class PublishedVectorRegistry:
         layer_name: str,
         source: ResolvedVectorSource,
         style_name: str,
-        geometry_name: str | None = None,
     ) -> None:
-        """Authorize an immutable vector layer and its published style.
+        """Authorize a published source and its fixed default appearance.
+
+        Publishing the same source preserves its style-signing key. Rebinding a
+        layer creates a new key, invalidating appearances approved for its old
+        source.
 
         Args:
             layer_name: Workspace-qualified GeoServer WMS layer name.
             source: Exact mounted source and native layer identity.
-            style_name: Geometry-specific initialized WMS style.
-            geometry_name: Authorized GeoServer geometry attribute for labels.
+            style_name: Initialized fixed default WMS style.
+        """
+        previous = self._sources.get(layer_name)
+        if previous is not None and previous.source == source:
+            return
+        self._sources[layer_name] = PublishedVectorAuthorization(
+            source, style_name, token_bytes(32)
+        )
+
+    def authorize_style(
+        self,
+        layer_name: str,
+        source: ResolvedVectorSource,
+        style_name: str,
+        geometry_name: str | None = None,
+    ) -> str:
+        """Sign an approved appearance without retaining a per-style entry.
+
+        Args:
+            layer_name: Workspace-qualified original publication identity.
+            source: Immutable source checked by the style service.
+            style_name: Content identity returned by the style preparer.
+            geometry_name: GeoServer geometry attribute required by fixed labels.
 
         Returns:
-            None. Retains the current authorized vector rendering state.
+            Signed style identity the browser sends with its appearance.
+
+        Raises:
+            PublishedLayerNotAuthorizedError: If the source is not published.
+            PublishedLayerChangedError: If its source binding changed while the
+                style was being prepared.
         """
-        self._sources[layer_name] = (
-            source,
-            style_name,
-            geometry_name,
-        )
+        authorization = self.require_current(layer_name)
+        if authorization.source != source:
+            raise PublishedLayerChangedError("The vector source binding changed")
+        if geometry_name is not None:
+            authorization = replace(authorization, geometry_name=geometry_name)
+            self._sources[layer_name] = authorization
+        return authorization.sign_style_name(style_name)
 
     def authorize_filter(self, layer_name: str, candidate: VectorFilter) -> str:
         """Retain a bounded immutable per-map view of a current publication.
@@ -450,7 +479,7 @@ class PublishedVectorRegistry:
             layer_name: Workspace-qualified GeoServer WMS layer name.
 
         Returns:
-            Exact immutable source and allowed style.
+            Exact immutable source and its appearance-approval key.
 
         Raises:
             PublishedLayerNotAuthorizedError: If this process did not authorize
@@ -474,9 +503,4 @@ class PublishedVectorRegistry:
             raise PublishedLayerNotAuthorizedError(
                 "The WMS layer has not been approved for visualization"
             )
-        source, style_name, geometry_name = authorization
-        return PublishedVectorAuthorization(
-            source,
-            style_name,
-            geometry_name,
-        )
+        return authorization

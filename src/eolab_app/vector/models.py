@@ -38,11 +38,11 @@ VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT = 9
 
 
 @dataclass(frozen=True)
-class VectorStylePublication:
-    """Internal result of publishing an authorized vector appearance.
+class PreparedVectorStyle:
+    """Rendering identity and label geometry for a validated vector appearance.
 
     Attributes:
-        style_name: Content-addressed GeoServer style identity.
+        style_name: Content-addressed identity of the generated inline SLD.
         geometry_name: GeoServer geometry attribute used by fixed labels, if any.
     """
 

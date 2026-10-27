@@ -8,6 +8,10 @@ import {
   VectorFeatureInspectorController,
 } from "../../src/vector/feature-inspector.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+import { normalizeVectorStyle } from "../../src/vector/style.js";
+
+const POLYGON_STYLE = normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#228b22", fillOpacity: 0.6,
+  strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 1 });
 
 test("renaming a layer updates inspected feature labels without another query", async () => {
   let reads = 0;
@@ -50,7 +54,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       sourceId: "catalog|parcels",
       label: "Parcels",
       bbox: [0, 0, 10, 10],
-      publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
+      publication: { layerName: "eolab:parcels", styleName: "vector-polygon", style: POLYGON_STYLE },
       geometryKind: "polygon",
       propertyNames: ["name", "rank"],
       primaryGeometry: "geometry",
@@ -174,8 +178,8 @@ function inspectionEvent(x, y, longitude = 5, latitude = 5) {
 
 test("feature queries keep the clicked location across Mercator zooms and map sizes", async () => {
   const circumference = 2 * Math.PI * 6378137;
-  const h = createFixture(async (request) => {
-    requests.push(new URL(request, "https://viewer.test"));
+  const h = createFixture(async (_url, { body }) => {
+    requests.push(body);
     return { ok: true, json: async () => ({ type: "FeatureCollection", features: [] }) };
   });
   const requests = [];
@@ -208,7 +212,7 @@ test("feature queries keep the clicked location across Mercator zooms and map si
           min, max: { x: min.x + width, y: min.y + height },
         });
         await h.controller.inspect(inspectionEvent(click.x, click.y, longitude, latitude));
-        const parameters = requests.at(-1).searchParams;
+        const parameters = requests.at(-1);
         assert.equal(parameters.get("srs"), "EPSG:3857");
         const [west, south, east, north] = parameters.get("bbox").split(",").map(Number);
         const pixelWidth = (east - west) / Number(parameters.get("width"));
@@ -379,8 +383,8 @@ test("inspector queries composed visible targets and navigates overlapping featu
       properties: { name: "Second" },
     },
   ];
-  const h = createFixture(async (url) => {
-    const parameters = new URL(url, "https://viewer.test").searchParams;
+  const h = createFixture(async (_url, { body: parameters }) => {
+    assert.deepEqual(JSON.parse(parameters.get("vector_style")), POLYGON_STYLE);
     requestedLayers.push(parameters.get("layers"));
     requestedProperties.push(parameters.get("propertyName"));
     return {
@@ -464,9 +468,8 @@ test("inspector queries composed visible targets and navigates overlapping featu
 test("inspector presents out-of-order layer results progressively in map order", async () => {
   const resolvers = new Map();
   let elapsedMilliseconds = 0;
-  const h = createFixture((url) => new Promise((resolve) => {
-    const layerName = new URL(url, "https://viewer.test")
-      .searchParams.get("layers");
+  const h = createFixture((_url, { body }) => new Promise((resolve) => {
+    const layerName = body.get("layers");
     resolvers.set(layerName, resolve);
   }), { now: () => elapsedMilliseconds });
   h.targets.push({
@@ -476,6 +479,7 @@ test("inspector presents out-of-order layer results progressively in map order",
     publication: {
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
+      style: POLYGON_STYLE,
     },
     geometryKind: "polygon",
     propertyNames: ["name"],
@@ -678,9 +682,9 @@ test("an actionable inspection failure still opens the inspector", async () => {
 
 test("inspector skips targets outside their authoritative Catalog bounds", async () => {
   const requestedLayers = [];
-  const h = createFixture(async (url) => {
+  const h = createFixture(async (_url, { body }) => {
     requestedLayers.push(
-      new URL(url, "https://viewer.test").searchParams.get("layers"),
+      body.get("layers"),
     );
     return {
       ok: true,
@@ -701,6 +705,7 @@ test("inspector skips targets outside their authoritative Catalog bounds", async
     publication: {
       layerName: "eolab:distant",
       styleName: "vector-point",
+      style: normalizeVectorStyle({ ...POLYGON_STYLE, geometryKind: "point", pointSize: 8 }),
     },
     geometryKind: "point",
     propertyNames: ["name"],
@@ -801,6 +806,7 @@ test("changing the visible vector set invalidates results but retains inspection
     publication: {
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
+      style: POLYGON_STYLE,
     },
     geometryKind: "polygon",
     propertyNames: ["score"],

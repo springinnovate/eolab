@@ -42,7 +42,7 @@ function fixture(overrides = {}) {
     const leaflet = { tileLayer: { wms(_url, options) {
         calls.push(["wms", options]);
         return {
-            options, once() {}, setParams(params) { Object.assign(this.options, params); },
+            options, once() {}, on() {}, setParams(params) { Object.assign(this.options, params); },
             addTo(target) { target.attached.add(this); return this; },
             setOpacity() {}, setZIndex() {},
         };

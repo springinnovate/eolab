@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { findVectorLayerAtPointer } from "../../src/vector/feature-hover.js";
+import { normalizeVectorStyle } from "../../src/vector/style.js";
 
 const viewport = { crs: "EPSG:3857", bbox: [-100, -100, 100, 100], width: 400, height: 300, x: 200, y: 150 };
 const targets = ["Top", "Middle", "Bottom"].map(label => ({ label,
-    publication: { layerName: `eolab:${label}`, styleName: "filtered-style" }, propertyNames: ["name", "description"] }));
+    publication: { layerName: `eolab:${label}`, styleName: "filtered-style",
+        style: normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#228b22", fillOpacity: 0.6,
+            strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 1 }) }, propertyNames: ["name", "description"] }));
 
 /** @param {boolean} hit Whether a feature exists. @return {Response} Bounded WMS result. */
 function response(hit) {
@@ -13,8 +16,10 @@ function response(hit) {
 
 test("reuses bounded feature queries in top-first order and stops at first hit", async () => {
     const queries = [];
-    const result = await findVectorLayerAtPointer({ targets, viewport, wmsUrl: "/geoserver/eolab/wms", signal: new AbortController().signal }, async url => {
-        const query = new URL(url, "https://example.test").searchParams;
+    const result = await findVectorLayerAtPointer({ targets, viewport, wmsUrl: "/geoserver/eolab/wms", signal: new AbortController().signal }, async (url, options) => {
+        assert.equal(url, "/geoserver/eolab/wms");
+        assert.equal(options.method, "POST");
+        const query = options.body;
         queries.push(query);
         return response(queries.length === 2);
     });
@@ -22,6 +27,7 @@ test("reuses bounded feature queries in top-first order and stops at first hit",
     assert.deepEqual(queries.map(query => query.get("layers")), ["eolab:Top", "eolab:Middle"]);
     assert.equal(queries[0].get("feature_count"), "5");
     assert.equal(queries[0].get("styles"), "filtered-style");
+    assert.deepEqual(JSON.parse(queries[0].get("vector_style")), targets[0].publication.style);
     assert.equal(queries[0].get("propertyName"), "name");
 });
 

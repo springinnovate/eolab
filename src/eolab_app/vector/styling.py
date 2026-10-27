@@ -318,13 +318,13 @@ class VectorStyleService:
         self,
         request: CatalogVectorStyleRequest,
     ) -> AppliedVectorStyle:
-        """Validate ownership and apply one per-layer vector style.
+        """Validate a catalog appearance and return its signed rendering identity.
 
         Args:
             request: Catalog identity and complete validated symbol state.
 
         Returns:
-            Applied style name and normalized style state.
+            Signed style identity and normalized appearance.
 
         Raises:
             VectorFeatureError: If catalog, source, authorization, or GeoServer
@@ -343,19 +343,20 @@ class VectorStyleService:
         layer: VectorLayer,
         style: VectorStyle,
     ) -> AppliedVectorStyle:
-        """Apply an appearance to a published catalog or uploaded vector layer.
+        """Approve an appearance for a published catalog or uploaded vector layer.
 
         Args:
             layer: Original source and metadata from catalog or upload lookup.
             style: Complete requested appearance, validated by the HTTP boundary.
 
         Returns:
-            Applied style name and appearance used by normal WMS rendering.
+            Signed identity and appearance carried by normal WMS requests.
 
         Raises:
             VectorConflictError: If publication, geometry or attributes do not
                 support the requested style.
-            VectorPublicationError: If GeoServer cannot apply the style.
+            VectorPublicationError: If GeoServer cannot identify required label
+                geometry.
         """
         async with self._style_lock:
             source = layer.source
@@ -426,18 +427,27 @@ class VectorStyleService:
                         "Style unavailable: this numeric field has no missing "
                         "values to style."
                     )
-            publication = await self._styler.apply_style(
+            prepared = await self._styler.prepare_style(
                 layer.resource_name,
                 style,
             )
-            self._vector_registry.authorize(
-                layer_name,
-                source,
-                publication.style_name,
-                publication.geometry_name,
-            )
+            try:
+                style_name = self._vector_registry.authorize_style(
+                    layer_name,
+                    source,
+                    prepared.style_name,
+                    prepared.geometry_name,
+                )
+            except (
+                PublishedLayerChangedError,
+                PublishedLayerNotAuthorizedError,
+            ) as error:
+                raise VectorConflictError(
+                    "Style unavailable: add the current vector layer to the map "
+                    "before styling it."
+                ) from error
             return AppliedVectorStyle(
-                styleName=publication.style_name,
+                styleName=style_name,
                 style=style,
             )
 

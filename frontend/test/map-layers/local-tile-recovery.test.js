@@ -107,6 +107,20 @@ test("exhausted independent tiles offer targeted retry and clear their layer war
     f.set.clear();
 });
 
+test("automatic and manual retries use the layer transport when provided", async context => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(), failed = f.tile("a"), retries = [];
+    f.layers.get("a").reloadTile = tile => retries.push(tile);
+    for (const delay of [1000, 4000, 10000, 15000, 30000, 5000]) {
+        f.layers.get("a").emit("tileerror", { tile: failed });
+        context.mock.timers.tick(delay);
+    }
+    f.set.retryFailedTiles();
+    assert.deepEqual(retries, Array(6).fill(failed));
+    assert.deepEqual(failed.assignments, [], "POST tiles never reload a temporary image URL");
+    f.set.clear();
+});
+
 test("zoom changes, hiding and composite transitions cancel obsolete independent retries", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
     const f = fixture(), old = f.tile("a");

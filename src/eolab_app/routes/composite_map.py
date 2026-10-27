@@ -398,7 +398,9 @@ def create_composite_map_router(
         Router serving safe render plans and their GeoServer-composed PNGs.
     """
     router = APIRouter(prefix="/api/map-rendering", tags=["rendering"])
-    internal_wms_url = f"{geoserver_internal_url.rstrip('/')}/eolab/wms"
+    # Workspace WMS removes the "eolab:" prefix from catalog layer names, so
+    # they no longer match our inline SLD. Global WMS keeps those names intact.
+    internal_wms_url = f"{geoserver_internal_url.rstrip('/')}/wms"
     tile_cache = _CompositeTileCache(maximum_tile_cache_bytes)
 
     @router.post("/plans", response_model=PublishedCompositeMapPlan)
@@ -495,17 +497,15 @@ def create_composite_map_router(
             """
             layer_names = tuple(layer.layer_name for layer in plan.request.layers)
             async with use_layers(layer_names) if use_layers else nullcontext():
-                if any(value is not None for value in plan.interpolations):
+                if plan.rendering_buffer or any(value is not None for value in plan.interpolations):
+                    form = build_get_map_form(
+                        plan.sld_document, bbox, width, height,
+                        spatial_reference, plan.interpolations,
+                    )
+                    form["buffer"] = str(plan.rendering_buffer)
                     return await geoserver_client.post(
                         internal_wms_url,
-                        data=build_get_map_form(
-                            plan.sld_document,
-                            bbox,
-                            width,
-                            height,
-                            spatial_reference,
-                            plan.interpolations,
-                        ),
+                        data=form,
                         headers=geoserver_forward_headers(request),
                     )
                 get_map_document = build_get_map_document(

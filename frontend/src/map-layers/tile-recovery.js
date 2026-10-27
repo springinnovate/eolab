@@ -20,7 +20,8 @@ export class TileRecovery {
     /**
      * Observe a grid before its first attachment to the map.
      * @param {Object} map Leaflet map with zoom, pixel bounds and public events.
-     * @param {Object} layer Leaflet WMS layer with public tile events.
+     * @param {Object} layer Leaflet WMS layer with public tile events and optional
+     * reloadTile(image) transport for requests that cannot reload an image URL.
      * @param {(status:MapTileStatus)=>void} onStatus Current-view status observer.
      */
     constructor(map, layer, onStatus) {
@@ -63,7 +64,7 @@ export class TileRecovery {
             if (record.phase !== "failed" || !this.isVisible(record)) continue;
             record.attempts = 0;
             record.phase = "retrying";
-            tile.src = record.source;
+            this.reloadTile(tile, record.source);
         }
         this.refresh();
     }
@@ -93,12 +94,23 @@ export class TileRecovery {
             record.timer = setTimeout(() => {
                 record.timer = null;
                 if (this.destroyed || !this.tiles.has(tile)) return;
-                if (this.isVisible(record)) tile.src = record.source;
+                if (this.isVisible(record)) this.reloadTile(tile, record.source);
                 else record.phase = "failed";
                 this.refresh();
             }, RETRY_DELAYS_MILLISECONDS[record.attempts++]);
         }
         this.refresh();
+    }
+
+    /**
+     * Repeat the layer's tile request or reload a native image URL.
+     * @param {HTMLImageElement} tile Failed image.
+     * @param {string} source Original source for native image transports.
+     * @return {void}
+     */
+    reloadTile(tile, source) {
+        if (typeof this.layer.reloadTile === "function") this.layer.reloadTile(tile);
+        else tile.src = source;
     }
 
     /**

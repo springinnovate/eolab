@@ -299,7 +299,7 @@ def test_publication_coordinates_upstream_contract_and_authorization(
 
     assert result.layer_name == f"eolab:{RESOURCE_NAME}"
     assert publisher.calls == [(RESOURCE_NAME, source_path)]
-    assert registry.require_current(result.layer_name).style_name == "dynamic-raster"
+    assert registry.require_current(result.layer_name).is_style_authorized("dynamic-raster")
 
 
 def test_clean_publication_creates_verifies_and_styles_exactly_once(
@@ -571,7 +571,7 @@ def test_app_restart_reauthorizes_existing_complete_publication(
 
     result = asyncio.run(publish())
 
-    assert registry.require_current(result.layer_name).style_name == "dynamic-raster"
+    assert registry.require_current(result.layer_name).is_style_authorized("dynamic-raster")
     assert not any(
         request.url.path.endswith("/external.geotiff")
         for request in scenario.requests

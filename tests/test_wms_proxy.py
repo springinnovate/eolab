@@ -48,7 +48,16 @@ class _NoRasterAuthorization:
 class _FixedVectorAuthorization:
     """Authorize exactly one fixed-style vector layer."""
 
-    style_name = "vector-polygon"
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Accept the fixture's fixed appearance.
+
+        Args:
+            style_name: Requested style.
+
+        Returns:
+            Whether the style is approved.
+        """
+        return style_name == "vector-polygon"
 
     def require_current(self, layer_name: str) -> "_FixedVectorAuthorization":
         """Return the fixed vector authorization.
@@ -295,7 +304,7 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
     )
     assert raster_style_response.status_code == 400
     assert raster_style_response.json() == {
-        "detail": "WMS style must be vector-polygon"
+        "detail": "WMS style is not authorized for this layer"
     }
     assert env_response.status_code == 400
     assert env_response.json() == {
@@ -596,7 +605,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
     assert exception_response.headers["content-type"] == "application/xml"
     assert wrong_style_response.status_code == 400
     assert wrong_style_response.json() == {
-        "detail": "WMS style must be dynamic-raster"
+        "detail": "WMS style is not authorized for this layer"
     }
     assert malformed_environment_response.status_code == 400
     assert malformed_environment_response.json() == {
@@ -710,16 +719,52 @@ def test_wms_proxy_rejects_requests_outside_its_public_contract(
     assert response.json() == {"detail": detail}
 
 
-def test_wms_proxy_rejects_post(
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+def test_wms_proxy_rejects_writes(
     configured_environment: None,
     version_file_path: Path,
+    method: str,
 ) -> None:
-    """Keep every state-changing GeoServer operation off the public route."""
-    response = TestClient(create_app(version_file_path)).post(
-        "/geoserver/eolab/wms?service=WMS&request=GetCapabilities"
+    """Keep state-changing HTTP methods off the public rendering route.
+
+    Args:
+        configured_environment: Application settings fixture.
+        version_file_path: Version file supplied to the application.
+        method: Unsupported HTTP method.
+    """
+    response = TestClient(create_app(version_file_path)).request(
+        method, "/geoserver/eolab/wms?service=WMS&request=GetCapabilities"
     )
 
     assert response.status_code == 405
+
+
+@pytest.mark.parametrize("content,content_type,query,status", [
+    (b"<GetMap/>", "application/xml", "", 415),
+    (b"a=" + b"x" * (512 * 1024), "application/x-www-form-urlencoded", "", 413),
+    (b"service=WMS&request=GetMap&layers=eolab:parcels", "application/x-www-form-urlencoded", "?layers=eolab:other", 400),
+    (b"service=WMS&request=DeleteLayer", "application/x-www-form-urlencoded", "", 400),
+    (b"service=WMS&request=GetMap&sld_body=arbitrary", "application/x-www-form-urlencoded", "", 400),
+], ids=["xml", "oversized", "duplicate", "operation", "inline-xml"])
+def test_wms_post_preserves_request_boundaries(
+    configured_environment: None, version_file_path: Path,
+    content: bytes, content_type: str, query: str, status: int,
+) -> None:
+    """Reject oversized, ambiguous or unsupported forms before contacting GeoServer.
+
+    Args:
+        configured_environment: Application settings fixture.
+        version_file_path: Version file supplied to the application.
+        content: Untrusted form or XML body.
+        content_type: Submitted media type.
+        query: Optional URL query parameters.
+        status: Expected boundary rejection.
+    """
+    response = TestClient(create_app(version_file_path)).post(
+        "/geoserver/eolab/wms" + query, content=content,
+        headers={"Content-Type": content_type},
+    )
+    assert response.status_code == status
 
 
 def test_unavailable_geoserver_does_not_change_app_health(

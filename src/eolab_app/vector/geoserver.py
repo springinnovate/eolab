@@ -18,17 +18,13 @@ from eolab_app.rendering.geoserver import (
 from eolab_app.rendering.geowebcache import GeoWebCacheLayerConfigurator
 from eolab_app.vector.errors import VectorPublicationError, VectorUpstreamError
 from eolab_app.vector.models import (
+    PreparedVectorStyle,
     VectorFormat,
     VectorGeometryKind,
     VectorReaderAssessment,
     VectorStyle,
-    VectorStylePublication,
 )
-from eolab_app.vector.styles import (
-    build_vector_sld,
-    vector_label_rendering_buffer,
-    vector_style_name,
-)
+from eolab_app.vector.styles import vector_style_name
 
 
 GEOSERVER_VECTOR_STYLE_NAMES: dict[VectorGeometryKind, str] = {
@@ -221,12 +217,15 @@ class GeoServerVectorPublisher:
         )
         return style_name
 
-    async def apply_style(
+    async def prepare_style(
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> VectorStylePublication:
-        """Create or update and assign one validated per-layer vector SLD.
+    ) -> PreparedVectorStyle:
+        """Identify an inline appearance and resolve any required label geometry.
+
+        Custom appearances are carried by map requests and are never stored or
+        assigned as the GeoServer layer's shared default.
 
         Args:
             resource_name: Stable server-derived WMS layer resource name.
@@ -236,8 +235,8 @@ class GeoServerVectorPublisher:
             Deterministic style identity and geometry attribute used for labels.
 
         Raises:
-            VectorPublicationError: If the layer is absent or GeoServer rejects
-                style persistence or assignment.
+            VectorPublicationError: If the layer is absent or its label geometry
+                cannot be read.
         """
         layer_exists = await self._gateway.resource_exists(
             "inspect vector layer before styling",
@@ -256,37 +255,7 @@ class GeoServerVectorPublisher:
         ):
             geometry_name = await self._label_geometry_name(resource_name)
         style_name = vector_style_name(resource_name, style, geometry_name=geometry_name)
-        style_path = (
-            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/styles/{style_name}"
-        )
-        style_exists = await self._gateway.resource_exists(
-            "inspect per-layer vector style",
-            f"{style_path}.sld?quietOnNotFound=true",
-        )
-        style_document = build_vector_sld(style_name, style, geometry_name=geometry_name)
-        if style_exists:
-            await self._gateway.request(
-                "update per-layer vector style",
-                "PUT",
-                style_path,
-                accepted_statuses=frozenset({200}),
-                content=style_document,
-                headers={"Content-Type": "application/vnd.ogc.sld+xml"},
-            )
-        else:
-            await self._gateway.request(
-                "create per-layer vector style",
-                "POST",
-                f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/styles",
-                accepted_statuses=frozenset({201}),
-                params={"name": style_name},
-                content=style_document,
-                headers={"Content-Type": "application/vnd.ogc.sld+xml"},
-            )
-        await self._assign_vector_style(
-            resource_name, style_name, rendering_buffer=vector_label_rendering_buffer(style)
-        )
-        return VectorStylePublication(style_name, geometry_name)
+        return PreparedVectorStyle(style_name, geometry_name)
 
     async def _label_geometry_name(self, resource_name: str) -> str:
         """Resolve the geometry attribute of an already authorized vector layer.
@@ -535,18 +504,16 @@ class GeoServerVectorPublisher:
         self,
         resource_name: str,
         style_name: str,
-        *,
-        rendering_buffer: int = 0,
     ) -> None:
         """Idempotently assign one initialized geometry-specific style.
 
         Args:
             resource_name: Stable WMS layer name.
             style_name: Initialized point, line, or polygon style.
-            rendering_buffer: Feature-owned bounded query margin for tile edges.
 
         Returns:
-            None after GeoServer accepts the style and rendering margin.
+            None after GeoServer accepts the fixed style and clears the shared
+            query margin. Custom label margins belong to individual requests.
 
         Raises:
             VectorPublicationError: If style assignment is rejected.
@@ -562,7 +529,7 @@ class GeoServerVectorPublisher:
                         "name": style_name,
                         "workspace": GEOSERVER_WORKSPACE_NAME,
                     },
-                    "metadata": {"entry": {"@key": "buffer", "$": str(rendering_buffer)}},
+                    "metadata": {"entry": {"@key": "buffer", "$": "0"}},
                 }
             },
             headers={"Accept": "application/json"},

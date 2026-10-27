@@ -38,6 +38,7 @@ function createAdapterFixture(fitToBounds, classifyResult = null) {
     tileLayer: {
       wms(url, options) {
         const layer = {
+          on() {},
           styleRequests: [],
           once(type, handler) {
             this.errorHandler = { type, handler };
@@ -126,6 +127,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     { name: "area", type: "float" },
   ]);
   const layer = fitted.adapter.createLayer(record, () => {});
+  assert.deepEqual(JSON.parse(fitted.wmsCalls[0].options.vector_style), PUBLICATION.style);
   assert.deepEqual(
     await fitted.adapter.summarizeCategories(record, "name"),
     { field: "name", values: [] },
@@ -172,6 +174,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   );
   assert.deepEqual(layer.styleRequests, [{
     styles: "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa",
+    vector_style: JSON.stringify(appliedStyle),
   }]);
   assert.equal(fitted.adapter.snapshot(record).legend.symbol.fill, "#00ff00");
   const reappliedStyle = {
@@ -185,9 +188,11 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   assert.deepEqual(layer.styleRequests, [
     {
       styles: "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa",
+      vector_style: JSON.stringify(appliedStyle),
     },
     {
       styles: "vector-style-0123456789abcdef01234567-bbbbbbbbbbbb",
+      vector_style: JSON.stringify(reappliedStyle),
     },
   ]);
   assert.equal(fitted.adapter.snapshot(record).legend.symbol.fill, "#ff0000");

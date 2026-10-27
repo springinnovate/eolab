@@ -7,8 +7,8 @@
  * @property {number} [opacity] Display opacity; hover skips fully transparent layers.
  * @property {number[]} bbox Authoritative Catalog Item west, south, east, north
  * bounds.
- * @property {{layerName:string,styleName:string}} publication Authorized WMS
- * publication identity.
+ * @property {{layerName:string,styleName:string,style:Object}} publication Authorized
+ * WMS identity and the complete appearance used by this map.
  * @property {"point"|"line"|"polygon"} geometryKind Geometry style family.
  * @property {string[]} propertyNames Catalog-declared non-geometry fields.
  * @property {string|null} primaryGeometry Catalog-declared geometry field.
@@ -39,7 +39,7 @@ export class VectorFeatureInfoError extends Error {
 }
 
 /**
- * Build a bounded GetFeatureInfo URL for one map click and vector publication.
+ * Build a bounded GetFeatureInfo URL using this map's vector appearance.
  *
  * The bounds and click use the map's projection, reducing dimensions and
  * the click coordinate together when a large display exceeds the public WMS
@@ -100,6 +100,7 @@ export function buildVectorFeatureInfoUrl({
         layers: publication.layerName,
         query_layers: publication.layerName,
         styles: publication.styleName,
+        vector_style: JSON.stringify(publication.style),
         srs: viewport.crs,
         bbox: viewport.bbox.join(","),
         width: String(width),
@@ -118,7 +119,7 @@ export function buildVectorFeatureInfoUrl({
 }
 
 /**
- * Retrieve and validate one bounded GeoJSON FeatureCollection.
+ * Post this map's appearance and retrieve one bounded GeoJSON FeatureCollection.
  *
  * @param {Object} configuration Request configuration accepted by the URL builder.
  * @param {AbortSignal} configuration.signal Cancellation signal.
@@ -132,10 +133,14 @@ export async function fetchVectorFeatureInfo(
 ) {
     let response;
     try {
+        const url = buildVectorFeatureInfoUrl(configuration);
+        const separator = url.indexOf("?");
         response = await fetchImplementation(
-            buildVectorFeatureInfoUrl(configuration),
+            url.slice(0, separator),
             {
-                headers: { Accept: "application/json" },
+                method: "POST",
+                body: new URLSearchParams(url.slice(separator + 1)),
+                headers: { Accept: "application/json", "X-EOLab-Uploads": "1" },
                 signal: configuration.signal,
             }
         );

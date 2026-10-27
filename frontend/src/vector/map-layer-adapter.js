@@ -416,11 +416,12 @@ export function createVectorMapLayerAdapter({
             };
         },
         /**
-         * Apply a validated per-layer style and refresh the existing WMS layer.
+         * Update the retained vector appearance and send it with subsequent WMS requests.
          *
          * @param {Object} record Neutral retained-layer record.
          * @param {Object} candidate Complete geometry-specific style state.
          * @return {Promise<Object>} Normalized applied style state.
+         * @throws {Error} If the style cannot be validated or applied.
          */
         async applyStyle(record, candidate) {
             const normalized = normalizeVectorStyle(candidate);
@@ -433,7 +434,10 @@ export function createVectorMapLayerAdapter({
             };
             record.state.style = applied;
             record.state.defaultStyleNotice = "";
-            record.state.layer.setParams({ styles: result.styleName });
+            record.state.layer.setParams({
+                styles: result.styleName,
+                vector_style: JSON.stringify(applied),
+            });
             return applied;
         },
         /**

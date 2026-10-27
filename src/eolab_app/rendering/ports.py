@@ -39,7 +39,27 @@ class MapRenderQueue(Protocol):
 class PublishedLayerAuthorization(Protocol):
     """Browser-safe policy returned for one current published layer."""
 
-    style_name: str
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Check whether this source owner approved the requested appearance.
+
+        Args:
+            style_name: Public style identity supplied by the client.
+
+        Returns:
+            True when the name is approved for this source.
+        """
+        ...
+
+    def composite_buffer(self, style_definition: Mapping[str, object] | None) -> int:
+        """Return the query margin required by an authorized appearance.
+
+        Args:
+            style_definition: Definition already checked by build_composite_sld.
+
+        Returns:
+            Extra pixels around a map tile to query for symbols or labels.
+        """
+        ...
 
     def validate_parameters(
         self,
@@ -122,7 +142,7 @@ class PublishedLayerRegistry(Protocol):
             layer_name: Workspace-qualified GeoServer layer name.
 
         Returns:
-            Current authorization including the allowed fixed style.
+            Current authorization including the approved styles.
 
         Raises:
             PublishedLayerNotAuthorizedError: If this registry does not own the
