@@ -372,7 +372,8 @@ def validate_operation(definition: ModelDefinition) -> None:
 
     Raises:
         ProcessingError: If the operation is unavailable or its arguments, outputs
-            or execution profile do not match the installed implementation.
+            or execution profile do not match the installed implementation, or
+            its primary output has no supported model-result response type.
     """
     step = definition.steps[0]
     contract = OPERATIONS.get(step.operation)
@@ -409,6 +410,7 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.parameters.items()
             }
             == dict(contract.parameters)
+            and contract.output.kind in ("raster", "statistics", "timeSeries")
             and contract.output.name in requested
             and len(set(requested)) == len(requested)
             and "provenance" not in definition.outputs

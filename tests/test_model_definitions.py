@@ -27,6 +27,44 @@ import eolab_app.processing.model_operations as operation_registry
 import eolab_app.processing.model_definitions as definitions
 
 
+@pytest.mark.parametrize("explicit_type", [False, True])
+def test_registry_rejects_a_vector_primary_result(
+    monkeypatch: pytest.MonkeyPatch, explicit_type: bool
+) -> None:
+    """Reject a vector primary result even when its recipe matches the operation.
+
+    Args:
+        monkeypatch: Isolated trusted-operation registration.
+        explicit_type: Whether YAML declares the type or uses the operation's default.
+    """
+    document = ModelRegistry.load_installed().get("raster-clip", "1.1.0").to_document()
+    original = operation_registry.get_model_operation("raster.clip.v1")
+    registry = {
+        **operation_registry.OPERATIONS,
+        original.id: replace(
+            original,
+            output=OperationOutput(
+                "features", "vector", "map", "application/geo+json", "Clipped features"
+            ),
+        ),
+    }
+    monkeypatch.setattr(definitions, "OPERATIONS", registry)
+    document["outputs"] = {
+        "features": {
+            "source": "clip.features",
+            "role": "result",
+            "presentation": "map",
+            "saveEligible": False,
+        }
+    }
+    if explicit_type:
+        document["outputs"]["features"]["type"] = "vector"
+    model = ModelDefinition.model_validate(document)
+    with pytest.raises(ProcessingError) as error:
+        ModelRegistry((model,))
+    assert error.value.code == "unsupported_model_operation"
+
+
 def test_recipe_can_retain_a_registered_geojson_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
