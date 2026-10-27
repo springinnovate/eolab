@@ -264,6 +264,14 @@ def test_run_example_has_typed_path_free_execution_and_round_trips() -> None:
         mode="json", by_alias=True, exclude_unset=True
     )
     assert normalized["execution"]["limits"] == {"resultTtlSeconds": 86_400}
+    assert normalized["execution"]["grid"]["width"] == 10
+    assert "grid" not in normalized["execution"]["sources"]["raster"]
+    incomplete = copy.deepcopy(normalized)
+    incomplete["execution"].pop("grid")
+    with pytest.raises(
+        ValidationError, match="Prepared execution must include its grid"
+    ):
+        RunDocument.model_validate(incomplete)
     for field in ("runtimeSeconds", "processMemoryBytes", "reservedBytes"):
         retired = copy.deepcopy(normalized)
         retired["execution"]["limits"][field] = 600

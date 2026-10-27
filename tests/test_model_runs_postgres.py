@@ -949,6 +949,7 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     assert "source_path" not in invocation_response.text
     assert captured["invocation"]["parameters"] == {"summary": "sum(a)"}
     assert captured["execution"]["state"] == "pending"
+    assert "grid" not in captured["execution"]
     assert "source_path" not in pending.text and "://" not in pending.text
     service.model_registry = ModelRegistry(())
     assert submit(client, body)["jobId"] == identifier
@@ -976,6 +977,7 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     RunDocument.model_validate(exported)
     assert exported["invocation"] == captured["invocation"]
     assert exported["execution"]["state"] == "prepared"
+    assert exported["execution"]["sources"] == captured["execution"]["sources"]
     assert exported["execution"]["outcome"]["status"] == "ready"
     assert exported["execution"]["outcome"]["statistics"] == ready["result"]["rows"]
     aggregate = client.post(
@@ -992,6 +994,7 @@ def test_model_executes_real_summary_and_exports_without_installed_definition(
     assert client.portal.call(worker.run_once)
     legacy = client.get(f"/api/processing/jobs/{aggregate.json()['jobId']}").json()
     assert legacy["result"]["rows"] == ready["result"]["rows"]
+    assert exported["execution"]["grid"] == legacy["grid"]
     assert [
         item["operation"] for item in client.get("/api/processing/jobs").json()["jobs"]
     ] == ["raster.aggregate.v1"]
@@ -1628,6 +1631,8 @@ def test_clip_model_download_matches_existing_clip_and_keeps_ownership(
         client.get(f"/api/processing/jobs/{job['jobId']}/run-yaml").content, run=True
     )
     RunDocument.model_validate(run)
+    assert run["execution"]["grid"] == legacy["grid"]
+    assert "grid" not in run["execution"]["sources"]["raster"]
     assert run["execution"]["numericalPolicy"]["numericInclusion"] == "all_touched"
     assert run["execution"]["outcome"]["raster"]["sha256"] == result["sha256"]
     assert client.get(result["provenanceUrl"]).json()["operation"] == "raster.clip.v1"

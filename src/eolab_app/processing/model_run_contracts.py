@@ -468,22 +468,21 @@ class OperationImplementation(ModelSchema):
 
 
 class ResolvedModelSource(ModelSchema):
-    """A raster input's checksum, band and grid information recorded for a run.
+    """A raster input's identity and band recorded for a run.
 
     Source identity is recorded at submission. Private rasters include their
-    published checksum and byte count. The primary raster's grid is added
-    during preparation; additional rasters retain their source identities.
+    published checksum and byte count. The calculation grid belongs to the
+    execution record, independently of the input raster's original grid.
     """
 
     sourceSignature: Digest
     sha256: Digest | None = None
     bytes: Annotated[int, Field(gt=0)] | None = None
     band: Literal[1]
-    grid: AggregateGrid | ClipGrid | None = None
 
 
 class ResolvedTemporalModelSource(ModelSchema):
-    """Record a temporal variable's units, time support and executed spatial grid.
+    """Record a temporal input variable's units and time support.
 
     The requested dataset, variable and half-open period remain in the captured
     invocation. The operation's numerical policy records the actual observations
@@ -493,7 +492,6 @@ class ResolvedTemporalModelSource(ModelSchema):
     kind: Literal["temporalInterval"]
     unit: str
     timeSupport: Literal["instantaneous", "mean_rate", "accumulation"]
-    grid: RasterResultGrid | None = None
 
 
 class ModelExecutionLimits(ModelSchema):
@@ -531,11 +529,13 @@ class ModelOutcome(ModelSchema):
 
 
 class ModelExecution(ModelSchema):
-    """Software, source data, calculation settings and results recorded for a run.
+    """Software, inputs, calculation grid, settings and results recorded for a run.
 
     Admission records the software and source metadata. Preparation adds the
-    executed grid, numerical policy and result retention; completion adds the
-    outcome. Temporal sources record variable metadata without archive checksums.
+    executed grid directly to this record, along with numerical policy and
+    result retention; completion adds the outcome. The grid describes the
+    calculation, not necessarily an input raster's original grid. Temporal
+    sources record variable metadata without archive checksums.
     """
 
     state: Literal["pending", "prepared"]
@@ -547,6 +547,7 @@ class ModelExecution(ModelSchema):
     additionalSources: dict[Name, ResolvedModelSource] = Field(
         default_factory=dict, exclude_if=lambda value: not value
     )
+    grid: AggregateGrid | ClipGrid | RasterResultGrid | None = None
     limits: ModelExecutionLimits | None = None
     numericalPolicy: SerializeAsAny[BaseModel] | None = None
     outcome: ModelOutcome | None = None
@@ -598,9 +599,7 @@ class ModelExecution(ModelSchema):
             ValueError: If a prepared record lacks retention, numerical settings or a grid.
         """
         if self.state == "prepared" and (
-            self.limits is None
-            or self.numericalPolicy is None
-            or any(source.grid is None for source in self.sources.values())
+            self.limits is None or self.numericalPolicy is None or self.grid is None
         ):
             raise ValueError("Prepared execution must include its grid and policy")
         return self

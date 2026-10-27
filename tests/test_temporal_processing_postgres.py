@@ -248,7 +248,8 @@ def test_period_map_outputs_are_owned_reusable_rasters(
     RunDocument.model_validate(exported)
     assert exported["invocation"] == pending["invocation"]
     assert exported["execution"]["state"] == "prepared"
-    assert exported["execution"]["sources"]["source"]["grid"]["width"] == output_width
+    assert exported["execution"]["grid"]["width"] == output_width
+    assert exported["execution"]["sources"] == pending["execution"]["sources"]
     assert "sourceSignature" not in exported_response.text
     assert str(archive) not in exported_response.text
     assert client.get(ready["result"]["provenanceUrl"]).status_code == 200
