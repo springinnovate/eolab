@@ -43,11 +43,13 @@ export function validateAnnotationStyle(style) {
 /**
  * Validate device storage before allowing it into the editor.
  * Older documents without positions retain their annotation order at the top of the stack.
+ * Unreadable filters are cleared without changing drawings or supported filters.
  * @param {AnnotationDocument} document Versioned annotation document.
+ * @param {(layerId:string)=>void} [onFilterCleared] Receives each layer whose unreadable filter was cleared.
  * @return {AnnotationLayer[]} Independent, validated annotation layers.
  * @throws {Error} If stored data is unsupported, malformed or too large.
  */
-export function readAnnotationLayers(document) {
+export function readAnnotationLayers(document, onFilterCleared = () => {}) {
     if (!document || document.version !== 1 || !Array.isArray(document.layers) || document.layers.length > MAX_ANNOTATION_LAYERS ||
         new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) throw new Error("Saved polygons have an unsupported format or exceed the storage limit.");
     const layers = structuredClone(document.layers);
@@ -57,7 +59,11 @@ export function readAnnotationLayers(document) {
         if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved shared layer position is invalid.");
         requireIdentifier(layer.id, identifiers);
         requireText(layer.name, MAX_ANNOTATION_NAME_LENGTH, false);
-        layer.filter = annotationFilterRules(layer.filter);
+        try { layer.filter = annotationFilterRules(layer.filter); }
+        catch {
+            layer.filter = structuredClone(EMPTY_VECTOR_FILTER);
+            onFilterCleared(layer.id);
+        }
         if (typeof layer.visible !== "boolean" || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 ||
             !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved shared layer is invalid.");
         layer.style = validateAnnotationStyle(layer.style);

@@ -10,6 +10,7 @@ export class AnnotationSessionsController {
      * @param {Object} options Dependencies and layer callbacks.
      * @param {Document} options.document Browser document.
      * @param {()=>Object[]} options.getLayers Device-saved own polygon collections.
+     * @param {()=>Promise<void>} options.saveLocalLayers Save unsaved local polygons before creating or joining a shared layer; reject if polygons could not be loaded or saved.
      * @param {(id:string)=>boolean} options.isLayerOnMap Whether a locally stored layer is currently attached to this map.
      * @param {(name:string,collection:Object,options?:Object)=>Promise<string>} options.createLayer Restore an author's polygons, optionally reusing a device layer.
      * @param {(id:string,data:Object)=>void} options.present Display collaborators and sharing status on one layer.
@@ -19,9 +20,9 @@ export class AnnotationSessionsController {
      * @param {AnnotationSessionsApi} [options.api] Same-origin session API.
      * @param {Function} [options.createView] Dialog factory for presentation tests.
      */
-    constructor({ document, getLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining = () => {}, storage = globalThis.localStorage,
+    constructor({ document, getLayers, saveLocalLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining = () => {}, storage = globalThis.localStorage,
         api = new AnnotationSessionsApi(), createView = (doc, actions) => new AnnotationSessionsView(doc, actions) }) {
-        Object.assign(this, { getLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining, storage, api });
+        Object.assign(this, { getLayers, saveLocalLayers, isLayerOnMap, createLayer, present, revealLayer, drawAfterJoining, storage, api });
         this.savedBindings = [];
         this.bindings = new Map(); this.closed = false; this.running = null; this.connecting = false;
         this.view = createView(document, { connect: (...args) => this.connect(...args), rename: (id, name) => this.renameContributor(id, name),
@@ -148,7 +149,8 @@ export class AnnotationSessionsController {
         return false;
     }
 
-    /** Create/join a layer, restoring only polygons owned by this browser credential.
+    /** Save unsaved local polygons, then create/join a layer and restore this browser's own polygons.
+     * If saving existing polygons fails, no server request is made and the error appears in the dialog.
      * @param {"create"|"join"|"contribute"} mode Create, explicit join, or first drawing in an invited layer.
      * @param {string} value Name or code.
      * @param {string} name Contributor display name.
@@ -159,6 +161,8 @@ export class AnnotationSessionsController {
         if (this.connecting || this.closed) return;
         this.connecting = true; this.view.busy(true); this.view.message("Connecting…");
         try {
+            await this.saveLocalLayers();
+            if (this.closed) return;
             const snapshot = await this.api.request(mode === "create" ? "" : "/join", "POST",
                 mode === "create" ? { name: value, contributorName: name } : { joinCode: value, contributorName: name });
             if (this.closed) return;

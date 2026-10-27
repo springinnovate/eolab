@@ -49,6 +49,7 @@ export class AnnotationController {
         this.inspectedPolygon = null;
         this.onHoverInvalidated = onHoverInvalidated;
         this.loaded = false;
+        this.clearedFilterLayerIds = new Set();
         this.savedSharingLayers = [];
         this.orderRestored = false;
         this.dirty = false;
@@ -117,6 +118,7 @@ export class AnnotationController {
      * Restore saved polygons without opening their editor or moving focus.
      * Failed loads leave stored data untouched and retain the error in the polygon
      * editor without showing polygon controls over an unrelated map workflow.
+     * Recovered filters are identified on their layers until the user applies a filter or reloads.
      * @param {Object} [options] Startup presentation policy.
      * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them off the shared map.
      * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
@@ -124,7 +126,7 @@ export class AnnotationController {
      */
     async load({ attachSavedLayers = true, sharedLayerIds = [] } = {}) {
         try {
-            this.model.layers = await this.storage.load();
+            this.model.layers = await this.storage.load(id => this.clearedFilterLayerIds.add(id));
             this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             const shared = new Set(sharedLayerIds);
             if (attachSavedLayers) for (const layer of [...this.model.layers].reverse()) {
@@ -160,6 +162,18 @@ export class AnnotationController {
         await this.save();
         if (this.dirty) throw new Error(this.status.textContent);
         return layer.id;
+    }
+
+    /**
+     * Finish saving local drawings before creating or joining a shared layer.
+     * Reuse an in-flight save; clean layers do not need another write.
+     * @return {Promise<void>} Completion once local layers are loaded and saved.
+     * @throws {Error} If loading is incomplete or a local save fails.
+     */
+    async saveForSharing() {
+        if (!this.loaded) throw new Error(this.status.textContent);
+        if (this.dirty) await (this.savePromise ?? this.save());
+        if (this.dirty) throw new Error(this.status.textContent);
     }
 
     /** Apply a saved map's local appearance without changing polygons or shared colors.
@@ -367,7 +381,7 @@ export class AnnotationController {
                 legend: this.layerLegend(layer),
                 canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: layer.filter.enabled && !!layer.filter.rules.length,
-                filterStatus: (layer.filter.enabled && layer.filter.rules.length)
+                filterStatus: this.clearedFilterLayerIds.has(layer.id) ? "Saved filter cleared—all polygons included" : (layer.filter.enabled && layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match` : null }),
             zoom: () => {
                 const bounds = rendering.getBounds();
@@ -490,7 +504,12 @@ export class AnnotationController {
         if (!layer) return null;
         return { key, label: layer.name, fields: ANNOTATION_FIELDS, filter: annotationFilterRules(layer.filter),
             status: `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match`,
-            apply: candidate => { layer.filter = annotationFilterRules(candidate); this.refreshLayer(layer.id); this.save(); },
+            apply: candidate => {
+                layer.filter = annotationFilterRules(candidate);
+                this.clearedFilterLayerIds.delete(layer.id);
+                this.refreshLayer(layer.id);
+                this.save();
+            },
             cancelPending: () => {} };
     }
 

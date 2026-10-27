@@ -1567,6 +1567,7 @@ async function initializeCatalog(
         });
         annotationSessions = new AnnotationSessionsController({
             document,
+            saveLocalLayers: () => annotations.saveForSharing(),
             createLayer: (name, collection, options) => annotations.restoreSharedContribution(name, collection, options),
             revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
             drawAfterJoining: id => annotations.beginPolygon(id),

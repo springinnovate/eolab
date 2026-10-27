@@ -13,7 +13,7 @@ function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
-        controls: new Map(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
+        controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },
@@ -431,6 +431,7 @@ test("startup retains storage failure in the closed editor and clears it after a
     assert.equal(annotations.loaded, false);
     assert.equal(annotations.importButton.disabled, true);
     assert.equal(annotations.status.textContent, "Cannot open saved polygons: Cannot open database");
+    await assert.rejects(annotations.saveForSharing(), /Cannot open database/);
     annotations.storage.load = async () => [];
     await annotations.load();
     assert.equal(annotations.panel.open, false);
@@ -450,11 +451,11 @@ test("empty polygon storage keeps the editor closed in every startup mode", asyn
     }
 });
 
-test("invalid saved filters stay in the closed editor without overwriting stored layers in every startup mode", async () => {
+test("invalid saved drawings stay in the closed editor without overwriting stored layers in every startup mode", async () => {
     const model = new AnnotationModel();
     model.createLayer();
     const saved = model.document();
-    saved.layers[0].filter = "";
+    saved.layers[0].polygons.push({ id: "invalid-polygon", name: "Preserve this drawing", note: "", vertices: [[0, 0], [1, 1]] });
     const original = structuredClone(saved);
     for (const attachSavedLayers of [true, false]) {
         const annotations = controller();
@@ -466,12 +467,36 @@ test("invalid saved filters stay in the closed editor without overwriting stored
         assert.equal(annotations.panel.open, false);
         assert.equal(annotations.loaded, false);
         assert.equal(annotations.importButton.disabled, true);
-        assert.match(annotations.status.textContent, /Use Match all or Match any/);
+        assert.match(annotations.status.textContent, /invalid polygon/);
         await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", features: [] }),
-            /Cannot open saved polygons: Use Match all or Match any/);
+            /Cannot open saved polygons: Saved polygons contain an invalid polygon/);
         await annotations.save();
         assert.equal(writes, 0);
         assert.deepEqual(saved, original);
+    }
+});
+
+test("recovered filter notices belong to their layers and clear when a filter is applied", async () => {
+    const model = new AnnotationModel();
+    const affected = model.createLayer(), unchanged = model.createLayer();
+    affected.filter = "";
+    const saved = model.document();
+    for (const attachSavedLayers of [true, false]) {
+        const annotations = controller();
+        annotations.loaded = false;
+        annotations.storage.load = async onFilterCleared => readAnnotationLayers(saved, onFilterCleared);
+        annotations.attachLayer = layer => annotations.layers.set(layer.id, {});
+        annotations.refreshLayer = () => {};
+        await annotations.load({ attachSavedLayers });
+        assert.equal(annotations.loaded, true);
+        assert.equal(annotations.panel.open, false);
+        assert.equal(annotations.importButton.disabled, false);
+        assert.equal(annotations.status.textContent, "");
+        assert.deepEqual([...annotations.clearedFilterLayerIds], [affected.id]);
+        assert.deepEqual(annotations.model.layer(unchanged.id), unchanged);
+        annotations.filterTarget(`local:annotation:${affected.id}`).apply(EMPTY_VECTOR_FILTER);
+        assert.equal(annotations.clearedFilterLayerIds.size, 0);
+        await annotations.savePromise;
     }
 });
 
@@ -527,6 +552,36 @@ test("callers awaiting a coalesced save wait for the final document, including t
     await Promise.all([first, second]);
     assert.equal(documents.length, 2);
     assert.equal(documents[1].layers[0].id, layer.id);
+    assert.equal(annotations.dirty, false);
+});
+
+test("sharing waits for storage loading and existing saves without writing clean layers", async () => {
+    const annotations = controller();
+    annotations.loaded = false;
+    annotations.status.textContent = "Opening local polygons…";
+    let finishLoading;
+    annotations.storage.load = () => new Promise(resolve => { finishLoading = resolve; });
+    const loading = annotations.load();
+    await assert.rejects(annotations.saveForSharing(), /Opening local polygons/);
+    finishLoading([]);
+    await loading;
+    let writes = 0, finishSaving;
+    annotations.storage.save = () => { writes++; return new Promise(resolve => { finishSaving = resolve; }); };
+    await annotations.saveForSharing();
+    assert.equal(writes, 0);
+    const saving = annotations.save();
+    let ready = false;
+    const sharing = annotations.saveForSharing().then(() => { ready = true; });
+    await Promise.resolve();
+    assert.equal(ready, false);
+    finishSaving();
+    await Promise.all([saving, sharing]);
+    assert.equal(writes, 1);
+    annotations.storage.save = async () => { throw new Error("Storage full"); };
+    await annotations.save();
+    await assert.rejects(annotations.saveForSharing(), /Storage full/);
+    annotations.storage.save = async () => {};
+    await annotations.saveForSharing();
     assert.equal(annotations.dirty, false);
 });
 
