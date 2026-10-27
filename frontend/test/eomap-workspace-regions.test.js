@@ -341,7 +341,7 @@ test("composition forwards inspection layout and CSS does not infer it from chan
     assert.doesNotMatch(STYLESHEET, /#map-inspection:has\(/);
     assert.match(STYLESHEET, /#app\[data-inspection-expanded="true"\]/);
     assert.match(STYLESHEET, /#app\[data-inspection-wide="true"\]/);
-    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: 16px auto auto 16px;/);
+    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: calc\(16px \+ var\(--map-tools-height, 42px\)\) auto auto 16px;/);
 });
 
 test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {

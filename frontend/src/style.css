@@ -4987,10 +4987,10 @@ summary:hover > .raster-disclosure-chevron {
     inset: 0;
   }
   #app #control-panel {
-    top: 16px;
+    top: calc(16px + var(--map-tools-height, 42px));
     bottom: 16px;
     height: auto;
-    max-height: calc(100dvh - 32px);
+    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
   }
   .map-inspection-tabs, .map-click-summary {
     min-height: 0;
@@ -4998,17 +4998,7 @@ summary:hover > .raster-disclosure-chevron {
     overflow-y: auto;
   }
   #app .panel-opener {
-    inset: 16px auto auto 16px;
-  }
-}
-
-@media (max-width: 899px) {
-  #app #control-panel {
-    top: calc(16px + var(--map-tools-height, 42px));
-    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
-  }
-  #app .panel-opener {
-    top: calc(16px + var(--map-tools-height, 42px));
+    inset: calc(16px + var(--map-tools-height, 42px)) auto auto 16px;
   }
 }
 
