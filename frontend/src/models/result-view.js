@@ -31,8 +31,7 @@ function rasterCards(result, element) {
             element("span", `Units: ${coverage.unit}`),
             element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
             element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
-            element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`),
-            element("p", "Missing values are excluded at each pixel. The count map shows how many valid observations contributed there.", "models-help"));
+            element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`));
     }
     return [card];
 }
