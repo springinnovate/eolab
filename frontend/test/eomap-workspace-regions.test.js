@@ -341,7 +341,7 @@ test("composition forwards inspection layout and CSS does not infer it from chan
     assert.doesNotMatch(STYLESHEET, /#map-inspection:has\(/);
     assert.match(STYLESHEET, /#app\[data-inspection-expanded="true"\]/);
     assert.match(STYLESHEET, /#app\[data-inspection-wide="true"\]/);
-    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: 16px auto auto 16px;/);
+    assert.match(STYLESHEET, /#app \.panel-opener\s*\{\s*inset: calc\(16px \+ var\(--map-tools-height, 42px\)\) auto auto 16px;/);
 });
 
 test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {
@@ -422,7 +422,8 @@ test("inspection header groups three raster destinations separately from clicked
     assert.equal(countMarkupId("map-click-disclosure"), 0);
     assert.equal(countMarkupId("map-click-navigation"), 1);
     assert.equal(countMarkupId("map-click-navigation-label"), 1);
-    assert.match(STYLESHEET, /#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto[^}]*max-height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
+    assert.match(STYLESHEET, /#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto/s);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*max-height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\]\s*\{\s*display:\s*none/s);
     assert.match(point.source, /Features at inspected point/);
     for (const [id, panel, caption] of [

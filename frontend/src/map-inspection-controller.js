@@ -11,12 +11,11 @@ export class MapInspectionController {
      *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
-     * @param {function({open: boolean, expanded: boolean, wide: boolean, compactHeight: number}):void}
+     * @param {function({open: boolean, expanded: boolean, wide: boolean, toolbarHeight: number}):void}
      * [dependencies.onLayoutChange] Receives initial layout and subsequent changes.
      * Expanded means an open, non-minimized panel has an active tool; wide selects
-     * the wider vector-chart presentation. Compact height includes the persistent
-     * toolbar and any visible dock content in CSS pixels, zero only when expanded.
-     * Result updates report a change only when they change this presentation geometry.
+     * the wider vector-chart presentation. Toolbar height is measured in CSS pixels.
+     * Result updates report a change only when they change these states or dimensions.
      */
     constructor({ documentContext = document, onLayoutChange = () => {} } = {}) {
         this.document = documentContext;
@@ -884,10 +883,9 @@ export class MapInspectionController {
         this.#reportLayoutChange();
     }
 
-    /** Position panels below the measured toolbar and report occupied compact space.
-     * Compact height includes the persistent toolbar and any visible dock content,
-     * including wrapping after viewport or text-size changes. The composition root
-     * forwards it to the app layout owner; neither controller inspects its peer's implementation.
+    /** Position panels below the toolbar and report its height with panel states.
+     * The composition root forwards these dimensions and states to the app layout
+     * owner so other shell controls can remain clear of the toolbar.
      * @return {void}
      */
     #reportLayoutChange() {
@@ -901,13 +899,12 @@ export class MapInspectionController {
             open: this.isOpen,
             expanded,
             wide: this.activeTool === "time-series" || this.activeTool === "feature-profile",
-            compactHeight: expanded ? 0 : toolbarHeight +
-                (this.isOpen ? Math.ceil(this.root.getBoundingClientRect().height) : 0),
+            toolbarHeight,
         };
         const previous = this.reportedLayout;
         if (previous && previous.open === layout.open &&
             previous.expanded === layout.expanded && previous.wide === layout.wide &&
-            previous.compactHeight === layout.compactHeight) return;
+            previous.toolbarHeight === layout.toolbarHeight) return;
         this.reportedLayout = layout;
         this.onLayoutChange({ ...layout });
     }

@@ -266,11 +266,10 @@ export class EomapLayoutController {
      * @param {boolean} layout.open Whether the map-tool popover is open.
      * @param {boolean} layout.expanded Whether it occupies space for an active panel.
      * @param {boolean} layout.wide Whether its active panel uses the wider layout.
-     * @param {number} layout.compactHeight Toolbar plus visible compact dock
-     * height in CSS pixels; includes the toolbar when the dock is closed.
+     * @param {number} layout.toolbarHeight Measured map-tool toolbar height in CSS pixels.
      * @return {void}
      */
-    setInspectionLayout({ open, expanded, wide, compactHeight }) {
+    setInspectionLayout({ open, expanded, wide, toolbarHeight }) {
         for (const [name, value] of Object.entries({ open, expanded, wide })) {
             const attribute = `data-inspection-${name}`;
             const text = String(value);
@@ -278,9 +277,9 @@ export class EomapLayoutController {
                 this.appElement.setAttribute(attribute, text);
             }
         }
-        const height = `${compactHeight}px`;
-        if (this.appElement.style.getPropertyValue("--inspection-compact-height") !== height) {
-            this.appElement.style.setProperty("--inspection-compact-height", height);
+        const height = `${toolbarHeight}px`;
+        if (this.appElement.style.getPropertyValue("--map-tools-height") !== height) {
+            this.appElement.style.setProperty("--map-tools-height", height);
         }
     }
 
