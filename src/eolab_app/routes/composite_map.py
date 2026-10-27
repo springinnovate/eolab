@@ -398,7 +398,8 @@ def create_composite_map_router(
         Router serving safe render plans and their GeoServer-composed PNGs.
     """
     router = APIRouter(prefix="/api/map-rendering", tags=["rendering"])
-    # Global WMS preserves the qualified layer names in the authorized SLD.
+    # Workspace WMS removes the "eolab:" prefix from catalog layer names, so
+    # they no longer match our inline SLD. Global WMS keeps those names intact.
     internal_wms_url = f"{geoserver_internal_url.rstrip('/')}/wms"
     tile_cache = _CompositeTileCache(maximum_tile_cache_bytes)
 

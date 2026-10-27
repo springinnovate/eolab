@@ -284,6 +284,8 @@ def create_wms_proxy_router(
                 detail="The public WMS endpoint accepts only GET requests",
             )
         query_entries, layer_name, operation = validated_public_wms_query(request)
+        # Capabilities must list only the EOLab workspace. Layer requests use
+        # global WMS so GeoServer keeps the qualified names in our inline SLD.
         internal_wms_url = (
             f"{internal_geoserver_url}/eolab/wms"
             if operation == "getcapabilities"
