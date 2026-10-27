@@ -114,11 +114,13 @@ export class AnnotationController {
     }
 
     /**
-     * Restore local layers without opening their editor; reveal the panel if loading fails.
+     * Restore saved polygons without opening their editor or moving focus.
+     * Failed loads leave stored data untouched and retain the error in the polygon
+     * editor without showing polygon controls over an unrelated map workflow.
      * @param {Object} [options] Startup presentation policy.
-     * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them stored but off the shared map.
+     * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them off the shared map.
      * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
-     * @return {Promise<void>} Completion, including a visible storage error if needed.
+     * @return {Promise<void>} Completion with failed loads retained in the editor's status.
      */
     async load({ attachSavedLayers = true, sharedLayerIds = [] } = {}) {
         try {
@@ -133,11 +135,11 @@ export class AnnotationController {
             this.status.textContent = "";
         } catch (error) {
             this.status.textContent = `Cannot open saved polygons: ${error.message}`;
-            this.panel.show();
         }
     }
 
     /** Restore your server contribution as a local editable layer after joining.
+     * Report a failed device-storage load before changing local polygons.
      * @param {string} name Shared layer name.
      * @param {Object} collection Server-validated GeoJSON belonging to this contributor.
      * @param {Object} [options] Existing contribution restoration options.
@@ -147,7 +149,7 @@ export class AnnotationController {
      * @throws {Error} If geometry, capacity or device persistence prevents restoration.
      */
     async restoreSharedContribution(name, collection, { localId = null, replacePolygons = false } = {}) {
-        if (!this.loaded) throw new Error("Local layers are not available yet.");
+        if (!this.loaded) throw new Error(this.status.textContent);
         const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
         const existing = this.model.layers.find(layer => layer.id === localId);
         const layer = existing ?? this.model.importLayer({ ...imported, name });
