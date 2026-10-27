@@ -101,6 +101,7 @@ export function createVectorWmsLayer(
         try {
             const response = await fetch(url.slice(0, separator), {
                 method: "POST",
+                headers: { "X-EOLab-Uploads": "1" },
                 body: new URLSearchParams(url.slice(separator + 1)),
                 signal: controller.signal,
             });

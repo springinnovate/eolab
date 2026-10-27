@@ -1,10 +1,11 @@
 """Exercise private vector rendering through the real application composition."""
 
+import json
 import os
 from pathlib import Path
 from threading import Event
 from typing import Any, TypeAlias
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 import httpx2
 import pytest
@@ -162,7 +163,14 @@ def rendered_upload(
             A small capabilities, feature-information, or image response.
         """
         forwarded.append(request)
-        operation = request.url.params.get("request", "").lower()
+        parameters = dict(request.url.params)
+        if request.headers.get("content-type", "").startswith(
+            "application/x-www-form-urlencoded"
+        ):
+            parameters.update(
+                parse_qsl(request.content.decode(), keep_blank_values=True)
+            )
+        operation = parameters.get("request", "").lower()
         if operation == "getcapabilities":
             names = [
                 f"eolab:{entry[0]}" for entry in publisher.requests if len(entry) == 5
@@ -283,23 +291,41 @@ def test_each_private_rendering_action_uses_the_owned_original_source(
     assert calls == (len(publisher.requests), len(reader.sources))
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
 def test_private_wms_and_cached_composites_reject_other_browsers_and_deleted_uploads(
     rendered_upload: RenderingFixture,
+    method: str,
 ) -> None:
-    """Protect base, filtered, legend, feature and cached tile access at composition.
+    """Protect signed appearances over GET and POST at the real ownership boundary.
 
     Args:
         rendered_upload: Real application and admitted private GeoPackage.
+        method: Direct WMS query or form transport to exercise.
     """
     owner, other, upload, _, _, forwarded = rendered_upload
     base = f"/api/vector-rendering/uploads/{upload['id']}"
     publication = owner.post(f"{base}/layers", headers=HEADERS).json()
+    appearance = default_vector_style("polygon").model_copy(
+        update={"fill_color": "#db2777"}
+    )
+    styled = owner.post(
+        f"{base}/styles",
+        json={"style": appearance.model_dump(by_alias=True)},
+        headers=HEADERS,
+    )
+    assert styled.status_code == 200, styled.text
+    publication.update(styled.json())
     filtered = owner.post(
         f"{base}/filters", json={"filter": FILTER}, headers=HEADERS
     ).json()
-    urls = []
+    wms_requests = []
     for layer in (publication["layerName"], filtered["layerName"]):
-        common = {"service": "WMS", "version": "1.3.0", "format": "image/png"}
+        common = {
+            "service": "WMS",
+            "version": "1.3.0",
+            "format": "image/png",
+            "vector_style": json.dumps(publication["style"]),
+        }
         tile = {
             **common,
             "layers": layer,
@@ -327,16 +353,24 @@ def test_private_wms_and_cached_composites_reject_other_browsers_and_deleted_upl
                 "feature_count": 1,
             },
         ):
-            url = "/geoserver/eolab/wms?" + urlencode(parameters)
-            urls.append(url)
-            response = owner.get(url)
+            transport = (
+                {"params": parameters}
+                if method == "GET"
+                else {"data": parameters, "headers": HEADERS}
+            )
+            wms_requests.append(transport)
+            response = owner.request(method, "/geoserver/eolab/wms", **transport)
             assert response.status_code == 200, response.text
             assert response.headers["Cache-Control"] == "private, no-store"
             calls = len(forwarded)
-            denied = other.get(url)
+            denied = other.request(method, "/geoserver/eolab/wms", **transport)
             assert denied.status_code == 404, denied.text
             assert denied.headers["Cache-Control"] == "private, no-store"
             assert len(forwarded) == calls
+            if method == "POST":
+                missing_header = owner.post("/geoserver/eolab/wms", data=parameters)
+                assert missing_header.status_code == 403, missing_header.text
+                assert len(forwarded) == calls
 
     plan_body = {
         "layers": [
@@ -396,8 +430,11 @@ def test_private_wms_and_cached_composites_reject_other_browsers_and_deleted_upl
         == 204
     )
     calls = len(forwarded)
-    for url in (*urls, tile_url):
-        response = owner.get(url)
+    for transport in wms_requests:
+        response = owner.request(method, "/geoserver/eolab/wms", **transport)
         assert response.status_code == 404, response.text
         assert response.headers["Cache-Control"] == "private, no-store"
+    deleted_tile = owner.get(tile_url)
+    assert deleted_tile.status_code == 404, deleted_tile.text
+    assert deleted_tile.headers["Cache-Control"] == "private, no-store"
     assert len(forwarded) == calls

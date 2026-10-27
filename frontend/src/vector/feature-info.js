@@ -140,7 +140,7 @@ export async function fetchVectorFeatureInfo(
             {
                 method: "POST",
                 body: new URLSearchParams(url.slice(separator + 1)),
-                headers: { Accept: "application/json" },
+                headers: { Accept: "application/json", "X-EOLab-Uploads": "1" },
                 signal: configuration.signal,
             }
         );

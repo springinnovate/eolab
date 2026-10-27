@@ -140,6 +140,7 @@ test("vector tiles post Leaflet parameters and release their image URL after dec
     assert.equal(tile.alt, "");
     assert.equal(f.calls[0].url, "/wms");
     assert.equal(f.calls[0].method, "POST");
+    assert.equal(f.calls[0].headers["X-EOLab-Uploads"], "1");
     assert.equal(f.calls[0].body.get("bbox"), "2,3,10,20");
     assert.equal(f.calls[0].body.get("styles"), "opaque-approval");
     assert.deepEqual(JSON.parse(f.calls[0].body.get("vector_style")), f.style);
