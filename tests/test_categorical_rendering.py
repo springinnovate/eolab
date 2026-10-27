@@ -20,6 +20,8 @@ from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.rendering.sld import SLD_NAMESPACE
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
+from eolab_app.vector.models import VectorStyle
+from eolab_app.vector.styles import default_vector_style, vector_style_name
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 
 
@@ -46,21 +48,38 @@ def category_style(color: str = "#228b22") -> dict[str, object]:
     }
 
 
-class RasterRegistry:
-    """Expose only two already published fixture layers, without source I/O."""
+def vector_style() -> VectorStyle:
+    """Return a polygon appearance whose fill differs from GeoServer's default.
 
-    def require_current(self, layer_name: str) -> PublishedRasterAuthorization:
+    Returns:
+        A validated custom vector appearance for the mixed-layer request.
+    """
+    return default_vector_style("polygon").model_copy(update={"fill_color": "#db2777"})
+
+
+class RenderingRegistry:
+    """Expose two published rasters and one styled vector without source I/O."""
+
+    def require_current(
+        self,
+        layer_name: str,
+    ) -> PublishedRasterAuthorization | PublishedVectorAuthorization:
         """Resolve one approved fixture identity.
 
         Args:
             layer_name: Requested published layer identity.
 
         Returns:
-            The real raster-owned authorization contract.
+            The real raster- or vector-owned authorization contract.
 
         Raises:
             PublishedLayerNotAuthorizedError: If the requested layer is unknown.
         """
+        if layer_name == "eolab:boundaries":
+            return PublishedVectorAuthorization(
+                source=object(),  # type: ignore[arg-type]
+                styles={vector_style_name("boundaries", vector_style()): None},
+            )
         if layer_name not in {"eolab:landcover", "eolab:continuous"}:
             raise PublishedLayerNotAuthorizedError("Layer is not published")
         return PublishedRasterAuthorization()
@@ -92,7 +111,7 @@ def rendering_client() -> tuple[TestClient, list[httpx2.Request]]:
     upstream = httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
     queue = GeoServerRenderQueue(2)
     tracker = GetMapRequestTracker(4)
-    registries = (RasterRegistry(),)
+    registries = (RenderingRegistry(),)
     app = FastAPI()
     app.include_router(
         create_wms_proxy_router(
@@ -265,24 +284,40 @@ def test_composite_category_isolated_by_plan_and_matches_direct_sld(
         parse_qs(request.content.decode(), keep_blank_values=True)
         for request in requests
     ]
-    assert forms[0]["sld_body"] == forms[2]["sld_body"]
-    assert forms[0]["sld_body"] != forms[1]["sld_body"]
+    # Composite requests explicitly select inline defaults; the rendering definition stays identical.
+    definitions = [
+        ElementTree.tostring(
+            ElementTree.fromstring(form["sld_body"][0]).find(
+                f".//{{{SLD_NAMESPACE}}}FeatureTypeStyle"
+            )
+        )
+        for form in forms
+    ]
+    assert definitions[0] == definitions[2]
+    assert definitions[0] != definitions[1]
     assert all(form["interpolations"] == ["nearest neighbor"] for form in forms)
 
 
 def test_mixed_composite_preserves_default_resampling_and_layer_order(
     rendering_client: tuple[TestClient, list[httpx2.Request]],
 ) -> None:
-    """Override only the categorical layer in bottom-first GeoServer order.
+    """Select each inline style and override only categorical resampling in drawing order.
 
     Args:
         rendering_client: Real routes with a capturing upstream boundary.
     """
     client, requests = rendering_client
+    polygon = vector_style()
     response = client.post(
         "/api/map-rendering/plans",
         json={
             "layers": [
+                {
+                    "layerName": "eolab:boundaries",
+                    "styleName": vector_style_name("boundaries", polygon),
+                    "styleDefinition": polygon.model_dump(by_alias=True),
+                    "opacity": 1,
+                },
                 {
                     "layerName": "eolab:landcover",
                     "styleName": "dynamic-raster",
@@ -306,9 +341,23 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
         == 200
     )
     form = parse_qs(requests[0].content.decode(), keep_blank_values=True)
-    assert form["layers"] == ["eolab:continuous,eolab:landcover"]
-    assert form["interpolations"] == [",nearest neighbor"]
+    assert form["layers"] == ["eolab:continuous,eolab:landcover,eolab:boundaries"]
+    assert form["interpolations"] == [",nearest neighbor,"]
     root = ElementTree.fromstring(form["sld_body"][0])
+    layers = root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")
+    assert [layer.findtext(f"{{{SLD_NAMESPACE}}}Name") for layer in layers] == [
+        "eolab:continuous",
+        "eolab:landcover",
+        "eolab:boundaries",
+    ]
+    assert [
+        layer.findtext(f"{{{SLD_NAMESPACE}}}UserStyle/{{{SLD_NAMESPACE}}}IsDefault")
+        for layer in layers
+    ] == ["1", "1", "1"]
+    assert (
+        layers[-1].findtext(f".//{{{SLD_NAMESPACE}}}CssParameter[@name='fill']")
+        == polygon.fill_color
+    )
     assert [
         float(node.text) for node in root.findall(f".//{{{SLD_NAMESPACE}}}Opacity")
     ] == [1, 0.4]
