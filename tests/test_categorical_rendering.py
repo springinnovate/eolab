@@ -172,6 +172,7 @@ def test_direct_style_becomes_trusted_body_and_disables_shared_native_tiles(
     request = requests[0]
     form = parse_qs(request.content.decode(), keep_blank_values=True)
     assert request.method == "POST"
+    assert request.url.path == "/geoserver/wms"
     assert "application/x-www-form-urlencoded" in request.headers["content-type"]
     assert not {"raster_style", "tiled", "tilesorigin"} & form.keys()
     assert form["interpolations"] == ["nearest neighbor"]
@@ -284,24 +285,15 @@ def test_composite_category_isolated_by_plan_and_matches_direct_sld(
         parse_qs(request.content.decode(), keep_blank_values=True)
         for request in requests
     ]
-    # Composite requests explicitly select inline defaults; the rendering definition stays identical.
-    definitions = [
-        ElementTree.tostring(
-            ElementTree.fromstring(form["sld_body"][0]).find(
-                f".//{{{SLD_NAMESPACE}}}FeatureTypeStyle"
-            )
-        )
-        for form in forms
-    ]
-    assert definitions[0] == definitions[2]
-    assert definitions[0] != definitions[1]
+    assert forms[0]["sld_body"] == forms[2]["sld_body"]
+    assert forms[0]["sld_body"] != forms[1]["sld_body"]
     assert all(form["interpolations"] == ["nearest neighbor"] for form in forms)
 
 
 def test_mixed_composite_preserves_default_resampling_and_layer_order(
     rendering_client: tuple[TestClient, list[httpx2.Request]],
 ) -> None:
-    """Select each inline style and override only categorical resampling in drawing order.
+    """Send qualified layer names and their inline appearances to global GeoServer WMS.
 
     Args:
         rendering_client: Real routes with a capturing upstream boundary.
@@ -340,6 +332,7 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
         ).status_code
         == 200
     )
+    assert requests[0].url.path == "/geoserver/wms"
     form = parse_qs(requests[0].content.decode(), keep_blank_values=True)
     assert form["layers"] == ["eolab:continuous,eolab:landcover,eolab:boundaries"]
     assert form["interpolations"] == [",nearest neighbor,"]
@@ -350,10 +343,6 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
         "eolab:landcover",
         "eolab:boundaries",
     ]
-    assert [
-        layer.findtext(f"{{{SLD_NAMESPACE}}}UserStyle/{{{SLD_NAMESPACE}}}IsDefault")
-        for layer in layers
-    ] == ["1", "1", "1"]
     assert (
         layers[-1].findtext(f".//{{{SLD_NAMESPACE}}}CssParameter[@name='fill']")
         == polygon.fill_color

@@ -265,6 +265,9 @@ def create_wms_proxy_router(
     async def wms(request: Request) -> Response:
         """Forward one validated and authorized WMS operation.
 
+        Layer requests use global WMS to preserve qualified layer names in SLD.
+        Capabilities remain limited to the EOLab workspace.
+
         Args:
             request: Incoming WMS request.
 
@@ -281,6 +284,11 @@ def create_wms_proxy_router(
                 detail="The public WMS endpoint accepts only GET requests",
             )
         query_entries, layer_name, operation = validated_public_wms_query(request)
+        internal_wms_url = (
+            f"{internal_geoserver_url}/eolab/wms"
+            if operation == "getcapabilities"
+            else f"{internal_geoserver_url}/wms"
+        )
         layer_names = (layer_name,) if layer_name is not None else ()
         private = bool(
             layer_name
@@ -342,7 +350,7 @@ def create_wms_proxy_router(
                 # every forwarded header remain part of the response identity.
                 render_request_key = json.dumps(
                     [
-                        f"{internal_geoserver_url}/eolab/wms",
+                        internal_wms_url,
                         sorted((name.lower(), value) for name, value in query_entries),
                         sorted(forwarded_headers.items()),
                     ]
@@ -360,12 +368,12 @@ def create_wms_proxy_router(
                     async with use_layers(layer_names) if use_layers else nullcontext():
                         if any(name.lower() == "sld_body" for name, _ in query_entries):
                             return await geoserver_client.post(
-                                f"{internal_geoserver_url}/eolab/wms",
+                                internal_wms_url,
                                 data=dict(query_entries),
                                 headers=forwarded_headers,
                             )
                         return await geoserver_client.get(
-                            f"{internal_geoserver_url}/eolab/wms",
+                            internal_wms_url,
                             params=query_entries,
                             headers=forwarded_headers,
                         )
@@ -384,7 +392,7 @@ def create_wms_proxy_router(
             else:
                 async with use_layers(layer_names) if use_layers else nullcontext():
                     geoserver_response = await geoserver_client.get(
-                        f"{internal_geoserver_url}/eolab/wms",
+                        internal_wms_url,
                         params=query_entries,
                         headers=forwarded_headers,
                     )

@@ -110,8 +110,6 @@ def build_get_map_form(
 
     Form-encoded WMS keeps large styles out of URLs and uses GeoServer's KVP
     interpolation contract, which is not part of the GetMap XML schema.
-    Each inline style is marked as its layer's default so the blank style
-    parameters select these appearances instead of GeoServer's shared defaults.
 
     Args:
         sld_document: Complete authorized SLD in bottom-first drawing order.
@@ -125,13 +123,6 @@ def build_get_map_form(
         WMS 1.1.1 form fields for a transparent PNG response.
     """
     root = ElementTree.fromstring(sld_document)
-    for user_style in root.findall(
-        f"{{{SLD_NAMESPACE}}}NamedLayer/{{{SLD_NAMESPACE}}}UserStyle"
-    ):
-        default = ElementTree.Element(f"{{{SLD_NAMESPACE}}}IsDefault")
-        default.text = "1"
-        feature_style = user_style.find(f"{{{SLD_NAMESPACE}}}FeatureTypeStyle")
-        user_style.insert(list(user_style).index(feature_style), default)
     names = [
         layer.findtext(f"{{{SLD_NAMESPACE}}}Name", "")
         for layer in root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")
@@ -142,9 +133,7 @@ def build_get_map_form(
         "request": "GetMap",
         "layers": ",".join(names),
         "styles": ",".join("" for _ in names),
-        "sld_body": ElementTree.tostring(
-            root, encoding="unicode", xml_declaration=True
-        ),
+        "sld_body": sld_document.decode("utf-8"),
         "interpolations": ",".join(value or "" for value in interpolations),
         "bbox": ",".join(format(value, ".17g") for value in bbox),
         "width": str(width),

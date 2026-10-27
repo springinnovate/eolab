@@ -398,7 +398,8 @@ def create_composite_map_router(
         Router serving safe render plans and their GeoServer-composed PNGs.
     """
     router = APIRouter(prefix="/api/map-rendering", tags=["rendering"])
-    internal_wms_url = f"{geoserver_internal_url.rstrip('/')}/eolab/wms"
+    # Global WMS preserves the qualified layer names in the authorized SLD.
+    internal_wms_url = f"{geoserver_internal_url.rstrip('/')}/wms"
     tile_cache = _CompositeTileCache(maximum_tile_cache_bytes)
 
     @router.post("/plans", response_model=PublishedCompositeMapPlan)

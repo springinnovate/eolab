@@ -51,8 +51,9 @@ class OutputGeoServer:
         """
         self.requests.append(request)
         path = request.url.path
-        if path.endswith("/eolab/wms"):
+        if path in {"/geoserver/wms", "/geoserver/eolab/wms"}:
             if request.url.params.get("request", "").lower() == "getcapabilities":
+                assert path == "/geoserver/eolab/wms"
                 layers = "".join(
                     f"<Layer><Name>eolab:{name}</Name></Layer>" for name in self.names
                 )
@@ -61,6 +62,7 @@ class OutputGeoServer:
                     content=f"<WMS_Capabilities><Capability><Layer><Layer><Name>eolab:catalog</Name></Layer>{layers}</Layer></Capability></WMS_Capabilities>",
                     headers={"Content-Type": "application/xml"},
                 )
+            assert path == "/geoserver/wms"
             return httpx2.Response(
                 200,
                 content=b"tile",
