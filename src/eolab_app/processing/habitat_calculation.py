@@ -1,12 +1,12 @@
 """Run Habitat condition with authorized inputs in a Processing attempt."""
 
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 from math import ceil
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zipfile import ZipFile, ZIP_STORED
 
 import numpy as np
@@ -31,7 +31,18 @@ from eolab_app.processing.aggregate_models import AggregateArea, RasterAggregate
 from eolab_app.processing.artifact_manifest import ProducedFile
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.clip_models import ClipGrid
-from eolab_app.processing.habitat_models import HabitatCalculationInputs, HabitatRequest
+from eolab_app.processing.habitat_models import (
+    HabitatCalculationInputs,
+    HabitatEarthEngineStack,
+    HabitatRasterStack,
+    HabitatRequest,
+)
+from eolab_app.processing.habitat_earth_engine import (
+    HabitatEarthEngineRuntime,
+    get_habitat_tiles,
+    load_habitat_stack,
+    prepare_habitat_band_views,
+)
 from eolab_app.processing.models import Artifact, ProcessingError
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 from eolab_app.processing.raster_preparation import (
@@ -49,10 +60,13 @@ class HabitatSources:
     Attributes:
         rasters: Input files keyed by predictor/response slot or mask role.
         vectors: Independently filtered AOI and reference-site sources.
+        earth_engine: Server-only acquisition configuration, supplied only for
+            automatic input execution and never included in saved inputs.
     """
 
     rasters: dict[str, Path]
     vectors: dict[str, ResolvedCatalogSelection]
+    earth_engine: HabitatEarthEngineRuntime | None = None
 
 
 @dataclass(frozen=True)
@@ -154,7 +168,8 @@ def prepare_habitat_inputs(
         Selected inputs, area descriptor and output grid for Processing and Run YAML.
 
     Raises:
-        ValueError: If selected polygons are empty or cannot be projected.
+        ValueError: If selected polygons are empty, cannot be projected, or the
+            source year is not supported by the packaged Earth Engine configuration.
         SelectionUnavailableError: If the original vector cannot be read.
         RasterioError: If the first predictor cannot be opened.
     """
@@ -177,7 +192,15 @@ def prepare_habitat_inputs(
         nativeBlocks=ceil(width / 512) * ceil(height / 512),
         estimatedRawBytes=width * height * 4,
     )
-    return HabitatCalculationInputs(inputs=request, area=area, grid=grid)
+    acquisition = None
+    if isinstance(request.stack, HabitatEarthEngineStack):
+        acquisition = load_habitat_stack(request.stack.year)
+        # A plain mapping makes the producer's read-only dataset definitions
+        # serializable in the saved plan and native-process arguments.
+        acquisition = replace(acquisition, datasets=dict(acquisition.datasets))
+    return HabitatCalculationInputs(
+        inputs=request, area=area, grid=grid, earthEngine=acquisition
+    )
 
 
 def describe_habitat_file(path: Path, name: str, media_type: str) -> ProducedFile:
@@ -209,10 +232,10 @@ def calculate_habitat(
     directory: Path,
     limits: RasterAggregateLimits,
 ) -> HabitatArtifact:
-    """Align inputs, fit reference sites and prepare the runner's maps for publication.
+    """Acquire or resolve rasters, fit references and prepare the runner's outputs.
 
     Args:
-        sources: Authorized raster paths and independently filtered vector inputs.
+        sources: Authorized raster/vector inputs and server acquisition configuration.
         prepared: Captured stack, AOI, output grid, resampling and scientific settings.
         directory: Private attempt directory owned and cleaned by Processing.
         limits: Existing Processing settings used by temporary polygon rasterization.
@@ -222,6 +245,7 @@ def calculate_habitat(
 
     Raises:
         ValueError: If the upstream reader or numerical calculation rejects inputs.
+        ProcessingError: If Habitat cannot connect to or download from Earth Engine.
         RasterioError: If a raster cannot be read or written.
         OSError: If result creation or cleanup fails.
     """
@@ -235,12 +259,67 @@ def calculate_habitat(
             height=prepared.grid.height,
         )
         aoi = read_habitat_area(prepared.area, sources, grid.crs)
+        inputs = {
+            name: (path, Resampling[request.preparation.resampling[name]])
+            for name, path in sources.rasters.items()
+        }
+        if prepared.earthEngine is not None:
+            acquisition = prepared.earthEngine
+            runtime = cast(HabitatEarthEngineRuntime, sources.earth_engine)
+            try:
+                tiles = get_habitat_tiles(
+                    aoi,
+                    acquisition,
+                    runtime.connection,
+                    cache_directory=runtime.cache_directory,
+                    working_directory=directory,
+                    progress=lambda complete, total: write_progress(
+                        directory,
+                        "fetching_habitat_tiles",
+                        complete,
+                        total,
+                        unit="tiles",
+                    ),
+                    # Processing terminates the supervised native process on
+                    # cancellation, including while Earth Engine is blocking.
+                    check_cancelled=lambda: None,
+                )
+            except RuntimeError as error:
+                raise ProcessingError(
+                    "habitat_earth_engine_failed", str(error), 502
+                ) from error
+            views = resources.enter_context(
+                prepare_habitat_band_views(tiles, directory)
+            )
+            predictor_names = tuple(
+                name for name, band in tiles.bands.items() if band.role == "predictor"
+            )
+            response_names = tuple(
+                name for name, band in tiles.bands.items() if band.role == "response"
+            )
+            categorical_predictor = next(
+                name
+                for name in predictor_names
+                if tiles.bands[name].data_type == "categorical"
+            )
+            for role, names in (
+                ("predictor", predictor_names),
+                ("response", response_names),
+            ):
+                inputs.update(
+                    {
+                        f"{role}_{index}": (views[name], Resampling.nearest)
+                        for index, name in enumerate(names)
+                    }
+                )
+        else:
+            stack = cast(HabitatRasterStack, request.stack)
+            predictor_names = tuple(layer.name for layer in stack.predictors)
+            response_names = tuple(layer.name for layer in stack.responses)
+            categorical_predictor = stack.categoricalPredictor
         rasters = resources.enter_context(
             prepare_raster_stack(
-                {
-                    name: (path, Resampling[request.preparation.resampling[name]])
-                    for name, path in sources.rasters.items()
-                },
+                inputs,
                 grid,
                 (mapping(aoi),),
                 directory,
@@ -273,18 +352,18 @@ def calculate_habitat(
         )
         result = run_habitat_condition(
             [
-                RasterBand(layer.name, rasters[f"predictor_{index}"])
-                for index, layer in enumerate(request.stack.predictors)
+                RasterBand(name, rasters[f"predictor_{index}"])
+                for index, name in enumerate(predictor_names)
             ],
             [
-                RasterBand(layer.name, rasters[f"response_{index}"])
-                for index, layer in enumerate(request.stack.responses)
+                RasterBand(name, rasters[f"response_{index}"])
+                for index, name in enumerate(response_names)
             ],
             RasterBand("reference_sites", reference_path),
             aoi,
             directory / "habitat-output",
             configuration,
-            categorical_predictor_name=request.stack.categoricalPredictor,
+            categorical_predictor_name=categorical_predictor,
             samples_per_class_per_block=settings.samples_per_class_per_block,
             random_seed=settings.random_seed,
             tile_size_pixels=settings.tile_size_pixels,
@@ -333,6 +412,12 @@ def calculate_habitat(
     fitted = result.fitted
     provenance = {
         **prepared.model_dump(mode="json", by_alias=True),
+        "variables": {
+            "predictors": predictor_names,
+            "responses": response_names,
+            "categoricalPredictor": categorical_predictor,
+        },
+        "inputResampling": {name: method.name for name, (_, method) in inputs.items()},
         "fit": {
             "predictorCoverage": json.loads(
                 fitted.prepared_data.predictor_coverage.to_json(orient="records")
@@ -383,6 +468,10 @@ def habitat_process_target(
         locations = {path: name for name, path in arguments[0].rasters.items()}
         if operation == "calculate":
             locations[arguments[2]] = "run files"
+            if arguments[0].earth_engine is not None:
+                locations[arguments[0].earth_engine.cache_directory] = (
+                    "Habitat input cache"
+                )
         for path, name in locations.items():
             detail = detail.replace(str(path), name).replace(path.as_posix(), name)
         queue.put(("error", ("invalid_habitat_inputs", detail, 422)))

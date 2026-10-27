@@ -32,6 +32,36 @@ from eolab_app.processing.habitat_earth_engine import (
 )
 from eolab_app.processing import habitat_earth_engine
 from eolab_app.raster.read_cancellation import RasterReadCancelled
+from eolab_app.settings import load_processing_worker_settings
+
+
+def test_worker_loads_optional_habitat_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Load private Habitat settings without reading credentials or creating a cache.
+
+    Args:
+        tmp_path: Separate source, result and not-yet-mounted credential paths.
+        monkeypatch: Isolate the worker environment from developer settings.
+    """
+    monkeypatch.setenv("CATALOG_INTERNAL_URL", "http://catalog")
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path / "sources"))
+    monkeypatch.setenv("PROCESSING_DATA_PATH", str(tmp_path / "processing"))
+    monkeypatch.setenv("VECTOR_UPLOAD_DATA_PATH", str(tmp_path / "uploads"))
+    monkeypatch.delenv("HABITAT_EARTH_ENGINE_PROJECT", raising=False)
+    monkeypatch.delenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", raising=False)
+    assert load_processing_worker_settings().habitat_earth_engine is None
+    monkeypatch.setenv("HABITAT_EARTH_ENGINE_PROJECT", "habitat-project")
+    with pytest.raises(ValueError, match="CREDENTIALS_FILE"):
+        load_processing_worker_settings()
+    credentials = tmp_path / "secrets" / "habitat.json"
+    monkeypatch.setenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", str(credentials))
+    runtime = load_processing_worker_settings().habitat_earth_engine
+    assert runtime.connection == HabitatEarthEngineSettings(
+        "habitat-project", credentials
+    )
+    assert runtime.cache_directory == tmp_path / "processing" / "habitat-cache"
+    assert not runtime.cache_directory.exists()
 
 
 def _load_test_stack(year: int) -> RasterStackConfiguration:

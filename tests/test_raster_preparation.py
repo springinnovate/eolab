@@ -162,13 +162,16 @@ def test_each_input_uses_its_requested_resampling(tmp_path: Path) -> None:
             numpy.testing.assert_allclose(continuous.read(1), values[:3, :3] + 2.75)
 
 
+@pytest.mark.parametrize("mosaic", [False, True])
 def test_masks_nodata_and_missing_coverage_are_excluded_from_resampling(
     tmp_path: Path,
+    mosaic: bool,
 ) -> None:
     """Preserve valid zero while excluding both source masks and NoData values.
 
     Args:
         tmp_path: Partly invalid and disjoint sources plus the attempt directory.
+        mosaic: Read the masked input through a VRT containing two source regions.
     """
     values = numpy.full((4, 4), 10, dtype="float32")
     values[0, 0] = 0
@@ -191,13 +194,39 @@ def test_masks_nodata_and_missing_coverage_are_excluded_from_resampling(
         rasterio.open(source, "r+") as dataset,
     ):
         dataset.write_mask(validity)
+    if mosaic:
+        source = tmp_path / "mosaic.vrt"
+        regions = "".join(f"""<ComplexSource>
+                <SourceFilename relativeToVRT="1">masked.tif</SourceFilename>
+                <SourceBand>1</SourceBand>
+                <SrcRect xOff="{column}" yOff="0" xSize="2" ySize="4"/>
+                <DstRect xOff="{column}" yOff="0" xSize="2" ySize="4"/>
+                <NODATA>-9999</NODATA>
+            </ComplexSource>""" for column in (0, 2))
+        source.write_text(
+            f"""<VRTDataset rasterXSize="4" rasterYSize="4">
+                <SRS>EPSG:3857</SRS><GeoTransform>0,1,0,4,0,-1</GeoTransform>
+                <VRTRasterBand dataType="Float32" band="1">
+                    <NoDataValue>-9999</NoDataValue>{regions}
+                </VRTRasterBand>
+                <MaskBand><VRTRasterBand dataType="Byte">
+                    <SimpleSource>
+                        <SourceFilename relativeToVRT="1">masked.tif</SourceFilename>
+                        <SourceBand>mask,1</SourceBand>
+                    </SimpleSource>
+                </VRTRasterBand></MaskBand>
+            </VRTDataset>""",
+            encoding="utf-8",
+        )
     disjoint = write_source(
         tmp_path / "disjoint.tif",
         numpy.full((4, 4), 91, dtype="float32"),
         transform=from_origin(100, 104, 1, 1),
         crs="EPSG:3857",
     )
-    originals = {path: path.read_bytes() for path in (source, disjoint)}
+    originals = {
+        path: path.read_bytes() for path in (tmp_path / "masked.tif", source, disjoint)
+    }
     grid = calculate_raster_grid((0, 0, 4, 4), PROJECTED, (0.5, 0.5), (0, 0))
     attempt = tmp_path / "attempt"
     attempt.mkdir()

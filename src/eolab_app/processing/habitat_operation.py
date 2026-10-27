@@ -1,6 +1,6 @@
 """Run Habitat condition through existing Processing source and worker contracts."""
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from eolab_app.bounded_vector import summary_process
 from eolab_app.catalog_selection import VectorSelection
@@ -10,17 +10,19 @@ from eolab_app.processing.habitat_calculation import (
     habitat_process_target,
 )
 from eolab_app.processing.habitat_models import (
+    OPERATION,
     HabitatCalculationInputs,
+    HabitatEarthEngineStack,
     HabitatRequest,
     HabitatSettings,
     QueuedHabitat,
     VectorReferenceSites,
 )
+from eolab_app.processing.habitat_earth_engine import HabitatEarthEngineRuntime
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.processing.raster_operations import bind_area_arguments
-from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import RasterSourceReference
 
 
@@ -67,37 +69,21 @@ def get_habitat_request(
     return value.inputs if isinstance(value, HabitatCalculationInputs) else value
 
 
-def get_habitat_source(
-    value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
-) -> RasterSourceReference:
-    """Return the first predictor for admission and the whole-raster area choice.
-
-    Args:
-        value: Validated request or saved specification.
-
-    Returns:
-        The predictor's Catalog or owned result-file reference.
-    """
-    return get_habitat_request(value).stack.predictors[0].source
-
-
-def get_additional_habitat_sources(
+def get_habitat_raster_sources(
     value: HabitatRequest | QueuedHabitat | HabitatCalculationInputs,
 ) -> dict[str, RasterSourceReference]:
-    """Declare the remaining rasters for ordinary authorization and retention.
+    """Declare all selected rasters for ordinary authorization and retention.
 
-    Keys identify captured stack positions, with predictor_0 reserved for the
-    primary source. Variable names are retained separately for scientific outputs.
+    Keys identify captured stack positions and selected mask roles. Automatic
+    inputs have no pre-existing raster source except any user-selected masks.
 
     Args:
         value: Validated request or saved specification.
 
     Returns:
-        Additional predictors, responses, raster references and optional habitat mask.
+        Manual predictors/responses, raster references and optional habitat mask.
     """
-    sources = get_habitat_request(value).get_raster_sources()
-    sources.pop("predictor_0")
-    return sources
+    return get_habitat_request(value).get_raster_sources()
 
 
 def get_habitat_vector_selections(
@@ -153,14 +139,13 @@ def build_habitat_submission(
 
 
 async def resolve_habitat_sources(
-    context: OperationContext, request: HabitatRequest, primary: AuthorizedRaster
+    context: OperationContext, request: HabitatRequest
 ) -> HabitatSources:
     """Resolve the selected vectors and collect authorized raster paths for native work.
 
     Args:
         context: Existing worker capabilities and authorized additional rasters.
         request: Captured layer and area selections.
-        primary: First predictor already authorized by the worker.
 
     Returns:
         Ephemeral native sources; no paths or resolved vectors enter stored inputs.
@@ -179,23 +164,20 @@ async def resolve_habitat_sources(
         for name, selection in selections.items()
     }
     return HabitatSources(
-        rasters={
-            "predictor_0": primary.source_path,
-            **{name: source.source_path for name, source in context.rasters.items()},
-        },
+        rasters={name: source.source_path for name, source in context.rasters.items()},
         vectors=vectors,
     )
 
 
 async def prepare_habitat(
-    context: OperationContext, queued: QueuedHabitat, primary: AuthorizedRaster
+    context: OperationContext, queued: QueuedHabitat, primary: None
 ) -> PreparedJobPlan:
     """Prepare the selected area and requested grid in the supervised worker process.
 
     Args:
         context: Existing source, lifecycle and native-execution capabilities.
         queued: Accepted inputs and any retained polygon-area geometry.
-        primary: Authorized first predictor.
+        primary: None; all selected raster roles use ordinary additional sources.
 
     Returns:
         Saved calculation inputs with the area descriptor and calculated output grid.
@@ -206,7 +188,7 @@ async def prepare_habitat(
         SelectionUnavailableError: If a selected vector is unavailable.
     """
     request = queued.request
-    sources = await resolve_habitat_sources(context, request, primary)
+    sources = await resolve_habitat_sources(context, request)
     if queued.polygonArea is not None:
         area = queued.polygonArea
     elif request.wholeRaster:
@@ -244,23 +226,36 @@ async def prepare_habitat(
 
 
 async def prepare_habitat_execution(
-    context: OperationContext, spec: HabitatCalculationInputs, primary: AuthorizedRaster
+    context: OperationContext, spec: HabitatCalculationInputs, primary: None
 ) -> tuple[HabitatSources, HabitatCalculationInputs]:
     """Resolve original sources for the saved Habitat calculation inputs.
 
     Args:
         context: Worker capabilities and authorized additional rasters.
         spec: Saved area, grid and scientific settings.
-        primary: Authorized first predictor.
+        primary: None; Habitat declares its individual raster roles explicitly.
 
     Returns:
         Authorized file paths and vector readers, plus the saved calculation inputs.
 
     Raises:
-        ProcessingError: If vector reading is unavailable.
+        ProcessingError: If vector reading or automatic-input configuration is unavailable.
         SelectionUnavailableError: If a selected vector cannot be read.
     """
-    return await resolve_habitat_sources(context, spec.inputs, primary), spec
+    sources = await resolve_habitat_sources(context, spec.inputs)
+    if isinstance(spec.inputs.stack, HabitatEarthEngineStack):
+        runtime = cast(
+            HabitatEarthEngineRuntime | None, context.operation_settings.get(OPERATION)
+        )
+        if runtime is None:
+            raise ProcessingError(
+                "habitat_earth_engine_unavailable",
+                "Earth Engine inputs are not configured. Ask the administrator to "
+                "configure Habitat's Earth Engine project and credentials.",
+                503,
+            )
+        sources = HabitatSources(sources.rasters, sources.vectors, runtime)
+    return sources, spec
 
 
 def select_habitat_execution(

@@ -270,19 +270,27 @@ deployment before building it. The pit-filling search cutoff is in
 -1 and 0 allow unlimited searches. This replaces the former
 `PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT` environment setting.
 
-The [Habitat Earth Engine acquisition function](src/eolab_app/processing/habitat_earth_engine.py)
-accepts a registered Google Cloud project and a service-account JSON key path
-through `HabitatEarthEngineSettings`. Mount the key read-only, outside the Catalog
-data mounts. Pass these settings only to the server process performing the
-download; never put the key in browser configuration or commit it. The
-[acquisition tests](tests/test_habitat_earth_engine.py) demonstrate calling
-`get_habitat_tiles` with a projected AOI, persistent cache and private working
-directory. Keep the cache outside run/result directories on the same filesystem
-as the working directory, so completed tiles can be published atomically. Cached
-tiles survive run expiry and restarts; administrators may remove the cache only
-while no calculations are using it. Concurrent first requests may both download
-a tile, but only the first completed publication is retained. This callable does
-not change the existing selected-layer Habitat workflow.
+Habitat condition can fetch its original scientific inputs from Earth Engine
+inside a model run. Set `EOLAB_HABITAT_EARTH_ENGINE_PROJECT` and
+`EOLAB_HABITAT_EARTH_ENGINE_CREDENTIALS_FILE` in Compose, and mount that
+service-account JSON key read-only in `processing-worker`, outside Catalog data
+mounts. The file setting is the absolute path **inside the container**. Never put
+the key in browser configuration or commit it. Leave both settings blank to use
+only manually selected rasters.
+
+The backend accepts `stack: {kind: earthEngine, year: 2018}` with an explicit
+analysis area and user-selected reference sites. The preparation grid remains
+explicit; downloaded bands use nearest-neighbor resampling, while selected masks
+use their requested methods. Browser controls are not yet available. See the
+[model integration tests](tests/test_habitat_earth_engine_model.py) for an executable
+request and result example.
+
+Habitat keeps completed input tiles under `PROCESSING_DATA_PATH/habitat-cache`,
+beside run files on the same filesystem for atomic publication. Tiles survive run
+expiry and restart; administrators may remove the cache only while no calculations
+use it. Concurrent cold requests may both download a tile; the first completed
+publication wins. Run cleanup removes temporary band views and aligned rasters,
+not cached tiles.
 
 EOLab is open-source software under the [Apache License 2.0](LICENSE). Bivariate
 palette definitions originate in the

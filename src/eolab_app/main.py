@@ -727,6 +727,9 @@ async def run_processing_worker() -> None:
                     native=execution_native,
                     areas=areas,
                     uploads=uploads,
+                    operation_settings={
+                        "habitat.condition.v1": settings.habitat_earth_engine
+                    },
                 )
                 workers.create_task(
                     serve_processing(worker, PostgresJobWakeup(), cleanup_lock)
