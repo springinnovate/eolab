@@ -64,6 +64,7 @@ from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
+from eolab_app.routes.habitat import create_habitat_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.rasters import create_raster_feature
@@ -521,6 +522,7 @@ def create_app(
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
     application.include_router(create_vector_sampling_router(vector_selection_reader))
+    application.include_router(create_habitat_router())
     application.include_router(
         create_processing_router(
             processing_service,

@@ -1,7 +1,7 @@
-/** Edit the named raster stack used to fit Habitat condition. */
+/** Choose Earth Engine inputs or a named raster stack for Habitat condition. */
 import { captureHabitatStack } from "./inputs.js";
 
-/** Keep predictor and response rows stable while the user chooses and names rasters. */
+/** Edit Habitat's input source and keep manual predictor/response rows stable. */
 export class HabitatStackView {
     /** Build stack controls using the Models form's existing raster chooser.
      * @param {Object} helpers Models presentation helpers.
@@ -12,7 +12,7 @@ export class HabitatStackView {
      * @param {Document} helpers.document Owning document, used to preserve focused edits.
      * @param {(host:HTMLElement,id:string,input:Object,onChange:(raster:Object|null)=>void,onResampling:(method:string)=>void)=>Object} helpers.buildRasterInput Build the ordinary raster chooser with row-specific source and method callbacks.
      * @param {(controls:Object,input:Object,value:Object,state:Object)=>boolean} helpers.renderRasterInput Update that chooser using current source availability.
-     * @param {{onInput:(name:string,change:Object)=>void}} handlers Controller-owned input edits.
+     * @param {{onInput:(name:string,change:Object)=>void,onRefreshHabitat:(name:string)=>void}} handlers Input edits and Earth Engine configuration retry.
      * @param {string} name Recipe input name for this stack.
      * @param {{label:string}} input Declared stack input.
      * @param {Object} model Installed recipe supplying the fixed Habitat settings.
@@ -23,9 +23,25 @@ export class HabitatStackView {
         this.predictors = []; this.responses = []; this.nextRowId = 0; this.categoricalRow = null;
         this.root = element("section", "", "models-vector");
         this.root.setAttribute("aria-label", input.label);
+        this.source = element("select");
+        this.source.addEventListener("change", () => handlers.onInput(name, {kind: this.source.value}));
+        this.options(this.source, [{value: "manual", label: "Choose raster layers"},
+            {value: "earthEngine", label: "Original model inputs from Earth Engine"}], "manual");
+        this.year = element("select");
+        this.year.addEventListener("change", () => handlers.onInput(name, {year: Number(this.year.value)}));
+        this.automatic = element("fieldset", "", "models-vector");
+        this.automatic.append(element("legend", "Earth Engine inputs"), field(`models-${name}-year`, "Assessment year", this.year),
+            element("p", "Downloads the original model's predictors and observed responses for the Analysis area. The first run can take a while; later runs reuse matching downloaded tiles. Reference sites are still your choice below.", "models-help"),
+            element("p", "Use a Montana area for the first demo. These inputs have not been validated for global coverage.", "models-help"));
+        this.acquisitionStatus = element("p", "", "models-help"); this.acquisitionStatus.setAttribute("role", "status");
+        this.retry = button("Retry Earth Engine year choices", () => handlers.onRefreshHabitat(name), "models-action");
+        this.automatic.append(this.acquisitionStatus, this.retry);
+        this.manual = element("fieldset", "", "models-vector");
+        this.manual.append(element("legend", "Raster layers"));
+        this.root.append(field(`models-${name}-source`, "Input source", this.source), this.automatic, this.manual);
         this.help = element("p", "Predictors describe the environment; observed responses describe the habitat condition to model. Each selected raster uses its first band.", "models-help");
         this.help.id = `models-${name}-help`;
-        this.root.append(this.help);
+        this.manual.append(this.help);
         this.groups = {};
         for (const [role, title, addLabel] of [
             ["predictors", "Predictor rasters", "Add predictor"],
@@ -36,7 +52,7 @@ export class HabitatStackView {
             const add = button(addLabel, () => this.addRow(role), "models-action");
             group.append(element("legend", title), rows, add);
             this.groups[role] = {root: group, rows, add};
-            this.root.append(group);
+            this.manual.append(group);
         }
         this.addPredictor = this.groups.predictors.add; this.addResponse = this.groups.responses.add;
         this.categorical = element("select"); this.categorical.required = true;
@@ -48,7 +64,8 @@ export class HabitatStackView {
         categoryHelp.id = `models-${name}-categorical-help`;
         this.categorical.setAttribute("aria-describedby", categoryHelp.id);
         this.status = element("p", "", "models-error"); this.status.setAttribute("role", "status");
-        this.root.append(field(`models-${name}-categorical`, "Categorical predictor", this.categorical), categoryHelp,
+        this.manual.append(field(`models-${name}-categorical`, "Categorical predictor", this.categorical), categoryHelp);
+        this.root.append(
             element("p", "The optional habitat assessment mask uses cells equal to 1. It limits where results are calculated; it does not limit the reference sites used for training. Nearest neighbor preserves mask values; interpolation can change which cells equal 1.", "models-help"), this.status);
 
         this.settings = element("details", "", "models-details");
@@ -148,6 +165,16 @@ export class HabitatStackView {
      */
     render(draft, state) {
         this.value = draft.inputs[this.inputName];
+        const automatic = this.value.kind === "earthEngine", configuration = this.value.configuration;
+        this.source.value = this.value.kind;
+        this.manual.hidden = this.manual.disabled = automatic;
+        this.automatic.hidden = this.automatic.disabled = !automatic;
+        this.year.required = automatic;
+        this.options(this.year, configuration ? Array.from({length: configuration.maximumYear - configuration.minimumYear + 1},
+            (_, index) => ({value: String(configuration.minimumYear + index), label: String(configuration.minimumYear + index)})) :
+            [{value: "", label: "Loading years…"}], String(this.value.year ?? ""));
+        this.acquisitionStatus.textContent = this.value.loading ? "Loading available years and pixel size…" : this.value.error;
+        this.retry.hidden = !this.value.error; this.retry.disabled = this.value.loading;
         for (const role of ["predictors", "responses"]) {
             while (this[role].length < this.value[role].length) this[role].push(this.buildRow(role));
             while (this[role].length > this.value[role].length) this[role].pop().root.remove();

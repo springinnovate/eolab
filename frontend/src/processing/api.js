@@ -424,6 +424,14 @@ export class ProcessingApiClient {
         return response.models.map(validateAvailableModel);
     }
 
+    /** Read Habitat's configured Earth Engine years and acquisition grid.
+     * @return {Promise<{defaultYear:number,minimumYear:number,maximumYear:number,grid:Object}>} Public scientific choices; no connection credentials.
+     * @throws {Error} If the configuration request fails.
+     */
+    async getHabitatEarthEngineOptions() {
+        return this.request("/models/habitat-condition/earth-engine-options");
+    }
+
     /** Read a page of this browser session's model history.
      * @param {string|null} [cursor=null] Continuation returned by the preceding page.
      * @return {Promise<{jobs:Object[],nextCursor:string|null}>} Runs and the next page token.

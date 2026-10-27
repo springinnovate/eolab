@@ -25,6 +25,15 @@ test("discovery, pagination and saved inputs establish a same-origin session", a
     assert.equal(h.calls.filter(call => call.url.endsWith("/jobs")).length, 1);
 });
 
+test("Habitat setup reads scientific options from its model-owned endpoint", async () => {
+    const options = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
+        grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}};
+    const h = fixture(() => options);
+    assert.deepEqual(await h.api.getHabitatEarthEngineOptions(), options);
+    assert.equal(h.calls[0].url, "/api/processing/models/habitat-condition/earth-engine-options");
+    assert.equal(h.calls[0].options.method, "GET");
+});
+
 test("submission uses the immutable request key and normal Processing mutation header", async () => {
     const h = fixture(() => job()); const body = {requestId: "x".repeat(32), model: invocation.model, inputs: invocation.inputs};
     await h.api.submitModelRun(body);

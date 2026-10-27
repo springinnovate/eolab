@@ -1,7 +1,7 @@
 /** Own model setup and run navigation while accepted work remains on the server. */
 import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { ProcessingRequestError } from "../processing/api.js";
-import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources } from "./inputs.js";
+import { createModelDraft, captureModelSubmission, modelSourceKey, modelAreaInput, modelViewportArea, modelResultSources, getModelRasterFields, getRasterPreparationSources, getHabitatEarthEngineInput } from "./inputs.js";
 import { getTemporalStatistics } from "./temporal-inputs.js";
 import { snapTemporalHour, getTemporalMonthBoundaries } from "../temporal-period.js";
 
@@ -56,6 +56,7 @@ export class ModelsController {
             onQuery: query => { this.state.query = query; this.render(); }, onChoose: model => this.chooseModel(model),
             onEdit: change => this.editDraft(change), onInput: (name, change) => this.editInput(name, change),
             onRefreshGrid: () => this.refreshRasterPreparation(true),
+            onRefreshHabitat: name => void this.loadHabitatOptions(this.state.draft, name),
             onArea: (name, mode) => this.chooseArea(name, mode),
             onTemporalDataset: key => void this.chooseTemporalDataset(key),
             onTemporalVariable: variable => void this.chooseTemporalVariable(variable),
@@ -134,7 +135,7 @@ export class ModelsController {
      */
     navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
-    /** Create a fresh draft and prepare any selected vector using its map-layer choice.
+    /** Create a draft, load model-specific choices and prepare selected map vectors.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
@@ -148,6 +149,7 @@ export class ModelsController {
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
         for (const [name, input] of Object.entries(draft.inputs)) {
+            if (draft.model.inputs[name].type === "habitat_stack") void this.loadHabitatOptions(draft, name);
             if (input.area?.kind !== "catalogSelection") continue;
             const key = modelSourceKey(input.area.selection);
             input.areaMode = "vector";
@@ -164,9 +166,33 @@ export class ModelsController {
         this.vectorSelectionRequests.clear();
     }
 
-    /** Change one named input without replacing another input's choices.
+    /** Load Habitat's year choices and suggested grid from its scientific configuration.
+     * Manual raster setup remains usable if this request fails. Replaced drafts
+     * ignore late replies; a duplicated run keeps its saved year and output grid.
+     * @param {Object} draft Draft requesting the configuration.
+     * @param {string} name Habitat stack input declared by that recipe.
+     * @return {Promise<void>} Resolves after choices or retry guidance are displayed.
+     */
+    async loadHabitatOptions(draft, name) {
+        const input = draft.inputs[name];
+        if (input.loading) return;
+        input.loading = true; input.error = ""; this.render();
+        try {
+            const options = await this.api.getHabitatEarthEngineOptions();
+            if (this.destroyed || this.state.draft !== draft) return;
+            input.configuration = options; input.year ??= options.defaultYear;
+        } catch (error) {
+            if (this.destroyed || this.state.draft !== draft) return;
+            input.error = `Could not load Earth Engine choices: ${error.message}`;
+        } finally {
+            input.loading = false;
+            if (!this.destroyed && this.state.draft === draft) { this.refreshRasterPreparation(); this.render(); }
+        }
+    }
+
+    /** Change one named input and update its dependent grid or area choices.
      * @param {string} name Input name declared by the recipe.
-     * @param {Object} change Edited source or mask fields.
+     * @param {Object} change Edited source, acquisition mode, mask or grid fields.
      * @return {void}
      */
     editInput(name, change) {
@@ -183,6 +209,14 @@ export class ModelsController {
             }
         }
         Object.assign(input, change);
+        if (this.state.draft.model.inputs[name].type === "habitat_stack" && change.kind) {
+            const draft = this.state.draft;
+            for (const [key, definition] of Object.entries(draft.model.inputs)) {
+                if (definition.type === "raster_preparation") Object.assign(draft.inputs[key], {mode: "auto", sourceKey: ""});
+                if (change.kind === "earthEngine" && definition.type === "summary_area" && draft.inputs[key].area?.kind === "wholeRaster")
+                    this.chooseArea(key, "viewport");
+            }
+        }
         this.editDraft({});
     }
 
@@ -193,7 +227,7 @@ export class ModelsController {
         this.preparationAbort?.abort(); this.preparationKey = null;
     }
 
-    /** Load grid choices for distinct active sources, without changing explicit choices.
+    /** Offer the model's acquisition grid and active source grids without replacing explicit choices.
      * Requests run sequentially within the source metadata service's concurrency limit.
      * @param {boolean} [retry=false] Retry failed lookups at the user's request.
      * @return {void}
@@ -205,12 +239,18 @@ export class ModelsController {
         const input = draft.inputs[name];
         const sources = [...new Map(getRasterPreparationSources(draft).filter(value => value.raster.available !== false)
             .map(value => [modelSourceKey(value.raster), value.raster])).values()];
-        const key = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
+        const earthEngine = getHabitatEarthEngineInput(draft);
+        const grid = earthEngine?.configuration?.grid;
+        const choices = grid ? [{key: "earthEngine", label: "Earth Engine inputs", sourceCrs: grid.crs, grid}] : [];
+        const key = JSON.stringify([draft.id, input.crs, earthEngine?.kind, grid, sources.map(modelSourceKey)]);
         if (!retry && key === this.preparationKey) return;
         this.preparationAbort?.abort();
         const abort = new AbortController(); this.preparationAbort = abort; this.preparationKey = key;
-        input.choices = []; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
-        if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
+        input.choices = choices; input.loading = Boolean(sources.length && (input.crs || input.projectionMode !== "custom")); input.error = "";
+        if (grid) input.unit = grid.unit;
+        if (input.mode === "auto" && grid) {
+            Object.assign(input, {pixelSize: [...grid.pixelSize], origin: [...grid.origin], sourceKey: "earthEngine", unit: grid.unit});
+        } else if (input.mode === "auto" && input.sourceKey !== (sources[0] ? modelSourceKey(sources[0]) : "")) {
             Object.assign(input, {pixelSize: [null, null], origin: [0, 0], sourceKey: ""});
         }
         if (input.loading) void this.loadRasterPreparation(draft, input, sources, abort);
@@ -226,14 +266,16 @@ export class ModelsController {
      */
     async loadRasterPreparation(draft, input, sources, abort) {
         const isCurrent = () => !abort.signal.aborted && !this.destroyed && this.state.draft === draft;
-        const choices = [], errors = [];
+        const choices = [...input.choices], errors = [];
+        const defaultKey = choices[0]?.key ?? modelSourceKey(sources[0]);
         for (const source of sources) {
             try {
                 if (!input.crs) {
                     const native = await this.describeSource(source, abort.signal);
                     if (!isCurrent()) return;
                     input.crs = native.crs;
-                    this.preparationKey = JSON.stringify([draft.id, input.crs, sources.map(modelSourceKey)]);
+                    const earthEngine = getHabitatEarthEngineInput(draft);
+                    this.preparationKey = JSON.stringify([draft.id, input.crs, earthEngine?.kind, earthEngine?.configuration?.grid, sources.map(modelSourceKey)]);
                 }
                 const key = modelSourceKey(source);
                 const metadata = await this.describeSource(source, abort.signal, input.crs);
@@ -247,7 +289,7 @@ export class ModelsController {
         if (!isCurrent()) return;
         input.choices = choices; input.loading = false; input.error = errors.join(" ");
         if (choices.length) input.unit = choices[0].grid.unit;
-        const selected = choices.find(value => value.key === (input.mode === "auto" ? modelSourceKey(sources[0]) : input.sourceKey));
+        const selected = choices.find(value => value.key === (input.mode === "auto" ? defaultKey : input.sourceKey));
         if (selected && (input.mode === "auto" || input.mode === "source" && input.pixelSize.some(value => value === null))) {
             Object.assign(input, {pixelSize: [...selected.grid.pixelSize], origin: [...selected.grid.origin], sourceKey: selected.key});
         }
@@ -877,9 +919,12 @@ export class ModelsController {
                 input.sourceReason = "Copied from the original run; choose another raster to change it.";
             } else if (definition.type === "habitat_stack") {
                 const value = saved.inputs[name];
-                input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
-                input.responses = value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)}));
-                input.categoricalPredictor = value.categoricalPredictor;
+                if (value.kind === "earthEngine") Object.assign(input, {kind: value.kind, year: value.year});
+                else {
+                    input.predictors = value.predictors.map(row => ({name: row.name, raster: structuredClone(row.source)}));
+                    input.responses = value.responses.map(row => ({name: row.name, raster: structuredClone(row.source)}));
+                    input.categoricalPredictor = value.categoricalPredictor;
+                }
             } else if (definition.type === "raster_preparation") {
                 const {crs, pixelSize, origin} = saved.inputs[name];
                 Object.assign(input, {crs, pixelSize: [...pixelSize], origin: [...origin], mode: "saved"});
@@ -918,6 +963,9 @@ export class ModelsController {
         }
         this.refreshMapLayers();
         this.render(); this.view.focusHeading();
+        for (const [name, definition] of Object.entries(model.inputs)) {
+            if (definition.type === "habitat_stack") await this.loadHabitatOptions(draft, name);
+        }
         if (draft.temporal?.datasetKey) await this.loadTemporalDates(undefined, true);
     }
 

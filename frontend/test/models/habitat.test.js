@@ -30,6 +30,9 @@ const habitat = {...model, id: "habitat-condition", title: "Habitat condition",
  */
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+const earthEngineOptions = {defaultYear: 2018, minimumYear: 2015, maximumYear: 2019,
+    grid: {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], unit: "metre", approximate: false}};
+
 /** Change a rendered form field through its actual event handler.
  * @param {HTMLElement} control Rendered input or select.
  * @param {string} value User-entered value.
@@ -54,6 +57,7 @@ async function fixture() {
         area: {kind: "selectedArea", selectedBounds: {west: 0, south: 0, east: 1, north: 1}},
     };
     const api = {discoverModels: async () => [model, habitat], listModelRuns: async () => ({jobs: [], nextCursor: null}),
+        getHabitatEarthEngineOptions: async () => structuredClone(earthEngineOptions),
         submitModelRun: async request => { requests.push(request); return job({model: habitat}); },
         getJob: async () => job({model: habitat}),
         readModelInvocation: async () => ({...requests[0], model: {...habitat, definition: habitat}})};
@@ -73,6 +77,7 @@ async function fixture() {
     await controller.loadLibrary();
     assert.deepEqual(controller.state.library.map(recipe => recipe.id), [model.id, habitat.id]);
     controller.setActive(true); controller.chooseModel(habitat);
+    await settle();
     return {controller, view, doc, context, api, jobs, requests, filters};
 }
 
@@ -377,5 +382,101 @@ test("Habitat preserves custom grid choices through late and failed metadata loo
     assert.match(grid.status.textContent, /enter a custom size/);
     assert.equal(h.view.setup.run.disabled, false);
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "custom-after-error").inputs.preparation.pixelSize, [100, 200]);
+    h.controller.destroy();
+});
+
+test("Earth Engine runs need no map rasters and duplicate the year, explicit area and reference filter", async () => {
+    const h = await fixture();
+    h.context.rasters = []; h.controller.refreshMapLayers();
+    h.context.viewportBounds = {west: -109, south: 46, east: -107, north: 48};
+    edit(h.view.setup.inputs.area.areaMode, "whole");
+    const stack = h.view.setup.inputs.stack;
+    edit(stack.source, "earthEngine");
+    assert.equal(stack.manual.hidden, true); assert.equal(stack.manual.disabled, true);
+    assert.equal(stack.automatic.disabled, false); assert.equal(stack.year.value, "2018");
+    assert.equal(h.view.setup.inputs.area.areaMode.value, "viewport");
+    assert.equal(h.view.setup.inputs.area.areaMode.children.some(option => option.value === "whole"), false);
+    assert.match(stack.automatic.children.map(child => child.textContent).join(" "), /first run can take a while/);
+    await chooseVector(h, "references", h.context.vectors[1], "South");
+    edit(stack.year, "2017");
+    assert.equal(h.view.setup.run.disabled, false);
+    await h.controller.submit();
+    const expected = h.requests[0].inputs;
+    assert.deepEqual(expected.stack, {kind: "earthEngine", year: 2017});
+    assert.deepEqual(expected.area, {kind: "selectedArea", selectedBounds: h.context.viewportBounds});
+    assert.deepEqual(expected.preparation, {crs: "EPSG:6933", pixelSize: [500, 500], origin: [0, 0], resampling: {}});
+    const summary = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.ok(summary.includes("Original model inputs from Earth Engine · Assessment year 2017"));
+    await h.controller.duplicateRun();
+    h.context.viewportBounds.west = -110; h.controller.refreshMapArea();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "duplicate-auto").inputs, expected);
+    assert.equal(h.view.setup.inputs.stack.source.value, "earthEngine");
+    assert.equal(h.view.setup.inputs.stack.year.value, "2017");
+    h.controller.state.draft.inputs.area.area = {kind: "wholeRaster"};
+    assert.throws(() => captureModelSubmission(h.controller.state.draft, "missing-area"), /Choose an analysis area/);
+    h.controller.destroy();
+});
+
+test("Earth Engine grid stays first with raster masks and preserves custom choices through duplication", async () => {
+    const h = await fixture(), inputs = h.view.setup.inputs;
+    edit(inputs.stack.source, "earthEngine");
+    edit(inputs.references.areaMode, "raster");
+    edit(inputs.references.maskRaster, modelSourceKey(h.context.rasters[3]));
+    edit(inputs.habitat_mask.source, modelSourceKey(h.context.rasters[4]));
+    await settle();
+    assert.deepEqual(h.controller.state.draft.inputs.preparation.pixelSize, [500, 500]);
+    assert.equal(inputs.preparation.resolution.value, "earthEngine");
+    assert.equal(h.controller.state.draft.inputs.preparation.choices.length, 3);
+    edit(inputs.habitat_mask.resampling, "mode");
+    edit(inputs.preparation.resolution, "custom");
+    edit(inputs.preparation.pixelX, "750", "input"); edit(inputs.preparation.pixelY, "750", "input");
+    await h.controller.submit();
+    assert.deepEqual(h.requests[0].inputs.preparation, {crs: "EPSG:6933", pixelSize: [750, 750], origin: [0, 0],
+        resampling: {reference_mask: "nearest", habitat_mask: "mode"}});
+    const saved = h.view.run.inputsBody.children[0].children.map(child => child.textContent);
+    assert.ok(saved.includes("Reference raster resampling")); assert.ok(saved.includes("Most common value (mode)"));
+    await h.controller.duplicateRun(); await settle();
+    assert.deepEqual(captureModelSubmission(h.controller.state.draft, "auto-masks").inputs, h.requests[0].inputs);
+    h.controller.destroy();
+});
+
+test("Switching input sources preserves manual rows and ignores their late grid metadata", async () => {
+    const h = await fixture();
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    h.controller.describeSource = async () => {
+        await pending;
+        return {crs: "EPSG:6933", projectedGrid: {...earthEngineOptions.grid, pixelSize: [900, 900]}};
+    };
+    chooseStack(h);
+    edit(h.view.setup.inputs.stack.predictors[0].resampling, "bilinear");
+    const rows = structuredClone(h.controller.state.draft.inputs.stack.predictors);
+    edit(h.view.setup.inputs.stack.source, "earthEngine");
+    release(); await settle();
+    assert.deepEqual(h.controller.state.draft.inputs.preparation.pixelSize, [500, 500]);
+    assert.deepEqual(h.controller.state.draft.inputs.stack.predictors, rows);
+    edit(h.view.setup.inputs.stack.source, "manual"); await settle();
+    assert.equal(h.view.setup.inputs.stack.manual.disabled, false);
+    assert.equal(h.view.setup.inputs.stack.automatic.disabled, true);
+    assert.deepEqual(h.controller.state.draft.inputs.stack.predictors, rows);
+    assert.equal(h.view.setup.inputs.stack.categorical.value, "habitat_type");
+    assert.deepEqual(h.controller.state.draft.inputs.preparation.pixelSize, [900, 900]);
+    h.controller.destroy();
+});
+
+test("Earth Engine configuration errors can be retried without blocking manual setup", async () => {
+    const h = await fixture();
+    h.api.getHabitatEarthEngineOptions = async () => { throw new Error("Service unavailable"); };
+    h.controller.chooseModel(habitat); await settle(); chooseStack(h);
+    await chooseVector(h, "references", h.context.vectors[0], "North");
+    assert.equal(h.view.setup.run.disabled, false);
+    const stack = h.view.setup.inputs.stack;
+    edit(stack.source, "earthEngine");
+    assert.equal(h.view.setup.run.disabled, true);
+    assert.match(stack.acquisitionStatus.textContent, /Service unavailable/);
+    assert.equal(stack.retry.hidden, false);
+    h.api.getHabitatEarthEngineOptions = async () => structuredClone(earthEngineOptions);
+    stack.retry.dispatchEvent(new Event("click")); await settle();
+    assert.equal(stack.year.value, "2018"); assert.equal(h.view.setup.run.disabled, false);
     h.controller.destroy();
 });

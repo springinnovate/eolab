@@ -9,6 +9,16 @@ import { createTemporalDraft, captureTemporalInput, captureTemporalReduction } f
  */
 export function modelHasInput(model, type) { return Object.values(model.inputs).some(input => input.type === type); }
 
+/** Find the active Earth Engine stack in this model's editable inputs.
+ * @param {Object} draft Model draft with named input state.
+ * @return {Object|undefined} Habitat stack state, absent when manual rasters are selected.
+ */
+export function getHabitatEarthEngineInput(draft) {
+    const name = Object.keys(draft.model.inputs).find(key => draft.model.inputs[key].type === "habitat_stack");
+    const input = draft.inputs[name];
+    return input?.kind === "earthEngine" ? input : undefined;
+}
+
 /** Identify a raster or vector choice without using its label or map visibility.
  * @param {Object} source Catalog identity, uploaded vector identity or owned run-file reference.
  * @return {string} Composite identity for a choice list.
@@ -45,7 +55,7 @@ export function getModelRasterFields(draft) {
             fields.push({state, field: "raster", optional: definition.type === "optional_raster"});
         } else if (["mask_source", "habitat_references"].includes(definition.type) && state.areaMode === "raster") {
             fields.push({state, field: "maskRaster", optional: false});
-        } else if (definition.type === "habitat_stack") {
+        } else if (definition.type === "habitat_stack" && state.kind === "manual") {
             for (const row of [...state.predictors, ...state.responses]) fields.push({state: row, field: "raster", optional: false});
         }
     }
@@ -64,7 +74,7 @@ export function getRasterPreparationSources(draft) {
     for (const [argument, binding] of Object.entries(step.inputs)) {
         if (!binding.input) continue;
         const definition = draft.model.inputs[binding.input], state = draft.inputs[binding.input];
-        if (definition.type === "habitat_stack") {
+        if (definition.type === "habitat_stack" && state.kind === "manual") {
             for (const [role, prefix] of [["predictors", "predictor"], ["responses", "response"]]) {
                 state[role].forEach((row, index) => {
                     if (row.raster) sources.push({key: `${prefix}_${index}`, state: row, raster: row.raster, label: row.name});
@@ -112,13 +122,19 @@ function captureModelRaster(raster, sources, type = "raster") {
         {kind: "runArtifact", jobId: raster.jobId, artifactId: raster.artifactId} : {collectionId: raster.collectionId, itemId: raster.itemId};
 }
 
-/** Capture the named predictor and response choices required by Habitat condition.
- * @param {{predictors:Array<{name:string,raster:Object|null}>,responses:Array<{name:string,raster:Object|null}>,categoricalPredictor:string}} state Editable stack.
+/** Capture either Earth Engine inputs for a year or explicitly selected Habitat rasters.
+ * @param {Object} state Editable mode, year, server-provided options and manual stack rows.
  * @param {Object[]} sources Current source choices in this model setup.
- * @return {{predictors:Array<{name:string,source:Object}>,responses:Array<{name:string,source:Object}>,categoricalPredictor:string}} Explicit stack with trimmed names and ordinary raster references.
- * @throws {Error} If roles, names, categorical choice or raster selections are invalid.
+ * @return {Object} Earth Engine year or named predictors/responses with ordinary raster references.
+ * @throws {Error} If year choices have not loaded, or the year, roles, names or raster selections are invalid.
  */
 export function captureHabitatStack(state, sources) {
+    if (state.kind === "earthEngine") {
+        if (!state.configuration) throw new Error("Wait for the Earth Engine year choices to load, or retry.");
+        if (!Number.isInteger(state.year) || state.year < state.configuration.minimumYear || state.year > state.configuration.maximumYear)
+            throw new Error("Choose an assessment year from the available years.");
+        return {kind: "earthEngine", year: state.year};
+    }
     if (!state.predictors.length || !state.responses.length) throw new Error("Choose at least one predictor and one observed response.");
     const names = [...state.predictors, ...state.responses].map(row => row.name.trim());
     if (names.some(name => !name)) throw new Error("Name each predictor and observed response.");
@@ -213,7 +229,8 @@ export function createModelDraft(model, context, id) {
                 sourceReason: input.type !== "catalog_raster" ? "Choose a raster from Map layers or a completed run. Results do not need to be shown on the map." : catalogRasters.length ? "Choose a raster from Map layers." : "Add a raster to Map layers to use this model.",
             };
         } else if (input.type === "habitat_stack") {
-            inputs[name] = {predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
+            inputs[name] = {kind: "manual", year: null, configuration: null, loading: false, error: "",
+                predictors: [{name: "predictor_1", raster: null, ...preparation}], responses: [{name: "response_1", raster: null, ...preparation}], categoricalPredictor: ""};
         } else if (input.type === "raster_preparation") {
             const step = model.steps.find(value => value.inputs.preparation?.input === name);
             const settings = step.inputs.settings.value;
@@ -285,6 +302,9 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         }
         else throw new Error(`This model requires an input type this interface does not yet support: ${input.type}.`);
     }
+    if (getHabitatEarthEngineInput(draft) && Object.entries(draft.model.inputs).some(([name, input]) =>
+        input.type === "summary_area" && inputs[name].kind === "wholeRaster"))
+        throw new Error("Choose an analysis area for Earth Engine inputs.");
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
         if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");
