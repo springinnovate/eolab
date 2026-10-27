@@ -117,13 +117,16 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         prepared_type: Persisted execution schema after preparation.
         policy_type: Schema validating recorded numerical implementation facts.
         bind: Translate recipe-bound arguments into the existing request contract.
-        source: Extract the operation's catalog or owned run-file reference.
+        source: Extract the primary Catalog or owned run-file reference. None
+            declares that the operation needs no pre-existing primary raster;
+            primary_input must also be None.
         polygon: Identify an owned polygon upload that admission must copy.
         vector_selections: Return selected vectors keyed by operation input name;
             admission retains their uploaded sources. Return an empty mapping
             when the request has no vector selections.
         queue: Capture inputs and ordinary sharing identity; model admission removes it.
-        prepare: Resolve captured inputs into a native calculation plan.
+        prepare: Resolve captured inputs into a native calculation plan. Receives
+            None as its primary source when source is None.
         execution: Select the native target, action and execution settings.
         policy: Report effective numerical settings from a prepared plan.
         result: Describe completed values and grid metadata using the saved
@@ -132,9 +135,12 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         outcome: Describe retained scientific metadata in Run YAML.
         cached: Optional cache reader; None means the operation always computes results.
         reusable: Optional cache-value extractor; None disables result-cache writes.
-        primary_input: Argument bound to the main raster source and its grid metadata.
+        primary_input: Argument bound to the primary raster or temporal source,
+            or None when source is None.
         extra_sources: Additional raster references to authorize and retain with the run.
         execution_inputs: Resolve ephemeral native arguments from the stored plan.
+            Operations without a primary source supply a callback accepting None;
+            the default callback requires an authorized raster.
         fixed_input_models: Argument names and schemas for values fixed in Model YAML.
         input_adapters: Additional operation-owned types accepted by selected inputs.
         progress_descriptions: Native phase names and their plain user-facing
@@ -152,14 +158,18 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     prepared_type: type[Prepared]
     policy_type: type[BaseModel]
     bind: Callable[[dict[str, Any], dict[str, Any], str, str], Request]
-    source: Callable[
-        [Request | Queued | Prepared], RasterSourceReference | TemporalIntervalSelection
-    ]
+    source: (
+        Callable[
+            [Request | Queued | Prepared],
+            RasterSourceReference | TemporalIntervalSelection,
+        ]
+        | None
+    )
     polygon: Callable[[Request], PolygonAreaReference | None]
     vector_selections: Callable[[Request], dict[str, VectorSelection]]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
-        [OperationContext, Queued, AuthorizedRaster | ResolvedTemporalInterval],
+        [OperationContext, Queued, AuthorizedRaster | ResolvedTemporalInterval | None],
         Awaitable[PreparedJobPlan],
     ]
     execution: Callable[
@@ -178,12 +188,16 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         Callable[[Prepared, Artifact], dict[str, dict[str, object]] | None] | None
     ) = None
     additional_outputs: tuple[OperationOutput, ...] = ()
-    primary_input: str = "raster"
+    primary_input: str | None = "raster"
     extra_sources: (
         Callable[[Request | Queued | Prepared], dict[str, RasterSourceReference]] | None
     ) = None
     execution_inputs: Callable[
-        [OperationContext, Prepared, AuthorizedRaster | ResolvedTemporalInterval],
+        [
+            OperationContext,
+            Prepared,
+            AuthorizedRaster | ResolvedTemporalInterval | None,
+        ],
         Awaitable[tuple[Any, Prepared]],
     ] = raster.prepare_raster_execution
     fixed_input_models: tuple[tuple[str, type[BaseModel]], ...] = ()

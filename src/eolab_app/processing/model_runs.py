@@ -301,7 +301,7 @@ def build_model_job_submission(
     prepared: PreparedJobPlan,
     invocation: ModelInvocation,
     source_metadata: (
-        tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile
+        tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile | None
     ),
     additional_sources: (
         dict[str, tuple[int, int, int, int] | JobInputFile] | None
@@ -313,7 +313,8 @@ def build_model_job_submission(
         prepared: The operation submission, including any polygons already copied for this run.
         invocation: The model definition, selected inputs and effective parameter values.
         source_metadata: Primary source's Catalog raster identity, temporal
-            metadata, or retained published-file identity.
+            metadata, or retained published-file identity. None for an operation
+            that declares no primary source.
         additional_sources: Additional raster identities keyed by operation input
             name, including each private file's own checksum and byte count.
 
@@ -343,14 +344,20 @@ def build_model_job_submission(
     }
     revision = compute_implementation_checksum()
     build = get_application_build_id()
-    if isinstance(source_metadata, TemporalVariableMetadata):
-        source_record = {
-            "kind": "temporalInterval",
-            "unit": source_metadata.unit,
-            "timeSupport": source_metadata.time_support,
-        }
-    else:
-        source_record = describe_model_raster_source(source_metadata)
+    sources = {}
+    if source_metadata is not None:
+        source_record = (
+            {
+                "kind": "temporalInterval",
+                "unit": source_metadata.unit,
+                "timeSupport": source_metadata.time_support,
+            }
+            if isinstance(source_metadata, TemporalVariableMetadata)
+            else describe_model_raster_source(source_metadata)
+        )
+        sources[definition.steps[0].inputs[operation.primary_input].input] = (
+            source_record
+        )
     metadata = {
         "invocation": invocation.model_dump(mode="json", by_alias=True),
         "execution": {
@@ -362,9 +369,7 @@ def build_model_job_submission(
                     "implementationRevision": revision,
                 }
             },
-            "sources": {
-                definition.steps[0].inputs[operation.primary_input].input: source_record
-            },
+            "sources": sources,
         },
     }
     if additional_sources:

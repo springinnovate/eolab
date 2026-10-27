@@ -228,9 +228,10 @@ class ProcessingService:
     ) -> dict[str, Any]:
         """Start a model run, or recover a previously accepted submission.
 
-        Checks the selected model and source, fills in defaults, and saves the
-        inputs before queueing work. Repeating the same request ID and inputs
-        returns the original run even if its model or source is no longer installed.
+        Checks the selected model and its declared sources, fills in defaults,
+        and saves the inputs before queueing work. Repeating the same request ID
+        and inputs returns the original run even if its model or source is no
+        longer installed.
 
         Args:
             owner: Hash of the requesting browser's Processing session cookie.
@@ -263,13 +264,13 @@ class ProcessingService:
             request, self.model_registry
         )
         operation = get_model_operation(invocation.model.definition.steps[0].operation)
-        source = operation.source(calculation)
+        source = operation.source(calculation) if operation.source is not None else None
         reference = operation.polygon(calculation)
         polygons = await self.read_polygon_area(owner, reference) if reference else None
         operation_plan = operation.queue(calculation, polygons)
         source_metadata: (
-            tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile
-        )
+            tuple[int, int, int, int] | TemporalVariableMetadata | JobInputFile | None
+        ) = None
         if isinstance(source, TemporalIntervalSelection):
             if self.model_authorizer is None:
                 raise ProcessingError(
@@ -278,7 +279,7 @@ class ProcessingService:
                     503,
                 )
             source_metadata = await self.model_authorizer.get_temporal_metadata(source)
-        else:
+        elif source is not None:
             operation_plan, source_metadata = await self._capture_model_raster_metadata(
                 owner, source, operation_plan
             )

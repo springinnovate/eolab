@@ -373,7 +373,8 @@ def validate_operation(definition: ModelDefinition) -> None:
     Raises:
         ProcessingError: If the operation is unavailable or its arguments, outputs
             or execution profile do not match the installed implementation, or
-            its primary output has no supported model-result response type.
+            its primary output has no supported model-result response type, or
+            its primary-source callback and input declaration disagree.
     """
     step = definition.steps[0]
     contract = OPERATIONS.get(step.operation)
@@ -404,7 +405,11 @@ def validate_operation(definition: ModelDefinition) -> None:
                 for name, item in step.inputs.items()
                 if isinstance(item, FixedInputBinding)
             )
-            and isinstance(step.inputs.get(contract.primary_input), InputBinding)
+            and (contract.source is None) == (contract.primary_input is None)
+            and (
+                contract.primary_input is None
+                or isinstance(step.inputs.get(contract.primary_input), InputBinding)
+            )
             and {
                 name: definition.parameters[item.parameter].type
                 for name, item in step.parameters.items()

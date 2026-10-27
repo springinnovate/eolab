@@ -207,7 +207,7 @@ class ProcessingWorker:
         row: dict[str, Any],
         calculation: BaseModel,
         model: ModelRunSpec | None,
-    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval, str | None]:
+    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval | None, str | None]:
         """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:
@@ -216,7 +216,8 @@ class ProcessingWorker:
             model: Validated recipe wrapper, or None for an ordinary raster job.
 
         Returns:
-            Authorized source and published checksum reusable in this attempt.
+            Authorized primary source and published checksum reusable in this
+            attempt, or (None, None) for an operation with no primary source.
 
         Raises:
             ProcessingError: If authorization or planning fails, or the attempt is cancelled.
@@ -231,8 +232,10 @@ class ProcessingWorker:
             raise ProcessingError(
                 "job_cancelled", "Calculation stopped before preparation.", 409
             )
-        authorized, checksum = await self._resolve_source(
-            row, operation.source(calculation)
+        authorized, checksum = (
+            await self._resolve_source(row, operation.source(calculation))
+            if operation.source is not None
+            else (None, None)
         )
         context = self._operation_context(row, model is None, checksum)
         context.rasters.update(
@@ -292,12 +295,11 @@ class ProcessingWorker:
                 else handler.prepared_type.model_validate(row["spec"])
             )
         spec = calculation
-        source = handler.source(spec)
         target, action, limits = handler.execution(
             spec, self._operation_context(row, model is None)
         )
-        if authorized is None:
-            authorized, checksum = await self._resolve_source(row, source)
+        if authorized is None and handler.source is not None:
+            authorized, checksum = await self._resolve_source(row, handler.source(spec))
         context = self._operation_context(row, model is None, checksum)
         context.rasters.update(
             await self._resolve_additional_sources(row, spec, handler)
