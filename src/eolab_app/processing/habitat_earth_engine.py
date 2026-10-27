@@ -115,14 +115,15 @@ def prepare_habitat_band_views(
         yield paths
 
 
-def load_habitat_stack(year: int) -> RasterStackConfiguration:
+def load_habitat_stack(year: int | None = None) -> RasterStackConfiguration:
     """Load the original Habitat variables and acquisition grid for a source year.
 
     The upstream configuration filename names its original study area, but this
     scientific-only loader does not read that area's geometry or local settings.
 
     Args:
-        year: Source year supported by the packaged scientific configuration.
+        year: Source year supported by the packaged scientific configuration,
+            or None to use its configured default year.
 
     Returns:
         Original band computations, datasets and fixed acquisition grid.

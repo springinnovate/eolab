@@ -3,7 +3,7 @@ import { ACTIVE_JOB_STATES } from "../processing/jobs.js";
 import { processingDownloadUrl } from "../processing/api.js";
 import { describeModelProgress } from "../processing/presentation.js";
 import { renderModelResult, updateModelFileActions, describeAreaStatistic } from "./result-view.js";
-import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput } from "./inputs.js";
+import { modelSourceKey, describeModelFilter, modelSupportsArea, modelHasInput, getHabitatEarthEngineInput } from "./inputs.js";
 import { TemporalModelInputsView } from "./temporal-view.js";
 import { HabitatStackView } from "./habitat-stack-view.js";
 import { RasterGridView } from "./raster-grid-view.js";
@@ -333,7 +333,7 @@ export class ModelsView {
         const runLabel = draft.temporal ? "Run analysis" : "Run model";
         const areaChoices = usesRasterOrVector ? [{value: "vector", label: "Vector layer"}, {value: "raster", label: references ? "Raster cells equal to 1" : "Raster cells greater than zero"}] :
             [{value: "viewport", label: "Visible map area"}, {value: "samplingArea", label: "Sampling area"}, {value: "vector", label: "Vector layer"}];
-        if (modelSupportsArea(input.type, {kind: "wholeRaster"})) areaChoices.unshift({value: "whole", label: "Entire raster"});
+        if (modelSupportsArea(input.type, {kind: "wholeRaster"}) && !getHabitatEarthEngineInput(draft)) areaChoices.unshift({value: "whole", label: "Entire raster"});
         if (value.capturedArea?.kind === "polygonArea" && value.areaOrigin === "map" && modelSupportsArea(input.type, value.capturedArea)) {
             areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
         }
@@ -553,6 +553,10 @@ export class ModelsView {
             for (const [name, input] of Object.entries(invocation.model.definition.inputs)) {
                 const value = invocation.inputs[name];
                 if (input.type === "habitat_stack") {
+                    if (value.kind === "earthEngine") {
+                        list.append(this.element("dt", input.label), this.element("dd", `Original model inputs from Earth Engine · Assessment year ${value.year}`));
+                        continue;
+                    }
                     for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
                         for (const row of value[role]) list.append(this.element("dt", `${label}: ${row.name}${role === "predictors" && row.name === value.categoricalPredictor ? " (categorical)" : ""}`),
                             this.element("dd", describeModelRaster(row.source, state.runs)));
@@ -563,7 +567,7 @@ export class ModelsView {
                     list.append(this.element("dt", input.label), this.element("dd", `${value.crs} · pixel size ${value.pixelSize.join(" × ")} · origin ${value.origin.join(", ")}`));
                     const step = invocation.model.definition.steps.find(item => item.inputs.preparation?.input === name);
                     const stack = invocation.inputs[step.inputs.stack.input];
-                    for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
+                    if (stack.kind !== "earthEngine") for (const [role, label] of [["predictors", "Predictor"], ["responses", "Observed response"]]) {
                         stack[role].forEach((row, index) => list.append(this.element("dt", `${label}: ${row.name} resampling`),
                             this.element("dd", RESAMPLING_LABELS[value.resampling[`${role === "predictors" ? "predictor" : "response"}_${index}`]])));
                     }
