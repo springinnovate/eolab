@@ -123,7 +123,7 @@ def generated_raster_model(
             ) as dataset:
                 count = len(list(dataset.filter(where=resolved.where)))
         plan = GeneratedRasterPlan(
-            **queued.request.model_dump(),
+            **queued.request.model_dump(by_alias=True),
             grid=ClipGrid(
                 crs="EPSG:4326",
                 transform=(0.01, 0, 0, 0, -0.01, 10),
@@ -137,7 +137,9 @@ def generated_raster_model(
             ),
             reference_count=count,
         )
-        return PreparedJobPlan(plan.model_dump(mode="json"), {}, 0, plan.operation)
+        return PreparedJobPlan(
+            plan.model_dump(mode="json", by_alias=True), {}, 0, plan.operation
+        )
 
     async def generation_inputs(
         context: OperationContext, plan: GeneratedRasterPlan, primary: None
@@ -195,7 +197,9 @@ def generated_raster_model(
         ),
         extra_sources=comparison_sources,
         queue=lambda request, polygons: PreparedJobPlan(
-            QueuedGeneratedRaster(request=request).model_dump(mode="json"),
+            QueuedGeneratedRaster(request=request).model_dump(
+                mode="json", by_alias=True
+            ),
             {},
             0,
             "test.generate.v1",
