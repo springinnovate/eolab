@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.resources import as_file, files
-import os
 from pathlib import Path
 import shutil
 from tempfile import mkdtemp
@@ -42,28 +41,6 @@ class HabitatEarthEngineSettings:
 
     project: str
     credentials_file: Path
-
-    @classmethod
-    def from_environment(cls) -> "HabitatEarthEngineSettings":
-        """Read the Habitat project's name and credential-file path on the server.
-
-        Returns:
-            Settings from HABITAT_GEE_PROJECT and HABITAT_GEE_CREDENTIALS_FILE.
-
-        Raises:
-            ValueError: If either required environment setting is absent or empty.
-        """
-        values = {}
-        for name in ("HABITAT_GEE_PROJECT", "HABITAT_GEE_CREDENTIALS_FILE"):
-            value = os.environ.get(name, "").strip()
-            if not value:
-                raise ValueError(
-                    f"Set {name} to enable Habitat Earth Engine downloads."
-                )
-            values[name] = value
-        return cls(
-            values["HABITAT_GEE_PROJECT"], Path(values["HABITAT_GEE_CREDENTIALS_FILE"])
-        )
 
 
 @dataclass(frozen=True)
@@ -240,7 +217,7 @@ def download_habitat_tiles(
         ee.EEException,
     ):
         raise RuntimeError(
-            "Habitat could not connect to Earth Engine. Check HABITAT_GEE_PROJECT "
+            "Habitat could not connect to Earth Engine. Check the configured project "
             "and the mounted service-account credentials and permissions."
         ) from None
     image = build_earth_engine_stack(configuration)

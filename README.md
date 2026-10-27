@@ -271,10 +271,10 @@ deployment before building it. The pit-filling search cutoff is in
 `PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT` environment setting.
 
 The [Habitat Earth Engine downloader](src/eolab_app/processing/habitat_earth_engine.py)
-uses `HABITAT_GEE_PROJECT` and `HABITAT_GEE_CREDENTIALS_FILE`. Register the project
-for Earth Engine and mount its service-account JSON key read-only, outside the
-Catalog data mounts. Pass these settings only to the server process performing
-the download; never put the key in browser configuration or commit it. The
+accepts a registered Google Cloud project and a service-account JSON key path
+through `HabitatEarthEngineSettings`. Mount the key read-only, outside the Catalog
+data mounts. Pass these settings only to the server process performing the
+download; never put the key in browser configuration or commit it. The
 [acquisition tests](tests/test_habitat_earth_engine.py) demonstrate calling the
 downloader with a projected AOI and a private working directory. These settings
 do not change the existing selected-layer Habitat workflow.

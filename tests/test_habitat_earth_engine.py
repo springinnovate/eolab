@@ -290,25 +290,17 @@ def test_failure_or_cancellation_removes_completed_tiles(
     assert "private-server-detail" not in str(error.value)
 
 
-def test_server_settings_and_authentication_errors_do_not_expose_credentials(
+def test_authentication_errors_do_not_expose_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stack: RasterStackConfiguration
 ) -> None:
-    """Read server settings and report authentication failures without key contents.
+    """Report authentication failures without exposing service-account key contents.
 
     Args:
         tmp_path: Private attempt and credential locations.
-        monkeypatch: Supply environment settings and a rejected credential load.
+        monkeypatch: Supply a rejected credential load.
         stack: Scientific settings used by the download request.
     """
-    monkeypatch.setenv("HABITAT_GEE_PROJECT", "habitat-test")
-    monkeypatch.setenv("HABITAT_GEE_CREDENTIALS_FILE", str(tmp_path / "key.json"))
-    settings = HabitatEarthEngineSettings.from_environment()
-    assert settings == HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json")
-    for name in ("HABITAT_GEE_PROJECT", "HABITAT_GEE_CREDENTIALS_FILE"):
-        with monkeypatch.context() as missing:
-            missing.delenv(name)
-            with pytest.raises(ValueError, match=name):
-                HabitatEarthEngineSettings.from_environment()
+    settings = HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json")
     monkeypatch.setattr(
         ee,
         "ServiceAccountCredentials",
