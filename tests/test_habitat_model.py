@@ -260,7 +260,7 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     submission = build_model_job_submission(
         operation.queue(calculation, None),
         invocation,
-        tuple(identities[sources["environment"]["itemId"]].to_catalog()),
+        None,
         {
             name: tuple(identities[source.item_id].to_catalog())
             for name, source in operation.extra_sources(calculation).items()
@@ -443,6 +443,8 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
         "reserved-name",
         "missing-resampling",
         "wrong-crs",
+        "automatic-whole-raster",
+        "automatic-mask-method",
     ],
 )
 def test_habitat_rejects_ambiguous_stack_or_preparation(
@@ -506,12 +508,18 @@ def test_habitat_rejects_ambiguous_stack_or_preparation(
         },
         parameters={},
     )
+    if invalid.startswith("automatic-"):
+        request.inputs["stack"] = {"kind": "earthEngine", "year": 2018}
+        if invalid == "automatic-whole-raster":
+            request.inputs["preparation"]["resampling"] = {"reference_mask": "nearest"}
+        else:
+            request.inputs["area"] = {"kind": "bounds", "bounds": [-110, 45, -109, 46]}
     with pytest.raises(ProcessingError) as error:
         build_model_calculation_request(request, ModelRegistry((habitat_definition,)))
     assert error.value.code == "invalid_model_inputs"
 
 
-def test_habitat_exports_private_primary_source(
+def test_habitat_exports_private_predictor_source(
     habitat_definition: ModelDefinition,
 ) -> None:
     """Keep a published predictor's identity when it is nested inside a stack.
@@ -567,8 +575,11 @@ def test_habitat_exports_private_primary_source(
     submission = build_model_job_submission(
         operation.queue(calculation, None),
         invocation,
-        file,
-        {name: (1, 2, 3, 4) for name in operation.extra_sources(calculation)},
+        None,
+        {
+            name: file if name == "predictor_0" else (1, 2, 3, 4)
+            for name in operation.extra_sources(calculation)
+        },
     )
     document = RunDocument.model_validate(
         parse_yaml(
@@ -588,5 +599,6 @@ def test_habitat_exports_private_primary_source(
     )
     assert document.invocation.inputs["stack"]["predictors"][0]["source"] == private
     assert document.invocation.inputs["preparation"] == request.inputs["preparation"]
-    assert document.execution.sources["stack"].sha256 == file.sha256
-    assert document.execution.sources["stack"].bytes == file.size
+    assert document.execution.sources == {}
+    assert document.execution.additionalSources["predictor_0"].sha256 == file.sha256
+    assert document.execution.additionalSources["predictor_0"].bytes == file.size

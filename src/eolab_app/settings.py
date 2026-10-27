@@ -9,6 +9,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.habitat_earth_engine import (
+    HabitatEarthEngineRuntime,
+    HabitatEarthEngineSettings,
+)
 
 APPLICATION_VERSION_PATH = Path("/app/version")
 
@@ -62,12 +66,14 @@ class ProcessingWorkerSettings:
         scan_mount_path: Absolute read-only mounted input root.
         processing_data_path: Absolute private writable artifact volume.
         vector_upload_data_path: Absolute read-only upload volume containing retained inputs.
+        habitat_earth_engine: Optional Habitat-only connection and persistent cache.
     """
 
     catalog_internal_url: str
     scan_mount_path: Path
     processing_data_path: Path
     vector_upload_data_path: Path
+    habitat_earth_engine: HabitatEarthEngineRuntime | None = None
 
     def __post_init__(self) -> None:
         """Require a catalog URL and absolute source and result-storage paths.
@@ -94,13 +100,28 @@ def load_processing_worker_settings() -> ProcessingWorkerSettings:
         KeyError: If a required worker environment value is absent.
         ValueError: If a supplied value violates its owned contract.
     """
+    processing_path = Path(os.environ["PROCESSING_DATA_PATH"])
+    project = os.environ.get("HABITAT_EARTH_ENGINE_PROJECT", "").strip()
+    credentials = os.environ.get("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", "").strip()
+    habitat = None
+    if project or credentials:
+        if not project or not credentials or not Path(credentials).is_absolute():
+            raise ValueError(
+                "Set HABITAT_EARTH_ENGINE_PROJECT and an absolute "
+                "HABITAT_EARTH_ENGINE_CREDENTIALS_FILE together."
+            )
+        habitat = HabitatEarthEngineRuntime(
+            HabitatEarthEngineSettings(project, Path(credentials)),
+            processing_path / "habitat-cache",
+        )
     return ProcessingWorkerSettings(
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
-        processing_data_path=Path(os.environ["PROCESSING_DATA_PATH"]),
+        processing_data_path=processing_path,
         vector_upload_data_path=Path(os.environ.get(
             "VECTOR_UPLOAD_DATA_PATH", str(Path("/vector-uploads").absolute())
         )),
+        habitat_earth_engine=habitat,
     )
 
 

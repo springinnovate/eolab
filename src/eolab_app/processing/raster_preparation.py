@@ -14,7 +14,6 @@ import numpy as np
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
-from rasterio.shutil import copy as copy_raster
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
@@ -91,7 +90,8 @@ def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> N
     NoData. An alpha band preserves that mask. Chained VRT sources normalize
     declared NoData and both infinities to NaN, keeping all invalid pixels out
     of interpolation. These VRTs reference original pixels and masks; they copy
-    no data and remain inside the preparation directory.
+    no data and remain inside the preparation directory. Reference the input as
+    one source, including when it is itself a mosaic VRT with multiple sources.
 
     Args:
         source: Authorized single-band source with admitted validity semantics.
@@ -101,15 +101,21 @@ def _write_masked_source_vrt(source: rasterio.io.DatasetReader, path: Path) -> N
         RasterioError: If the source metadata cannot be copied.
         OSError: If the temporary VRT cannot be written.
     """
-    copy_raster(source, path, driver="VRT")
-    tree = ElementTree.parse(path)
-    band = tree.getroot().find("VRTRasterBand")
-    band.set("dataType", "Float64")
-    nodata = band.find("NoDataValue")
-    if nodata is None:
-        nodata = ElementTree.SubElement(band, "NoDataValue")
-    nodata.text = "nan"
-    pixels = band.find("SimpleSource")
+    root = ElementTree.Element(
+        "VRTDataset", rasterXSize=str(source.width), rasterYSize=str(source.height)
+    )
+    tree = ElementTree.ElementTree(root)
+    ElementTree.SubElement(root, "SRS").text = source.crs.to_wkt()
+    ElementTree.SubElement(root, "GeoTransform").text = ",".join(
+        str(value) for value in source.transform.to_gdal()
+    )
+    band = ElementTree.SubElement(root, "VRTRasterBand", dataType="Float64", band="1")
+    ElementTree.SubElement(band, "NoDataValue").text = "nan"
+    pixels = ElementTree.SubElement(band, "SimpleSource")
+    ElementTree.SubElement(pixels, "SourceFilename", relativeToVRT="0").text = (
+        source.name
+    )
+    ElementTree.SubElement(pixels, "SourceBand").text = "1"
     if source.nodata is not None:
         pixels.tag = "ComplexSource"
         ElementTree.SubElement(pixels, "NODATA").text = str(source.nodata)

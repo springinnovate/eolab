@@ -5,6 +5,7 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import PurePath
@@ -65,6 +66,7 @@ class ProcessingWorker:
         native: ReusableProcess | None = None,
         areas: CatalogSelectionReader | None = None,
         uploads: VectorUploadStore | None = None,
+        operation_settings: Mapping[str, object] | None = None,
     ) -> None:
         """Configure source access, job storage, result files and calculation limits.
 
@@ -76,9 +78,12 @@ class ProcessingWorker:
             native: Lifecycle-managed execution lane supplied by composition.
             areas: Catalog vector reader used to resolve filtered calculation areas.
             uploads: Storage for original uploaded vectors retained by accepted jobs.
+            operation_settings: Server-only dependencies keyed by operation ID;
+                passed unchanged to the owning operation, never persisted.
         """
         self.areas = areas
         self.uploads = uploads
+        self.operation_settings = operation_settings or {}
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
@@ -128,6 +133,7 @@ class ProcessingWorker:
             run_process,
             reuse_results,
             source_checksum,
+            operation_settings=self.operation_settings,
         )
 
     async def _resolve_source(

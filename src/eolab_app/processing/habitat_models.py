@@ -4,6 +4,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rasterio.crs import CRS
+from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 
 from eolab_app.catalog_selection import VectorSelection
 from eolab_app.processing.aggregate_models import AggregateArea
@@ -82,6 +83,21 @@ class HabitatRasterStack(HabitatSchema):
         return self
 
 
+class HabitatEarthEngineStack(HabitatSchema):
+    """An assessment year for the packaged Earth Engine predictor/response stack.
+
+    The scientific configuration loader owns the supported year range. Reference
+    sites still come from the user's separate selection, never from Earth Engine.
+    """
+
+    kind: Literal["earthEngine"]
+    year: Annotated[int, Field(strict=True)]
+
+
+HabitatStack = HabitatRasterStack | HabitatEarthEngineStack
+"""Manual raster choices or the packaged Earth Engine variables for one year."""
+
+
 class RasterReferenceSites(HabitatSchema):
     """Use cells equal to one after the selected resampling as reference sites."""
 
@@ -110,6 +126,8 @@ class HabitatPreparation(HabitatSchema):
         origin: Grid intersection anchoring the AOI's outward-snapped bounds.
         resampling: Methods keyed by predictor_N, response_N, reference_mask or
             habitat_mask, matching the selected source roles exactly.
+            Automatic bands use nearest-neighbor resampling; in automatic mode
+            this mapping contains only the user-selected raster masks.
     """
 
     crs: str
@@ -159,7 +177,7 @@ class HabitatSettings(HabitatSchema):
 class HabitatRequest(HabitatSchema):
     """Capture layers, assessment area, raster preparation and settings for one run."""
 
-    stack: HabitatRasterStack
+    stack: HabitatStack
     references: HabitatReferences
     habitat_mask: RasterSourceReference | None
     preparation: HabitatPreparation
@@ -173,19 +191,22 @@ class HabitatRequest(HabitatSchema):
         """Return all selected rasters under their preparation and retention roles.
 
         Returns:
-            Predictor and response positions, plus selected raster-reference and
-            assessment-mask sources. Variable names remain in the selected stack.
+            Manually selected predictor and response positions, plus raster
+            references and assessment masks in either mode. Downloaded tiles have
+            no Catalog identity and are not declared as external raster sources.
         """
-        sources = {
-            f"predictor_{index}": band.source
-            for index, band in enumerate(self.stack.predictors)
-        }
-        sources.update(
-            {
-                f"response_{index}": band.source
-                for index, band in enumerate(self.stack.responses)
+        sources = {}
+        if isinstance(self.stack, HabitatRasterStack):
+            sources = {
+                f"predictor_{index}": band.source
+                for index, band in enumerate(self.stack.predictors)
             }
-        )
+            sources.update(
+                {
+                    f"response_{index}": band.source
+                    for index, band in enumerate(self.stack.responses)
+                }
+            )
         if isinstance(self.references, RasterReferenceSites):
             sources["reference_mask"] = self.references.source
         if self.habitat_mask is not None:
@@ -238,6 +259,10 @@ class HabitatRequest(HabitatSchema):
             raise ValueError(
                 "Choose one box, vector selection, polygon area, or whole raster."
             )
+        if isinstance(self.stack, HabitatEarthEngineStack) and self.wholeRaster:
+            raise ValueError(
+                "Choose an explicit analysis area for Earth Engine inputs."
+            )
         return self
 
 
@@ -256,9 +281,12 @@ class HabitatCalculationInputs(HabitatSchema):
     output: float32 with valid values from 0 to 1 and -9999 for missing values.
     Temporary aligned inputs use float64 and NaN NoData on the same spatial grid.
     The window starts at zero; nativeBlocks counts 512-pixel preparation tiles.
+    earthEngine captures the packaged scientific source definitions for automatic
+    inputs; it contains no credentials, local paths or generated reference sites.
     """
 
     operation: Literal["habitat.condition.v1"] = OPERATION
     inputs: HabitatRequest
     area: AggregateArea
     grid: ClipGrid
+    earthEngine: RasterStackConfiguration | None = None

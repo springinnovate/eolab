@@ -1,6 +1,8 @@
 """Fetch and reuse the original Habitat predictor and response rasters."""
 
 from collections.abc import Callable
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 import errno
 from importlib.resources import as_file, files
@@ -56,6 +58,61 @@ class HabitatTiles:
 
     tiles: tuple[Path, ...]
     bands: dict[str, RasterBandDefinition]
+
+
+@dataclass(frozen=True)
+class HabitatEarthEngineRuntime:
+    """Server-only connection and persistent storage for Habitat input acquisition.
+
+    Attributes:
+        connection: Earth Engine project and mounted credential-file path.
+        cache_directory: Model-private cache beside Processing attempts/results,
+            on the same filesystem for atomic publication. Run cleanup does not
+            remove completed cache entries.
+    """
+
+    connection: HabitatEarthEngineSettings
+    cache_directory: Path
+
+
+@contextmanager
+def prepare_habitat_band_views(
+    tiles: HabitatTiles, directory: Path
+) -> Iterator[dict[str, Path]]:
+    """Expose cached multiband tiles as job-local single-band raster mosaics.
+
+    The views reference cached pixels without copying them. Pass the returned
+    paths to ordinary raster preparation; they are not Catalog sources.
+
+    Args:
+        tiles: Complete, aligned files admitted by Habitat acquisition.
+        directory: Private attempt directory owned by the native supervisor.
+
+    Yields:
+        VRT paths keyed by scientific band name, valid inside this context.
+        Unsourced gaps are NoData; valid zero and source masks are preserved.
+
+    Raises:
+        RuntimeError: If GDAL cannot construct a band mosaic.
+        OSError: If temporary view creation or cleanup fails.
+    """
+    from osgeo import gdal
+
+    with TemporaryDirectory(prefix="habitat-bands-", dir=directory) as temporary:
+        paths = {}
+        for index, name in enumerate(tiles.bands, start=1):
+            path = Path(temporary) / f"band-{index}.vrt"
+            with gdal.ExceptionMgr():
+                dataset = gdal.BuildVRT(
+                    str(path),
+                    [str(tile) for tile in tiles.tiles],
+                    bandList=[index],
+                    VRTNodata="nan",
+                )
+                dataset.FlushCache()
+                dataset = None
+            paths[name] = path
+        yield paths
 
 
 def load_habitat_stack(year: int) -> RasterStackConfiguration:

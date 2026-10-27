@@ -1,6 +1,7 @@
 """Supply registered operations with existing Processing execution capabilities."""
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any, Awaitable, Callable
 
 from eolab_app.catalog_selection import CatalogSelectionReader
@@ -25,6 +26,9 @@ class OperationContext:
         reuse_results: Whether this job may use the scalar-results cache.
         source_checksum: Published checksum for a private raster input.
         rasters: Additional raster inputs authorized for this operation attempt.
+        operation_settings: Server-only dependencies keyed by operation ID.
+            Only the owning operation interprets these values; they are never
+            included in persisted requests or public provenance.
     """
 
     jobs: JobStore
@@ -36,3 +40,4 @@ class OperationContext:
     reuse_results: bool
     source_checksum: str | None = None
     rasters: dict[str, AuthorizedRaster] = field(default_factory=dict)
+    operation_settings: Mapping[str, object] = field(default_factory=dict)
