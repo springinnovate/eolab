@@ -8,9 +8,6 @@
 
 #annotations-panel { font-size: 0.85rem; }
 #annotations-panel [hidden] { display: none; }
-.annotation-load-notice { margin: 0.35rem 0; padding: 0.35rem 0.5rem; border: 1px solid var(--status-warning); border-radius: var(--radius); font-size: 0.8rem; overflow-wrap: anywhere; }
-.annotation-load-notice > summary { cursor: pointer; font-weight: 600; }
-.annotation-load-notice > p { margin: 0.4rem 0 0; }
 .annotation-layer-tools { margin: 0.35rem 0; border: 1px solid var(--border-1); border-radius: var(--radius); font-size: 0.78rem; }
 .annotation-layer-tools > summary { padding: 0.35rem 0.5rem; cursor: pointer; font-weight: 600; }
 .annotation-layer-actions { padding: 0 0.2rem 0.3rem; font-size: 0.78rem; gap: 0.2rem; }

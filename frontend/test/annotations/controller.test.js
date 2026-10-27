@@ -15,7 +15,6 @@ function controller() {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
         controls: new Map(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
-        loadNotice: { hidden: true }, loadError: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
@@ -423,7 +422,7 @@ test("storage failure reveals Retry saving without discarding unsaved annotation
     assert.equal(annotations.retryButton.hidden, true);
 });
 
-test("startup reports storage failure without opening the editor and clears the notice after a successful load", async () => {
+test("startup retains storage failure in the closed editor and clears it after a successful load", async () => {
     const annotations = controller();
     annotations.loaded = false;
     annotations.storage.load = async () => { throw new Error("Cannot open database"); };
@@ -431,34 +430,31 @@ test("startup reports storage failure without opening the editor and clears the 
     assert.equal(annotations.panel.open, false);
     assert.equal(annotations.loaded, false);
     assert.equal(annotations.importButton.disabled, true);
-    assert.equal(annotations.loadNotice.hidden, false);
-    assert.equal(annotations.loadError.textContent, "Cannot open database");
-    assert.match(annotations.status.textContent, /Cannot open saved polygons/);
+    assert.equal(annotations.status.textContent, "Cannot open saved polygons: Cannot open database");
     annotations.storage.load = async () => [];
     await annotations.load();
     assert.equal(annotations.panel.open, false);
-    assert.equal(annotations.loadNotice.hidden, true);
+    assert.equal(annotations.status.textContent, "");
     assert.equal(annotations.loaded, true);
     assert.equal(annotations.importButton.disabled, false);
 });
 
-test("no saved polygons leaves authoring and published maps free of polygon notices", async () => {
+test("empty polygon storage keeps the editor closed in every startup mode", async () => {
     for (const attachSavedLayers of [true, false]) {
         const annotations = controller();
         annotations.loaded = false;
         await annotations.load({ attachSavedLayers });
         assert.equal(annotations.loaded, true);
         assert.equal(annotations.panel.open, false);
-        assert.equal(annotations.loadNotice.hidden, true);
         assert.equal(annotations.status.textContent, "");
     }
 });
 
-test("invalid private filters report only in authoring and cannot overwrite unread polygons", async () => {
+test("invalid saved filters stay in the closed editor without overwriting stored layers in every startup mode", async () => {
     const model = new AnnotationModel();
     model.createLayer();
     const saved = model.document();
-    saved.layers[0].filter.match = "invalid";
+    saved.layers[0].filter = "";
     const original = structuredClone(saved);
     for (const attachSavedLayers of [true, false]) {
         const annotations = controller();
@@ -470,8 +466,9 @@ test("invalid private filters report only in authoring and cannot overwrite unre
         assert.equal(annotations.panel.open, false);
         assert.equal(annotations.loaded, false);
         assert.equal(annotations.importButton.disabled, true);
-        assert.equal(annotations.loadNotice.hidden, !attachSavedLayers);
-        assert.match(annotations.loadError.textContent, /Use Match all or Match any/);
+        assert.match(annotations.status.textContent, /Use Match all or Match any/);
+        await assert.rejects(annotations.restoreSharedContribution("Shared layer", { type: "FeatureCollection", features: [] }),
+            /Cannot open saved polygons: Use Match all or Match any/);
         await annotations.save();
         assert.equal(writes, 0);
         assert.deepEqual(saved, original);
@@ -589,8 +586,6 @@ test("restoring a shared contribution exposes it only after successful device sa
     annotations.storage.save = async () => { throw new Error("Storage full"); };
     await assert.rejects(annotations.restoreSharedContribution("Unsaved", collection), /Storage full/);
     assert.deepEqual(annotations.sharableLayers().map(layer => layer.id), [id]);
-    annotations.loaded = false;
-    await assert.rejects(annotations.restoreSharedContribution("Unavailable", collection), /not available/);
 });
 
 
