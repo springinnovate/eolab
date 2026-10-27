@@ -57,6 +57,8 @@ export class AnnotationController {
         this.restoredLayers = new WeakMap();
         this.pendingSave = false;
         this.panel = panel;
+        this.loadNotice = document.querySelector("#annotation-load-notice");
+        this.loadError = document.querySelector("#annotation-load-error");
         this.status = document.querySelector("#annotation-save-status");
         this.undoButton = document.querySelector("#undo-annotation-delete");
         this.retryButton = document.querySelector("#retry-annotation-save");
@@ -114,7 +116,8 @@ export class AnnotationController {
     }
 
     /**
-     * Restore local layers without opening their editor; reveal the panel if loading fails.
+     * Restore saved polygons without opening their editor or moving focus.
+     * Failed loads show an expandable notice in Map layers and leave stored data untouched.
      * @param {Object} [options] Startup presentation policy.
      * @param {boolean} [options.attachSavedLayers=true] Display private saved layers; false keeps them stored but off the shared map.
      * @param {string[]} [options.sharedLayerIds=[]] Bookmarked shared layers whose inclusion comes from the remembered map, not polygon storage.
@@ -130,10 +133,12 @@ export class AnnotationController {
             }
             this.loaded = true;
             this.importButton.disabled = false;
+            this.loadNotice.hidden = true;
             this.status.textContent = "";
         } catch (error) {
             this.status.textContent = `Cannot open saved polygons: ${error.message}`;
-            this.panel.show();
+            this.loadError.textContent = error.message;
+            this.loadNotice.hidden = false;
         }
     }
 

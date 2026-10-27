@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AnnotationController } from "../../src/annotations/controller.js";
-import { AnnotationModel } from "../../src/annotations/model.js";
+import { AnnotationModel, readAnnotationLayers } from "../../src/annotations/model.js";
 import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 
@@ -15,6 +15,7 @@ function controller() {
         model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
         controls: new Map(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
+        loadNotice: { hidden: true }, loadError: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
@@ -422,20 +423,47 @@ test("storage failure reveals Retry saving without discarding unsaved annotation
     assert.equal(annotations.retryButton.hidden, true);
 });
 
-test("successful startup leaves panel closed but a storage load failure reveals the panel", async () => {
+test("startup reports storage failure without opening the editor and clears the notice after a successful load", async () => {
     const annotations = controller();
     annotations.loaded = false;
+    annotations.storage.load = async () => { throw new Error("Cannot open database"); };
     await annotations.load();
     assert.equal(annotations.panel.open, false);
+    assert.equal(annotations.loaded, false);
+    assert.equal(annotations.importButton.disabled, true);
+    assert.equal(annotations.loadNotice.hidden, false);
+    assert.equal(annotations.loadError.textContent, "Cannot open database");
+    assert.match(annotations.status.textContent, /Cannot open saved polygons/);
+    annotations.storage.load = async () => [];
+    await annotations.load();
+    assert.equal(annotations.panel.open, false);
+    assert.equal(annotations.loadNotice.hidden, true);
+    assert.equal(annotations.loaded, true);
     assert.equal(annotations.importButton.disabled, false);
-    const failed = controller();
-    failed.loaded = false;
-    failed.storage.load = async () => { throw new Error("Cannot open database"); };
-    await failed.load();
-    assert.equal(failed.panel.open, true);
-    assert.equal(failed.loaded, false);
-    assert.equal(failed.importButton.disabled, true);
-    assert.match(failed.status.textContent, /Cannot open saved polygons/);
+});
+
+test("invalid saved filters leave authoring and published-map startup closed and cannot overwrite unread polygons", async () => {
+    const model = new AnnotationModel();
+    model.createLayer();
+    const saved = model.document();
+    saved.layers[0].filter.match = "invalid";
+    const original = structuredClone(saved);
+    for (const attachSavedLayers of [true, false]) {
+        const annotations = controller();
+        annotations.loaded = false;
+        annotations.storage.load = async () => readAnnotationLayers(saved);
+        let writes = 0;
+        annotations.storage.save = async () => { writes++; };
+        await annotations.load({ attachSavedLayers });
+        assert.equal(annotations.panel.open, false);
+        assert.equal(annotations.loaded, false);
+        assert.equal(annotations.importButton.disabled, true);
+        assert.equal(annotations.loadNotice.hidden, false);
+        assert.match(annotations.loadError.textContent, /Use Match all or Match any/);
+        await annotations.save();
+        assert.equal(writes, 0);
+        assert.deepEqual(saved, original);
+    }
 });
 
 test("action and export errors open the panel while draft errors stay in the map editor", () => {
