@@ -4175,30 +4175,43 @@ article.raster-histogram-summary {
   display: none;
 }
 
-.vector-feature-inspector-header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+#vector-feature-inspector {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  background: var(--surface-1);
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
 }
-.vector-feature-inspector-header h2 { margin: 0; font-size: 1rem; }
-.vector-feature-inspector-actions { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
-.vector-feature-inspector-actions button { white-space: nowrap; }
+.vector-feature-inspector-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+.vector-feature-inspector-header h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vector-feature-inspector-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+#vector-feature-inspector-details {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+}
+.vector-feature-inspector-plots { display: flex; flex-wrap: wrap; gap: 6px; }
+.vector-feature-inspector-plots .immediate-action-help { max-width: 100%; }
+.vector-feature-inspector-plots button { white-space: normal; text-align: left; }
 #vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) {
   justify-self: end;
   width: max-content;
   max-width: 100%;
-}
-#vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) .vector-feature-inspector-actions {
-  flex: 0 0 auto;
-}
-#vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) .vector-feature-inspector-actions > :not(.vector-feature-inspector-toggle) {
-  display: none;
 }
 .immediate-action-help { position: relative; display: inline-flex; }
 .immediate-action-tooltip {

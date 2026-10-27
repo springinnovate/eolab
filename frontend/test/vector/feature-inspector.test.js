@@ -305,6 +305,43 @@ test("identified features use a filtered WMS highlight without geometry", async 
   assert.deepEqual(h.removedLayers, [h.wmsHighlights[0]]);
 });
 
+test("the inspector heading follows returned IDs and clears with the results", async () => {
+  const qualifiedId = `catalog.parcels.${"x".repeat(1100)}`;
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [
+      { type: "Feature", id: qualifiedId, geometry: null, properties: {} },
+      { type: "Feature", id: 0, geometry: null, properties: {} },
+      { type: "Feature", geometry: null, properties: {} },
+    ] }),
+  }));
+  const heading = h.documentContext.querySelector("#vector-feature-inspector-heading");
+  const previous = h.documentContext.querySelector("#previous-vector-feature");
+  const next = h.documentContext.querySelector("#next-vector-feature");
+
+  await h.controller.inspect(inspectionEvent(12, 24));
+  assert.equal(heading.textContent, `Feature inspector (FID ${qualifiedId})`);
+  assert.equal(heading.title, heading.textContent);
+
+  next.dispatchEvent(new Event("click"));
+  assert.equal(heading.textContent, "Feature inspector (FID 0)");
+  assert.equal(heading.title, heading.textContent);
+
+  next.dispatchEvent(new Event("click"));
+  assert.equal(heading.textContent, "Feature inspector");
+  assert.equal(heading.title, heading.textContent);
+
+  previous.dispatchEvent(new Event("click"));
+  assert.equal(heading.textContent, "Feature inspector (FID 0)");
+  assert.equal(heading.title, heading.textContent);
+
+  h.documentContext.querySelector("#close-vector-inspector")
+    .dispatchEvent(new Event("click"));
+  assert.equal(heading.textContent, "Feature inspector");
+  assert.equal(heading.title, heading.textContent);
+  h.controller.destroy();
+});
+
 test("analysis observations are immutable and omit nested properties", () => {
   const observation = vectorInspectionObservation({
     feature: {
