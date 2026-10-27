@@ -1,2 +1,2 @@
 # Packaged Habitat condition runner at the reviewed upstream commit.
-nhi-terrestrial-integrity-modeling @ https://codeload.github.com/springinnovate/nhi-terrestrial-integrity-modeling/tar.gz/00ba721be9fe0e0f1e05af1d9c13f7842c29b0b8 --hash=sha256:7ecdbc9d99596ec279c5d037f7b1e36b46b5735acf4913339a71b79fdcfe4811
+nhi-terrestrial-integrity-modeling @ https://codeload.github.com/springinnovate/nhi-terrestrial-integrity-modeling/tar.gz/4ce62c869f49ad70e573925cac908675d2ccf2cb --hash=sha256:1904badb2a7f51d2f1871fe319ad6e332aeb04e400c216425a1e8b4bc28db296
