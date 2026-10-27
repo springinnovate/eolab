@@ -64,18 +64,18 @@ execution:
     raster:
       sourceSignature: "1111111111111111111111111111111111111111111111111111111111111111"
       band: 1
-      grid:
-        crs: "EPSG:4326"
-        width: 10
-        height: 10
-        transform: [0.1, 0.0, -1.0, 0.0, -0.1, 1.0]
-        dtype: float32
-        nodata: null
-        window: [0, 0, 10, 10]
-        nativeBlocks: 1
-        scale: "1"
-        offset: "0"
-        storedUnit: null
+  grid:
+    crs: "EPSG:4326"
+    width: 10
+    height: 10
+    transform: [0.1, 0.0, -1.0, 0.0, -0.1, 1.0]
+    dtype: float32
+    nodata: null
+    window: [0, 0, 10, 10]
+    nativeBlocks: 1
+    scale: "1"
+    offset: "0"
+    storedUnit: null
   numericalPolicy:
     version: raster.aggregate.v1
     grid: native

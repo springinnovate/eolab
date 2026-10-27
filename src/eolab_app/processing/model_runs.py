@@ -497,7 +497,7 @@ def record_model_preparation(
     prepared: PreparedJobPlan,
     limits: ProcessingLimits,
 ) -> PreparedJobPlan:
-    """Record the executed source grid and calculation settings in a model job.
+    """Record the calculation grid and settings in a model job's execution details.
 
     Args:
         row: The worker's current job record, including the recipe and inputs saved at submission.
@@ -523,13 +523,11 @@ def record_model_preparation(
     validate_operation(invocation.model.definition)
     if invocation.model.definition.steps[0].operation != spec.operation:
         raise ValueError("Prepared operation does not match the saved recipe")
-    raster_name = (
-        invocation.model.definition.steps[0].inputs[operation.primary_input].input
-    )
     execution = metadata["execution"]
     execution.update(
         {
             "state": "prepared",
+            "grid": spec.grid.model_dump(mode="json"),
             "limits": {
                 "resultTtlSeconds": limits.result_ttl_seconds,
             },
@@ -538,7 +536,6 @@ def record_model_preparation(
             ),
         }
     )
-    execution["sources"][raster_name]["grid"] = spec.grid.model_dump(mode="json")
     export_yaml(metadata, run=True)
     return replace(
         prepared,
