@@ -36,11 +36,8 @@ function fixture(configureDocument = () => {}) {
     histogram.append(close);
     const calls = [];
     const presentationOrder = [];
-    let surfaceOpen = false;
-    root.showPopover = () => { surfaceOpen = true; calls.push("show"); presentationOrder.push("dock-open"); };
-    root.hidePopover = () => { surfaceOpen = false; calls.push("hide"); };
-    root.getBoundingClientRect = () => ({ width: 420,
-        height: surfaceOpen && root.getAttribute("data-minimized") !== "true" ? 48 : 0 });
+    root.showPopover = () => { calls.push("show"); presentationOrder.push("dock-open"); };
+    root.hidePopover = () => { calls.push("hide"); };
     const toolbar = doc.querySelector("#map-tools-toolbar");
     toolbar.getBoundingClientRect = () => ({ height: 44 });
     const toolActions = doc.querySelector("#workspace-tool-actions");
@@ -546,12 +543,12 @@ test("active-tool subscriptions report expanded presentation, support detachment
 
 test("layout reports follow dock transitions, not repeated result updates", () => {
     const h = fixture();
-    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false, compactHeight: 44 }]);
+    assert.deepEqual(h.layouts, [{ open: false, expanded: false, wide: false, toolbarHeight: 44 }]);
     h.controller.beginMapClick({ lat: 0, lng: 0 });
     h.controller.setClickResult("feature", { state: "empty", message: "No features" });
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 92 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, toolbarHeight: 44 });
     h.controller.showHistogram();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, toolbarHeight: 44 });
     const count = h.layouts.length;
     for (let i = 0; i < 25; i++) {
         h.controller.showHistogram(i, { activate: false });
@@ -559,20 +556,20 @@ test("layout reports follow dock transitions, not repeated result updates", () =
     }
     assert.equal(h.layouts.length, count, "result content does not change shell layout");
     h.controller.showVectorTimeSeries();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, toolbarHeight: 44 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, compactHeight: 44 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: true, toolbarHeight: 44 });
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, compactHeight: 0 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: true, toolbarHeight: 44 });
     h.controller.hideVectorTimeSeries();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, compactHeight: 0 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: true, wide: false, toolbarHeight: 44 });
     h.controller.closeHistogram();
-    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, compactHeight: 92 });
+    assert.deepEqual(h.layouts.at(-1), { open: true, expanded: false, wide: false, toolbarHeight: 44 });
     h.controller.destroy();
-    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false, compactHeight: 44 });
+    assert.deepEqual(h.layouts.at(-1), { open: false, expanded: false, wide: false, toolbarHeight: 44 });
 });
 
-test("closed toolbar reserves its current height as filter rows reflow", () => {
+test("toolbar reflow reports its height and positions panels without opening the dock", () => {
     let notifyResize;
     let height = 44;
     const h = fixture(doc => {
@@ -591,22 +588,25 @@ test("closed toolbar reserves its current height as filter rows reflow", () => {
         };
     });
     const rootStyle = h.doc.querySelector("#map-inspection").style;
-    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, compactHeight: 44});
+    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, toolbarHeight: 44});
+    const count = h.layouts.length;
     height = 119.5;
     notifyResize();
-    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, compactHeight: 120});
+    assert.equal(h.layouts.length, count + 1);
+    assert.deepEqual(h.layouts.at(-1), {open: false, expanded: false, wide: false, toolbarHeight: 120});
     assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "120px");
     assert.deepEqual(h.calls, [], "filter geometry does not open the dock");
-    const count = h.layouts.length;
     notifyResize();
-    assert.equal(h.layouts.length, count, "unchanged filter geometry does not rewrite layout");
+    assert.equal(h.layouts.length, count + 1, "unchanged filter geometry does not rewrite layout");
     height = 44;
     notifyResize();
-    assert.equal(h.layouts.at(-1).compactHeight, 44, "clearing filters releases their reserved space");
+    assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "44px");
+    assert.equal(h.layouts.length, count + 2);
+    assert.equal(h.layouts.at(-1).toolbarHeight, 44);
     h.controller.destroy();
 });
 
-test("toolbar reflow positions panels and updates compact space without losing retained tools", () => {
+test("toolbar reflow reports its height without losing retained tools", () => {
     let notifyResize;
     const observed = [];
     let disconnected = false;
@@ -633,42 +633,29 @@ test("toolbar reflow positions panels and updates compact space without losing r
     h.controller.showHistogram();
     h.controller.showStyle("Countries");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.layouts.at(-1).compactHeight, 48);
+    assert.equal(h.layouts.at(-1).expanded, false);
     const count = h.layouts.length;
     notifyResize();
     assert.equal(h.layouts.length, count);
     height = 72.25;
     notifyResize();
-    assert.equal(h.layouts.at(-1).compactHeight, 73);
+    assert.equal(h.layouts.length, count + 1);
+    assert.equal(h.layouts.at(-1).toolbarHeight, 73);
     assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "73px");
     assert.equal(h.histogram.hidden, false);
     assert.equal(h.style.hidden, false);
     assert.equal(h.controller.activeTool, "style");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.layouts.at(-1).compactHeight, 0);
+    assert.equal(h.layouts.at(-1).expanded, true);
+    const expandedCount = h.layouts.length;
     height = 96;
     notifyResize();
-    assert.equal(h.layouts.at(-1).compactHeight, 0);
+    assert.equal(h.layouts.length, expandedCount + 1);
+    assert.equal(h.layouts.at(-1).toolbarHeight, 96);
     assert.equal(rootStyle.getPropertyValue("--map-tools-height"), "96px");
     h.controller.destroy();
     assert.equal(disconnected, true);
     assert.equal(h.layouts.at(-1).open, false);
-});
-
-test("compact opening measures its visible popover before a resize notification", () => {
-    let visible = false;
-    const h = fixture(doc => {
-        const root = doc.querySelector("#map-inspection");
-        root.showPopover = () => { visible = true; };
-        root.hidePopover = () => { visible = false; };
-        root.getBoundingClientRect = () => ({ height: visible ? 64 : 0 });
-    });
-    h.controller.beginMapClick({ lat: 0, lng: 0 });
-    h.controller.setClickResult("feature", { state: "empty", message: "No features" });
-    assert.equal(h.layouts.at(-1).compactHeight, 108);
-    assert.equal(h.layouts.at(-1).expanded, false);
-    h.controller.destroy();
-    assert.equal(h.layouts.at(-1).compactHeight, 44);
 });
 
 test("histogram and style have independent visibility on one persistent surface", () => {

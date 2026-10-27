@@ -291,8 +291,8 @@ test("inspection layout changes only the changed shell attributes without schedu
     fixture.app.setAttribute = (name, value) => { writes.push([name, value]); setAttribute(name, value); };
     const heights = [];
     const setProperty = fixture.app.style.setProperty;
-    fixture.app.style.setProperty = (name, value) => { heights.push(value); setProperty(name, value); };
-    const state = { open: true, expanded: true, wide: false, compactHeight: 0 };
+    fixture.app.style.setProperty = (name, value) => { heights.push([name, value]); setProperty(name, value); };
+    const state = { open: true, expanded: true, wide: false, toolbarHeight: 48 };
     layout.setInspectionLayout(state);
     assert.deepEqual(writes, [
         ["data-inspection-open", "true"], ["data-inspection-expanded", "true"],
@@ -301,11 +301,14 @@ test("inspection layout changes only the changed shell attributes without schedu
     writes.length = 0;
     for (let i = 0; i < 25; i++) layout.setInspectionLayout({ ...state });
     assert.deepEqual(writes, []);
-    layout.setInspectionLayout({ ...state, expanded: false, compactHeight: 48 });
+    layout.setInspectionLayout({ ...state, expanded: false });
     assert.deepEqual(writes, [["data-inspection-expanded", "false"]]);
-    assert.deepEqual(heights, ["0px", "48px"]);
-    layout.setInspectionLayout({ ...state, expanded: false, compactHeight: 72 });
-    assert.equal(fixture.app.style.getPropertyValue("--inspection-compact-height"), "72px");
+    assert.deepEqual(heights, [["--map-tools-height", "48px"]]);
+    writes.length = 0;
+    layout.setInspectionLayout({ ...state, expanded: false, toolbarHeight: 72 });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(heights, [["--map-tools-height", "48px"], ["--map-tools-height", "72px"]]);
+    assert.equal(fixture.app.style.getPropertyValue("--map-tools-height"), "72px");
     assert.equal(fixture.app.getAttribute("data-inspection-open"), "true");
     assert.deepEqual(fixture.timers, [], "the existing map ResizeObserver owns actual viewport resizing");
     layout.destroy();

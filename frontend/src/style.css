@@ -3801,7 +3801,7 @@ article.raster-histogram-summary {
   position: fixed;
   top: 16px;
   right: 20px;
-  z-index: 800;
+  z-index: 1101;
   display: flex;
   flex-direction: column;
   width: min(var(--inspection-width), calc(100vw - 40px));
@@ -3915,7 +3915,7 @@ article.raster-histogram-summary {
 }
 
 #app[data-inspection-wide="true"] {
-  --inspection-width: min(580px, calc(100vw - 744px));
+  --inspection-width: clamp(420px, calc(100vw - 744px), 580px);
 }
 
 #app[data-inspection-expanded="true"] {
@@ -4981,37 +4981,17 @@ summary:hover > .raster-disclosure-chevron {
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
 
-/* Small screens dock tools below the map instead of covering its edge. */
+/* Narrow screens keep the full map behind the collapsible side panels. */
 @media (max-width: 1199px) {
-  /* Reserve result space below the raster navigation on short screens. */
-  #app { --inspection-space: 0px; --inspection-compact-height: 0px; --inspection-dock-height: max(45dvh, min(420px, 75dvh)); }
-  #app:not([data-inspection-expanded="true"]) {
-    --inspection-space: calc(var(--inspection-compact-height) + 16px);
-  }
-  #app[data-inspection-expanded="true"] {
-    --inspection-space: var(--inspection-dock-height);
-  }
   #map, #app.is-control-panel-collapsed #map {
-    inset: 0 0 var(--inspection-space);
+    inset: 0;
   }
   #app #control-panel {
     top: 16px;
-    bottom: calc(var(--inspection-space) + 16px);
+    bottom: 16px;
     height: auto;
-    max-height: calc(100dvh - var(--inspection-space) - 32px);
+    max-height: calc(100dvh - 32px);
   }
-  #map-inspection {
-    inset: auto 8px calc(8px + var(--map-tools-height, 42px));
-    width: auto;
-    height: calc(var(--inspection-dock-height) - 16px - var(--map-tools-height, 42px));
-    max-height: calc(var(--inspection-dock-height) - 16px - var(--map-tools-height, 42px));
-  }
-  #map-inspection[data-active-tool=""] {
-    inset-block-end: calc(8px + var(--map-tools-height, 42px));
-    height: auto;
-    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
-  }
-  .map-tool-openers { inset: auto 8px 8px; width: auto; flex-direction: column-reverse; }
   .map-inspection-tabs, .map-click-summary {
     min-height: 0;
     max-height: calc((45dvh - 80px) / 3);
@@ -5019,6 +4999,16 @@ summary:hover > .raster-disclosure-chevron {
   }
   #app .panel-opener {
     inset: 16px auto auto 16px;
+  }
+}
+
+@media (max-width: 899px) {
+  #app #control-panel {
+    top: calc(16px + var(--map-tools-height, 42px));
+    max-height: calc(100dvh - 32px - var(--map-tools-height, 42px));
+  }
+  #app .panel-opener {
+    top: calc(16px + var(--map-tools-height, 42px));
   }
 }
 
