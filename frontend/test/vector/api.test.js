@@ -101,7 +101,7 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
     );
 });
 
-test("vector styling sends Catalog identity plus complete symbol state", async () => {
+test("vector styling sends complete symbol state and accepts an opaque approval", async () => {
     const requests = [];
     const style = {
         geometryKind: "line",
@@ -124,8 +124,7 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
         },
     };
     const result = {
-        styleName:
-          "vector-style-0123456789abcdef01234567-89abcdef0123",
+        styleName: "opaque-style-approval",
         style,
     };
 

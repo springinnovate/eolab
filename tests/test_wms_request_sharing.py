@@ -31,7 +31,16 @@ class TestLayerRegistry:
     """Model current layer authorization and server-owned filter translation."""
 
     __test__ = False
-    style_names: frozenset[str] = frozenset({"vector-polygon"})
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Accept the fixture's fixed appearance.
+
+        Args:
+            style_name: Requested style.
+
+        Returns:
+            Whether the style is approved.
+        """
+        return style_name == "vector-polygon"
 
     def __init__(self) -> None:
         """Start with authorized layers and record every authorization lookup."""

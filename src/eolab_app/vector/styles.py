@@ -125,7 +125,7 @@ def build_vector_sld(
         geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
-        UTF-8 XML accepted by the GeoServer style REST boundary. Categorical
+        UTF-8 XML for GeoServer's inline WMS style. Categorical
         Other rules use an explicit complement so feature picking can combine
         geometry and label rules without changing category membership.
 

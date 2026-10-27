@@ -1,7 +1,9 @@
-"""Vector-owned authorization for fixed public WMS parameters."""
+"""Authorize source-bound vector appearances and build request-local WMS styles."""
 
-from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+import hmac
+import json
 
 from pydantic import ValidationError
 
@@ -14,42 +16,66 @@ from eolab_app.vector.models import (
 from eolab_app.vector.styles import (
     build_vector_sld,
     default_vector_style,
+    vector_label_rendering_buffer,
     vector_style_name,
 )
 
 
 @dataclass(frozen=True)
 class PublishedVectorAuthorization:
-    """Vector source and approved appearances for independent map views.
+    """Published vector source and its key for approving map appearances.
 
     Attributes:
         source: Exact mounted source and native layer identity.
-        styles: Approved WMS style names mapped to their GeoServer geometry
-            attributes for labels; None means the style needs no label geometry.
+        default_style_name: Initializer-owned fixed appearance for this geometry.
+        signing_key: Process-local secret shared by appearances of this source.
+        geometry_name: GeoServer geometry attribute resolved for fixed labels.
         upstream_layer_name: Original authorized publication for a filtered view.
         filter: Validated per-view predicate, never an arbitrary expression.
     """
 
     source: ResolvedVectorSource
-    styles: Mapping[str, str | None]
+    default_style_name: str
+    signing_key: bytes = field(repr=False)
+    geometry_name: str | None = None
     upstream_layer_name: str | None = None
     filter: VectorFilter | None = None
 
-    @property
-    def style_names(self) -> Collection[str]:
-        """Return every WMS style approved for this source.
+    def sign_style_name(self, style_name: str) -> str:
+        """Sign a validated content identity for this immutable vector source.
+
+        Args:
+            style_name: Content identity approved by the vector style service.
 
         Returns:
-            Published style names usable by any authorized view of this source.
+            Identity and authentication code, without retaining style history.
         """
-        return self.styles.keys()
+        signature = hmac.digest(self.signing_key, style_name.encode("utf-8"), "sha256")
+        return f"{style_name}.{signature.hex()}"
+
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Check whether this source approved a requested style identity.
+
+        Args:
+            style_name: Unqualified fixed or signed appearance identity.
+
+        Returns:
+            True for the fixed default or a valid source-bound signature.
+        """
+        if style_name == self.default_style_name:
+            return True
+        content_name, separator, _signature = style_name.rpartition(".")
+        return bool(separator) and hmac.compare_digest(
+            self.sign_style_name(content_name).encode("utf-8"),
+            style_name.encode("utf-8"),
+        )
 
     def validate_parameters(
         self,
         operation: str,
         query: Mapping[str, str],
     ) -> None:
-        """Reject dynamic substitutions unsupported by fixed vector styles.
+        """Reject raster-only substitutions on a vector request.
 
         Args:
             operation: Normalized WMS operation.
@@ -71,18 +97,57 @@ class PublishedVectorAuthorization:
     def prepare_query(
         self, operation: str, query: list[tuple[str, str]],
     ) -> list[tuple[str, str]]:
-        """Translate authorized public identities into an upstream WMS request.
+        """Build inline appearance and filter parameters for one WMS request.
 
         Args:
             operation: Validated lowercase WMS operation.
             query: Globally bounded and feature-validated public query entries.
 
         Returns:
-            Server-owned upstream query entries.
+            Server-owned upstream query entries without persistent custom styles.
+
+        Raises:
+            PublishedLayerRequestError: If appearance data is absent, malformed,
+                or differs from the approved signed identity.
         """
+        normalized = {key.lower(): value for key, value in query}
+        style_parameter = "style" if operation == "getlegendgraphic" else "styles"
+        style_name = normalized.get(style_parameter, "").removeprefix("eolab:")
+        definition = normalized.get("vector_style")
+        if definition is not None:
+            try:
+                style_definition = json.loads(definition)
+            except ValueError as error:
+                raise PublishedLayerRequestError("Vector appearance is invalid") from error
+            layer_parameter = "layer" if operation == "getlegendgraphic" else "layers"
+            layer_name = normalized[layer_parameter]
+            style_name = style_name or self.default_style_name
+            style, geometry_name = self._require_style(
+                layer_name, style_name, style_definition
+            )
+            document = build_vector_sld(
+                style_name,
+                style,
+                layer_name=self.upstream_layer_name or layer_name,
+                geometry_name=geometry_name,
+            )
+            query = [
+                (key, value)
+                for key, value in query
+                if key.lower() not in {
+                    "vector_style", style_parameter, "tiled", "tilesorigin"
+                }
+            ] + [(style_parameter, ""), ("sld_body", document.decode("utf-8"))]
+            if operation == "getmap":
+                query.append(("buffer", str(vector_label_rendering_buffer(style))))
+        elif (
+            style_name
+            and self.is_style_authorized(style_name)
+            and style_name != self.default_style_name
+        ):
+            raise PublishedLayerRequestError("Vector appearance is required for this style")
         if self.filter is None:
             return query
-        normalized = {key.lower(): value for key, value in query}
         predicate = filter_ecql(self.filter)
         feature_id = normalized.get("featureid")
         if feature_id is not None:
@@ -96,6 +161,17 @@ class PublishedVectorAuthorization:
         if operation != "getlegendgraphic":
             forwarded.append(("cql_filter", predicate))
         return forwarded
+
+    def composite_buffer(self, style_definition: Mapping[str, object] | None) -> int:
+        """Return the label query margin for an already validated appearance.
+
+        Args:
+            style_definition: Complete vector appearance accepted by the SLD builder.
+
+        Returns:
+            Zero without labels, otherwise the bounded pixel margin for labels.
+        """
+        return vector_label_rendering_buffer(VectorStyle.model_validate(style_definition))
 
     def composite_interpolation(
         self, style_definition: Mapping[str, object] | None
@@ -134,43 +210,72 @@ class PublishedVectorAuthorization:
             PublishedLayerRequestError: If the style definition is invalid or
                 does not produce the requested approved style identity.
         """
-        if (
-            style_name not in self.styles
-            or style_environment is not None
-            or style_definition is None
-        ):
+        if style_environment is not None or style_definition is None:
             raise PublishedLayerRequestError(
                 "Composite vector rendering requires an approved vector style"
             )
-        try:
-            style = VectorStyle.model_validate(style_definition)
-        except ValidationError as error:
-            raise PublishedLayerRequestError(
-                "Composite vector style is invalid"
-            ) from error
-        layer_name = self.upstream_layer_name or layer_name
-        resource_name = layer_name.partition(":")[2]
-        geometry_name = self.styles[style_name]
-        default_style_name = f"vector-{style.geometry_kind}"
-        is_default_style = (
-            style_name == default_style_name
-            and style == default_vector_style(style.geometry_kind)
+        style, geometry_name = self._require_style(
+            layer_name, style_name, style_definition
         )
-        try:
-            matches_style = is_default_style or vector_style_name(
-                resource_name, style, geometry_name=geometry_name,
-            ) == style_name
-        except ValueError as error:
-            raise PublishedLayerRequestError("Composite vector label geometry is unavailable") from error
-        if not matches_style:
-            raise PublishedLayerRequestError(
-                "Composite vector style does not match its authorized identity"
-            )
         document = build_vector_sld(
             style_name,
             style,
-            layer_name=layer_name,
+            layer_name=self.upstream_layer_name or layer_name,
             opacity_multiplier=opacity,
             geometry_name=geometry_name,
         )
         return filter_vector_sld(document, self.filter) if self.filter is not None else document
+
+    def _require_style(
+        self,
+        layer_name: str,
+        style_name: str,
+        style_definition: object,
+    ) -> tuple[VectorStyle, str | None]:
+        """Match browser-supplied appearance data to its source-bound approval.
+
+        Args:
+            layer_name: Workspace-qualified original or filtered publication.
+            style_name: Fixed default or signed content identity.
+            style_definition: Complete untrusted appearance from a WMS or plan
+                request.
+
+        Returns:
+            Validated appearance and the geometry attribute needed for its labels.
+
+        Raises:
+            PublishedLayerRequestError: If the appearance is malformed, unsigned,
+                or inconsistent with its approved content identity.
+        """
+        try:
+            style = VectorStyle.model_validate(style_definition)
+        except ValidationError as error:
+            raise PublishedLayerRequestError(
+                "Vector appearance is invalid"
+            ) from error
+        layer_name = self.upstream_layer_name or layer_name
+        resource_name = layer_name.partition(":")[2]
+        geometry_name = (
+            self.geometry_name
+            if style.label is not None and (
+                style.geometry_kind == "polygon"
+                or (style.geometry_kind == "line" and style.label.placement == "center")
+            )
+            else None
+        )
+        is_default_style = (
+            style_name == self.default_style_name
+            and style_name == f"vector-{style.geometry_kind}"
+            and style == default_vector_style(style.geometry_kind)
+        )
+        try:
+            content_name = vector_style_name(
+                resource_name, style, geometry_name=geometry_name,
+            )
+        except ValueError as error:
+            raise PublishedLayerRequestError("Vector label geometry is unavailable") from error
+        if not is_default_style and self.sign_style_name(content_name) != style_name:
+            raise PublishedLayerRequestError(
+                "Vector appearance does not match its approved identity"
+            )
+        return style, geometry_name

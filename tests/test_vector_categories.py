@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, NoReturn
 
 import fiona
 import pytest
@@ -22,7 +22,7 @@ from tests.test_vector_publication import StaticCatalog
 class UnusedStyler:
     """Fail if category discovery unexpectedly reaches GeoServer styling."""
 
-    async def apply_style(self, *_args: Any, **_kwargs: Any) -> str:
+    async def prepare_style(self, *_args: Any, **_kwargs: Any) -> NoReturn:
         """Reject an unexpected style operation.
 
         Args:

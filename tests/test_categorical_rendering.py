@@ -78,7 +78,8 @@ class RenderingRegistry:
         if layer_name == "eolab:boundaries":
             return PublishedVectorAuthorization(
                 source=object(),  # type: ignore[arg-type]
-                styles={vector_style_name("boundaries", vector_style()): None},
+                default_style_name="vector-polygon",
+                signing_key=b"categorical-rendering-test",
             )
         if layer_name not in {"eolab:landcover", "eolab:continuous"}:
             raise PublishedLayerNotAuthorizedError("Layer is not published")
@@ -231,7 +232,7 @@ def test_categorical_input_cannot_replace_layer_authority_or_supply_sld(
     ):
         assert client.get("/geoserver/eolab/wms", params=query).status_code == 400
     assert requests == []
-    vector = PublishedVectorAuthorization(source=object(), styles={"vector-polygon": None})  # type: ignore[arg-type]
+    vector = RenderingRegistry().require_current("eolab:boundaries")
     with pytest.raises(PublishedLayerRequestError, match="not supported for vector"):
         vector.validate_parameters("getmap", {"raster_style": style})
 
@@ -306,7 +307,9 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
             "layers": [
                 {
                     "layerName": "eolab:boundaries",
-                    "styleName": vector_style_name("boundaries", polygon),
+                    "styleName": RenderingRegistry()
+                    .require_current("eolab:boundaries")
+                    .sign_style_name(vector_style_name("boundaries", polygon)),
                     "styleDefinition": polygon.model_dump(by_alias=True),
                     "opacity": 1,
                 },

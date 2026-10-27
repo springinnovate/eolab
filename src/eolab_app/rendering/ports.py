@@ -1,6 +1,6 @@
 """Neutral contracts used by the restricted WMS delivery boundary."""
 
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 import httpx2
@@ -39,12 +39,25 @@ class MapRenderQueue(Protocol):
 class PublishedLayerAuthorization(Protocol):
     """Browser-safe policy returned for one current published layer."""
 
-    @property
-    def style_names(self) -> Collection[str]:
-        """Return the WMS styles approved for this published layer.
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Check whether this source owner approved the requested appearance.
+
+        Args:
+            style_name: Public style identity supplied by the client.
 
         Returns:
-            Style names accepted by the owning feature's rendering policy.
+            True when the name is approved for this source.
+        """
+        ...
+
+    def composite_buffer(self, style_definition: Mapping[str, object] | None) -> int:
+        """Return the query margin required by an authorized appearance.
+
+        Args:
+            style_definition: Definition already checked by build_composite_sld.
+
+        Returns:
+            Extra pixels around a map tile to query for symbols or labels.
         """
         ...
 

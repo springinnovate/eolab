@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from eolab_app.vector.filters import VectorFilter, VectorFilterCount
 from eolab_app.vector.models import (
     CatalogVectorRequest,
+    PreparedVectorStyle,
     ResolvedVectorSource,
     VectorCategoryRead,
     VectorFormat,
@@ -14,7 +15,6 @@ from eolab_app.vector.models import (
     VectorNumericRead,
     VectorReaderAssessment,
     VectorStyle,
-    VectorStylePublication,
 )
 
 
@@ -178,14 +178,14 @@ class VectorFieldReader(Protocol):
 
 
 class VectorStyler(Protocol):
-    """GeoServer styling adapter required by the vector style workflow."""
+    """Resolve GeoServer metadata needed to prepare a vector appearance."""
 
-    async def apply_style(
+    async def prepare_style(
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> VectorStylePublication:
-        """Create or update one per-layer SLD and assign it to the layer.
+    ) -> PreparedVectorStyle:
+        """Identify an inline appearance without storing a GeoServer style.
 
         Args:
             resource_name: Server-derived GeoServer feature type identity.
@@ -195,6 +195,7 @@ class VectorStyler(Protocol):
             Style identity and authoritative geometry attribute used for labels.
 
         Raises:
-            VectorPublicationError: If GeoServer cannot apply the style.
+            VectorPublicationError: If the published layer or label geometry is
+                unavailable.
         """
         ...

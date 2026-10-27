@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 from xml.etree import ElementTree
 
 import httpx2
@@ -14,10 +15,14 @@ from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
-from eolab_app.vector.models import CatalogVectorRequest
+from eolab_app.vector.models import CatalogVectorRequest, VectorStyle
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import MountedVectorResolver, PublishedVectorRegistry
-from eolab_app.vector.styles import OGC_NAMESPACE, SLD_NAMESPACE
+from eolab_app.vector.styles import (
+    OGC_NAMESPACE,
+    SLD_NAMESPACE,
+    vector_label_rendering_buffer,
+)
 from eolab_app.vector.styling import VectorStyleService
 from tests.test_vector_categories import assessed_category_item
 from tests.test_vector_publication import RecordingPublisher, StaticCatalog
@@ -52,17 +57,22 @@ def _vector_services(
     )
 
 
-def _map_query(layer: str, style: str) -> dict[str, str]:
+def _map_query(
+    layer: str,
+    style: str,
+    appearance: VectorStyle | None = None,
+) -> dict[str, str]:
     """Build a small WMS map request with an explicit layer and appearance.
 
     Args:
         layer: Published layer or filtered alias.
         style: Published appearance selected by this map.
+        appearance: Complete settings accompanying a signed custom style.
 
     Returns:
         Valid GetMap query parameters.
     """
-    return {
+    query = {
         "service": "WMS",
         "version": "1.1.1",
         "request": "GetMap",
@@ -75,6 +85,23 @@ def _map_query(layer: str, style: str) -> dict[str, str]:
         "format": "image/png",
         "transparent": "true",
     }
+    if appearance is not None:
+        query["vector_style"] = appearance.model_dump_json(by_alias=True)
+    return query
+
+
+def _upstream_parameters(request: httpx2.Request) -> dict[str, str]:
+    """Read the actual form body or URL sent to the GeoServer substitute.
+
+    Args:
+        request: Captured KVP request for rendering, hover or a legend.
+
+    Returns:
+        Native WMS parameters, including empty style names.
+    """
+    if request.method == "POST":
+        return dict(parse_qsl(request.content.decode(), keep_blank_values=True))
+    return dict(request.url.params)
 
 
 def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> None:
@@ -104,7 +131,7 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
             An empty feature collection for inspection, or a small image response.
         """
         captured.append(request)
-        if request.url.params.get("request") == "GetFeatureInfo":
+        if _upstream_parameters(request).get("request") == "GetFeatureInfo":
             return httpx2.Response(
                 200, json={"type": "FeatureCollection", "features": []}
             )
@@ -176,11 +203,33 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
                 await publication.publish(identity)
                 second = await styling.apply(polygon_request(item))
                 assert first.style_name != second.style_name
+                authorization = registry.require_current(published.layer_name)
+                for index in range(128):
+                    request = polygon_request(item)
+                    request = request.model_copy(
+                        update={
+                            "style": request.style.model_copy(
+                                update={
+                                    "fill_color": f"#{index:06x}",
+                                }
+                            ),
+                        }
+                    )
+                    changed = await styling.apply(request)
+                    assert authorization.is_style_authorized(changed.style_name)
+                    # New styles use the same source object instead of retaining history.
+                    assert (
+                        registry.require_current(published.layer_name) is authorization
+                    )
                 tile = await browser.get(
                     plan["wmsUrl"], params=_map_query("composite", "")
                 )
                 assert tile.status_code == 200, tile.text
-                root = ElementTree.fromstring(captured[-1].content)
+                parameters = _upstream_parameters(captured[-1])
+                root = ElementTree.fromstring(parameters["sld_body"])
+                assert parameters["buffer"] == str(
+                    vector_label_rendering_buffer(first.style)
+                )
                 assert (
                     root.findtext(
                         f".//{{{SLD_NAMESPACE}}}Geometry/{{{OGC_NAMESPACE}}}Function/"
@@ -195,38 +244,58 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
                 assert rebuilt.json() == plan
 
                 for appearance in (first, second):
-                    query = _map_query(published.layer_name, appearance.style_name)
+                    query = _map_query(
+                        published.layer_name, appearance.style_name, appearance.style
+                    )
                     assert (
-                        await browser.get("/geoserver/eolab/wms", params=query)
+                        await browser.post("/geoserver/eolab/wms", data=query)
                     ).status_code == 200
-                    assert captured[-1].url.params["styles"] == appearance.style_name
+                    parameters = _upstream_parameters(captured[-1])
+                    assert parameters["styles"] == ""
+                    root = ElementTree.fromstring(parameters["sld_body"])
+                    assert (
+                        root.findtext(
+                            f".//{{{SLD_NAMESPACE}}}UserStyle/{{{SLD_NAMESPACE}}}Name"
+                        )
+                        == appearance.style_name
+                    )
+                    assert parameters["buffer"] == str(
+                        vector_label_rendering_buffer(appearance.style)
+                    )
                 info = {
-                    **_map_query(filtered.layerName, first.style_name),
+                    **_map_query(filtered.layerName, first.style_name, first.style),
                     "request": "GetFeatureInfo",
                     "query_layers": filtered.layerName,
                     "info_format": "application/json",
                     "x": "128",
                     "y": "128",
                     "feature_count": "5",
+                    "buffer": "8",
                 }
                 assert (
-                    await browser.get("/geoserver/eolab/wms", params=info)
+                    await browser.post("/geoserver/eolab/wms", data=info)
                 ).status_code == 200
-                assert captured[-1].url.params["styles"] == first.style_name
-                assert captured[-1].url.params["query_layers"] == published.layer_name
-                assert "\"category\" = 'A'" in captured[-1].url.params["cql_filter"]
+                parameters = _upstream_parameters(captured[-1])
+                assert parameters["styles"] == ""
+                assert parameters["query_layers"] == published.layer_name
+                assert parameters["buffer"] == "8"
+                assert "\"category\" = 'A'" in parameters["cql_filter"]
                 legend = {
                     "service": "WMS",
                     "version": "1.1.1",
                     "request": "GetLegendGraphic",
                     "layer": filtered.layerName,
                     "style": first.style_name,
+                    "vector_style": first.style.model_dump_json(by_alias=True),
                     "format": "image/png",
                 }
                 assert (
-                    await browser.get("/geoserver/eolab/wms", params=legend)
+                    await browser.post("/geoserver/eolab/wms", data=legend)
                 ).status_code == 200
-                assert captured[-1].url.params["style"] == first.style_name
+                parameters = _upstream_parameters(captured[-1])
+                assert parameters["style"] == ""
+                assert parameters["layer"] == published.layer_name
+                assert "sld_body" in parameters
                 cleared = await publication.apply_filter(
                     CatalogVectorFilterRequest(
                         **identity.model_dump(by_alias=True),
@@ -234,11 +303,11 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
                     )
                 )
                 assert cleared.layerName == published.layer_name
-                query = _map_query(cleared.layerName, first.style_name)
+                query = _map_query(cleared.layerName, first.style_name, first.style)
                 assert (
                     await browser.get("/geoserver/eolab/wms", params=query)
                 ).status_code == 200
-                assert "cql_filter" not in captured[-1].url.params
+                assert "cql_filter" not in _upstream_parameters(captured[-1])
 
                 await other_publication.publish(
                     CatalogVectorRequest(
@@ -248,12 +317,23 @@ def test_vector_maps_keep_their_styles_after_republication(tmp_path: Path) -> No
                 )
                 other = await other_styling.apply(polygon_request(other_item))
                 forwarded = len(captured)
-                for rejected_style in ("unpublished-style", other.style_name):
+                tampered = first.style_name[:-1] + (
+                    "0" if first.style_name[-1] != "0" else "1"
+                )
+                for rejected_style in ("unpublished-style", other.style_name, tampered):
                     rejected = await browser.get(
                         "/geoserver/eolab/wms",
                         params=_map_query(published.layer_name, rejected_style),
                     )
                     assert rejected.status_code == 400
+                assert (
+                    await browser.get(
+                        "/geoserver/eolab/wms",
+                        params=_map_query(
+                            published.layer_name, first.style_name, second.style
+                        ),
+                    )
+                ).status_code == 400
                 mismatched_plan = {
                     "layers": [
                         {

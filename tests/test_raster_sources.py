@@ -59,7 +59,7 @@ def test_registry_requires_an_approved_layer() -> None:
         registry.require_current(layer_name)
 
     registry.authorize(layer_name)
-    assert registry.require_current(layer_name).style_names == ("dynamic-raster",)
+    assert registry.require_current(layer_name).is_style_authorized("dynamic-raster")
 
     registry.revoke(layer_name)
     with pytest.raises(PublishedLayerNotAuthorizedError):

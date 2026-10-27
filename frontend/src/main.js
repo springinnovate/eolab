@@ -1435,6 +1435,7 @@ async function initializeCatalog(
                     publication: {
                         layerName: record.publication.layerName,
                         styleName: record.publication.styleName,
+                        style: record.publication.style,
                     },
                     geometryKind: source.geometryKind,
                     propertyNames: source.fields.map(({ name }) => name),

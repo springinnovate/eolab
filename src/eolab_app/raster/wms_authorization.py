@@ -90,13 +90,29 @@ def validate_raster_style_environment(environment: str) -> None:
 
 @dataclass(frozen=True)
 class PublishedRasterAuthorization:
-    """Raster-owned WMS request policy for an authorized published layer.
+    """Raster-owned WMS request policy for an authorized published layer."""
 
-    Attributes:
-        style_names: Public WMS styles authorized for this raster.
-    """
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Accept only the initialized dynamic raster style.
 
-    style_names: tuple[str, ...] = (RASTER_WMS_STYLE_NAME,)
+        Args:
+            style_name: Public style identity supplied by the client.
+
+        Returns:
+            True for the raster rendering style.
+        """
+        return style_name == RASTER_WMS_STYLE_NAME
+
+    def composite_buffer(self, style_definition: Mapping[str, object] | None) -> int:
+        """Return zero because raster appearances do not draw outside their cells.
+
+        Args:
+            style_definition: Already authorized raster appearance.
+
+        Returns:
+            Zero extra query pixels.
+        """
+        return 0
 
     def validate_parameters(
         self,
@@ -121,6 +137,8 @@ class PublishedRasterAuthorization:
             raise PublishedLayerRequestError(
                 "featureid is supported only for vector layers"
             )
+        if "vector_style" in query:
+            raise PublishedLayerRequestError("vector_style is not supported for raster layers")
         if "env" in query:
             validate_raster_style_environment(query["env"])
 
@@ -193,7 +211,7 @@ class PublishedRasterAuthorization:
             PublishedLayerRequestError: If the appearance is not a complete
                 authorized dynamic raster style.
         """
-        if style_name not in self.style_names:
+        if not self.is_style_authorized(style_name):
             raise PublishedLayerRequestError(
                 "Composite raster rendering requires its dynamic raster style"
             )

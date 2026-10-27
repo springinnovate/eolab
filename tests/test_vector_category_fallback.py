@@ -143,7 +143,8 @@ def test_filtered_composite_retains_fallback_and_label_selection(
     style = VectorStyle.model_validate(document)
     style_name = vector_style_name(item["id"], style, geometry_name="shape")
     layer_name = f"eolab:{item['id']}"
-    registry.authorize(
+    registry.authorize(layer_name, source, "vector-polygon")
+    style_name = registry.authorize_style(
         layer_name, source, style_name, "shape"
     )
     selection = VectorFilter(

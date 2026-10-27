@@ -166,7 +166,7 @@ def test_filtered_publications_are_isolated_current_bounded_and_style_preserving
     authorization = registry.require_current(applied.layerName)
     assert authorization.filter == candidate
     assert authorization.upstream_layer_name == publication.layer_name
-    assert publication.style_name in authorization.style_names
+    assert authorization.is_style_authorized(publication.style_name)
     document = authorization.build_composite_sld(applied.layerName, publication.style_name, None,
         publication.style.model_dump(by_alias=True), 1)
     root = ET.fromstring(document)

@@ -30,7 +30,27 @@ from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 class _TestAuthorization:
     """Authorize one fixed test style and emit its requested layer identity."""
 
-    style_names: frozenset[str] = frozenset({"test-style"})
+    def is_style_authorized(self, style_name: str) -> bool:
+        """Accept the fixture style.
+
+        Args:
+            style_name: Requested style.
+
+        Returns:
+            Whether the fixture owns the style.
+        """
+        return style_name == "test-style"
+
+    def composite_buffer(self, style_definition: Mapping[str, object] | None) -> int:
+        """Return no extra margin for this symbol-free fixture.
+
+        Args:
+            style_definition: Unused fixture appearance.
+
+        Returns:
+            Zero pixels.
+        """
+        return 0
 
     def composite_interpolation(
         self, style_definition: Mapping[str, object] | None
@@ -778,7 +798,7 @@ def test_vector_composite_sld_multiplies_symbol_opacity() -> None:
     style = default_vector_style("polygon")
     authorization = PublishedVectorAuthorization(
         source=object(),  # type: ignore[arg-type]
-        styles={"vector-polygon": None},
+        default_style_name="vector-polygon", signing_key=b"test-key",
     )
     document = authorization.build_composite_sld(
         "eolab:polygon-item",

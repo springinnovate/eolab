@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
+from urllib.parse import parse_qsl
 from xml.etree import ElementTree
 
 import httpx2
@@ -25,6 +26,7 @@ from eolab_app.routes.geoserver_map import (
 
 
 MAX_FEATURE_INFO_FEATURES = 10
+MAX_WMS_FORM_BYTES = 512 * 1024
 MAX_FEATURE_INFO_RESPONSE_BYTES = 512 * 1024
 MAX_FEATURE_INFO_BUFFER_PIXELS = 20
 MAX_FEATURE_ID_CHARACTERS = 512
@@ -53,6 +55,7 @@ PUBLIC_WMS_MAP_QUERY_PARAMETERS = PUBLIC_WMS_COMMON_QUERY_PARAMETERS | {
     "layers",
     "srs",
     "styles",
+    "vector_style",
     "time",
     "transparent",
     "width",
@@ -85,6 +88,7 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
         "rule",
         "scale",
         "style",
+        "vector_style",
         "transparent",
         "width",
     },
@@ -92,12 +96,12 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
 
 
 def validated_public_wms_query(
-    request: Request,
+    query_entries: list[tuple[str, str]],
 ) -> tuple[list[tuple[str, str]], str | None, str]:
     """Validate an untrusted request against the public WMS contract.
 
     Args:
-        request: Incoming WMS request.
+        query_entries: Untrusted WMS query or form parameters.
 
     Returns:
         Accepted query entries, the one requested data layer or ``None`` for
@@ -107,7 +111,6 @@ def validated_public_wms_query(
         HTTPException: If the request is not an allowed operation or uses an
             unsupported or repeated parameter.
     """
-    query_entries = list(request.query_params.multi_items())
     normalized_query = {key.lower(): value for key, value in query_entries}
     if len(normalized_query) != len(query_entries):
         raise HTTPException(status_code=400, detail="WMS parameters must not repeat")
@@ -255,7 +258,7 @@ def create_wms_proxy_router(
     router = APIRouter()
     internal_geoserver_url = geoserver_internal_url.rstrip("/")
 
-    # Claim non-GET methods before the catch-all static mount so they receive
+    # Claim unsupported methods before the catch-all static mount so they receive
     # the WMS contract's 405 response instead of being treated as asset paths.
     @router.api_route(
         "/geoserver/eolab/wms",
@@ -266,7 +269,8 @@ def create_wms_proxy_router(
         """Forward one validated and authorized WMS operation.
 
         Layer requests use global WMS to preserve qualified layer names in SLD.
-        Capabilities remain limited to the EOLab workspace.
+        Capabilities remain limited to the EOLab workspace. Form POSTs carry
+        large appearances without relying on browser or proxy URL limits.
 
         Args:
             request: Incoming WMS request.
@@ -278,12 +282,25 @@ def create_wms_proxy_router(
             HTTPException: If the request violates the public contract, its
                 layer is not current, or GeoServer is unavailable.
         """
-        if request.method != "GET":
+        if request.method not in {"GET", "POST"}:
             raise HTTPException(
                 status_code=405,
-                detail="The public WMS endpoint accepts only GET requests",
+                detail="The public WMS endpoint accepts GET or form POST requests",
             )
-        query_entries, layer_name, operation = validated_public_wms_query(request)
+        query_entries = list(request.query_params.multi_items())
+        if request.method == "POST":
+            if request.headers.get("content-type", "").partition(";")[0] != "application/x-www-form-urlencoded":
+                raise HTTPException(status_code=415, detail="WMS POST requires a URL-encoded form")
+            body = bytearray()
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_WMS_FORM_BYTES:
+                    raise HTTPException(status_code=413, detail="WMS form exceeds 512 KiB")
+                body.extend(chunk)
+            try:
+                query_entries.extend(parse_qsl(body.decode("utf-8"), keep_blank_values=True, errors="strict"))
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="WMS form is invalid") from error
+        query_entries, layer_name, operation = validated_public_wms_query(query_entries)
         # Capabilities must list only the EOLab workspace. Layer requests use
         # global WMS so GeoServer keeps the qualified names in our inline SLD.
         internal_wms_url = (
@@ -332,7 +349,7 @@ def create_wms_proxy_router(
             )
             if (
                 requested_style != ""
-                and requested_style not in authorization.style_names
+                and not authorization.is_style_authorized(requested_style)
                 and not is_vector_highlight
             ):
                 raise HTTPException(
@@ -393,11 +410,14 @@ def create_wms_proxy_router(
                 return result
             else:
                 async with use_layers(layer_names) if use_layers else nullcontext():
-                    geoserver_response = await geoserver_client.get(
-                        internal_wms_url,
-                        params=query_entries,
-                        headers=forwarded_headers,
-                    )
+                    if any(name.lower() == "sld_body" for name, _ in query_entries):
+                        geoserver_response = await geoserver_client.post(
+                            internal_wms_url, data=dict(query_entries), headers=forwarded_headers,
+                        )
+                    else:
+                        geoserver_response = await geoserver_client.get(
+                            internal_wms_url, params=query_entries, headers=forwarded_headers,
+                        )
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,

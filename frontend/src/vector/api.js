@@ -191,7 +191,7 @@ export async function publishVector(
  * @param {Object} style Validated geometry-specific browser style state.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
  * implementation.
- * @return {Promise<Object>} Normalized applied style state.
+ * @return {Promise<Object>} Validated appearance and its opaque rendering approval.
  * @throws {VectorRenderingRequestError} If style application fails.
  */
 export async function styleVector(
@@ -208,9 +208,6 @@ export async function styleVector(
     );
     if (
         typeof result?.styleName !== "string" ||
-        !/^vector-style-[0-9a-f]{24}-[0-9a-f]{12}$/.test(
-          result.styleName,
-        ) ||
         result.style?.geometryKind !== style.geometryKind
     ) {
         throw new VectorRenderingRequestError(

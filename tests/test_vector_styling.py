@@ -1,6 +1,7 @@
 """Test validated vector styles, authoritative workflow, and GeoServer SLDs."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
@@ -18,7 +19,7 @@ from eolab_app.vector.models import (
     CatalogVectorNumericClassificationRequest,
     VectorLabelStyle,
     VectorStyle,
-    VectorStylePublication,
+    PreparedVectorStyle,
 )
 from eolab_app.vector.sources import (
     MountedVectorResolver,
@@ -44,11 +45,11 @@ class RecordingStyler:
         """Create an empty style request log."""
         self.requests: list[tuple[str, VectorStyle]] = []
 
-    async def apply_style(
+    async def prepare_style(
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> VectorStylePublication:
+    ) -> PreparedVectorStyle:
         """Record one style request and return its deterministic name.
 
         Args:
@@ -60,7 +61,7 @@ class RecordingStyler:
         """
         self.requests.append((resource_name, style))
         geometry_name = "shape" if style.label is not None else None
-        return VectorStylePublication(
+        return PreparedVectorStyle(
             vector_style_name(resource_name, style, geometry_name=geometry_name), geometry_name,
         )
 
@@ -593,10 +594,10 @@ def test_style_service_uses_catalog_identity_and_current_publication(
     authorization = registry.require_current(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}"
     )
-    assert result.style_name == vector_style_name(
+    assert result.style_name == authorization.sign_style_name(vector_style_name(
         item["id"], request.style, geometry_name="shape",
-    )
-    assert authorization.styles[result.style_name] == "shape"
+    ))
+    assert authorization.geometry_name == "shape"
     composite = authorization.build_composite_sld(
         f"eolab:{item['id']}", result.style_name, None,
         result.style.model_dump(by_alias=True), 0.5,
@@ -605,6 +606,52 @@ def test_style_service_uses_catalog_identity_and_current_publication(
         f".//{{{SLD_NAMESPACE}}}Geometry/{{{OGC_NAMESPACE}}}Function/{{{OGC_NAMESPACE}}}PropertyName"
     )
     assert anchor.text == "shape"
+
+
+@pytest.mark.parametrize("operation", ["getmap", "getfeatureinfo", "getlegendgraphic"])
+def test_approved_style_is_sent_inline_with_operation_specific_buffer(
+    tmp_path: Path, operation: str,
+) -> None:
+    """Render one approved appearance without relying on a stored GeoServer style.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+        operation: Direct WMS rendering, hover, or legend request.
+    """
+    item, _ = assessed_geopackage_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    registry = PublishedVectorRegistry()
+    layer_name = f"eolab:{item['id']}"
+    registry.authorize(layer_name, source, "vector-polygon")
+    service = VectorStyleService(
+        StaticCatalog(item), resolver, RecordingStyler(), registry, UnusedFieldReader(),
+    )
+    applied = asyncio.run(service.apply(polygon_request(item, label_field="name")))
+    layer_parameter = "layer" if operation == "getlegendgraphic" else "layers"
+    style_parameter = "style" if operation == "getlegendgraphic" else "styles"
+    query = [
+        (layer_parameter, layer_name),
+        (style_parameter, applied.style_name),
+        ("vector_style", applied.style.model_dump_json(by_alias=True)),
+        ("tiled", "true"),
+    ]
+    if operation == "getfeatureinfo":
+        query.extend([("query_layers", layer_name), ("buffer", "8")])
+
+    forwarded = dict(registry.require_current(layer_name).prepare_query(operation, query))
+
+    assert forwarded[style_parameter] == ""
+    assert "vector_style" not in forwarded and "tiled" not in forwarded
+    document = ElementTree.fromstring(forwarded["sld_body"])
+    assert document.findtext(f"{{{SLD_NAMESPACE}}}NamedLayer/{{{SLD_NAMESPACE}}}Name") == layer_name
+    assert document.findtext(f".//{{{OGC_NAMESPACE}}}Function/{{{OGC_NAMESPACE}}}PropertyName") == "shape"
+    expected_buffer = {
+        "getmap": str(vector_label_rendering_buffer(applied.style)),
+        "getfeatureinfo": "8",
+        "getlegendgraphic": None,
+    }[operation]
+    assert forwarded.get("buffer") == expected_buffer
 
 
 def test_style_service_rejects_unpublished_or_wrong_geometry(
@@ -635,6 +682,49 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
     )
     with pytest.raises(VectorConflictError, match="does not match"):
         asyncio.run(service.apply(polygon_request(item, "line")))
+
+
+def test_style_service_reports_source_rebinding_during_preparation(
+    tmp_path: Path,
+) -> None:
+    """Report a publication conflict if preparation finishes after source rebinding.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+    """
+    item, _ = assessed_geopackage_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    replacement = replace(source, layer_name="another-layer")
+    layer_name = f"eolab:{item['id']}"
+    registry = PublishedVectorRegistry()
+    registry.authorize(layer_name, source, "vector-polygon")
+
+    class RebindingStyler(RecordingStyler):
+        """Simulate another publication while the GeoServer preparer is awaited."""
+
+        async def prepare_style(
+            self, resource_name: str, style: VectorStyle,
+        ) -> PreparedVectorStyle:
+            """Return prepared metadata after changing the published source.
+
+            Args:
+                resource_name: Original server-derived layer identity.
+                style: Appearance approved for the original source.
+
+            Returns:
+                Prepared appearance whose source binding has since changed.
+            """
+            prepared = await super().prepare_style(resource_name, style)
+            registry.authorize(layer_name, replacement, "vector-polygon")
+            return prepared
+
+    service = VectorStyleService(
+        StaticCatalog(item), resolver, RebindingStyler(), registry, UnusedFieldReader(),
+    )
+    with pytest.raises(VectorConflictError, match="add the current vector layer"):
+        asyncio.run(service.apply(polygon_request(item)))
+    assert registry.require_current(layer_name).source == replacement
 
 
 def test_style_service_rejects_label_fields_outside_authoritative_table(
@@ -894,7 +984,7 @@ def test_label_publication_rejects_missing_or_ambiguous_geometry(attributes: lis
     publisher = GeoServerVectorPublisher(client, "http://geoserver/geoserver")
     request = polygon_request({"collection": "eolab-mounted-vectors", "id": "test-layer"}, label_field="name")
     with pytest.raises(VectorPublicationError, match="unique vector label geometry"):
-        asyncio.run(publisher.apply_style("test-layer", request.style))
+        asyncio.run(publisher.prepare_style("test-layer", request.style))
     asyncio.run(client.aclose())
 
 
@@ -913,21 +1003,19 @@ def test_fixed_label_identity_requires_and_includes_geometry_attribute() -> None
 
 
 @pytest.mark.parametrize("label_font_size", [None, 12, 72])
-def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
+def test_geoserver_style_preparation_does_not_persist_appearances(
     label_font_size: int | None,
 ) -> None:
-    """Assign content-addressed styles with their bounded tile-edge margins.
+    """Prepare content identities without changing shared GeoServer state.
 
     Args:
         label_font_size: No labels, the ordinary font, or its validated maximum.
 
     Returns:
-        None. Verifies the GeoServer REST request sequence and margin reset.
+        None. Verifies geometry lookup and the absence of style or layer writes.
     """
     resource_name = "geopackage-0123456789abcdef01234567"
-    style_names: set[str] = set()
     requests: list[httpx2.Request] = []
-    assigned_buffers: list[int] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
@@ -936,53 +1024,18 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
             f"/layers/{resource_name}.json"
         ):
             return httpx2.Response(200)
-        if request.method == "GET" and "/styles/" in path:
-            inspected_style_name = path.rsplit("/", 1)[-1].removesuffix(
-                ".sld"
-            )
-            return httpx2.Response(
-                200 if inspected_style_name in style_names else 404
-            )
         if request.method == "GET" and "/featuretypes/" in path:
             return httpx2.Response(200, json={"featureType": {"attributes": {"attribute": [
                 {"name": "custom_shape", "binding": "org.locationtech.jts.geom.MultiPolygon"},
                 {"name": "name", "binding": "java.lang.String"},
             ]}}})
-        if request.method == "POST" and path.endswith(
-            "/workspaces/eolab/styles"
-        ):
-            style_name = request.url.params["name"]
-            assert request.headers["content-type"] == (
-                "application/vnd.ogc.sld+xml"
-            )
-            document = ElementTree.fromstring(request.content)
-            anchor = document.find(f".//{{{SLD_NAMESPACE}}}Geometry/{{{OGC_NAMESPACE}}}Function/{{{OGC_NAMESPACE}}}PropertyName")
-            if anchor is not None:
-                assert anchor.text == "custom_shape"
-            style_names.add(style_name)
-            return httpx2.Response(201)
-        if request.method == "PUT" and "/styles/" in path:
-            assert path.rsplit("/", 1)[-1] in style_names
-            ElementTree.fromstring(request.content)
-            return httpx2.Response(200)
-        if request.method == "PUT" and path.endswith(
-            f"/layers/{resource_name}.json"
-        ):
-            document = __import__("json").loads(request.content)
-            assigned_style_name = document["layer"]["defaultStyle"]["name"]
-            assert assigned_style_name in style_names
-            assert document["layer"]["defaultStyle"]["workspace"] == "eolab"
-            metadata_entry = document["layer"]["metadata"]["entry"]
-            assert metadata_entry["@key"] == "buffer"
-            assigned_buffers.append(int(metadata_entry["$"]))
-            return httpx2.Response(200)
         raise AssertionError(f"Unexpected request: {request.method} {path}")
 
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     publisher = GeoServerVectorPublisher(client, "http://geoserver/geoserver")
 
     first = asyncio.run(
-        publisher.apply_style(resource_name, default_vector_style("polygon"))
+        publisher.prepare_style(resource_name, default_vector_style("polygon"))
     )
     changed_style = polygon_request({
         "collection": "eolab-mounted-vectors",
@@ -998,22 +1051,16 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
             },
         })
     second = asyncio.run(
-        publisher.apply_style(resource_name, changed_style)
+        publisher.prepare_style(resource_name, changed_style)
     )
     third = asyncio.run(
-        publisher.apply_style(resource_name, default_vector_style("polygon"))
+        publisher.prepare_style(resource_name, default_vector_style("polygon"))
     )
     asyncio.run(client.aclose())
 
     assert first != second
     assert first == third
-    assert style_names == {first.style_name, second.style_name}
     assert second.geometry_name == ("custom_shape" if label_font_size is not None else None)
     expected_buffer = 0 if label_font_size is None else max(256, label_font_size * 12 + 20)
-    assert assigned_buffers == [0, expected_buffer, 0]
     assert vector_label_rendering_buffer(changed_style) == expected_buffer
-    assert sum(request.method == "POST" for request in requests) == 2
-    assert any(
-        request.method == "PUT" and "/styles/" in request.url.path
-        for request in requests
-    )
+    assert all(request.method == "GET" for request in requests)

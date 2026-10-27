@@ -60,7 +60,7 @@ test("uploaded polygons use ordinary vector styling, filtering and local removal
     };
     const leaflet = { tileLayer: { wms(url, options) {
         const layer = {
-            url, options, once() {}, setOpacity() {}, setZIndex() {},
+            url, options, once() {}, on() {}, setOpacity() {}, setZIndex() {},
             setParams(params) { Object.assign(this.options, params); },
             addTo(target) { target.attached.add(this); return this; },
         };

@@ -8,10 +8,13 @@ import {
   VECTOR_FEATURE_INFO_LIMIT,
   VectorFeatureInfoError,
 } from "../../src/vector/feature-info.js";
+import { normalizeVectorStyle } from "../../src/vector/style.js";
 
 const PUBLICATION = Object.freeze({
   layerName: "eolab:parcels",
   styleName: "vector-polygon",
+  style: normalizeVectorStyle({ geometryKind: "polygon", fillColor: "#228b22", fillOpacity: 0.6,
+    strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 1 }),
 });
 const PROPERTY_NAMES = Object.freeze(["name", "R2000", "R2024"]);
 
@@ -35,6 +38,7 @@ test("feature info scales a large viewport and click under the WMS limit", () =>
   assert.equal(url.searchParams.get("layers"), PUBLICATION.layerName);
   assert.equal(url.searchParams.get("query_layers"), PUBLICATION.layerName);
   assert.equal(url.searchParams.get("styles"), PUBLICATION.styleName);
+  assert.deepEqual(JSON.parse(url.searchParams.get("vector_style")), PUBLICATION.style);
   assert.equal(url.searchParams.get("version"), "1.1.1");
   assert.equal(url.searchParams.get("srs"), "EPSG:4326");
   assert.equal(url.searchParams.get("bbox"), "20,10,40,30");
@@ -69,6 +73,10 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
     };
   });
   assert.deepEqual(features, [feature]);
+  assert.equal(calls[0].url, "/geoserver/eolab/wms");
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body.get("vector_style")), PUBLICATION.style);
+  assert.equal(calls[0].options.body.get("request"), "GetFeatureInfo");
   assert.equal(calls[0].options.headers.Accept, "application/json");
 
   await assert.rejects(

@@ -10,7 +10,7 @@ from hashlib import sha256
 from threading import Lock
 from pathlib import Path
 import re
-from types import MappingProxyType
+from secrets import token_bytes
 from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -393,33 +393,55 @@ class PublishedVectorRegistry:
         layer_name: str,
         source: ResolvedVectorSource,
         style_name: str,
-        geometry_name: str | None = None,
     ) -> None:
-        """Retain a published style alongside the source's other approved styles.
+        """Authorize a published source and its fixed default appearance.
 
-        Publishing or styling the same source preserves existing map appearances.
-        A different source binding replaces the previous source's style approvals.
+        Publishing the same source preserves its style-signing key. Rebinding a
+        layer creates a new key, invalidating appearances approved for its old
+        source.
 
         Args:
             layer_name: Workspace-qualified GeoServer WMS layer name.
             source: Exact mounted source and native layer identity.
-            style_name: Initialized WMS style or validated content-addressed style.
-            geometry_name: GeoServer geometry attribute used by this style's labels.
-
-        Returns:
-            None. Stores an immutable snapshot of the source's approved styles.
+            style_name: Initialized fixed default WMS style.
         """
         previous = self._sources.get(layer_name)
-        styles = (
-            dict(previous.styles)
-            if previous is not None and previous.source == source
-            else {}
-        )
-        styles[style_name] = geometry_name
+        if previous is not None and previous.source == source:
+            return
         self._sources[layer_name] = PublishedVectorAuthorization(
-            source,
-            MappingProxyType(styles),
+            source, style_name, token_bytes(32)
         )
+
+    def authorize_style(
+        self,
+        layer_name: str,
+        source: ResolvedVectorSource,
+        style_name: str,
+        geometry_name: str | None = None,
+    ) -> str:
+        """Sign an approved appearance without retaining a per-style entry.
+
+        Args:
+            layer_name: Workspace-qualified original publication identity.
+            source: Immutable source checked by the style service.
+            style_name: Content identity returned by the style preparer.
+            geometry_name: GeoServer geometry attribute required by fixed labels.
+
+        Returns:
+            Signed style identity the browser sends with its appearance.
+
+        Raises:
+            PublishedLayerNotAuthorizedError: If the source is not published.
+            PublishedLayerChangedError: If its source binding changed while the
+                style was being prepared.
+        """
+        authorization = self.require_current(layer_name)
+        if authorization.source != source:
+            raise PublishedLayerChangedError("The vector source binding changed")
+        if geometry_name is not None:
+            authorization = replace(authorization, geometry_name=geometry_name)
+            self._sources[layer_name] = authorization
+        return authorization.sign_style_name(style_name)
 
     def authorize_filter(self, layer_name: str, candidate: VectorFilter) -> str:
         """Retain a bounded immutable per-map view of a current publication.
@@ -457,7 +479,7 @@ class PublishedVectorRegistry:
             layer_name: Workspace-qualified GeoServer WMS layer name.
 
         Returns:
-            Exact immutable source and its approved styles.
+            Exact immutable source and its appearance-approval key.
 
         Raises:
             PublishedLayerNotAuthorizedError: If this process did not authorize
