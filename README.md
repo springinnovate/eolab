@@ -270,6 +270,15 @@ deployment before building it. The pit-filling search cutoff is in
 -1 and 0 allow unlimited searches. This replaces the former
 `PROCESSING_DOWNSTREAM_PIT_FILL_SEARCH_LIMIT` environment setting.
 
+The [Habitat Earth Engine downloader](src/eolab_app/processing/habitat_earth_engine.py)
+accepts a registered Google Cloud project and a service-account JSON key path
+through `HabitatEarthEngineSettings`. Mount the key read-only, outside the Catalog
+data mounts. Pass these settings only to the server process performing the
+download; never put the key in browser configuration or commit it. The
+[acquisition tests](tests/test_habitat_earth_engine.py) demonstrate calling the
+downloader with a projected AOI and a private working directory. These settings
+do not change the existing selected-layer Habitat workflow.
+
 EOLab is open-source software under the [Apache License 2.0](LICENSE). Bivariate
 palette definitions originate in the
 [ESOS-C data viewer](https://github.com/springinnovate/esos-c-dataviewer), also under
