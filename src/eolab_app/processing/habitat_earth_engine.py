@@ -1,11 +1,11 @@
-"""Download the original Habitat predictor and response rasters from Earth Engine."""
+"""Fetch and reuse the original Habitat predictor and response rasters."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import errno
 from importlib.resources import as_file, files
 from pathlib import Path
-import shutil
-from tempfile import mkdtemp
+from tempfile import TemporaryDirectory
 
 from affine import Affine
 import ee
@@ -44,17 +44,16 @@ class HabitatEarthEngineSettings:
 
 
 @dataclass(frozen=True)
-class HabitatTileDownload:
-    """Completed multiband Habitat tiles and their scientific variable definitions.
+class HabitatTiles:
+    """Shared cached Habitat tiles and their scientific variable definitions.
 
     Attributes:
-        directory: Private download directory; the caller owns its removal.
         tiles: Complete grid tiles in north-to-south, west-to-east order.
+            Files belong to the persistent cache, not to a calculation attempt.
         bands: Ordered GeoTIFF band names mapped to the original definitions.
             Contains predictors and responses, never computed reference sites.
     """
 
-    directory: Path
     tiles: tuple[Path, ...]
     bands: dict[str, RasterBandDefinition]
 
@@ -156,53 +155,23 @@ def _name_downloaded_bands(
         dataset.descriptions = names
 
 
-def download_habitat_tiles(
-    area: BaseGeometry,
+def _build_habitat_image(
     configuration: RasterStackConfiguration,
     settings: HabitatEarthEngineSettings,
-    directory: Path,
-    *,
-    progress: Callable[[int, int], None],
-    check_cancelled: Callable[[], None],
-) -> HabitatTileDownload:
-    """Fetch the original Habitat variables for tiles intersecting a projected AOI.
-
-    Call inside a dedicated Processing native process: Earth Engine initialization
-    is process-global. Requests use the scientific acquisition grid, independently
-    of the later model output grid. No files are reused or admitted to the Catalog.
+) -> ee.Image:
+    """Connect with server credentials and build the original scientific image.
 
     Args:
-        area: Valid, nonempty AOI already projected to configuration.grid.crs.
         configuration: Scientific settings from load_habitat_stack.
         settings: Server-only Earth Engine project and service-account key path.
-        directory: Existing private working directory, outside source mounts.
-        progress: Receive completed and total tile counts, starting at zero.
-        check_cancelled: Raise to cancel before initialization, between requests
-            or before accepting a downloaded tile. Processing's existing native
-            supervisor handles cancellation during a blocking request.
 
     Returns:
-        Completed tiles with ordered band definitions in a new private directory.
-        The caller owns that directory on success. Failure or cooperative
-        cancellation removes it; after hard termination, the Processing owner
-        removes the parent attempt directory once the native process has exited.
+        Earth Engine expression for the configured bands, ready for tile requests.
 
     Raises:
-        RuntimeError: If credentials, initialization or an Earth Engine request
-            fails. Credential contents and raw authentication errors are omitted.
-        ValueError: If a downloaded raster differs from the requested grid/bands.
-        RasterioError: If downloaded pixels or metadata cannot be read or written.
-        OSError: If local files cannot be written or removed.
-        Exception: Propagates exceptions from progress and cancellation callbacks.
+        RuntimeError: If credentials or initialization fail; raw authentication
+            errors are omitted to keep credential details private.
     """
-    grids = _select_tile_grids(area, configuration.grid)
-    bands = {
-        name: band
-        for name, band in zip(configuration.band_names(), configuration.bands)
-        if band.role in ("predictor", "response")
-    }
-    check_cancelled()
-    progress(0, len(grids))
     try:
         credentials = ee.ServiceAccountCredentials(
             key_file=str(settings.credentials_file)
@@ -220,12 +189,96 @@ def download_habitat_tiles(
             "Habitat could not connect to Earth Engine. Check the configured project "
             "and the mounted service-account credentials and permissions."
         ) from None
-    image = build_earth_engine_stack(configuration)
-    download_directory = Path(mkdtemp(prefix="habitat-gee-", dir=directory))
-    paths = []
+    return build_earth_engine_stack(configuration)
+
+
+def _publish_tile(directory: Path, entry: Path) -> None:
+    """Atomically publish a validated tile, preserving an existing winner.
+
+    Args:
+        directory: Private staging directory containing the completed tile.tif.
+        entry: Deterministic cache directory on the same filesystem. Every
+            published entry is nonempty, so rename cannot overwrite it.
+
+    Raises:
+        OSError: If publication fails for a reason other than another writer
+            publishing the same tile first, including different filesystems.
+    """
     try:
-        for index, grid in enumerate(grids):
-            check_cancelled()
+        directory.rename(entry)
+    except OSError as error:
+        if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+            raise
+
+
+def get_habitat_tiles(
+    area: BaseGeometry,
+    configuration: RasterStackConfiguration,
+    settings: HabitatEarthEngineSettings,
+    *,
+    cache_directory: Path,
+    working_directory: Path,
+    progress: Callable[[int, int], None],
+    check_cancelled: Callable[[], None],
+) -> HabitatTiles:
+    """Reuse completed Habitat tiles and fetch missing tiles for a projected AOI.
+
+    Run in a dedicated Processing native process: Earth Engine initialization is
+    process-global. The upstream scientific configuration digest includes year,
+    grid, datasets, bands and stack version; globally anchored tile coordinates
+    allow overlapping AOIs to reuse the same pixels. Completed entries are
+    immutable and are not reopened or rehashed here. An entirely cached request
+    does not connect to Earth Engine.
+
+    Args:
+        area: Valid, nonempty AOI already projected to configuration.grid.crs.
+        configuration: Scientific settings from load_habitat_stack.
+        settings: Server-only project and credentials, used only for cache misses.
+        cache_directory: Private persistent cache, outside source mounts and
+            attempt/result directories. Its files survive run expiry and restart.
+            Administrators may clear it only while no calculations use it.
+        working_directory: Existing private attempt directory on the same
+            filesystem as the cache, allowing atomic directory publication.
+        progress: Receive completed and total tile counts, including cache hits.
+        check_cancelled: Raise to cancel between requests or before publication.
+            The native supervisor handles cancellation during a blocking request.
+
+    Returns:
+        Shared cached files and ordered band definitions. Never remove these
+        files when a run ends. Failure/cancellation removes this call's staging;
+        previously published tiles remain reusable. After native termination the
+        caller cleans the working directory. Concurrent misses may both fetch;
+        the first completed publication wins without overwriting cached pixels.
+
+    Raises:
+        RuntimeError: If credentials, initialization or an Earth Engine request
+            fails. Credential contents and raw authentication errors are omitted.
+        ValueError: If a downloaded raster differs from the requested grid/bands.
+        RasterioError: If downloaded pixels or metadata cannot be read or written.
+        OSError: If local reads, writes, publication or staging cleanup fail.
+        Exception: Propagates exceptions from progress and cancellation callbacks.
+    """
+    grids = _select_tile_grids(area, configuration.grid)
+    bands = {
+        name: band
+        for name, band in zip(configuration.band_names(), configuration.bands)
+        if band.role in ("predictor", "response")
+    }
+    check_cancelled()
+    progress(0, len(grids))
+    stack_directory = cache_directory / configuration.raster_configuration_sha256
+    stack_directory.mkdir(parents=True, exist_ok=True)
+    span = configuration.grid.pixel_size_meters * configuration.grid.tile_size_pixels
+    image = None
+    paths = []
+    for index, grid in enumerate(grids):
+        check_cancelled()
+        column = round((grid.transform.c - configuration.grid.origin_x) / span)
+        row = round((configuration.grid.origin_y - grid.transform.f) / span)
+        entry = stack_directory / f"{column}_{row}"
+        if not entry.exists():
+            if image is None:
+                image = _build_habitat_image(configuration, settings)
             try:
                 pixels = ee.data.computePixels(
                     {
@@ -252,13 +305,16 @@ def download_habitat_tiles(
                     "server connection and access to the configured source datasets."
                 ) from None
             check_cancelled()
-            path = download_directory / f"tile-{index:06d}.tif"
-            path.write_bytes(pixels)
-            _name_downloaded_bands(path, grid, tuple(bands))
-            paths.append(path)
-            progress(index + 1, len(grids))
-        check_cancelled()
-        return HabitatTileDownload(download_directory, tuple(paths), bands)
-    except BaseException:
-        shutil.rmtree(download_directory)
-        raise
+            with TemporaryDirectory(
+                prefix="habitat-gee-", dir=working_directory
+            ) as temporary:
+                directory = Path(temporary)
+                path = directory / "tile.tif"
+                path.write_bytes(pixels)
+                _name_downloaded_bands(path, grid, tuple(bands))
+                check_cancelled()
+                _publish_tile(directory, entry)
+        paths.append(entry / "tile.tif")
+        progress(index + 1, len(grids))
+    check_cancelled()
+    return HabitatTiles(tuple(paths), bands)
