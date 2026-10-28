@@ -261,6 +261,8 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null) {
 /** Own vector-inspection requests, results, and map highlight. */
 export class VectorFeatureInspectorController {
     /**
+     * Connect map clicks to feature results, navigation and map highlights.
+     *
      * @param {Object} configuration Collaborators.
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Initialized Leaflet map.
@@ -280,6 +282,8 @@ export class VectorFeatureInspectorController {
      * intent for all selected features without knowing its implementation.
      * @param {(sourceId:string)=>void} configuration.onStyleRequested Publishes
      * styling intent with the selected feature's opaque source identity.
+     * @param {(sourceId:string)=>void} [configuration.onFilterRequested] Publishes
+     * filtering intent with the selected feature's opaque source identity.
      * @param {(focus:Readonly<Object>)=>boolean}
      * configuration.onFeatureZoomRequested Publishes current-feature map
      * navigation intent without owning viewport movement.
@@ -288,6 +292,7 @@ export class VectorFeatureInspectorController {
      * HTTP implementation.
      * @param {()=>number} [configuration.now] Monotonic clock used only for
      * user-facing request progress.
+     * @throws {TypeError} If a required collaborator is not a function.
      */
     constructor({
         leaflet,
@@ -350,6 +355,7 @@ export class VectorFeatureInspectorController {
         this.fetchImplementation = fetchImplementation;
         this.now = now;
         this.panel = documentContext.querySelector("#vector-feature-inspector");
+        this.heading = documentContext.querySelector("#vector-feature-inspector-heading");
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
         this.timeSeriesButton = documentContext.querySelector(
             "#open-vector-time-series"
@@ -816,7 +822,8 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Present one result and replace its map highlight.
+     * Present one result with its returned feature ID and replace its map highlight.
+     * Results without an ID retain the plain inspector heading.
      * WMS highlights remain visible through the map's maximum zoom of 22.
      *
      * @param {number} index Zero-based result index.
@@ -838,6 +845,10 @@ export class VectorFeatureInspectorController {
             canNext: this.resultIndex < this.results.length - 1,
         });
         this.result.hidden = false;
+        this.heading.textContent = observation.featureId === null
+            ? "Feature inspector"
+            : `Feature inspector (FID ${observation.featureId})`;
+        this.heading.title = this.heading.textContent;
         this.layerName.textContent = target.label;
         if (this.filterButton) this.filterButton.hidden = false;
         this.styleButton.hidden = false;
@@ -892,7 +903,7 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Clear result DOM and map highlight.
+     * Clear selected results and their map highlight, restoring the plain heading.
      *
      * @return {void}
      */
@@ -900,6 +911,8 @@ export class VectorFeatureInspectorController {
         this.results = [];
         this.resultIndex = 0;
         this.result.hidden = true;
+        this.heading.textContent = "Feature inspector";
+        this.heading.title = this.heading.textContent;
         this.#updateTimeSeriesAction(0);
         this.featureProfileButton.disabled = true;
         if (this.filterButton) this.filterButton.hidden = true;
