@@ -8,6 +8,8 @@ import {
   RasterCursorSamplesController,
 } from "../../src/raster/cursor-samples.js";
 import { MOUNTED_GEOTIFF_ITEM } from "../../test-support/raster/fixtures.js";
+import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
 function createDeferred() {
   let resolve;
@@ -159,6 +161,102 @@ test("a newer cursor position cancels dwell and in-flight stale work", async () 
   assert.equal(snapshots.length, snapshotCount);
   clock.runNext();
   assert.equal(requests[1].position.longitude, 5);
+});
+
+test("outside cursor replies never reveal an empty picker while other rasters load", async () => {
+  const clock = createClock();
+  const requests = [];
+  const documentContext = new FakeRasterControlDocument();
+  const view = new RasterCursorValuesView(documentContext);
+  const root = documentContext.querySelector("#raster-cursor-values");
+  const marker = documentContext.querySelector("#raster-cursor-marker");
+  const list = documentContext.querySelector("#raster-cursor-value-list");
+  view.clear();
+  const controller = new RasterCursorSamplesController(
+    () => {
+      const deferred = createDeferred();
+      requests.push(deferred);
+      return deferred.promise;
+    },
+    snapshot => snapshot === null ? view.clear() : view.render(snapshot),
+    clock,
+  );
+  view.move({ clientX: 100, clientY: 100 });
+  controller.move([participant(1), participant(2)], { longitude: 1, latitude: 2 });
+  clock.runNext();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  requests[0].resolve({ inBounds: false, value: null });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  requests[1].resolve({ inBounds: false, value: null });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+
+  view.move({ clientX: 200, clientY: 200 });
+  controller.move([participant(1), participant(2)], { longitude: 3, latitude: 4 });
+  clock.runNext();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  requests[2].resolve({ inBounds: false, value: null });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  requests[3].resolve({ inBounds: true, value: 12 });
+  await Promise.resolve();
+  assert.equal(root.hidden, false);
+  assert.equal(marker.hidden, false);
+  assert.equal(marker.style.left, "200px");
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[1].textContent, "1.200e+1");
+
+  view.move({ clientX: 300, clientY: 300 });
+  controller.move([participant(1)], { longitude: 5, latitude: 6 });
+  clock.runNext();
+  assert.equal(root.hidden, false);
+  assert.equal(marker.style.left, "200px");
+  assert.equal(list.children[0].children[1].textContent, "1.200e+1");
+  requests[4].resolve({ inBounds: false, value: null });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+});
+
+test("a stale cursor value cannot reveal an empty picker after pointer movement", async () => {
+  const clock = createClock();
+  const requests = [];
+  const documentContext = new FakeRasterControlDocument();
+  const view = new RasterCursorValuesView(documentContext);
+  const root = documentContext.querySelector("#raster-cursor-values");
+  const marker = documentContext.querySelector("#raster-cursor-marker");
+  view.clear();
+  const controller = new RasterCursorSamplesController(
+    () => {
+      const deferred = createDeferred();
+      requests.push(deferred);
+      return deferred.promise;
+    },
+    snapshot => snapshot === null ? view.clear() : view.render(snapshot),
+    clock,
+  );
+  view.move({ clientX: 100, clientY: 100 });
+  controller.move([participant(1)], { longitude: 1, latitude: 2 });
+  clock.runNext();
+  view.move({ clientX: 200, clientY: 200 });
+  controller.move([participant(1)], { longitude: 3, latitude: 4 });
+  requests[0].resolve({ inBounds: true, value: 99 });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  clock.runNext();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
+  requests[1].resolve({ inBounds: false, value: null });
+  await Promise.resolve();
+  assert.equal(root.hidden, true);
+  assert.equal(marker.hidden, true);
 });
 
 test("cursor stack applies a fixed participant ceiling and reports omissions", () => {
