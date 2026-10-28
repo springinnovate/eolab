@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from xml.etree import ElementTree
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,6 +28,7 @@ from eolab_app.raster.sources import MountedRasterResolver, PublishedRasterRegis
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.rendering.composite import CompositeMapRenderingService
 from eolab_app.rendering.render_queue import GeoServerRenderQueue
+from eolab_app.rendering.sld import SLD_NAMESPACE
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
@@ -150,7 +152,7 @@ def test_observations_publish_original_files_and_refresh_without_gating_analysis
         TestClient, RasterPublicationService, OutputGeoServer, ScanManager, Path
     ],
 ) -> None:
-    """Publish original observations, reuse their identities, and preserve source files.
+    """Style two views of one observation and preserve files through source refresh.
 
     Args:
         temporal_rendering: Real source, publication and rendering services.
@@ -178,10 +180,37 @@ def test_observations_publish_original_files_and_refresh_without_gating_analysis
     assert len(upstream.requests) == before
     assert set(archive.rglob("*.tif")) == original_files
     assert api.get("/geoserver/eolab/wms", params=map_query(layer)).content == b"tile"
-    plan = api.post("/api/map-rendering/plans", json=plan_request(layer))
+    top = {**plan_request(layer)["layers"][0], "opacity": 0.25}
+    bottom = {
+        **top,
+        "opacity": 0.75,
+        "styleEnvironment": (
+            "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff"
+        ),
+    }
+    plan = api.post("/api/map-rendering/plans", json={"layers": [top, bottom]})
     assert plan.status_code == 200, plan.text
     tile = _tile_url(plan.json()["wmsUrl"])
     assert api.get(tile).content == b"tile"
+    document = ElementTree.fromstring(upstream.requests[-1].content)
+    named_layers = document.findall(f".//{{{SLD_NAMESPACE}}}NamedLayer")
+    assert [entry.findtext(f"{{{SLD_NAMESPACE}}}Name") for entry in named_layers] == [
+        layer,
+        layer,
+    ]
+    assert [
+        entry.findtext(f".//{{{SLD_NAMESPACE}}}Opacity") for entry in named_layers
+    ] == ["0.75", "0.25"]
+    assert [
+        [
+            (stop.attrib["quantity"], stop.attrib["color"])
+            for stop in entry.findall(f".//{{{SLD_NAMESPACE}}}ColorMapEntry")
+        ]
+        for entry in named_layers
+    ] == [
+        [("10", "#ff0000"), ("20", "#00ff00"), ("30", "#0000ff")],
+        [("0", "#000000"), ("8", "#888888"), ("16", "#ffffff")],
+    ]
     capabilities = api.get(
         "/geoserver/eolab/wms", params={"service": "WMS", "request": "GetCapabilities"}
     )

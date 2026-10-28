@@ -59,7 +59,7 @@ class CompositeMapLayerRequest(BaseModel):
 
 
 class CompositeMapPlanRequest(BaseModel):
-    """A bounded top-first retained-layer render plan."""
+    """Ordered map appearances; multiple views may share a published layer."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -83,21 +83,6 @@ class CompositeMapPlanRequest(BaseModel):
             > MAX_COMPOSITE_PLAN_BYTES
         ):
             raise ValueError("Composite map plan must be 512 KiB or smaller")
-        return self
-
-    @model_validator(mode="after")
-    def require_unique_layers(self) -> "CompositeMapPlanRequest":
-        """Reject duplicate published layer identities.
-
-        Returns:
-            Validated composite plan.
-
-        Raises:
-            ValueError: If one GeoServer layer appears more than once.
-        """
-        names = [layer.layer_name for layer in self.layers]
-        if len(names) != len(set(names)):
-            raise ValueError("Composite map layers must be unique")
         return self
 
 

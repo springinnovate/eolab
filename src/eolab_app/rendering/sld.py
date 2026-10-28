@@ -110,6 +110,10 @@ def build_get_map_form(
 
     Form-encoded WMS keeps large styles out of URLs and uses GeoServer's KVP
     interpolation contract, which is not part of the GetMap XML schema.
+    Each appearance gets a request-local style name so repeated source layers
+    retain distinct styles in GeoServer's named-style lookup.
+    GeoServer looks up styles in the first matching NamedLayer but reads filters
+    by layer position, so retain each layer entry and move its styles to the first.
 
     Args:
         sld_document: Complete authorized SLD in bottom-first drawing order.
@@ -123,17 +127,31 @@ def build_get_map_form(
         WMS 1.1.1 form fields for a transparent PNG response.
     """
     root = ElementTree.fromstring(sld_document)
-    names = [
-        layer.findtext(f"{{{SLD_NAMESPACE}}}Name", "")
-        for layer in root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")
-    ]
+    names: list[str] = []
+    styles: list[str] = []
+    layers_by_name: dict[str, ElementTree.Element] = {}
+    for index, layer in enumerate(root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")):
+        name = layer.findtext(f"{{{SLD_NAMESPACE}}}Name", "")
+        style = layer.find(f"{{{SLD_NAMESPACE}}}UserStyle")
+        for previous_name in style.findall(f"{{{SLD_NAMESPACE}}}Name"):
+            style.remove(previous_name)
+        style_name = ElementTree.Element(f"{{{SLD_NAMESPACE}}}Name")
+        style_name.text = f"view-{index}"
+        style.insert(0, style_name)
+        names.append(name)
+        styles.append(style_name.text)
+        if name in layers_by_name:
+            layers_by_name[name].append(style)
+            layer.remove(style)
+        else:
+            layers_by_name[name] = layer
     return {
         "service": "WMS",
         "version": "1.1.1",
         "request": "GetMap",
         "layers": ",".join(names),
-        "styles": ",".join("" for _ in names),
-        "sld_body": sld_document.decode("utf-8"),
+        "styles": ",".join(styles),
+        "sld_body": ElementTree.tostring(root, encoding="unicode"),
         "interpolations": ",".join(value or "" for value in interpolations),
         "bbox": ",".join(format(value, ".17g") for value in bbox),
         "width": str(width),

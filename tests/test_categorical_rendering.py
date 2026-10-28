@@ -237,7 +237,7 @@ def test_categorical_input_cannot_replace_layer_authority_or_supply_sld(
         vector.validate_parameters("getmap", {"raster_style": style})
 
 
-def test_composite_category_isolated_by_plan_and_matches_direct_sld(
+def test_composite_category_isolated_by_plan_and_matches_direct_appearance(
     rendering_client: tuple[TestClient, list[httpx2.Request]],
 ) -> None:
     """Use the same categorical renderer while retaining distinct map appearances.
@@ -286,15 +286,21 @@ def test_composite_category_isolated_by_plan_and_matches_direct_sld(
         parse_qs(request.content.decode(), keep_blank_values=True)
         for request in requests
     ]
-    assert forms[0]["sld_body"] == forms[2]["sld_body"]
-    assert forms[0]["sld_body"] != forms[1]["sld_body"]
+    symbols = [
+        ElementTree.fromstring(form["sld_body"][0]).find(
+            f".//{{{SLD_NAMESPACE}}}RasterSymbolizer"
+        )
+        for form in forms
+    ]
+    assert ElementTree.tostring(symbols[0]) == ElementTree.tostring(symbols[2])
+    assert ElementTree.tostring(symbols[0]) != ElementTree.tostring(symbols[1])
     assert all(form["interpolations"] == ["nearest neighbor"] for form in forms)
 
 
 def test_mixed_composite_preserves_default_resampling_and_layer_order(
     rendering_client: tuple[TestClient, list[httpx2.Request]],
 ) -> None:
-    """Send qualified layer names and their inline appearances to global GeoServer WMS.
+    """Keep repeated raster appearances ordered among categorical and vector layers.
 
     Args:
         rendering_client: Real routes with a capturing upstream boundary.
@@ -314,6 +320,14 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
                     "opacity": 1,
                 },
                 {
+                    "layerName": "eolab:continuous",
+                    "styleName": "dynamic-raster",
+                    "styleEnvironment": (
+                        "min:10;med:20;max:30;cmin:#ff0000;cmed:#00ff00;cmax:#0000ff"
+                    ),
+                    "opacity": 0.25,
+                },
+                {
                     "layerName": "eolab:landcover",
                     "styleName": "dynamic-raster",
                     "styleDefinition": category_style(),
@@ -323,7 +337,7 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
                     "layerName": "eolab:continuous",
                     "styleName": "dynamic-raster",
                     "styleEnvironment": "min:0;med:5;max:10;cmin:#000000;cmed:#888888;cmax:#ffffff",
-                    "opacity": 1,
+                    "opacity": 0.75,
                 },
             ]
         },
@@ -337,14 +351,36 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
     )
     assert requests[0].url.path == "/geoserver/wms"
     form = parse_qs(requests[0].content.decode(), keep_blank_values=True)
-    assert form["layers"] == ["eolab:continuous,eolab:landcover,eolab:boundaries"]
-    assert form["interpolations"] == [",nearest neighbor,"]
+    assert form["layers"] == [
+        "eolab:continuous,eolab:landcover,eolab:continuous,eolab:boundaries"
+    ]
+    assert form["styles"] == ["view-0,view-1,view-2,view-3"]
+    assert form["interpolations"] == [",nearest neighbor,,"]
     root = ElementTree.fromstring(form["sld_body"][0])
     layers = root.findall(f"{{{SLD_NAMESPACE}}}NamedLayer")
     assert [layer.findtext(f"{{{SLD_NAMESPACE}}}Name") for layer in layers] == [
         "eolab:continuous",
         "eolab:landcover",
+        "eolab:continuous",
         "eolab:boundaries",
+    ]
+    continuous_styles = layers[0].findall(f"{{{SLD_NAMESPACE}}}UserStyle")
+    assert [
+        [
+            style.findtext(f"{{{SLD_NAMESPACE}}}Name")
+            for style in layer.findall(f"{{{SLD_NAMESPACE}}}UserStyle")
+        ]
+        for layer in layers
+    ] == [["view-0", "view-2"], ["view-1"], [], ["view-3"]]
+    assert [
+        [
+            (stop.attrib["quantity"], stop.attrib["color"])
+            for stop in style.findall(f".//{{{SLD_NAMESPACE}}}ColorMapEntry")
+        ]
+        for style in continuous_styles
+    ] == [
+        [("0", "#000000"), ("5", "#888888"), ("10", "#ffffff")],
+        [("10", "#ff0000"), ("20", "#00ff00"), ("30", "#0000ff")],
     ]
     assert (
         layers[-1].findtext(f".//{{{SLD_NAMESPACE}}}CssParameter[@name='fill']")
@@ -352,7 +388,7 @@ def test_mixed_composite_preserves_default_resampling_and_layer_order(
     )
     assert [
         float(node.text) for node in root.findall(f".//{{{SLD_NAMESPACE}}}Opacity")
-    ] == [1, 0.4]
+    ] == [0.75, 0.25, 0.4]
 
 
 def test_plan_payload_limit_precedes_retention(
