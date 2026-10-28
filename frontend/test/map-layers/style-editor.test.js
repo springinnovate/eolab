@@ -16,7 +16,7 @@ function fixture() {
     root.append(doc.querySelector('#close-layer-style'));
     const histogram = doc.querySelector('#map-histogram-panel');
     histogram.hidden = true;
-    histogram.append(doc.querySelector('#close-map-histogram'));
+    doc.querySelector('#map-inspection-raster-analysis').append(doc.querySelector('#close-map-histogram'));
     doc.querySelector('#vector-feature-inspector').hidden = true;
     doc.querySelector('#vector-time-series').hidden = true;
     doc.querySelector('#vector-feature-profile').hidden = true;

@@ -3982,7 +3982,8 @@ article.raster-histogram-summary {
   color: var(--text-2);
 }
 
-.map-inspection-raster-actions { display: flex; flex-wrap: wrap; gap: 3px; }
+.map-inspection-result-header { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border-1); }
+.map-inspection-raster-actions { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
 .map-inspection-raster-actions button:disabled { opacity: var(--disabled-opacity); cursor: default; }
 .map-inspection-raster-actions button { min-height: 24px; }
 .map-inspection-raster-feedback { margin: 0; overflow-wrap: anywhere; }
@@ -4024,12 +4025,26 @@ article.raster-histogram-summary {
   color: var(--brand-hover);
 }
 
-.map-inspection-tab[aria-selected="true"],
-.map-inspection-raster-actions button[aria-pressed="true"] {
+.map-inspection-tab[aria-selected="true"] {
   border-color: var(--brand);
   background: var(--surface-selected);
   color: var(--brand-press);
 }
+
+.map-inspection-raster-actions .map-inspection-tab {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+}
+.map-inspection-raster-actions .map-inspection-tab[aria-pressed="true"] {
+  border-bottom-color: var(--brand);
+  color: var(--brand-press);
+}
+.map-inspection-raster-actions .map-inspection-tab:focus-visible { outline-offset: -3px; }
+.analysis-result-close { display: none; }
+#map-inspection[data-active-tool="histogram"] #close-map-histogram,
+#map-inspection[data-active-tool="raster-series"] #close-raster-series,
+#map-inspection[data-active-tool="feature"] #close-vector-inspector { display: inline-flex; }
 
 #map-inspection-tab-time-series,
 #map-inspection-tab-feature-profile,
@@ -4567,8 +4582,6 @@ summary:hover > .raster-disclosure-chevron {
 .raster-histogram-point-value[data-state="error"] { color: var(--status-danger); }
 .map-analysis-help { margin: 8px 0; color: var(--text-2); font-size: 0.78rem; }
 .map-analysis-help > summary { cursor: pointer; }
-.histogram-close { float: right; position: sticky; top: 0; z-index: 2; }
-#map-histogram-panel .raster-histogram-summary:first-child .raster-histogram-summary-name { padding-right: 36px; }
 @media (max-width: 699px) {
   .map-tool-openers { width: auto; max-width: calc(100vw - 40px); }
   #raster-sampling-tool { left: calc(40px + 100% - 100vw); right: auto; width: min(290px, calc(100vw - 205px)); min-width: 90px; }
@@ -4606,7 +4619,6 @@ summary:hover > .raster-disclosure-chevron {
 #map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 6px; }
 #map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 12px; border-top: 1px solid var(--border-1); }
 #map-histogram-panel .raster-histogram-summary-select { padding: 0; }
-#map-histogram-panel .raster-histogram-empty { padding-right: 36px; }
 #map-histogram-panel .raster-histogram-summary-name,
 #map-histogram-panel .raster-histogram-detail-layer,
 #raster-bivariate-statistics-heading {
@@ -4617,7 +4629,7 @@ summary:hover > .raster-disclosure-chevron {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#map-histogram-panel .raster-histogram-heading { margin: 0 0 6px; padding-right: 36px; }
+#map-histogram-panel .raster-histogram-heading { margin: 0 0 6px; }
 #map-histogram-panel .raster-histogram-heading > div { min-width: 0; }
 #map-histogram-panel .raster-bivariate-statistics,
 #map-histogram-panel .raster-histogram { grid-template-columns: minmax(0, 1fr); margin: 0; padding: 0; border: 0; background: transparent; }

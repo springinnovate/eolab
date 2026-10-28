@@ -46,6 +46,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
+  documentContext.querySelector("#map-inspection-raster-analysis").append(documentContext.querySelector("#close-vector-inspector"));
   documentContext.querySelector("#vector-feature-result").hidden = true;
   documentContext.querySelector("#open-vector-time-series").disabled = true;
   documentContext.querySelector("#open-vector-feature-profile").disabled = true;
@@ -821,6 +822,31 @@ test("a newer click owns presentation and closing does not disable later inspect
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+});
+
+test("Escape on the result-header close button cancels inspection and clears the feature", async () => {
+  let signal;
+  const h = createFixture((_url, options) => {
+    signal = options.signal;
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => {
+      reject(new DOMException("Cancelled", "AbortError"));
+    }));
+  });
+  const pending = h.controller.inspect(inspectionEvent(2, 3));
+  const close = h.documentContext.querySelector("#close-vector-inspector");
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").contains(close), false);
+  close.focus();
+  const event = new Event("keydown", { cancelable: true });
+  Object.defineProperty(event, "key", { value: "Escape" });
+  h.documentContext.dispatchEvent(event);
+  await pending;
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(h.controller.results, []);
+  assert.equal(h.documentContext.querySelector("#vector-feature-result").hidden, true);
+  assert.equal(h.documentContext.querySelector("#vector-feature-inspector").hidden, true);
+  assert.equal(h.documentContext.activeElement, h.mapContainer);
+  h.controller.destroy();
 });
 
 test("changing the visible vector set invalidates results but retains inspection", async () => {

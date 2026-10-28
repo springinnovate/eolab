@@ -160,7 +160,8 @@ export class MapInspectionController {
             this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.histogram.hidden ||
-                !this.histogram.contains(this.document.activeElement)) return;
+                !(this.histogram.contains(this.document.activeElement) ||
+                    this.document.activeElement === this.closeButton)) return;
             event.preventDefault();
             event.stopPropagation();
             this.closeHistogram();
