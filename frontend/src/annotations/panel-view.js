@@ -7,14 +7,14 @@ export class AnnotationPanelView {
      * @param {Document} options.document Browser document.
      * @param {()=>void} options.onOpen Reveal the panel in the existing map-tool container.
      * @param {()=>void} options.onClose Hide the panel without discarding controls.
-     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only selected-layer context.
      */
-    constructor({ document, onOpen, onClose, onContextChange = () => {} }) {
+    constructor({ document, onOpen, onClose }) {
         this.document = document;
         this.onOpen = onOpen;
-        this.onContextChange = onContextChange;
+        this.onClose = onClose;
         this.layers = new Map();
         this.selectedKey = null;
+        this.title = document.querySelector("#annotation-panel-title");
         this.entry = document.querySelector("#toggle-map-layers");
         this.selector = document.querySelector("#annotation-panel-layer");
         this.layerField = document.querySelector("#annotation-panel-layer-field");
@@ -42,6 +42,7 @@ export class AnnotationPanelView {
         option.textContent = label;
         this.layers.set(key, { controls, option });
         this.selector.append(option);
+        this.layerField.hidden = this.layers.size < 2;
         if (this.selectedKey === null) this.displayLayerControls(key);
     }
 
@@ -54,18 +55,20 @@ export class AnnotationPanelView {
     renameLayer(key, label) {
         const layer = this.layers.get(key);
         if (layer) layer.option.textContent = label;
-        if (layer && this.selectedKey === key) this.onContextChange({ source: label, scope: "Shared annotation layer" });
+        if (layer && this.selectedKey === key) this.title.textContent = label;
     }
 
     /**
-     * Remove a deleted layer's controls and select another layer, if available.
+     * Remove a deleted layer's controls, selecting another layer or closing the empty editor.
      * @param {string} key Map-layer identity.
      * @return {void}
      */
     removeLayer(key) {
         this.layers.get(key)?.option.remove();
         this.layers.delete(key);
+        this.layerField.hidden = this.layers.size < 2;
         if (this.selectedKey === key) this.displayLayerControls(this.layers.keys().next().value ?? null);
+        if (this.layers.size === 0) this.onClose();
     }
 
     /**
@@ -78,9 +81,8 @@ export class AnnotationPanelView {
         this.selectedKey = layer ? key : null;
         this.selector.value = this.selectedKey ?? "";
         this.content.replaceChildren(...(layer ? [layer.controls] : []));
-        this.layerField.hidden = !layer;
         this.empty.hidden = !!layer;
-        this.onContextChange({ source: layer?.option.textContent ?? "No shared layer selected", scope: layer ? "Shared annotation layer" : "" });
+        this.title.textContent = layer?.option.textContent ?? "Polygons";
     }
 
     /**
@@ -91,13 +93,15 @@ export class AnnotationPanelView {
     showLayer(key) {
         if (!this.layers.has(key)) return;
         if (this.selectedKey !== key) this.displayLayerControls(key);
-        this.onOpen();
-        this.selector.focus({ preventScroll: true });
+        this.show();
     }
 
-    /** Reveal annotation tools, keeping the selected layer and any unfinished text. @return {void} */
+    /** Reveal polygon controls or an action error, focusing the visible selector or heading.
+     * Keep the selected layer and any unfinished text.
+     * @return {void}
+     */
     show() {
         this.onOpen();
-        (this.selectedKey ? this.selector : this.entry).focus({ preventScroll: true });
+        (this.layerField.hidden ? this.title : this.selector).focus({ preventScroll: true });
     }
 }
