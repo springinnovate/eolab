@@ -116,6 +116,23 @@ test("layer and histogram actions select one hidden source and preserve the requ
     h.close();
 });
 
+test("a histogram source selects an existing view without adding another statistics input", async () => {
+    const h = fixture();
+    const first = {...source("1"), key: "local:view:first", label: "First view"};
+    const second = {...source("1"), key: "local:view:second", label: "Second view"};
+    h.controller.updateAvailableRasters([first, second]);
+    h.view.actions.onAutomatic(false);
+    h.controller.selectSource({collectionId: "catalog", itemId: "1", label: "Raster 1"});
+    await h.open(); h.view.actions.onCalculate(); await flush();
+
+    assert.deepEqual(h.controller.sources.map(item => item.key), [first.key, second.key]);
+    assert.deepEqual([...h.controller.selectedKeys], [first.key]);
+    const submissions = h.requests.filter(([kind]) => kind === "submit");
+    assert.equal(submissions.length, 1);
+    assert.equal(submissions[0][1].source.itemId, "1");
+    h.close();
+});
+
 test("reviewed catalog, upload and drawing polygons use the same calculations and invalidate hidden work", async () => {
     for (const info of [{selection: CATALOG_SELECTION},
         {selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter}},

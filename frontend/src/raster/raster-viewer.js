@@ -326,11 +326,10 @@ export function initializeRasterViewer(
      * @param {Object} item Catalog raster to analyze.
      * @param {Object} area Normalized whole, bounds, or polygon selection sampling area.
      * @param {AbortSignal} signal Controller-owned cancellation signal.
+     * @param {Object|null} [session] Owning view, or the active renderer-independent analysis session.
      * @return {Promise<Object>} Statistics or the final read/abort failure.
      */
-    function loadStatisticsWithRetry(item, area, signal) {
-        const session = activeRasterItem === item ? mapLayers.getRecord(activeLayerKey)?.state :
-            mapLayers.retainedRecords.find(record => record.state.item === item)?.state;
+    function loadStatisticsWithRetry(item, area, signal, session = mapLayers.getRecord(activeLayerKey)?.state ?? analysisRasterSession) {
         const codes = sessionCategoryValues(session);
         if (session) session.analysis.statisticsCategoryIdentity = JSON.stringify(codes === null ? null : [...codes].sort((a, b) => a - b));
         return requestRasterStatistics(() => loadStatistics(item, area, signal, undefined, codes), signal, clock);
@@ -513,11 +512,12 @@ export function initializeRasterViewer(
      * Rendering state is consulted only for the candidate's current style; it
      * never determines whether paired analysis is available.
      *
-     * @param {string} key Catalog-owned collection and Item identity.
+     * @param {string} key Catalog source identity or retained view key.
      * @return {Object|null} Current raster session or null.
      */
     function getBivariateCandidateSession(key) {
-        const retainedSession = mapLayers.getRecord(key)?.state ?? null;
+        const retainedSession = mapLayers.getRecord(key)?.state ?? mapLayers.retainedRecords.find(record =>
+            record.adapter === rasterMapLayerAdapter && rasterSourceKey(record.state.item) === key)?.state ?? null;
         if (retainedSession !== null) {
             return retainedSession;
         }
@@ -553,13 +553,13 @@ export function initializeRasterViewer(
      */
     function syncBivariateCandidate(session) {
         const key = rasterSourceKey(session.item);
-        const candidate = bivariateCandidates.find(
+        const candidate = bivariateCandidates.find(current => current.key === session.key) ?? bivariateCandidates.find(
             /**
-             * Match a paired candidate by catalog or renderer-session identity.
+             * Match a Catalog-selected candidate by source identity.
              * @param {Object} current Candidate with a stable key.
              * @return {boolean} Whether it belongs to the session being saved.
              */
-            (current) => current.key === key || current.key === session.key
+            (current) => current.key === key
         );
         if (candidate === undefined) {
             return;
@@ -1449,7 +1449,13 @@ export function initializeRasterViewer(
      */
     function requireLayerHistogramController(session) {
         session.layerHistogramController ??= new RasterStatisticsController(
-            loadStatisticsWithRetry,
+            /** Load this view's numeric categories even when another view shares its source.
+             * @param {Object} item Original raster source.
+             * @param {Object} area Requested sampling area.
+             * @param {AbortSignal} signal Cancellation for this view's request.
+             * @return {Promise<Object>} Statistics for this view's classification.
+             */
+            (item, area, signal) => loadStatisticsWithRetry(item, area, signal, session),
             /**
              * Mark this inactive session's requested scope busy and inapplicable.
              *
@@ -2604,7 +2610,7 @@ export function initializeRasterViewer(
         }
         rememberBivariateCandidate(item);
         mapLayers.recordIntent();
-        const retainedKey = catalogKey;
+        const retainedKey = mapLayers.findLayerKey(item);
         const existingSession = matchingAnalysisSession(item);
         if (existingSession !== null && isActiveAnalysisRaster()) {
             return;
@@ -4678,8 +4684,8 @@ export function initializeRasterViewer(
      * Publish and construct one raster layer without retaining or attaching it.
      *
      * @param {Object} item Selected mounted GeoTIFF STAC Item.
-     * @param {{visible:boolean,opacity:number}} presentation Initial neutral
-     * layer visibility and opacity.
+     * @param {{visible:boolean,opacity:number,customName?:string|null,key?:string}} presentation Initial neutral
+     * layer visibility, opacity, optional name and independent view key.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached raster
      * layer prepared by the neutral retained-layer owner.
      */

@@ -1,6 +1,5 @@
 /** Prepare catalog datasets and add or remove their raster and vector map layers. */
 
-import { getCatalogItemKey } from "./catalog-item-identity.js";
 import { getCatalogVisualization } from "./catalog.js";
 import { assessCatalogVector } from "./vector/api.js";
 
@@ -74,8 +73,8 @@ export class CatalogVisualizationCoordinator {
      * Publish and construct one supported layer without attaching it to a map.
      *
      * @param {Object} item Supported and prepared Catalog Item.
-     * @param {{visible:boolean,opacity:number,customName?:string|null}} presentation Initial neutral
-     * visibility, opacity and optional map-specific name.
+     * @param {{visible:boolean,opacity:number,customName?:string|null,key?:string}} presentation Initial neutral
+     * visibility, opacity, optional map-specific name and independent view key.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached layer
      * prepared by the owning raster or vector adapter.
      * @throws {TypeError} If the Item has no visualization adapter.
@@ -134,7 +133,7 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Remove a Catalog layer or the first retained view of a temporal dataset.
+     * Remove the topmost retained view of a Catalog dataset.
      *
      * @param {Object} item Retained Catalog STAC Item.
      * @param {boolean} [allowUndo=false] Whether this is an explicit user removal.
@@ -145,8 +144,10 @@ export class CatalogVisualizationCoordinator {
             this.rasterViewer.removeTemporal(item, allowUndo);
             return;
         }
-        if (allowUndo) this.mapLayerController.removeWithUndo(getCatalogItemKey(item));
-        else this.mapLayerController.remove(item);
+        if (allowUndo) {
+            const key = this.mapLayerController.findLayerKey(item);
+            if (key !== null) this.mapLayerController.removeWithUndo(key);
+        } else this.mapLayerController.remove(item);
     }
 
     /**

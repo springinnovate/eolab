@@ -214,7 +214,7 @@ export class MapLayerController {
     }
 
     /**
-     * Publish, retain, and activate one Catalog layer through its owner.
+     * Activate the topmost view of a Catalog source, or publish and add its first view.
      *
      * @param {Object} item Supported Catalog Item.
      * @param {MapLayerAdapter} adapter Feature-owned map-layer adapter.
@@ -225,10 +225,10 @@ export class MapLayerController {
         this.#requireAdapter(adapter);
         const key = getCatalogItemKey(item);
         const showRequestSequence = this.recordIntent();
-        const retainedRecord = this.records.get(key);
+        const retainedRecord = this.records.get(this.findLayerKey(item));
         if (retainedRecord !== undefined) {
             retainedRecord.adapter.prepare?.(retainedRecord);
-            this.activate(key);
+            this.activate(retainedRecord.entry.key);
             this.view.setStatus(`${retainedRecord.entry.label} selected.`);
             return retainedRecord.publication;
         }
@@ -279,11 +279,13 @@ export class MapLayerController {
      * @param {boolean} [presentation.visible=true] Initial visibility.
      * @param {number} [presentation.opacity=1] Initial opacity in [0, 1].
      * @param {string|null} [presentation.customName=null] Optional map-specific display name.
+     * @param {string} [presentation.key=getCatalogItemKey(item)] View identity,
+     * separate from its source when retaining multiple views of one Item.
      * @return {Promise<{key:string,record:Object,layer:Object}>} Detached
      * publication, owner state, and Leaflet layer.
      * @throws {Error} If publication or detached construction fails.
      */
-    async stage(item, adapter, { visible = true, opacity = 1, customName = null } = {}) {
+    async stage(item, adapter, { visible = true, opacity = 1, customName = null, key = getCatalogItemKey(item) } = {}) {
         this.#requireAdapter(adapter);
         customName = normalizeCustomLayerName(customName);
         if (this.destroyed) {
@@ -297,7 +299,6 @@ export class MapLayerController {
                 "Map layer opacity must be from zero through one."
             );
         }
-        const key = getCatalogItemKey(item);
         if (this.records.has(key) || this.pendingPublications.has(key)) {
             throw new Error(`Map layer is already retained or pending: ${key}`);
         }
@@ -309,7 +310,7 @@ export class MapLayerController {
             item,
             adapter,
             publication,
-            { visible, opacity, customName }
+            { visible, opacity, customName, key }
         );
     }
 
@@ -350,8 +351,7 @@ export class MapLayerController {
                 typeof key !== "string" ||
                 record?.entry?.key !== key ||
                 record.adapter === undefined ||
-                staged.layer === undefined ||
-                getCatalogItemKey(record.entry.item) !== key
+                staged.layer === undefined
             ) {
                 throw new TypeError("Staged map layer is invalid.");
             }
@@ -369,7 +369,8 @@ export class MapLayerController {
                 const { entry } = this.stack.add(
                     presentation.item,
                     presentation.label,
-                    retentionOrder
+                    retentionOrder,
+                    key
                 );
                 this.stack.setOpacity(key, presentation.opacity);
                 this.stack.setVisible(key, presentation.visible);
@@ -482,10 +483,19 @@ export class MapLayerController {
      * Return whether one Catalog Item is retained.
      *
      * @param {Object} item Catalog Item.
-     * @return {boolean} Whether its composite identity is retained.
+     * @return {boolean} Whether any view of the source is retained.
      */
     contains(item) {
         return this.stack.hasItem(item);
+    }
+
+    /**
+     * Find the topmost retained view of a Catalog Item.
+     * @param {Object} item Catalog source identity.
+     * @return {string|null} View key, or null when the source is not on the map.
+     */
+    findLayerKey(item) {
+        return this.stack.findLayerKey(item);
     }
 
     /**
@@ -742,16 +752,16 @@ export class MapLayerController {
     }
 
     /**
-     * Remove one Catalog Item from the retained stack.
+     * Cancel a pending Catalog addition and remove the source's topmost retained view.
      *
      * @param {Object} item Catalog Item.
      * @return {void}
      */
     remove(item) {
         this.recordIntent();
-        const key = getCatalogItemKey(item);
-        this.#invalidatePublication(key);
-        if (this.records.has(key)) {
+        this.#invalidatePublication(getCatalogItemKey(item));
+        const key = this.findLayerKey(item);
+        if (key !== null) {
             this.removeKey(key);
         }
     }
@@ -905,7 +915,7 @@ export class MapLayerController {
         const previousActive = this.stack.activeKey;
         const presentation = record.entry;
         try {
-            const { entry } = this.stack.add(presentation.item, presentation.label, this.recordIntent());
+            const { entry } = this.stack.add(presentation.item, presentation.label, this.recordIntent(), key);
             this.stack.setVisible(key, presentation.visible);
             this.stack.setOpacity(key, presentation.opacity);
             entry.customName = presentation.customName ?? null;
@@ -1189,7 +1199,7 @@ export class MapLayerController {
             item,
             adapter,
             publication,
-            { visible: true, opacity: 1 }
+            { visible: true, opacity: 1, key }
         );
         const label = staged.record.entry.label;
         const previousActiveKey = this.stack.activeKey;
@@ -1236,11 +1246,11 @@ export class MapLayerController {
      * @param {Object} item Supported Catalog Item.
      * @param {MapLayerAdapter} adapter Feature-owned adapter.
      * @param {Object} publication Completed owner publication response.
-     * @param {{visible:boolean,opacity:number,customName?:string|null}} presentation Initial state and optional display name.
+     * @param {{visible:boolean,opacity:number,customName?:string|null,key:string}} presentation Initial state, optional display name and view identity.
      * @return {{key:string,record:Object,layer:Object}} Detached layer.
      */
     #createStaged(item, adapter, publication, presentation) {
-        const key = getCatalogItemKey(item);
+        const { key } = presentation;
         const entry = {
             key,
             item,

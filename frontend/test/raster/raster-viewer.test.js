@@ -1164,6 +1164,43 @@ test("saved style updates a staged raster before it is attached", async () => {
     h.destroy();
 });
 
+test("views sharing one Catalog Item keep separate styles and histogram categories", async () => {
+    const requestedCodes = [];
+    const h = visibleLayerFixture(async (item, area, _signal, _fetch, codes) => {
+        requestedCodes.push(codes);
+        return createCategoryStatistics(item, selectedBoundsFromArea(area), codes);
+    });
+    const item = createRasterItem("same-source");
+    const first = await h.viewer.stage(item, { key: "local:view:first", visible: true, opacity: 1 });
+    const second = await h.viewer.stage(item, { key: "local:view:second", visible: true, opacity: 0.5 });
+    const appearances = [categoricalAppearance(), {
+        mode: "categorical", categories: [{value: 7, label: "Seven", color: "#0000ff", opacity: 1}],
+        unmapped: {color: "#808080", opacity: 0},
+    }];
+    for (const [index, staged] of [first, second].entries()) {
+        const {record} = staged;
+        record.adapter.applySavedState(record, {
+            ...record.adapter.exportSavedState(record), mode: "categorical", categorical: appearances[index],
+        });
+    }
+    h.mapLayers.commitStaged([first, second], { fitToBounds: false });
+    await flushPromises();
+
+    assert.equal(first.record.state.item, second.record.state.item);
+    assert.notEqual(first.record.state.analysis, second.record.state.analysis);
+    for (const [index, staged] of [first, second].entries()) {
+        const codes = appearances[index].categories.map(row => row.value).sort((a, b) => a - b);
+        assert.ok(requestedCodes.some(requested => JSON.stringify([...requested].sort((a, b) => a - b)) === JSON.stringify(codes)));
+        assert.deepEqual(staged.record.state.analysis.wholeRasterStatistics.categoricalDistribution.categoryValues, codes);
+        assert.deepEqual(staged.record.adapter.exportSavedState(staged.record).categorical, appearances[index]);
+    }
+    h.mapLayers.removeKey(first.key);
+    assert.equal(h.mapLayers.findLayerKey(item), second.key);
+    assert.equal(h.mapLayers.isAttached(second.key), true);
+    assert.deepEqual(second.record.adapter.exportSavedState(second.record).categorical, appearances[1]);
+    h.destroy();
+});
+
 test("categorical editor commits exact tables to both rendering boundaries and preserves both modes", async () => {
     const h = visibleLayerFixture();
     await h.viewer.show(createRasterItem("categorical-modes"));

@@ -44,6 +44,24 @@ test("new layers are inserted in top-first drawing order", () => {
   );
 });
 
+test("Catalog membership follows source identity while each view keeps its own key and order", () => {
+  const stack = new MapLayerStack();
+  const item = catalogItem("collection", "source");
+  const first = stack.add(item, "First view").entry;
+  const second = stack.add(item, "Second view", undefined, "local:view:second").entry;
+  stack.addLocal("local:drawing:one", "Drawing");
+
+  assert.equal(stack.findLayerKey({...item}), second.key);
+  assert.equal(stack.hasItem(item), true);
+  stack.moveTo(first.key, 0);
+  assert.equal(stack.findLayerKey(item), first.key);
+  stack.remove(first.key);
+  assert.equal(stack.findLayerKey(item), second.key);
+  stack.remove(second.key);
+  assert.equal(stack.findLayerKey(item), null);
+  assert.equal(stack.hasItem(item), false);
+});
+
 test("retained map layers may all be visible", () => {
   const stack = new MapLayerStack();
   const first = stack.add(catalogItem("collection", "first"), "first.tif").entry;

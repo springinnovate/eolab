@@ -662,7 +662,7 @@ async function initializeCatalog(
         show: item => catalogVisualization.show(item),
         remove: item => catalogVisualization.remove(item, true),
         getBounds: getCatalogItemMapBounds,
-        openStyle: (key, item) => layerStyleEditor.open(rasterVisualization.temporalLayerKey(item) ?? key),
+        openStyle: (_key, item) => layerStyleEditor.open(rasterVisualization.temporalLayerKey(item) ?? mapLayerController.findLayerKey(item)),
         zoomToBounds: bounds => leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 }),
         onPrepared: (item, visualization) => {
             if (!catalogItemsMatch(catalogState.selectedItem, item)) return;

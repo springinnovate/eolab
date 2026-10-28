@@ -743,6 +743,48 @@ function undoFixture() {
     return Object.assign(fixture, { controller, view, adapter });
 }
 
+test("same-source views retain independent presentation and Undo restores the exact removed view", async () => {
+    const { controller, adapter } = undoFixture();
+    const item = catalogItem("shared-source");
+    let publications = 0;
+    adapter.publish = async () => { publications++; return { id: item.id }; };
+    const first = await controller.stage(item, adapter, { customName: "First view" });
+    const second = await controller.stage(item, adapter, {
+        key: "local:view:second", customName: "Second view", visible: false, opacity: 0.4,
+    });
+    first.record.state.color = "red";
+    second.record.state.color = "blue";
+    controller.commitStaged([second, first], { fitToBounds: false });
+
+    assert.deepEqual(controller.snapshots().map(layer => layer.key), [second.key, first.key]);
+    assert.notEqual(second.record.state, first.record.state);
+    assert.equal(controller.getLeafletLayer(second.key).opacity, 0.4);
+    assert.equal(controller.isAttached(second.key), false);
+    controller.renameLayer(second.key, "Blue view");
+    assert.equal(first.record.entry.label, "First view");
+    await controller.show({...item}, adapter);
+    assert.equal(controller.activeKey, second.key);
+    assert.equal(publications, 2, "selecting a retained source does not republish it");
+
+    controller.removeWithUndo(second.key);
+    assert.equal(controller.contains(item), true);
+    assert.equal(controller.findLayerKey(item), first.key);
+    await controller.undoLayerRemoval();
+    const restored = controller.getRecord(second.key);
+    assert.equal(restored.entry.label, "Blue view");
+    assert.equal(restored.entry.visible, false);
+    assert.equal(restored.entry.opacity, 0.4);
+    assert.equal(restored.state.color, "blue");
+    assert.equal(controller.getRecord(first.key), first.record);
+    assert.equal(first.record.state.color, "red");
+    controller.remove(item);
+    assert.equal(controller.getRecord(second.key), null);
+    assert.equal(controller.contains(item), true);
+    controller.remove(item);
+    assert.equal(controller.contains(item), false);
+    controller.destroy();
+});
+
 test("Undo restores the last removed layer's order, visibility, opacity and appearance without activating it", async () => {
     const { controller, view, adapter } = undoFixture();
     for (const id of ["a", "b", "c"]) await controller.show(catalogItem(id), adapter);
