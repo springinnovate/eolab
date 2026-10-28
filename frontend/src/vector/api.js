@@ -1,9 +1,59 @@
-/** Publish, style and filter catalog vectors and this browser's uploaded polygons. */
+/** Request vector metadata, publication, styles and filters using source identities. */
 
 import {
     normalizeVectorCategorySummary,
     normalizeVectorNumericClassification,
 } from "./style.js";
+
+/**
+ * Path-free identity supplied by vector source selection.
+ * @typedef {{collectionId:string,itemId:string}|{uploadId:string}} VectorFieldValueSource
+ */
+
+/**
+ * Read one page of prepared string values without opening the original source.
+ * Upload requests use the current browser's private ownership cookie. Nulls are
+ * excluded by the endpoint; empty strings and whitespace are preserved exactly.
+ * @param {VectorFieldValueSource} source Catalog identity or owned upload ID.
+ * @param {{field:string,search:string,offset:number}} query Field and matching page.
+ * @param {AbortSignal} signal Cancellation when the editor or query changes.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
+ * @return {Promise<{field:string,values:string[],nextOffset:number|null}>} Up to 50 exact values.
+ * @throws {Error} If the request fails, values are unavailable or the response is invalid.
+ * @throws {DOMException} If the request is aborted.
+ */
+export async function getVectorFieldValues(source, query, signal, fetchImplementation = globalThis.fetch) {
+    const page = { field: query.field, search: query.search, offset: query.offset, limit: 50 };
+    const uploaded = "uploadId" in source;
+    const url = uploaded
+        ? `/api/vector-uploads/${encodeURIComponent(source.uploadId)}/field-values?${new URLSearchParams(page)}`
+        : "/api/catalog/vector-field-values";
+    let response;
+    try {
+        response = await fetchImplementation(url, {
+            method: uploaded ? "GET" : "POST", signal, credentials: "same-origin", cache: "no-store",
+            headers: { Accept: "application/json", ...(!uploaded ? { "Content-Type": "application/json" } : {}) },
+            ...(!uploaded ? { body: JSON.stringify({ collectionId: source.collectionId, itemId: source.itemId, ...page }) } : {}),
+        });
+    } catch (error) {
+        if (error.name === "AbortError") throw error;
+        throw new Error("Could not load available values. Check your connection and try again.");
+    }
+    if (!response.ok) {
+        if (uploaded && response.status === 404) {
+            throw new Error("This private upload is unavailable. Open it in the browser that uploaded it, or upload it again.");
+        }
+        throw await vectorRenderingError(response, "available values");
+    }
+    const result = await response.json().catch(() => null);
+    if (result?.field !== query.field || !Array.isArray(result.values) || result.values.length > page.limit ||
+        result.values.some(value => typeof value !== "string") ||
+        !(result.nextOffset === null || (Number.isSafeInteger(result.nextOffset) && result.values.length > 0 &&
+            result.nextOffset === query.offset + result.values.length))) {
+        throw new Error("Available values returned an invalid response. Try again.");
+    }
+    return result;
+}
 
 /**
  * Admitted upload metadata tagged for the ordinary vector rendering pipeline.

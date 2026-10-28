@@ -1066,6 +1066,7 @@ async function initializeCatalog(
             return {
                 key, label: record.entry.label,
                 fields: record.adapter.describeSource(record).fields,
+                source: record.adapter.describeSource(record).source,
                 ...record.adapter.describeFilter(record),
                 apply: (candidate) => record.adapter.applyFilterState(record, candidate),
                 cancelPending: () => record.adapter.cancelPendingFilter(record),
@@ -1151,7 +1152,8 @@ async function initializeCatalog(
          */
         editVectorFilter: request => {
             modelFilterControls?.destroy();
-            const target = {key: request.key, label: request.source.label, fields: request.source.fields ?? [], filter: request.filter};
+            const target = {key: request.key, label: request.source.label, source: request.source,
+                fields: request.source.fields ?? [], filter: request.filter};
             modelFilterControls = new VectorFilterControls({host: request.host, inspection: mapInspection,
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
             modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
