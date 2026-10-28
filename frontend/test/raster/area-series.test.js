@@ -91,28 +91,6 @@ function stackOpeners(h, area = null) {
     return callbacks;
 }
 
-test("Plot this area replaces the retained whole-raster scope with the selected custom polygons", async () => {
-    const h = fixture(); h.controller.chooseArea("whole");
-    const polygons = { kind: "polygonArea", polygonArea: { id: "a".repeat(32), sha256: "b".repeat(64) } };
-    h.controller.setArea(polygons, "Custom polygons · 2 of 2 features");
-    stackOpeners(h, polygons).get("#open-raster-series-summary")(); await h.tick();
-    assert.equal(h.view.state.area.areaChoice, "selection");
-    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent.area), [polygons, polygons]);
-    assert.equal(h.view.state.area.areaLabel, "Custom polygons · 2 of 2 features");
-    h.close();
-});
-
-test("explicit Statistics areas override retained scope for catalog selections, map boxes and whole rasters", async () => {
-    for (const area of [{ kind: "catalogSelection", catalogSelection: CATALOG_SELECTION }, box(10), { kind: "wholeRaster" }]) {
-        const h = fixture(); h.controller.chooseArea(area.kind === "wholeRaster" ? "selection" : "whole");
-        h.controller.setArea(area, "Accepted area");
-        stackOpeners(h, area).get("#open-raster-series-summary")(); await h.tick();
-        assert.equal(h.view.state.area.areaChoice, area.kind === "wholeRaster" ? "whole" : "selection");
-        assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, intent]) => intent.area), [area, area]);
-        h.close();
-    }
-});
-
 test("normal stack openers preserve a deliberate whole-raster choice through background area changes", async () => {
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
         const h = fixture(); h.controller.chooseArea("whole"); h.controller.setArea(box(10), "Background map selection");
@@ -123,27 +101,40 @@ test("normal stack openers preserve a deliberate whole-raster choice through bac
     }
 });
 
-test("Plot this area with a cleared selection cannot silently calculate whole rasters", async () => {
-    const h = fixture(); h.controller.chooseArea("whole"); h.controller.setArea(null, "");
-    stackOpeners(h).get("#open-raster-series-summary")(); await h.tick();
-    assert.equal(h.view.state.area.areaChoice, "selection");
-    assert.equal(h.view.state.area.area, null);
-    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 0);
-    assert.match(h.view.state.message, /Choose an area|click the map/); h.close();
+test("layer and histogram actions select one hidden source and preserve the requested area", async () => {
+    const h = fixture(); h.view.actions.onAutomatic(false);
+    const selected = {collectionId: "catalog", itemId: "hidden", label: "Hidden raster"};
+    h.controller.chooseArea("whole");
+    h.controller.selectSource(selected); await h.open(); h.view.actions.onCalculate(); await flush();
+    const first = h.requests.find(([kind]) => kind === "submit")[1];
+    assert.deepEqual(first.source, selected); assert.deepEqual(first.area, {kind: "wholeRaster"});
+    h.controller.selectSource(selected, box(10)); await flush();
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 1);
+    await h.finish("cancelled"); h.view.actions.onCalculate(); await flush();
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").at(-1)[1].area, box(10));
+    assert.equal(h.view.state.area.sources.length, 1);
+    h.close();
 });
 
-test("Plot this area cancels whole-raster work and cannot mix its late results with polygon statistics", async () => {
-    const h = fixture(); h.controller.chooseArea("whole"); await h.open();
-    const polygons = { kind: "polygonArea", polygonArea: { id: "a".repeat(32), sha256: "b".repeat(64) } };
-    h.controller.setArea(polygons, "Custom polygons"); stackOpeners(h, polygons).get("#open-raster-series-summary")();
-    await h.tick();
-    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
-    await h.finish("ready", false, "1"); await h.finish("ready", false, "2");
-    assert.ok(h.view.state.rows.every(row => row.state === "waiting"));
-    assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").slice(2).map(([, intent]) => intent.area), [polygons, polygons]);
-    await h.finish(); await h.finish();
-    assert.equal(h.area.complete, true); assert.ok(h.view.state.rows.every(row => row.state === "value"));
-    assert.match(h.controller.exportCsv(), /polygonArea/); assert.doesNotMatch(h.controller.exportCsv(), /wholeRaster/); h.close();
+test("reviewed catalog, upload and drawing polygons use the same calculations and invalidate hidden work", async () => {
+    for (const info of [{selection: CATALOG_SELECTION},
+        {selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter}},
+        {polygonArea: {id: "a".repeat(32), sha256: "b".repeat(64)}}]) {
+        const h = fixture(); h.view.actions.onAutomatic(false); await h.open();
+        h.controller.setVectorSelectionState({analysis: true, phase: "reading"});
+        assert.equal(h.view.state.area.area, null);
+        h.controller.setVectorSamplingArea({...info, label: "Reviewed polygons"});
+        h.view.actions.onCalculate(); await flush();
+        const expected = info.polygonArea ? {kind: "polygonArea", polygonArea: info.polygonArea}
+            : {kind: "catalogSelection", catalogSelection: info.selection};
+        assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, request]) => request.area), [expected, expected]);
+        h.controller.updateSamplingForPanelVisibility(false);
+        h.controller.invalidateArea(expected); await flush();
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+        await h.finish(); await h.finish();
+        assert.equal(h.area.results.size, 0, "late obsolete polygon results are discarded");
+        h.close();
+    }
 });
 
 test("standard deviation submits the population formula per raster and retains results in series CSV", async () => {
@@ -493,36 +484,15 @@ test("per-raster failure leaves a gap and proceeds to the next raster",async()=>
     assert.match(h.controller.exportCsv(),/Raster unavailable/);h.close();
 });
 
-test("summary and series submit independently without receiving each other's results",async()=>{
-    const h=fixture();const snapshots=[];
-    const summary=h.calculationRequests.createClient("summary",state=>{snapshots.push(state);if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
-    await h.open();
-    summary.submit({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
-    await flush();
-    assert.equal(h.server.size,3,"all three submissions precede any result");
-    await h.finish("ready",false,"summary");
-    assert.ok(snapshots.every(state=>!state.completedJob||state.completedJob.sources.a.itemId==="summary"));
-    assert.equal(h.area.results.size,0);
-    await h.finish("ready",false,"2");
-    assert.deepEqual(h.view.state.rows.map(row=>row.state),["waiting","value"]);
-    await h.finish();assert.equal(h.area.complete,true);h.close();
-});
-
-
-
-test("uncertain submissions keep the original key and cannot leak into summary recovery",async()=>{
+test("uncertain submissions recover with their original key",async()=>{
     const h=fixture();const submit=h.api.submitCalculation;let lost=true;
     h.api.submitCalculation=async input=>{const job=await submit(input);if(lost){lost=false;throw Error("Connection lost");}return job;};
     await h.open();
     assert.equal(h.area.needsRecovery,true);
     const saved=h.storage.forClient("raster-series:0").read();
-    assert.equal(saved.context.client,"raster-series");
-    const observed=[];
-    h.calculationRequests.createClient("summary",state=>observed.push(state));
     await h.area.retryInterruptedCalculations();await flush();
     const submissions=h.requests.filter(([kind])=>kind==="submit");
     assert.equal(submissions.length,3);assert.deepEqual(submissions[0][1],submissions[2][1]);
-    assert.ok(observed.every(state=>!state.unfinishedCalculation));
     await h.finish();await h.finish();
     assert.equal(h.area.complete,true);
     assert.equal(h.area.results.size,2);
@@ -530,14 +500,12 @@ test("uncertain submissions keep the original key and cannot leak into summary r
     h.close();
 });
 
-test("reload cancels every saved series job without restarting the stack or summary",async()=>{
+test("reload cancels every automatic request without resubmitting",async()=>{
     const h=fixture();await h.open();
     const originals=[...h.server.values()];h.close();
     const recovered=fixture({},h.data);
     for(const job of originals)recovered.server.set(job.jobId,job);
-    const summary=recovered.calculationRequests.createClient("summary",()=>{});
-    assert.equal(summary.snapshot.unfinishedCalculation,null);
-    await recovered.area.recoverAndCancelPreviousSeriesCalculations();await flush();
+    await recovered.area.start();await flush();
     assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,2);
     await recovered.finish("cancelled");await recovered.finish("cancelled");
     assert.equal(recovered.requests.filter(([kind])=>kind==="submit").length,0);
@@ -622,17 +590,6 @@ test("closing and reopening a completed area plot preserves its result and compl
     h.controller.updateSamplingForPanelVisibility(false);h.controller.updateSamplingForPanelVisibility(true);await h.tick();
     assert.match(h.view.state.message,/Raster series complete/);
     assert.equal(h.requests.length,count);h.close();
-});
-
-test("one queued caller can replace and cancel its request without cancelling its peer",async()=>{
-    const h=fixture();await h.open();
-    const summary=h.calculationRequests.createClient("summary",()=>{});
-    const intent={source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Sum",expression:"sum(a)"}]};
-    summary.submit(intent);summary.submit({...intent,area:box(10)});summary.stop();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
-    await h.finish();await h.finish();
-    assert.equal([...h.server.values()].find(job=>job.sources.a.itemId==="summary").status,"cancelling");
-    assert.equal(h.area.complete,true);h.close();
 });
 
 test("all statistics keep identities and raster positions through out-of-order results and new areas",async()=>{
@@ -739,7 +696,7 @@ test("reload recovers and cancels all 64 independent submissions",async()=>{
     h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i))));
     await h.open();h.close();
     const recovered=fixture(h.api,h.data);
-    await recovered.area.recoverAndCancelPreviousSeriesCalculations();await flush();
+    await recovered.area.start();await flush();
     assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,64);
     assert.ok([...h.server.values()].every(job=>job.status==="cancelling"));
     recovered.close();
@@ -749,16 +706,13 @@ test("reload recovers and cancels all 64 independent submissions",async()=>{
 
 
 
-test("cancelling a series leaves concurrent summary and clip jobs running",async()=>{
+test("cancelling a series leaves concurrent clip jobs running",async()=>{
     const h=fixture();
-    const summary=h.calculationRequests.createClient("summary",state=>{if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
-    summary.submit({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
     const clip={jobId:"c".repeat(32),operation:"raster.clip.v1",status:"running",sources:{a:{itemId:"clip"}}};
     h.server.set(clip.jobId,clip);h.jobs.accept(clip);
     await h.open();h.area.cancelRemainingRasters();await flush();
     const cancelled=h.requests.filter(([kind])=>kind==="cancel").map(([,id])=>h.server.get(id).sources.a.itemId);
     assert.deepEqual(cancelled.sort(),["1","2"]);
-    assert.equal([...h.server.values()].find(job=>job.sources.a.itemId==="summary").status,"running");
     assert.equal(h.server.get(clip.jobId).status,"running");h.close();
 });
 
@@ -785,7 +739,7 @@ test("reload recovers multiple lost submissions with original keys before cancel
     const oldJobs=[...h.server];h.close();
     const restored=fixture({},h.data);
     for(const [id,job]of oldJobs)restored.server.set(id,job);
-    await restored.area.recoverAndCancelPreviousSeriesCalculations();await flush();
+    await restored.area.start();await flush();
     assert.deepEqual(restored.requests.filter(([kind])=>kind==="submit").map(([,input])=>input),originals);
     assert.equal(restored.server.size,2);
     assert.equal(restored.requests.filter(([kind])=>kind==="cancel").length,2);

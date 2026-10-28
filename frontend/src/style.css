@@ -4121,7 +4121,6 @@ article.raster-histogram-summary {
 #map-histogram-panel,
 #raster-series,
 #annotations-panel,
-#calculations-panel,
 #models-panel,
 #raster-clips-panel,
 #layer-style-editor,
@@ -4143,14 +4142,11 @@ article.raster-histogram-summary {
 }
 
 #map-inspection:not(:popover-open),
-#open-calculations[hidden],
-#open-calculations-dock[hidden],
 #map-tools-more-summary[hidden],
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
 #annotations-panel[hidden],
-#calculations-panel[hidden],
 #models-panel[hidden],
 #raster-clips-panel[hidden],
 #layer-style-editor[hidden],
@@ -4164,7 +4160,6 @@ article.raster-histogram-summary {
 #map-histogram-panel:not([data-map-inspection-active="true"]),
 #raster-series:not([data-map-inspection-active="true"]),
 #annotations-panel:not([data-map-inspection-active="true"]),
-#calculations-panel:not([data-map-inspection-active="true"]),
 #models-panel:not([data-map-inspection-active="true"]),
 #raster-clips-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
@@ -5116,11 +5111,6 @@ summary:hover > .raster-disclosure-chevron {
 .download-job progress { width: 100%; }
 #raster-clips-message:empty, #raster-clips-job-message:empty { display: none; }
 /* Summary controls, saved results and passive activity on the sampling rectangle. */
-#calculations-panel { padding: 0.75rem; overflow-wrap: anywhere; }
-#calculations-panel p { font-size: 0.85rem; line-height: 1.45; }
-#calculations-panel summary { cursor: pointer; font-weight: 600; }
-#calculations-panel select, #calculations-panel textarea,
-#calculations-panel input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 7px 8px; background: var(--surface-2); color: var(--text-1); }
 .calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
 .calculation-functions li { margin: 0.55rem 0; }
 .calculation-functions code { overflow-wrap: anywhere; }

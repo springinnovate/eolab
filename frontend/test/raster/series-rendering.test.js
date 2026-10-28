@@ -10,7 +10,7 @@ import { RasterSeriesPlotsView } from "../../src/raster/series-plots-view.js";
  */
 function fixture() {
     const document = new FakeRasterControlDocument();
-    for (const id of ["order", "direction"]) {
+    for (const id of ["order", "direction", "automatic"]) {
         const label = document.createElement("label");
         label.append(document.querySelector("#raster-series-" + id));
     }
@@ -43,7 +43,7 @@ function controlsFixture() {
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
-            complete: false, recoverable: false } };
+            complete: false, recoverable: false, automatic: true } };
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
@@ -140,7 +140,7 @@ test("changed controls remain current without overwriting a focused formula edit
     assert.equal(h.view.root.getAttribute("aria-busy"), "false");
     assert.equal(h.view.download.disabled, false);
     assert.equal(h.document.querySelector("#raster-series-calculate").hidden, true);
-    assert.equal(h.document.querySelector("#raster-series-cancel").hidden, true);
+    assert.equal(h.document.querySelector("#raster-series-cancel").hidden, false);
     assert.equal(h.document.querySelector("#raster-series-recover").hidden, false);
     h.document.activeElement = null; h.draw();
     assert.equal(expression.value, "mean(a)", "unfocused inputs reflect the supplied state");

@@ -78,7 +78,7 @@ test("owned temporal CSV keeps exact values, UTC gaps, formula text and error st
     await assert.rejects(expired.readTemporalStackRows(completed), /unavailable or has expired/);
 });
 
-test("reload recovers a lost temporal model response with the same request and cancels that job", async () => {
+test("reload recovers a lost temporal model response with the same request and continues that job", async () => {
     const saved = new Map(), submissions = [], cancelled = [];
     const storage = {get length() {return saved.size;}, key: index => [...saved.keys()][index],
         getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key)};
@@ -101,19 +101,20 @@ test("reload recovers a lost temporal model response with the same request and c
     const requests = new CalculationRequests({api, jobs, storage: new CalculationSessionStorage(storage),
         requestId: () => "request-" + "2".repeat(24)});
     const client = requests.createClient("raster-series:0", () => {});
-    client.submit(intent(), {automatic: false, client: "raster-series"});
+    client.submit({...intent(), calculations: [{label: "stat-1", expression: "mean(a)"}]},
+        {automatic: false, presentation: {key: "temporal", names: ["Mean"]}});
     for (let tick = 0; tick < 80; tick++) await Promise.resolve();
     assert.equal(client.snapshot.recoverable, true);
     requests.destroy(); jobs.destroy();
     const reloadedJobs = new ProcessingJobs(api, clock);
     const reloadedRequests = new CalculationRequests({api, jobs: reloadedJobs, storage: new CalculationSessionStorage(storage)});
     const reloaded = new RasterSeriesCalculations({requests: reloadedRequests, api, clock});
-    await reloaded.recoverAndCancelPreviousSeriesCalculations();
+    await reloaded.start();
     for (let tick = 0; tick < 80; tick++) await Promise.resolve();
     assert.equal(submissions.length, 2);
     assert.deepEqual(submissions[1], submissions[0]);
-    assert.equal(cancelled.length, 1);
-    assert.equal(accepted.status, "cancelled");
-    assert.equal(saved.size, 0);
+    assert.equal(cancelled.length, 0);
+    assert.equal(accepted.status, "running");
+    assert.equal(saved.size, 1);
     reloaded.destroy(); reloadedRequests.destroy(); reloadedJobs.destroy();
 });

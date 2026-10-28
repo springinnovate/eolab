@@ -1,5 +1,6 @@
 /** Plot Processing formulas across original raster sources. */
-import { rasterSourceReference } from "../raster-source.js";
+import { rasterSourceReference, rasterSourceKey } from "../raster-source.js";
+import { vectorSelectionsEqual } from "../selected-area.js";
 import { isCanonicalWgs84Position } from "./geometry.js";
 import { getTemporalMonthBoundaries, temporalPeriodError } from "../temporal-period.js";
 import { csvParse, csvFormat } from "d3";
@@ -12,6 +13,11 @@ const SERIES_STATISTICS = Object.freeze({
     max: { label: "Maximum", expression: "max(a)" },
     sum: { label: "Sum", expression: "sum(a)" },
     area: { label: "Area above zero", expression: "areaha(a > 0)" },
+    count: { label: "Count above 10", expression: "count(a > 10)" },
+    "area-threshold": { label: "Area above 10", expression: "areaha(a > 10)" },
+    "area-class": { label: "Area in class 4", expression: "areaha(a == 4)" },
+    percent: { label: "Percent above 10", expression: "100 * count(a > 10) / count(a)" },
+    range: { label: "Range", expression: "max(a) - min(a)" },
     custom: { label: "Custom", expression: "" },
 });
 
@@ -56,6 +62,8 @@ export class RasterSeriesController {
         this.statisticDisplay = new Map([[1, { plotId: 1, visible: true, styleIndex: 0 }]]);
         this.selectedArea = null;
         this.selectedAreaLabel = "";
+        this.vectorArea = null;
+        this.vectorAreaLabel = "";
         this.sources = [];
         this.selectedKeys = new Set();
         /** @type {Map<string, boolean>} Explicit checklist choices for retained rasters. */
@@ -146,10 +154,74 @@ export class RasterSeriesController {
         this.areaStatistics.calculateRemainingRasters();
     }
 
+    /** Select one original raster for a layer or histogram action.
+     * @param {Object} source Labeled original-source descriptor, including hidden sources.
+     * @param {Object} [area] Explicit histogram area; omission retains the chosen scope.
+     * @return {void}
+     */
+    selectSource(source, area) {
+        const key = rasterSourceKey(source);
+        if (!this.sources.some(item => item.key === key)) this.sources.push({key, source, label: source.label});
+        this.sourceMode = "layers";
+        this.selectedKeys = new Set([key]);
+        this.selectionOverrides = new Map(this.sources.map(item => [item.key, item.key === key]));
+        if (area !== undefined) {
+            this.areaChoice = area?.kind === "wholeRaster" ? "whole" : "selection";
+            this.selectedArea = area;
+            this.selectedAreaLabel = "Selected histogram area";
+        }
+        this.updateAreaInputs();
+    }
+
+    /** Whether committed polygon edits should update this active calculation.
+     * @return {boolean} True only for automatic calculations using polygon controls.
+     */
+    get followsVectorChanges() { return this.active && this.areaStatistics.automatic && this.areaChoice === "vector"; }
+
+    /** Accept reviewed polygon features from the existing selection workflow.
+     * @param {Object} info Catalog selection or owned polygon-area reference and display label.
+     * @return {void}
+     */
+    setVectorSamplingArea(info) {
+        this.vectorArea = info.polygonArea ? {kind: "polygonArea", polygonArea: info.polygonArea}
+            : {kind: "catalogSelection", catalogSelection: info.selection};
+        this.vectorAreaLabel = info.label;
+        this.areaChoice = "vector";
+        this.updateAreaInputs();
+    }
+
+    /** Clear the previous polygon input while a new analysis selection awaits review.
+     * @param {{analysis:boolean,phase:string}} selection Public selection progress.
+     * @return {void}
+     */
+    setVectorSelectionState(selection) {
+        if (selection.analysis && ["reading", "selected"].includes(selection.phase)) {
+            this.vectorArea = null;
+            this.areaChoice = "vector";
+            this.updateAreaInputs();
+        }
+    }
+
+    /** Release a changed or removed polygon selection and cancel calculations that use it.
+     * @param {Object} area Catalog-selection or polygon-area descriptor being invalidated.
+     * @return {void}
+     */
+    invalidateArea(area) {
+        /** Compare the invalidated vector input with a captured calculation area.
+         * @param {Object|null} candidate Captured area. @return {boolean} Same selection identity.
+         */
+        const matches = candidate => area.kind === "polygonArea" ? candidate?.polygonArea?.id === area.polygonArea.id
+            : vectorSelectionsEqual(candidate?.catalogSelection, area.catalogSelection);
+        if (matches(this.vectorArea)) this.vectorArea = null;
+        if (matches(this.selectedArea)) this.selectedArea = null;
+        this.updateAreaInputs();
+    }
+
     /**
      * Update available rasters and reconcile their default selections.
      * Untouched sources follow map visibility; explicit checklist choices override
-     * that default until the source is removed. Hidden rasters remain selectable.
+     * that default. Explicit calculations retain their captured inputs through map
+     * changes; hidden rasters remain selectable.
      * @param {Object[]} sources Ordered map snapshots with original-source references.
      * @param {Object[]} [datasets=[]] Distinct temporal Catalog identities retained in Map layers.
      * @return {void}
@@ -171,7 +243,8 @@ export class RasterSeriesController {
         this.selectedKeys = new Set(sources.filter(source => this.selectionOverrides.get(source.key) ?? source.visible)
             .map(source => source.key));
         this.sources = sources.map(source => ({ ...source }));
-        this.updateAreaInputs();
+        if (this.areaStatistics.manual) this.render();
+        else this.updateAreaInputs();
     }
 
     /** Select one dataset without inheriting the observation displayed on the map.
@@ -300,20 +373,22 @@ export class RasterSeriesController {
 
     /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
     updateAreaInputs() {
+        const area = this.areaChoice === "whole" ? {kind: "wholeRaster"}
+            : this.areaChoice === "vector" ? this.vectorArea : this.selectedArea;
+        const label = this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel;
         if (this.sourceMode === "temporal") {
             const temporal = this.temporal;
             const source = this.temporalSelectionError() ? null : {collectionId: temporal.item.collection, itemId: temporal.item.id,
                 variable: temporal.variable, startTime: new Date(`${temporal.startTime}Z`).toISOString(), endTime: new Date(`${temporal.endTime}Z`).toISOString()};
-            this.areaStatistics.updateTemporalInputs(source, this.areaChoice === "whole" ? {kind: "wholeRaster"} : this.selectedArea,
-                this.selectedAreaLabel, this.formulas, this.position);
+            this.areaStatistics.updateTemporalInputs(source, area, label, this.formulas, this.position);
             return;
         }
         this.areaStatistics.updateCalculationInputs(this.sources.filter(source => this.selectedKeys.has(source.key)),
-            this.areaChoice === "whole" ? {kind:"wholeRaster"} : this.selectedArea, this.selectedAreaLabel, this.formulas, this.position);
+            area, label, this.formulas, this.position);
     }
 
-    /** Choose shared sampling or each raster's full extent.
-     * @param {"selection"|"whole"} choice Area source. @return {void}
+    /** Choose the map sampling area, reviewed polygons or each raster's full extent.
+     * @param {"selection"|"vector"|"whole"} choice Area source. @return {void}
      */
     chooseArea(choice) {
         if (this.areaChoice === choice) return;

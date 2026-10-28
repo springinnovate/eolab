@@ -77,7 +77,9 @@ test("a temporal request restores its period, formulas and result after reload w
     const job = [...h.server.values()][0];
     h.close();
     const restored = fixture(h);
-    await restored.controller.start();
+    const starting = restored.controller.start();
+    restored.controller.updateAvailableRasters([ORDINARY], [DATASET]);
+    await starting;
     assert.equal(restored.view.state.temporal.variable, "temperature");
     assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
     restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();

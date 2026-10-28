@@ -95,13 +95,13 @@ test("source metadata carries an optional target CRS through private transport a
 
 test("ordinary calculation, stack and clip recovery retain private identities without display data", () => {
     const labeled = labeledRasterSource(raster, "Coverage");
-    const intent = calculationIntent({source: labeled, area, calculations: [{label: "Total", expression: "sum(a)"}]});
+    const intent = calculationIntent({source: labeled, area, calculations: [{label: "stat-1", expression: "sum(a)"}]});
     assert.deepEqual(intent.source, {...source, label: "Coverage"});
     const data = new Map(); const storage = {getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key,value), removeItem: key => data.delete(key)};
     const clip = new PendingSubmissionStorage(storage);
     clip.write({source: labeled, area, requestId: "a".repeat(32), label: "Clip"}); assert.deepEqual(clip.read().source, labeled);
     const recovery = new CalculationSessionStorage(storage);
-    recovery.write({intent, jobId: "d".repeat(32), pending: null, cancelRequested: false, context: {automatic: true}});
+    recovery.write({intent, jobId: "d".repeat(32), pending: null, cancelRequested: false, context: {automatic: true, presentation: {key: "private", names: ["Total"]}}});
     assert.deepEqual(recovery.read().intent, intent);
     const stack = new RasterSeriesCalculations({requests: {}});
     stack.updateCalculationInputs([{key: rasterSourceKey(raster), ...raster}], area, "Sampling area", [{id:1,label:"Total",expression:"sum(a)"}]);

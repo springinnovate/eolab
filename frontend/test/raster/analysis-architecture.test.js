@@ -40,7 +40,7 @@ test("raster analysis remains independent from rendering implementations", async
 });
 
 test("statistics reuse Processing execution without importing raster-stack UI or rendering owners", async () => {
-    for (const moduleName of ["summary-statistics-controller.js", "raster-series-calculations.js"]) {
+    for (const moduleName of ["raster-series-calculations.js"]) {
         const source = await readFile(new URL(`../../src/processing/${moduleName}`, import.meta.url), "utf8");
         const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]);
         assert.equal(imports.find(path => path.startsWith("../raster/") || path.startsWith("../map-layers/") ||

@@ -600,7 +600,7 @@
                     aria-labelledby="raster-sampling-area-heading">
                     <strong id="raster-sampling-area-heading">Sampling area</strong>
                     <p id="raster-sample-window-description">
-                      Choose the area to sample. Statistics and Raster stack can also use each raster’s whole extent.
+                      Choose the area to sample. Summarize rasters can also use each raster’s whole extent.
                     </p>
                     <div class="raster-sampling-area-options" role="radiogroup"
                       aria-labelledby="raster-sampling-area-heading">
@@ -675,13 +675,12 @@
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Analysis</strong>
-          <button id="open-calculations" class="workspace-tool-action" type="button" aria-controls="calculations-panel">Raster statistics</button>
           <button id="open-analysis-tools" class="workspace-tool-action" type="button"
             aria-label="Inspect visible data at the map center">Inspect map center</button>
           <button id="open-models" class="workspace-tool-action" type="button" aria-controls="models-panel">Models</button>
           <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Model runs</button>
           <button id="open-raster-series" class="workspace-tool-action" type="button"
-            aria-controls="raster-series">Plot raster stack</button>
+            aria-controls="raster-series">Summarize rasters</button>
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Export</strong>
@@ -702,10 +701,8 @@
             <div class="map-inspection-raster-actions">
               <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
                 aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
-              <button id="open-calculations-dock" class="map-inspection-tab" type="button"
-                aria-controls="calculations-panel" aria-pressed="false">Statistics</button>
               <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
-                aria-controls="raster-series" aria-pressed="false">Raster stack</button>
+                aria-controls="raster-series" aria-pressed="false">Summarize rasters</button>
             </div>
             <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
@@ -781,17 +778,30 @@
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster stack</h2>
-              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster series">&times;</button>
+              <h2>Summarize rasters</h2>
+              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster summary">&times;</button>
             </header>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sampling area selected</p>
               <div class="raster-series-controls">
-                <label>Area <select id="raster-series-area"><option value="selection">Current sampling area</option><option value="whole">Whole raster</option></select></label>
+                <label>Area <select id="raster-series-area"><option value="selection">Map sampling area</option><option value="vector">Polygon layer</option><option value="whole">Whole raster</option></select></label>
                 <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
               </div>
             </div>
+            <section id="raster-series-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
+              <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+              <small data-vector-sampling="predicate"></small>
+              <div class="downloads-actions">
+                <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
+                <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
+                <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
+                <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
+              </div>
+              <p data-vector-sampling="status" role="status"></p>
+            </section>
             <div class="raster-series-run-controls">
+              <label class="raster-series-automatic"><input id="raster-series-automatic" type="checkbox" checked>Update automatically when inputs change</label>
+              <p>Choose Calculate to keep working after closing this panel or reloading this tab.</p>
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
                 <button id="raster-series-calculate" type="button">Calculate</button>
@@ -800,7 +810,7 @@
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
-            <nav class="raster-series-section-links" aria-label="Raster stack sections">
+            <nav class="raster-series-section-links" aria-label="Raster summary sections">
               <button id="raster-series-show-results" class="summary-text-button" type="button" aria-controls="raster-series-results">Results</button>
               <button id="raster-series-edit-statistics" class="summary-text-button" type="button" aria-controls="raster-series-statistics">Statistics</button>
               <button id="raster-series-edit-data" class="summary-text-button" type="button" aria-controls="raster-series-data-settings">Data and order</button>
@@ -821,7 +831,7 @@
             <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
               <div class="raster-series-statistics-header">
                 <h3 id="raster-series-statistics-title" tabindex="-1">Statistics</h3>
-                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
+                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom formula</option></select></label>
               </div>
               <div id="raster-series-formulas"></div>
             </section>
@@ -879,67 +889,6 @@
               <p>Local layers are saved on this device. Shared layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Export GeoJSON to keep a file. Map links include live shared layers, but not private polygons or editing credentials.</p>
               <p>GeoJSON imports polygon names and notes. EOLab exports also preserve contributor names and colors; other attributes and styles are ignored. Imported polygons become yours when you share them in a new layer.</p>
             </details>
-          </section>
-          <section id="calculations-panel" role="region" aria-labelledby="open-calculations-dock" hidden>
-            <div class="downloads-actions summary-panel-heading"><h2>Raster statistics</h2><button id="calculations-close" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster statistics">&times;</button></div>
-            <p class="map-analysis-purpose">Calculate values such as mean, totals and area across rasters. Each formula uses <code>a</code> for the raster in that result.</p>
-            <section class="summary-scope" aria-label="Sampling area">
-              <div class="summary-area-row"><label for="summary-source-mode">Rasters</label><select id="summary-source-mode"><option value="query">Enabled rasters in this area</option><option value="single">Choose raster for each statistic</option></select></div>
-              <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
-              <p id="calculations-area-description" class="summary-area-details"></p>
-              <div class="summary-scope-actions">
-                <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
-                <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
-              </div>
-            </section>
-            <section id="calculations-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
-              <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
-              <small data-vector-sampling="predicate"></small>
-              <div class="downloads-actions">
-                <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
-                <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
-                <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
-                <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
-              </div>
-              <p data-vector-sampling="status" role="status"></p>
-            </section>
-            <div id="calculations-rows"></div>
-            <div id="summary-undo" class="downloads-actions" hidden><span>Statistic removed.</span><button id="summary-undo-button" class="summary-text-button" type="button">Undo</button></div>
-            <div class="summary-add-row"><label class="visually-hidden" for="calculations-template">Add statistic</label><select id="calculations-template"><option value="">+ Add statistic</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="count">Count above a threshold</option><option value="sum">Sum</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom</option></select></div>
-              <details id="calculations-help"><summary>Formula reference</summary>
-                <p>Use <code>a</code> for the raster selected in that statistic. Presets are editable.</p>
-                <h4>Functions</h4>
-                <ul class="calculation-functions">
-                  <li><code>pixelValue(a)</code> — Native pixel at your last map click, independent of the selected area. No-data and outside coverage return no valid data.</li>
-                  <li><code>sum(a)</code> — Add pixel values. To add only values above 10, use <code>sum(a, where=a &gt; 10)</code>.</li>
-                  <li><code>areaha(a == 4)</code> — Ground area in hectares where the value is 4. For values above a threshold, use <code>areaha(a &gt; 10)</code>. Includes the fraction of each matching pixel inside your box or selected polygons.</li>
-                  <li><code>count(a)</code> — Number of valid pixels. Use <code>count(a &gt; 10)</code> to count matching pixels.</li>
-                  <li><code>mean(a)</code> — Average pixel value. For a selected group, use <code>mean(a, where=a &gt; 10)</code>.</li>
-                  <li><code>stdev(a)</code> — Population standard deviation of valid selected pixels. Use <code>stdev(a, where=a &gt; 10)</code> to filter. One pixel gives zero; no matching pixels gives no value.</li>
-                  <li><code>min(a)</code> — Smallest pixel value.</li>
-                  <li><code>max(a)</code> — Largest pixel value.</li>
-                </ul>
-                <p><code>sum</code>, <code>count</code>, <code>mean</code>, <code>stdev</code>, <code>min</code>, and <code>max</code> accept an optional <code>where=condition</code>. <code>areaha</code> takes one condition.</p>
-                <h4>Operators and combinations</h4>
-                <ul class="calculation-functions">
-                  <li>Arithmetic: <code>+ - * /</code>. Example range: <code>max(a) - min(a)</code>.</li>
-                  <li>Comparisons: <code>&lt; &lt;= &gt; &gt;= == !=</code>. Example class: <code>a == 4</code>.</li>
-                  <li>Conditions: <code>&amp;&amp;</code> (and), <code>||</code> (or), <code>!</code> (not). Example: <code>areaha(a &gt; 10 &amp;&amp; a &lt;= 20)</code>.</li>
-                  <li>Percentage of valid pixels: <code>100 * count(a &gt; 10) / count(a)</code>.</li>
-                  <li>Percentage of valid ground area: <code>100 * areaha(a &gt; 10) / areaha(a == a)</code>.</li>
-                </ul>
-                <p><code>sum(a &gt; 10)</code> counts matches; <code>sum(a, where=a &gt; 10)</code> adds their values. Functions cannot be nested inside other functions.</p>
-                <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including polygon holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
-                <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
-              </details>
-            <section id="summary-current-work" aria-label="Unfinished calculation" hidden>
-              <p id="summary-current-work-context"></p>
-              <div class="summary-status-row">
-                <span id="summary-current-work-status" role="status" aria-live="polite"></span>
-                <button id="summary-cancel-work" class="secondary-button" type="button">Cancel calculation</button>
-                <button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button>
-              </div>
-            </section>
           </section>
           <section id="raster-clips-panel" role="tabpanel" aria-labelledby="map-inspection-tab-raster-clips" hidden>
             <header class="map-histogram-toolbar">
@@ -1180,7 +1129,7 @@
             </header>
             <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
             <button id="open-raster-series-histogram" class="secondary-button" type="button"
-              aria-controls="raster-series">Plot raster stack</button>
+              aria-controls="raster-series">Summarize rasters</button>
             <section class="raster-point-samples" id="raster-point-samples"
               aria-labelledby="raster-point-samples-heading" aria-live="polite"
               aria-atomic="true" aria-busy="false" hidden>

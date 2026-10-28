@@ -41,7 +41,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} busy Whether calculations are running.
  * @property {"line"|"scatter"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,hasErrors:boolean,recoverable:boolean}} area Scope and execution availability supplied by the owner.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,hasErrors:boolean,recoverable:boolean,automatic:boolean}} area Scope and execution availability supplied by the owner.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {{id:number,scale:string}[]} plots Independent plot settings.
  * @property {boolean} showingPrevious Whether plots use retained results.
@@ -95,6 +95,7 @@ export class RasterSeriesView {
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
      * @param {(id:number,scale:string)=>void} actions.onPlotScale Change one Y scale.
      * @param {()=>void} actions.onCalculate Calculate remaining sources.
+     * @param {(automatic:boolean)=>void} actions.onAutomatic Choose automatic updates after input edits.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
      * @param {(mode:string)=>void} actions.onSourceMode Choose raster layers or a temporal dataset.
@@ -108,6 +109,7 @@ export class RasterSeriesView {
      */
     bind(actions) {
         this.actions = actions;
+        this.document.querySelector("#raster-series-automatic").addEventListener("change", event => actions.onAutomatic(event.target.checked));
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
         this.document.querySelector("#raster-series-source-mode").addEventListener("change", event => actions.onSourceMode(event.target.value));
         for (const [id, handler] of [["dataset", actions.onTemporalDataset], ["variable", actions.onTemporalVariable], ["month", actions.onTemporalMonth]]) {
@@ -383,6 +385,13 @@ export class RasterSeriesView {
         }
         const areaChoice = this.document.querySelector("#raster-series-area");
         if (areaChoice.value !== area.areaChoice) areaChoice.value = area.areaChoice;
+        const vector = this.document.querySelector("#raster-series-vector-area");
+        if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
+        const editArea = this.document.querySelector("#raster-series-edit-area");
+        if (editArea.hidden !== (area.areaChoice !== "selection")) editArea.hidden = area.areaChoice !== "selection";
+        const automatic = this.document.querySelector("#raster-series-automatic");
+        if (automatic.checked !== area.automatic) automatic.checked = area.automatic;
+        if (automatic.parentElement.hidden !== !!state.temporal) automatic.parentElement.hidden = !!state.temporal;
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
         const calculate = this.document.querySelector("#raster-series-calculate");
@@ -393,7 +402,8 @@ export class RasterSeriesView {
         if (calculate.hidden !== hideCalculate) calculate.hidden = hideCalculate;
         if (calculate.textContent !== "Calculate") calculate.textContent = "Calculate";
         const cancel = this.document.querySelector("#raster-series-cancel");
-        if (cancel.hidden !== !state.busy) cancel.hidden = !state.busy;
+        const hideCancel = !state.busy && !area.recoverable;
+        if (cancel.hidden !== hideCancel) cancel.hidden = hideCancel;
         const recover = this.document.querySelector("#raster-series-recover");
         if (recover.hidden !== !area.recoverable) recover.hidden = !area.recoverable;
     }

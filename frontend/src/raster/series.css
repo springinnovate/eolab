@@ -82,3 +82,12 @@
   .raster-series-formula { grid-template-columns: minmax(0, 1fr) auto auto 44px; }
   .raster-series-formula button { min-width: 44px; }
 }
+
+.summary-text-button { padding: 4px; border: 0; background: transparent; color: var(--brand); cursor: pointer; font: inherit; }
+.summary-vector-area { display: grid; gap: 8px; min-width: 0; margin: 0 0 12px; padding: 10px; border: 1px solid var(--border-1); border-radius: var(--radius); font-size: 0.8rem; }
+.summary-vector-area label { display: grid; gap: 4px; min-width: 0; }
+.summary-vector-area p { margin: 0; color: var(--text-2); }
+.summary-vector-area [data-vector-sampling="predicate"] { overflow-wrap: anywhere; }
+.raster-series-automatic { display: flex; align-items: center; gap: 6px; }
+.raster-series-automatic input { width: auto; margin: 0; }
+@media (pointer: coarse) { .summary-text-button, .raster-series-automatic { min-height: 44px; } .summary-text-button { min-width: 44px; } }

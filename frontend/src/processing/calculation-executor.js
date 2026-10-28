@@ -15,8 +15,6 @@ import { describeJobProgress } from "./presentation.js";
  * @property {Object|null} currentJob Job including prepared grid and estimates when available.
  * @property {Object|null} completedJob Last successful job.
  * @property {Object|null} completedCalculation Inputs for the last successful job.
- * @property {ReadonlyArray<Object>} jobs Summary history.
- * @property {string} historyError History retrieval error.
  */
 
 /** Preserve submission identity and cancellation across browser reloads. */
@@ -42,7 +40,7 @@ export class CalculationExecutor {
         requestId = () => crypto.randomUUID()}) {
         Object.assign(this, {api, jobs, storage, onChange, onActivity, requestId});
         this.#status = {phase: "idle", message: "", currentJob: null, completedJob: null,
-            completedCalculation: null, jobs: [], historyError: ""};
+            completedCalculation: null};
         this.#saved = storage.read();
         this.destroyed = false;
         this.unsubscribe = jobs.subscribe(() => this.#receiveJobs());
@@ -51,7 +49,7 @@ export class CalculationExecutor {
     /** Read progress and admission state together. @return {CalculationExecutionSnapshot} Current snapshot. */
     get snapshot() {
         const isIdle = !this.#saved && !this.#pending && !this.#advancing;
-        return Object.freeze({...this.#status, jobs: Object.freeze([...this.#status.jobs]), isIdle,
+        return Object.freeze({...this.#status, isIdle,
             admission: !isIdle ? "busy" : this.#retryRequired ? "retry" : "ready",
             recoverable: !!this.#saved && this.#retryRequired,
             unfinishedCalculation: this.#saved ? Object.freeze({calculation: this.#saved.intent,
@@ -68,22 +66,19 @@ export class CalculationExecutor {
     /** Retry using the original request key. @return {Promise<void>} Currently available lifecycle actions. */
     async retry() { this.#retryRequired = false; await this.#advance(); }
 
-    /** Forget an unsent replacement; stop() cancels accepted work. @return {void} */
-    discardPendingCalculation() { this.#pending = null; }
-
     /** Submit complete inputs; the worker prepares and executes without another browser instruction.
      * @param {Object} calculation Raster, selected area and named formulas.
-     * @param {Object|null} [context=null] Caller-owned recovery metadata.
+     * @param {{automatic:boolean,presentation:{key:string,names:string[]}}} context Source and formula names retained with the automatic/manual policy.
      * @return {void} Progress is delivered through onChange.
      * @throws {TypeError} If the calculation inputs violate the browser contract.
      */
-    submit(calculation, context = null) {
+    submit(calculation, context) {
         if (this.destroyed) return;
         const intent = calculationIntent(calculation);
         if (this.#retryRequired && this.#saved) return;
         if ([this.#pending, this.#saved].some(item => item && !item.cancelRequested &&
             JSON.stringify(item.intent) === JSON.stringify(intent))) return;
-        this.#pending = {intent, context: context && Object.freeze({...context})};
+        this.#pending = {intent, context: Object.freeze({...context})};
         this.#retryRequired = false;
         if (this.#saved) this.#cancelSaved();
         void this.#advance();
@@ -206,10 +201,8 @@ export class CalculationExecutor {
         }
     }
 
-    /** Apply job history and continue this caller's observed work. @return {void} */
+    /** Apply observed statuses and continue this caller's observed work. @return {void} */
     #receiveJobs() {
-        this.#status.jobs = this.jobs.jobs.filter(job => job.operation === "raster.aggregate.v1");
-        this.#status.historyError = this.jobs.error;
         if (this.#status.completedJob) this.#status.completedJob = this.jobs.jobs.find(job =>
             job.jobId === this.#status.completedJob.jobId) ?? this.#status.completedJob;
         if (this.#saved?.jobId) {
@@ -217,16 +210,6 @@ export class CalculationExecutor {
             else void this.#advance();
         }
         this.#notify();
-    }
-
-    /** Cancel or delete a job from history.
-     * @param {string} id Job ID. @param {"cancel"|"delete"} action Requested action.
-     * @return {Promise<void>} Completion or displayed failure.
-     */
-    async jobAction(id, action) {
-        if (id === this.#saved?.jobId && action === "cancel") { this.stop(); return; }
-        try { await this.jobs.action(id, action); }
-        catch (error) { this.#status.message = error.message; this.#notify(); }
     }
 
     /** Publish progress and working-area activity. @return {void} */

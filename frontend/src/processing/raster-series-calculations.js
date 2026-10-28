@@ -2,7 +2,7 @@
 import { labeledRasterSource, rasterSourceKey } from "../raster-source.js";
 import { calculationIntent, calculationPixelPoint } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
-import { describeJobProgress } from "./presentation.js";
+import { describeJobProgress, describeClipArea } from "./presentation.js";
 
 /** Identify calculation inputs independently of display names and raster order.
  * @param {Object[]} sources Selected original sources.
@@ -21,8 +21,8 @@ function calculationInputKey(sources, area, formulas, point, temporalSource) {
 /**
  * Calculate up to five formulas over selected rasters or a temporal interval.
  * Ordinary rasters use independent requests; a temporal interval uses one model run.
- * This controller keeps results, pauses for recovery, and
- * cancels obsolete work when the inputs change or its owning query is deactivated.
+ * Input changes cancel obsolete work. Automatic calculations stop when hidden;
+ * explicitly started calculations continue in the background and recover after reload.
  */
 export class RasterSeriesCalculations {
     /** Initialize independent multi-raster inputs, results and progress tracking.
@@ -33,12 +33,9 @@ export class RasterSeriesCalculations {
      * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
      * @param {import("./api.js").ProcessingApiClient} [options.api] Temporal model discovery and owned CSV reader.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
-     * @param {"raster-series"|"summary-query"} [options.clientName="raster-series"] Isolated recovery namespace.
-     * @throws {TypeError} If the recovery namespace is unsupported.
      */
-    constructor({ requests, api, clock = globalThis, clientName = "raster-series" }) {
-        if (!["raster-series", "summary-query"].includes(clientName)) throw new TypeError("Unsupported multi-raster calculation caller.");
-        Object.assign(this, { requests, api, clock, clientName });
+    constructor({ requests, api, clock = globalThis }) {
+        Object.assign(this, { requests, api, clock });
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -69,27 +66,13 @@ export class RasterSeriesCalculations {
      */
     setProgressListener(onChange) { this.onChange = onChange; }
 
-    /** Recover this namespace's calculations saved before reload and request cancellation.
-     * Call once during browser startup. The remaining raster list is not saved, so
-     * that old query must not resume automatically. If its submission response was
-     * lost, the executor recovers the job with the original request key before cancelling.
-     * @return {Promise<void>} Initial recovery attempt; cancellation may finish later
-     * through the shared job observer.
-     */
-    async recoverAndCancelPreviousSeriesCalculations() {
-        const clients = this.requests.savedClientNames().filter(name => name.startsWith(this.clientName + ":"))
-            .map(name => this.getOrCreateRasterExecutor(Number(name.split(":")[1])));
-        for (const client of clients) client.stop();
-        await Promise.all(clients.map(client => client.start()));
-    }
-
     /** Restore explicit requests and their finished peers; cancel automatic work after reload.
      * Inputs are restored synchronously before the first server lookup. The UI can
      * then display the captured sources, area and formulas while recovery proceeds.
      * @return {Promise<void>} Initial observation or recovery of saved requests.
      */
     async start() {
-        const clients = this.requests.savedClientNames().filter(name => name.startsWith(this.clientName + ":"))
+        const clients = this.requests.savedClientNames()
             .map(name => [Number(name.split(":")[1]), this.getOrCreateRasterExecutor(Number(name.split(":")[1]))]);
         const manual = clients.filter(([, client]) => {
             const saved = client.snapshot.unfinishedCalculation;
@@ -106,7 +89,7 @@ export class RasterSeriesCalculations {
                     return {key: saved.context.presentation.key, label: saved.calculation.source.label, source: saved.calculation.source};
                 });
             this.area = intent.area;
-            this.areaLabel = "Recovered calculation area";
+            this.areaLabel = describeClipArea(intent.area);
             this.pixelPoint = intent.pixelPoint ?? null;
             this.temporalMode = intent.kind === "temporal";
             this.temporalSource = this.temporalMode ? intent.source : undefined;
@@ -145,7 +128,7 @@ export class RasterSeriesCalculations {
      */
     getOrCreateRasterExecutor(index) {
         if (!this.clients.has(index)) {
-            const client = this.requests.createClient(this.clientName + ":" + index,
+            const client = this.requests.createClient("raster-series:" + index,
                 state => this.handleCalculationProgress(index, state));
             this.clients.set(index, client);
         }
@@ -161,7 +144,7 @@ export class RasterSeriesCalculations {
      * @param {Object|null} area Map box, filtered catalog selection, uploaded polygon reference,
      * whole-raster descriptor, or null when no area has been chosen.
      * @param {string} label Area description displayed beside the plot.
-     * @param {{id:number,label:string,expression:string,calculationLabel?:string}[]} formulas Formulas and optional immutable export labels.
+     * @param {{id:number,label:string,expression:string}[]} formulas Formulas with stable numeric identities.
      * @param {{longitude:number,latitude:number}|null} [pixelPoint=null] Exact committed map click for pixelValue formulas.
      * @param {Object|null} [temporalSource] Catalog interval; null retains temporal mode while inputs are incomplete.
      * @return {void}
@@ -295,7 +278,7 @@ export class RasterSeriesCalculations {
         }
         this.busy = this.dispatching = true;
         try {
-            const formulas = this.formulas.map(formula => ({ label: formula.calculationLabel ?? "stat-" + formula.id, expression: formula.expression.trim() }));
+            const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
             const firstCalculationInputs = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area,
                 calculations: formulas, pixelPoint: this.pixelPoint });
             // Record all identities before submission can synchronously notify listeners.
@@ -312,7 +295,7 @@ export class RasterSeriesCalculations {
             }
             for (const [client, request] of additions) {
                 if (version !== this.version || (!this.active && !this.manual)) return;
-                client.submit(request.calculationInputs, {automatic: !this.manual, client: this.clientName,
+                client.submit(request.calculationInputs, {automatic: !this.manual,
                     presentation: {key: request.key, names: this.formulas.map(formula => formula.label)}});
             }
             this.dispatching = false;
@@ -359,7 +342,7 @@ export class RasterSeriesCalculations {
             const client = this.getOrCreateRasterExecutor(0);
             this.pending.set(0, {key: "temporal", calculationInputs, submitted: true,
                 previousJobId: client.snapshot.completedJob?.jobId, phase: "submitting", message: "Submitting temporal calculation…"});
-            client.submit(calculationInputs, {automatic: false, client: this.clientName,
+            client.submit(calculationInputs, {automatic: false,
                 presentation: {key: "temporal", names: this.formulas.map(formula => formula.label)}});
             this.dispatching = false;
             this.updateSeriesProgress();

@@ -7,9 +7,9 @@ import { ProcessingApiClient } from "../../src/processing/api.js";
 /** @return {Object} Valid unfinished submission with a recoverable request key. */
 function record() {
     return {intent:{source:{collectionId:"catalog",itemId:"raster",label:"Raster"},
-        area:{kind:"wholeRaster"},calculations:[{label:"Sum",expression:"sum(a)"}]},
+        area:{kind:"wholeRaster"},calculations:[{label:"stat-1",expression:"sum(a)"}]},
     jobId:null,pending:{requestId:"request-original-1234"},
-    cancelRequested:false,context:{automatic:true}};
+    cancelRequested:false,context:{automatic:true,presentation:{key:"raster",names:["Sum"]}}};
 }
 
 /** @param {Map} [data=new Map()] Saved records. @return {Object} Browser storage double. */
@@ -20,33 +20,19 @@ function storage(data = new Map()) {
 
 test("independent records preserve each request key and clearing one cannot clear its peers",()=>{
     const data=new Map(), root=new CalculationSessionStorage(storage(data));
-    for(const name of ["summary","raster-series:0","raster-series:49"]) {
+    for(const name of ["raster-series:1","raster-series:0","raster-series:49"]) {
         root.forClient(name).write({...record(),pending:{requestId:"request-original-"+name.replace(":","-")}});
     }
     root.forClient("raster-series:0").clear();
-    assert.deepEqual(root.savedClientNames(),["summary","raster-series:49"]);
-    assert.equal(root.read().pending.requestId,"request-original-summary");
+    assert.deepEqual(root.savedClientNames(),["raster-series:1","raster-series:49"]);
+    assert.equal(root.forClient("raster-series:1").read().pending.requestId,"request-original-raster-series-1");
     assert.equal(root.forClient("raster-series:49").read().pending.requestId,"request-original-raster-series-49");
     root.forClient("raster-series:500").write(record());
-    assert.deepEqual(root.savedClientNames(),["summary","raster-series:49","raster-series:500"]);
+    assert.deepEqual(root.savedClientNames(),["raster-series:1","raster-series:49","raster-series:500"]);
     for (const name of ["raster-series:-1", "raster-series:01", "raster-series:9007199254740992"]) {
         assert.throws(()=>root.forClient(name),/Unsupported/);
     }
     assert.throws(()=>root.forClient("another-user"),/Unsupported/);
-});
-
-test("map-query recovery positions are isolated from fixed summary and raster stack records", () => {
-    const root = new CalculationSessionStorage(storage());
-    for (const client of ["summary", "raster-series:0", "summary-query:0", "summary-query:64"]) {
-        root.forClient(client).write({ ...record(), context: { automatic: true, client: client.split(":")[0] } });
-    }
-    assert.deepEqual(new Set(root.savedClientNames()), new Set(["summary", "raster-series:0", "summary-query:0", "summary-query:64"]));
-    root.forClient("summary-query:0").clear();
-    assert.ok(root.read()); assert.ok(root.forClient("raster-series:0").read());
-    assert.equal(root.forClient("summary-query:64").read().pending.requestId, "request-original-1234");
-    for (const client of ["summary-query:-1", "summary-query:01", "summary-query:9007199254740992", "summary-query:other"]) {
-        assert.throws(() => root.forClient(client), /Unsupported/);
-    }
 });
 
 for (const operation of ["clip", "calculation"]) {
@@ -80,18 +66,18 @@ for (const operation of ["clip", "calculation"]) {
 
 test("malformed and oversized records do not affect valid peer recovery",()=>{
     const data=new Map(), root=new CalculationSessionStorage(storage(data));
-    root.write(record());
+    root.forClient("raster-series:1").write(record());
     data.set("eolab.processing.calculation.v2.raster-series:0","{");
-    data.set("eolab.processing.calculation.v2.raster-series:1"," ".repeat(16385));
-    assert.deepEqual(root.savedClientNames(),["summary"]);
+    data.set("eolab.processing.calculation.v2.raster-series:2"," ".repeat(16385));
+    assert.deepEqual(root.savedClientNames(),["raster-series:1"]);
     assert.throws(()=>root.forClient("raster-series:2").write({...record(),extra:"x".repeat(16384)}),/too large/);
-    assert.deepEqual(root.savedClientNames(),["summary"]);
+    assert.deepEqual(root.savedClientNames(),["raster-series:1"]);
 });
 
 test("pixel clicks survive recovery immutably while area-only intent identity remains unchanged",()=>{
     const original=record(), point={longitude:-122.25,latitude:37.75};
     assert.equal(JSON.stringify(calculationIntent({...original.intent,pixelPoint:point})),JSON.stringify(calculationIntent(original.intent)));
-    const intent=calculationIntent({...original.intent,pixelPoint:point,calculations:[{label:"Pixel",expression:"pixelValue(a)"}]});
+    const intent=calculationIntent({...original.intent,pixelPoint:point,calculations:[{label:"stat-1",expression:"pixelValue(a)"}]});
     const root=new CalculationSessionStorage(storage());root.write({...original,intent});
     point.longitude=5;
     assert.deepEqual(root.read().intent.pixelPoint,{longitude:-122.25,latitude:37.75});
