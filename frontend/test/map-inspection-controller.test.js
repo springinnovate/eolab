@@ -32,7 +32,7 @@ function fixture(configureDocument = () => {}) {
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
-    histogram.append(close);
+    doc.querySelector("#map-inspection-raster-analysis").append(close);
     const calls = [];
     const presentationOrder = [];
     root.showPopover = () => { calls.push("show"); presentationOrder.push("dock-open"); };
@@ -483,6 +483,7 @@ test("Raster clips is transient while retained analysis results remain available
     const downloads = h.doc.querySelector("#raster-clips-panel");
     assert.equal(downloads.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.histogram.hidden, false);
+    assert.equal(h.histogram.contains(h.close), false, "the close action lives in the result header");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.equal(downloads.hidden, true);
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");

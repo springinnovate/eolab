@@ -419,6 +419,7 @@ export class VectorFeatureInspectorController {
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.panel.hidden || !(
                 this.panel.contains(this.document.activeElement) ||
+                this.document.activeElement === this.closeButton ||
                 this.document.activeElement === this.mapContainer
             )) {
                 return;

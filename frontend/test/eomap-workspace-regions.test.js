@@ -427,6 +427,13 @@ test("analysis destinations share one compact navigation above the selected resu
         assert.ok(control.source.includes(`>${caption}</button>`));
     }
     assert.ok(navigation.end < histogram.start);
+    for (const id of ["close-map-histogram", "close-raster-series", "close-vector-inspector"]) {
+        const close = requireElementRange(id);
+        assert.equal(countMarkupId(id), 1);
+        assert.ok(close.start > navigation.start && close.end < navigation.end, `${id} is in the common result header`);
+        assert.match(close.source, /analysis-result-close/);
+    }
+    assert.doesNotMatch(requireElementRange("raster-series").source, /About Raster statistics|map-histogram-toolbar/);
     assert.doesNotMatch(navigation.source, /<strong/);
     for (const removed of ["map-click-navigation", "map-click-summary", "map-click-feature", "open-raster-series-histogram", "map-histogram-heading"]) {
         assert.equal(countMarkupId(removed), 0);
@@ -463,7 +470,6 @@ test("histogram charts precede optional help, point details and mode controls", 
     assert.match(STYLESHEET, /details\[open\] > summary > \.raster-disclosure-chevron::before\s*\{[^}]*rotate\(45deg\)/s);
     assert.match(STYLESHEET, /\.raster-sampling-vector > summary\s*\{[^}]*display:\s*grid[^}]*cursor:\s*pointer/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
-    assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
     assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
     assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Inspect map center<\/button>/);
     assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);

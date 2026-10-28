@@ -603,13 +603,21 @@
           <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
           <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Analysis results">
-            <div class="map-inspection-raster-actions">
-              <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
-                aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
-              <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
-                aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
-              <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
-                aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-pressed="false" disabled>Features</button>
+            <div class="map-inspection-result-header">
+              <div class="map-inspection-raster-actions">
+                <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
+                  aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
+                <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
+                  aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
+                <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
+                  aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-pressed="false" disabled>Features</button>
+              </div>
+              <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+                aria-label="Close raster histograms">×</button>
+              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+                aria-label="Close raster statistics">&times;</button>
+              <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close analysis-result-close" type="button"
+                aria-label="Close feature inspector">×</button>
             </div>
             <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
             <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
@@ -671,10 +679,6 @@
             <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
-            <header class="map-histogram-toolbar">
-              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster statistics">&times;</button>
-            </header>
-            <details class="map-analysis-help"><summary>About Raster statistics</summary><p>Calculate statistics for a selected area. View values for one raster, or plot comparisons across rasters or dates.</p></details>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sampling area selected</p>
               <div class="raster-series-controls">
@@ -821,8 +825,6 @@
                   class="analysis-panel-action vector-feature-inspector-toggle"
                   type="button" aria-controls="vector-feature-inspector-details"
                   aria-expanded="true">Collapse</button>
-                <button id="close-vector-inspector" class="analysis-panel-action analysis-panel-close"
-                  type="button" aria-label="Close feature inspector">×</button>
               </div>
             </header>
             <p id="map-click-context" class="map-inspection-context"></p>
@@ -1017,8 +1019,6 @@
           </section>
           <section id="map-histogram-panel" role="region"
             aria-labelledby="map-click-histogram" hidden>
-            <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close histogram-close" type="button"
-              aria-label="Close raster histograms">×</button>
             <section id="map-histogram-overview" class="raster-histogram-overview"
               aria-label="Visible raster histograms">
               <p class="raster-histogram-empty" id="raster-histogram-empty">
