@@ -4,28 +4,33 @@ import {
     EMPTY_VECTOR_FILTER, MAX_VECTOR_FILTER_RULES, normalizeVectorFilter,
     vectorFilterFieldKind, vectorFilterOperators, vectorFilterSummary,
 } from "./filter.js";
+import { getVectorFieldValues } from "./api.js";
+import { VectorFilterValuePicker } from "./filter-value-picker.js";
 
 /** Own a rule-builder panel without reaching into style or inspection peers. */
 export class VectorFilterControls {
     /**
      * Bind a dedicated non-modal vector Filter panel.
      * @param {Object} options Panel dependencies.
-     * @param {(key:string)=>Object|null} options.getTarget Composition-owned target lookup.
+     * @param {(key:string)=>(Object & {source?:import("./api.js").VectorFieldValueSource})|null} options.getTarget Composition-owned target lookup; an immutable source identity enables prepared values.
      * @param {Object} options.inspection Neutral dock presentation.
      * @param {HTMLElement|null} [options.host=null] Inline container; keeps editing in the caller's panel.
      * @param {Document} [options.documentContext=document] Owning document.
      * @param {Function} [options.setTimer] Debounce scheduler.
      * @param {Function} [options.clearTimer] Debounce canceller.
+     * @param {typeof getVectorFieldValues} [options.loadValues=getVectorFieldValues] Prepared-value lookup; targets with a path-free source enable suggestions.
      */
     constructor({ getTarget, inspection, host = null, documentContext = document,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
-        clearTimer = (timer) => globalThis.clearTimeout(timer) }) {
+        clearTimer = (timer) => globalThis.clearTimeout(timer), loadValues = getVectorFieldValues }) {
         this.document = documentContext;
         this.getTarget = getTarget;
         this.inspection = inspection;
         this.setTimer = setTimer;
         this.clearTimer = clearTimer;
         this.host = host;
+        this.loadValues = loadValues;
+        this.valuePickers = [];
         const template = documentContext.querySelector("#vector-filter-panel");
         this.root = host ? template.cloneNode(true) : template;
         const controls = {title: "vector-filter-title", rules: "vector-filter-rules", enabled: "vector-filter-enabled",
@@ -137,6 +142,7 @@ export class VectorFilterControls {
     /** Save edits, release optional action preparation, hide the panel and restore focus. @return {void} */
     close() {
         if (this.key === null) return;
+        this.#clearValuePickers();
         this.#saveDraft();
         if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
         this.action?.onClose?.();
@@ -151,6 +157,7 @@ export class VectorFilterControls {
         this.destroyed = true;
         this.pendingAction?.cancel();
         this.#cancelTimer();
+        this.#clearValuePickers();
         this.generation++;
         for (const [element, type, listener] of this.listeners) element.removeEventListener(type, listener);
         this.listeners = [];
@@ -257,9 +264,18 @@ export class VectorFilterControls {
         this.#renderRules();
     }
 
+    /** Release suggestions when closing, replacing a source or rebuilding rules. @return {void} */
+    #clearValuePickers() {
+        for (const picker of this.valuePickers) picker.destroy();
+        this.valuePickers = [];
+    }
+
     /** Render accessible field/operator/value rows; input edits keep focus. @return {void} */
     #renderRules() {
-        const fields = this.getTarget(this.key)?.fields ?? [];
+        this.#clearValuePickers();
+        const target = this.getTarget(this.key);
+        const fields = target?.fields ?? [];
+        const source = target?.source, key = this.key;
         this.rules.replaceChildren(...this.draft.rules.map((rule, index) => {
             const row = this.document.createElement("div"); row.className = "vector-filter-rule";
             const select = (label, options, selected) => {
@@ -305,6 +321,22 @@ export class VectorFilterControls {
                     this.#changed();
                 });
                 row.append(input);
+                if (kind === "string" && source) {
+                    const picker = new VectorFilterValuePicker({documentContext: this.document, input,
+                        field: rule.field, condition: index + 1, setTimer: this.setTimer, clearTimer: this.clearTimer,
+                        isCurrent: () => !this.destroyed && this.key === key && this.getTarget(key) !== null,
+                        loadValues: (query, signal) => this.loadValues(source, query, signal),
+                        acceptsValue: value => {
+                            try {
+                                normalizeVectorFilter({enabled: true, match: "all", rules: [{...rule, value}]}, fields);
+                                return true;
+                            } catch { return false; }
+                        },
+                        selectValue: value => { rule.value = value; input.value = value; this.#changed(); },
+                    });
+                    input.addEventListener("input", () => picker.close());
+                    this.valuePickers.push(picker); row.append(picker.root);
+                }
             }
             const remove = this.document.createElement("button"); remove.type = "button"; remove.className = "secondary-button";
             remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove condition ${index + 1}`);

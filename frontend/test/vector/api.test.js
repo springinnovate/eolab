@@ -5,6 +5,7 @@ import {
     assessCatalogVector,
     classifyVectorNumbers,
     countVectorFilter,
+    getVectorFieldValues,
     publishVector,
     styleVector,
     summarizeVectorCategories,
@@ -14,6 +15,48 @@ import {
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("prepared field values send only Catalog identity and matching page, preserving exact strings", async () => {
+    const source = { collectionId: "vectors", itemId: "countries", path: "must-not-send", filter: {} };
+    const query = { field: "name", search: " ß ", offset: 50 };
+    const controller = new AbortController();
+    const page = { field: "name", values: ["", "  literal  ", "NULL", "é", "a\nb", "x".repeat(257)], nextOffset: 56 };
+    assert.deepEqual(await getVectorFieldValues(source, query, controller.signal, async (url, options) => {
+        assert.equal(url, "/api/catalog/vector-field-values");
+        assert.equal(options.method, "POST"); assert.equal(options.signal, controller.signal);
+        assert.equal(options.cache, "no-store"); assert.equal(options.credentials, "same-origin");
+        assert.deepEqual(JSON.parse(options.body), { collectionId: "vectors", itemId: "countries", ...query, limit: 50 });
+        return Response.json(page);
+    }), page);
+});
+
+test("prepared upload values use the browser cookie and encode exact search text", async () => {
+    const source = { uploadId: "owned/id" }, query = { field: "Group & name", search: "a+b &é", offset: 0 };
+    const page = { field: query.field, values: ["a+b &é"], nextOffset: null };
+    assert.deepEqual(await getVectorFieldValues(source, query, undefined, async (url, options) => {
+        const parsed = new URL(url, "https://eolab.test");
+        assert.equal(parsed.pathname, "/api/vector-uploads/owned%2Fid/field-values");
+        assert.deepEqual(Object.fromEntries(parsed.searchParams), { field: query.field, search: query.search, offset: "0", limit: "50" });
+        assert.equal(options.method, "GET"); assert.equal(options.body, undefined);
+        assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");
+        return Response.json(page);
+    }), page);
+    await assert.rejects(getVectorFieldValues(source, query, undefined, async () => new Response("", { status: 404 })), /browser that uploaded/);
+});
+
+test("prepared value lookup rejects malformed pages and preserves unavailable, transport and abort failures", async () => {
+    const source = { collectionId: "vectors", itemId: "countries" }, query = { field: "name", search: "", offset: 0 };
+    const valid = { field: "name", values: ["exact"], nextOffset: null };
+    for (const page of [null, {...valid, field: "other"}, {...valid, values: [null]}, {...valid, values: [1]},
+        {...valid, values: Array(51).fill("a")}, {...valid, nextOffset: 0}, {...valid, nextOffset: 2},
+        {...valid, values: [], nextOffset: 1}, {field: "name", values: []}]) {
+        await assert.rejects(getVectorFieldValues(source, query, undefined, async () => Response.json(page)), /invalid response/);
+    }
+    await assert.rejects(getVectorFieldValues(source, query, undefined, async () => new Response("not JSON")), /invalid response/);
+    await assert.rejects(getVectorFieldValues(source, query, undefined, async () => Response.json({detail: "Choose a string field with prepared values."}, {status: 409})), /prepared values/);
+    await assert.rejects(getVectorFieldValues(source, query, undefined, async () => { throw Error("offline"); }), /connection/);
+    await assert.rejects(getVectorFieldValues(source, query, undefined, async () => { throw new DOMException("Cancelled", "AbortError"); }), {name: "AbortError"});
 });
 
 test("filter count distinguishes queue saturation and expiry from incomplete counts", async () => {

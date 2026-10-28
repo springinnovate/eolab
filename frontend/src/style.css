@@ -5010,6 +5010,16 @@ summary:hover > .raster-disclosure-chevron {
 #vector-filter-applied { overflow-wrap: anywhere; font-size: 0.85rem; }
 .vector-filter-help { color: var(--text-2); font-size: 0.8rem; }
 #vector-filter-status.is-error { color: #b42318; }
+.vector-filter-value-picker { grid-column: 1 / -1; min-width: 0; }
+.vector-filter-value-picker > div { margin-top: 8px; }
+.vector-filter-value-picker > div[hidden] { display: none; }
+.vector-filter-value-picker button { margin: 4px 6px 4px 0; }
+.vector-filter-value-list { max-height: 180px; overflow-y: auto; margin-top: 6px; border: 1px solid var(--border-1); border-radius: var(--radius); }
+.vector-filter-value-list:empty { display: none; }
+.vector-filter-value-list [role="option"] { padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer; }
+.vector-filter-value-list [aria-selected="true"] { background: var(--surface-2); outline: 2px solid var(--text-1); outline-offset: -2px; }
+.vector-filter-value-list [aria-disabled="true"] { color: var(--text-2); cursor: not-allowed; }
+.vector-filter-value-picker :is(input, button):focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
 .map-layer-filter-status { grid-column: 2 / -1; justify-self: start; font-size: 0.75rem; }
 .map-filter-summary-group:has(> .map-filter-indicators[hidden]) { display: none; }
 .map-filter-summary-heading { display: block; padding: 4px; font-size: 0.74rem; }
