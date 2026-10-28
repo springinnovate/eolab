@@ -983,13 +983,13 @@ for (const mode of ["continuous", "categorical"]) {
         assert.equal(preview().scopeLabel, "Whole raster");
         h.viewer.closeStyle(); h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
         h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous distribution · Whole raster");
+        assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
         assert.match(preview().feedback.message, /map sample: Calculating/i);
         assert.equal(preview().feedback.isBusy, true);
         const selectedRead = reads.find(read => read.item === item && read.area.kind === "selectedArea");
         selectedRead.pending.reject(new Error("The selected area does not overlap the raster")); await flushPromises();
         h.viewer.closeStyle(); h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous distribution · Whole raster");
+        assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
         assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
         assert.equal(preview().feedback.isBusy, false);
         assert.equal(record.state.analysis.wholeRasterStatistics, whole, "Retained whole data remains available");
@@ -1021,7 +1021,7 @@ for (const mode of ["continuous", "categorical"]) {
         assert.equal(preview().scopeLabel, "Vector selection · Countries.gpkg");
         assert.equal(preview().feedback.message, "");
         h.controlsView.handlers.onUseMapWindow(); await flushPromises(); h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous distribution · Vector selection · countries");
+        assert.equal(preview().scopeLabel, "Previous histogram · Vector selection · countries");
         const mapRead = reads.at(-1);
         mapRead.pending.resolve(createCategoryStatistics(item, mapRead.area.selectedBounds, mapRead.codes)); await flushPromises();
         assert.match(preview().scopeLabel, /map sample$/i);
@@ -1032,10 +1032,10 @@ for (const mode of ["continuous", "categorical"]) {
         h.layerStackView.handlers.onAllVisibility(false); h.viewer.openStyle(key);
         assert.equal(replacement.signal.aborted, true);
         assert.equal(preview().feedback.isBusy, false);
-        assert.equal(preview().scopeLabel, "Previous distribution · Map sample");
+        assert.equal(preview().scopeLabel, "Previous histogram · Map sample");
         assert.match(preview().feedback.message, /map sample:/i);
         replacement.pending.resolve(createCategoryStatistics(item, replacement.area.selectedBounds, replacement.codes)); await flushPromises();
-        assert.equal(preview().scopeLabel, "Previous distribution · Map sample", "Late cancelled reply cannot relabel the preview");
+        assert.equal(preview().scopeLabel, "Previous histogram · Map sample", "Late cancelled reply cannot relabel the preview");
         h.destroy();
     });
 }

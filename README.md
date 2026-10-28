@@ -107,7 +107,7 @@ For visible vectors, EOLab highlights the features under the click and opens
 their attributes in **Feature inspector**. Use **Previous** and **Next** when
 several features overlap. Clicking empty space does not open an empty result.
 
-For visible rasters, EOLab samples the pixel values and prepares histograms. A
+For visible rasters, EOLab samples the pixel values and shows them in **Histograms**. A
 bounded sample window can be moved or resized to explore a local distribution:
 
 - **1D** mode shows distributions for the active visible rasters.

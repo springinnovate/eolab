@@ -701,7 +701,7 @@
             <strong>Raster analysis</strong>
             <div class="map-inspection-raster-actions">
               <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
-                aria-describedby="map-click-histogram-status" aria-pressed="false">Distributions</button>
+                aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
               <button id="open-calculations-dock" class="map-inspection-tab" type="button"
                 aria-controls="calculations-panel" aria-pressed="false">Statistics</button>
               <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
@@ -1172,9 +1172,9 @@
           <section id="map-histogram-panel" role="region"
             aria-labelledby="map-click-histogram" hidden>
             <header class="map-histogram-toolbar">
-              <h2 id="map-histogram-heading">Raster distributions</h2>
+              <h2 id="map-histogram-heading">Raster histograms</h2>
               <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close" type="button"
-                aria-label="Close raster histogram">×</button>
+                aria-label="Close raster histograms">×</button>
             </header>
             <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
             <button id="open-raster-series-histogram" class="secondary-button" type="button"
@@ -1186,7 +1186,7 @@
               <dl id="raster-point-sample-list"></dl>
             </section>
             <section id="map-histogram-overview" class="raster-histogram-overview"
-              aria-label="Visible raster distributions">
+              aria-label="Visible raster histograms">
               <p class="raster-histogram-empty" id="raster-histogram-empty">
                 No visible raster layers. Show a raster layer to see its histogram.
               </p>
@@ -1197,7 +1197,7 @@
               data-eomap-region="raster-interpretation"
               aria-labelledby="raster-bivariate-statistics-heading" hidden>
               <div class="raster-histogram-heading">
-                <h3 id="raster-bivariate-statistics-heading">Paired raster distribution</h3>
+                <h3 id="raster-bivariate-statistics-heading">Paired raster histogram</h3>
                 <button class="secondary-button" id="retry-raster-paired-statistics"
                   type="button" hidden>Retry</button>
               </div>
@@ -1584,7 +1584,7 @@
                             hidden
                           >
                             <div class="raster-style-histogram-heading">
-                              <h4 id="raster-style-histogram-heading">Distribution</h4>
+                              <h4 id="raster-style-histogram-heading">Histogram</h4>
                               <span id="raster-style-histogram-scope"></span>
                             </div>
                             <svg
@@ -1767,7 +1767,7 @@
                               Reset style
                             </button>
                             <button class="secondary-button" id="open-raster-histogram-analysis" type="button">
-                              Open full analysis
+                              Open histograms
                             </button>
                           </div>
                         </div>

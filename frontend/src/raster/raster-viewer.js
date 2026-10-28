@@ -2695,7 +2695,7 @@ export function initializeRasterViewer(
         const scope = statistics.scope === "catalogSelection"
             ? `Vector selection · ${statistics.catalogSelection.layerName}`
             : statistics.scope === "selectedArea" ? "Map sample" : "Whole raster";
-        return `Previous distribution · ${scope}`;
+        return `Previous histogram · ${scope}`;
     }
 
     /**
@@ -2728,7 +2728,7 @@ export function initializeRasterViewer(
             message = `Histogram unavailable: ${presentation.error?.message ?? "Unknown error"}`;
         } else if (presentation.state !== "ready" || statistics === null) {
             message = categorical ? CATEGORICAL_HISTOGRAM_MESSAGE
-                : "Histogram not available yet. Open full analysis to calculate it.";
+                : "Histogram not available yet. Choose Open histograms to calculate it.";
         }
         const feedback = { message: message ? `${presentation.scope}: ${message}` : "", isBusy: presentation.state === "loading" };
         if (statistics === null) {
@@ -3527,7 +3527,7 @@ export function initializeRasterViewer(
                 `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
                 `Click the map again to replace it.${
                     bivariateMode.active
-                        ? " The paired distribution uses this shared area."
+                        ? " The paired histogram uses this shared area."
                         : ""
                 }`;
         } else if ((bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection) !== null) {
@@ -3535,7 +3535,7 @@ export function initializeRasterViewer(
             nextStatus = `Vector selection selected: ${area.filename}. ` +
                 "Polygon boundaries and holes define the histogram selection.";
         } else if (bivariateMode.active) {
-            nextStatus = "Whole-overlap paired distribution selected. " +
+            nextStatus = "Whole-overlap paired histogram selected. " +
                 "Click the map to use one shared WGS 84 window.";
         } else {
             nextStatus = "Whole-raster histogram selected. Click the map or " +

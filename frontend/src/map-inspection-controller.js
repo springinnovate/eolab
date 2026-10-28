@@ -103,7 +103,7 @@ export class MapInspectionController {
             },
             {
                 name: "histogram",
-                label: "Distributions", raster: true,
+                label: "Histograms", raster: true,
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-click-histogram"),
             },
@@ -242,7 +242,7 @@ export class MapInspectionController {
         }
         this.#setToolLabel(
             "histogram",
-            "Distributions",
+            "Histograms",
             resultCount === null ? "" : String(resultCount) + " raster results"
         );
         this.#showTool("histogram", options);
