@@ -43,7 +43,7 @@ function fixture(configureDocument = () => {}) {
     const mapToolsButton = doc.querySelector("#map-tools-more-summary");
     for (const [id, caption] of [
         ["map-click-histogram", "Histograms"],
-        ["open-raster-series-dock", "Summarize rasters"],
+        ["open-raster-series-dock", "Raster statistics"],
     ]) {
         const button = doc.querySelector(`#${id}`);
         button.id = id;
@@ -255,7 +255,7 @@ test("task headers retain their own source and scope while clicks and peer conte
     h.controller.setToolContext("raster-series", { source: "GEA Italy", scope: "Whole raster" });
     h.controller.showRasterSeries();
     h.controller.setToolContext("histogram", { source: "6 raster layers", scope: "New map sample" });
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Summarize rasters");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     assert.equal(context.textContent, "GEA Italy · Whole raster");
     h.controller.setToolContext("raster-clips", { source: "GEA Chile", scope: "Captured box" });
     h.controller.showRasterClips();
@@ -528,9 +528,9 @@ test("active-tool subscriptions report expanded presentation, support detachment
     h.controller.showFeatureInspector({activate:false});
     assert.deepEqual(changes, [null, "raster-series"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Summarize rasters");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Summarize rasters");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.deepEqual(changes, [null, "raster-series", null, "raster-series", "histogram"]);
     unsubscribe(); h.controller.showRasterClips();

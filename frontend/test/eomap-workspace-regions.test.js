@@ -431,7 +431,7 @@ test("inspection header groups two raster destinations separately from clicked-p
     assert.match(point.source, /Features at inspected point/);
     for (const [id, panel, caption] of [
         ["map-click-histogram", "map-histogram-panel", "Histograms"],
-        ["open-raster-series-dock", "raster-series", "Summarize rasters"],
+        ["open-raster-series-dock", "raster-series", "Raster statistics"],
     ]) {
         const control = requireElementRange(id);
         assert.ok(control.start > raster.start && control.end < raster.end);
@@ -685,7 +685,7 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     for (const [id, accessibleName] of [
         ["models-close", "Close Models"],
         ["close-annotations", "Close shared layer"],
-        ["close-raster-series", "Close raster summary"],
+        ["close-raster-series", "Close raster statistics"],
         ["raster-clips-close", "Close raster download"],
         ["close-vector-inspector", "Close feature inspector"],
         ["close-vector-time-series", "Close vector series"],

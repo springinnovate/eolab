@@ -600,7 +600,7 @@
                     aria-labelledby="raster-sampling-area-heading">
                     <strong id="raster-sampling-area-heading">Sampling area</strong>
                     <p id="raster-sample-window-description">
-                      Choose the area to sample. Summarize rasters can also use each raster’s whole extent.
+                      Choose the area to sample. Raster statistics can also use each raster’s whole extent.
                     </p>
                     <div class="raster-sampling-area-options" role="radiogroup"
                       aria-labelledby="raster-sampling-area-heading">
@@ -680,7 +680,7 @@
           <button id="open-models" class="workspace-tool-action" type="button" aria-controls="models-panel">Models</button>
           <button id="open-model-runs" class="workspace-tool-action" type="button" aria-controls="models-panel">Model runs</button>
           <button id="open-raster-series" class="workspace-tool-action" type="button"
-            aria-controls="raster-series">Summarize rasters</button>
+            aria-controls="raster-series">Raster statistics</button>
         </div>
         <div class="workspace-tool-actions-group">
           <strong class="workspace-tool-actions-label">Export</strong>
@@ -702,7 +702,7 @@
               <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
                 aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
               <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
-                aria-controls="raster-series" aria-pressed="false">Summarize rasters</button>
+                aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
             </div>
             <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
@@ -778,9 +778,10 @@
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Summarize rasters</h2>
-              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster summary">&times;</button>
+              <h2>Raster statistics</h2>
+              <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster statistics">&times;</button>
             </header>
+            <p class="map-analysis-purpose">Calculate statistics for a selected area. View values for one raster, or plot comparisons across rasters or dates.</p>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sampling area selected</p>
               <div class="raster-series-controls">
@@ -810,7 +811,7 @@
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
-            <nav class="raster-series-section-links" aria-label="Raster summary sections">
+            <nav class="raster-series-section-links" aria-label="Raster statistics sections">
               <button id="raster-series-show-results" class="summary-text-button" type="button" aria-controls="raster-series-results">Results</button>
               <button id="raster-series-edit-statistics" class="summary-text-button" type="button" aria-controls="raster-series-statistics">Statistics</button>
               <button id="raster-series-edit-data" class="summary-text-button" type="button" aria-controls="raster-series-data-settings">Data and order</button>
@@ -1129,7 +1130,7 @@
             </header>
             <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
             <button id="open-raster-series-histogram" class="secondary-button" type="button"
-              aria-controls="raster-series">Summarize rasters</button>
+              aria-controls="raster-series">Raster statistics</button>
             <section class="raster-point-samples" id="raster-point-samples"
               aria-labelledby="raster-point-samples-heading" aria-live="polite"
               aria-atomic="true" aria-busy="false" hidden>
