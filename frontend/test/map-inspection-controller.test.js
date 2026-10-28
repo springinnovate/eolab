@@ -999,20 +999,35 @@ test("mixed raster and vector clicks never restore an empty inspection surface",
 test("annotation panel closes independently and cannot leave a hidden input-blocking surface", () => {
     const h = fixture();
     const annotations = h.doc.querySelector("#annotations-panel");
+    const tab = h.doc.querySelector("#map-inspection-tab-annotations");
+    tab.id = "map-inspection-tab-annotations";
+    assert.equal(tab.hidden, true);
     h.controller.showHistogram();
     h.controller.showAnnotations();
     assert.equal(h.controller.activeTool, "annotations");
+    assert.equal(tab.hidden, false);
+    assert.equal(h.doc.querySelector("#map-inspection-dock-title").hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
+    assert.equal(annotations.getAttribute("aria-labelledby"), tab.id);
     assert.equal(annotations.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "false");
     h.controller.hideAnnotations();
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(annotations.hidden, true);
+    assert.equal(tab.hidden, true);
     h.controller.closeHistogram();
     assert.equal(h.panels.hidden, true);
     h.controller.showAnnotations();
     h.controller.hideAnnotations();
     assert.equal(h.panels.hidden, true);
     assert.equal(h.controller.isOpen, false);
+    h.controller.showAnnotations();
+    h.controller.showHistogram();
+    const focused = h.doc.querySelector("#map-click-histogram");
+    focused.focus();
+    h.controller.hideAnnotations();
+    assert.equal(h.controller.activeTool, "histogram");
+    assert.equal(h.doc.activeElement, focused);
 });
 
 test("raster series remains active during map inspection and closes without hiding peer results", () => {

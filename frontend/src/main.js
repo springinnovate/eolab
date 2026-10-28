@@ -1547,7 +1547,6 @@ async function initializeCatalog(
     {
         const annotationPanel = new AnnotationPanelView({ document,
             onOpen: () => mapInspection.showAnnotations(),
-            onContextChange: context => mapInspection.setToolContext("annotations", context),
             onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
             panel: annotationPanel,

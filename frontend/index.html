@@ -618,7 +618,7 @@
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
             <button id="map-inspection-tab-models" class="map-inspection-tab" type="button" role="tab" aria-controls="models-panel" aria-selected="false" tabindex="-1" hidden>Models</button>
-            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Shared layer</button>
+            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Polygons</button>
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
               aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
@@ -769,14 +769,14 @@
             </details>
           </section>
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
-            <header class="map-histogram-toolbar"><h2>Shared layer</h2><button id="close-annotations" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close shared layer">&times;</button></header>
+            <header class="map-histogram-toolbar"><h2 id="annotation-panel-title" tabindex="-1">Polygons</h2><button id="close-annotations" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close polygon editor">&times;</button></header>
             <div class="annotation-layer-actions">
               <button class="secondary-button" id="undo-annotation-delete" type="button" hidden>Undo deletion</button>
               <button class="secondary-button" id="retry-annotation-save" type="button" hidden>Retry saving</button>
             </div>
             <p id="annotation-save-status" role="status" aria-live="polite">Opening local polygons…</p>
             <p id="annotation-file-status" role="status" aria-live="polite"></p>
-            <p id="annotation-panel-empty">Choose a shared layer in Map layers to edit its polygons, names and notes.</p>
+            <p id="annotation-panel-empty">Choose a local or shared polygon layer in Map layers to edit its polygons, names and notes.</p>
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>

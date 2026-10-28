@@ -671,7 +671,7 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     }
     for (const [id, accessibleName] of [
         ["models-close", "Close Models"],
-        ["close-annotations", "Close shared layer"],
+        ["close-annotations", "Close polygon editor"],
         ["close-raster-series", "Close raster statistics"],
         ["raster-clips-close", "Close raster download"],
         ["close-vector-inspector", "Close feature inspector"],

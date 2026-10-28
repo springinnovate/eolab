@@ -88,7 +88,7 @@ export class MapInspectionController {
                 tab: documentContext.querySelector("#map-inspection-tab-models") },
             { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true, resultNavigation: true,
                 tab: documentContext.querySelector("#open-raster-series-dock") },
-            { name: "annotations", label: "Shared layer", panel: this.annotations,
+            { name: "annotations", label: "Polygons", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
             {
                 name: "raster-clips", label: "Download raster clip", panel: this.rasterClips,
@@ -132,7 +132,7 @@ export class MapInspectionController {
             },
         ];
         const tasks = {
-            style: "Appearance", filter: "Data selection", annotations: "Shared layers",
+            style: "Appearance", filter: "Data selection",
             "raster-clips": "Export", histogram: "Raster analysis",
             "raster-series": "Raster analysis", feature: "Point inspection",
         };
@@ -802,6 +802,7 @@ export class MapInspectionController {
      * Render foreground task/source/scope, retained navigation and active-panel visibility.
      * Raster destinations use stable native buttons; their owners handle opening.
      * Features share the compact result navigation; other tools keep their retained tabs.
+     * Polygon editing names its selected layer in the panel without another task heading.
      * Opening or updating a tool never replaces its focused raster destination.
      * Hide the panel surface when no tool is active so the retained result header
      * cannot leave an invisible container intercepting map input below it.
@@ -816,7 +817,7 @@ export class MapInspectionController {
         const tool = this.activeTool === null ? null : this.#tool(this.activeTool);
         this.dockTitle.textContent = tool === null ? "Explore data" : `${tool.task} · ${tool.label}`;
         this.dockTitle.title = this.dockTitle.textContent;
-        this.dockTitle.hidden = ["histogram", "raster-series", "feature"].includes(this.activeTool);
+        this.dockTitle.hidden = ["histogram", "raster-series", "feature", "annotations"].includes(this.activeTool);
         const context = tool?.context ?? (this.activeTool === "feature"
             ? { source: "Visible vector layers", scope: this.clickLabel }
             : { source: "", scope: "" });

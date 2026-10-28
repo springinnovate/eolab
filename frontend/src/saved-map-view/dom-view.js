@@ -346,15 +346,15 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Keep the application stable while current Items are revalidated.
+     * Show loading progress while restoring the saved map's layers.
      *
-     * @param {number} layerCount Number of shared layers to restore.
+     * @param {number} layerCount Number of map layers to restore.
      * @return {void}
      */
     showLoading(layerCount) {
         this.#prepareDialog(
-            "Opening shared map…",
-            `Loading ${formatCount(layerCount, "shared layer")}…`,
+            "Opening map…",
+            `Loading ${formatCount(layerCount, "map layer")}…`,
             []
         );
         this.cancelButton.hidden = true;

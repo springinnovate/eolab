@@ -32,7 +32,7 @@ export class AnnotationLayerControls {
         this.inspection.hidden = true;
         this.root.append(this.inspection);
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
-            layer.name = value.trim() || "Shared layer";
+            layer.name = value.trim() || "Polygon layer";
             actions.change(false);
         }, 160);
         this.root.append(this.name);
