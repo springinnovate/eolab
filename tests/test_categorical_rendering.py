@@ -286,14 +286,14 @@ def test_composite_category_isolated_by_plan_and_matches_direct_appearance(
         parse_qs(request.content.decode(), keep_blank_values=True)
         for request in requests
     ]
-    symbols = [
+    appearances = [
         ElementTree.fromstring(form["sld_body"][0]).find(
-            f".//{{{SLD_NAMESPACE}}}RasterSymbolizer"
+            f".//{{{SLD_NAMESPACE}}}FeatureTypeStyle"
         )
         for form in forms
     ]
-    assert ElementTree.tostring(symbols[0]) == ElementTree.tostring(symbols[2])
-    assert ElementTree.tostring(symbols[0]) != ElementTree.tostring(symbols[1])
+    assert ElementTree.tostring(appearances[0]) == ElementTree.tostring(appearances[2])
+    assert ElementTree.tostring(appearances[0]) != ElementTree.tostring(appearances[1])
     assert all(form["interpolations"] == ["nearest neighbor"] for form in forms)
 
 
