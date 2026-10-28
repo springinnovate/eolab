@@ -28,6 +28,7 @@ test("both summary openers share the workflow and publish owned source/area cont
         assert.equal(h.controller.state.active, true);
         assert.match(contexts.at(-1).source, /Human footprint/);
         assert.match(contexts.at(-1).scope, /Box/);
+        assert.equal(contexts.at(-1).usesSamplingBox, true);
         assert.equal(h.submits(), 0, "opening a destination never submits a calculation");
         h.controller.close();
     }
@@ -48,6 +49,7 @@ test("both summary openers share the workflow and publish owned source/area cont
     h.view.elements.area.value = "whole";
     h.view.elements.area.dispatchEvent(new Event("change"));
     assert.equal(contexts.at(-1).scope, "Whole raster");
+    assert.equal(contexts.at(-1).usesSamplingBox, false);
     h.controller.editStatistic(h.controller.state.statistics[0].id, { source: resistance });
     assert.match(contexts.at(-1).source, /Resistance/);
     h.view.render({ ...h.controller.state, active: false,

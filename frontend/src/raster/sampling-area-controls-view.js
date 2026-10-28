@@ -1,5 +1,5 @@
 /**
- * DOM presentation adapter for raster histogram sampling-area controls.
+ * Present the shared raster sampling area and contextual box-size controls.
  *
  * This adapter owns sample-window sizing and whole-window/catalog-selection
  * controls. Map exploration is coordinated separately by the composition root.
@@ -21,7 +21,7 @@ const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
  */
 
-/** Own direct DOM interaction and presentation for histogram sampling areas. */
+/** Present sampling controls without changing the selected area on show or hide. */
 export class RasterSamplingAreaControlsView {
     #root;
 
@@ -37,6 +37,11 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sampling-area-controls"
         );
+        this.tool = requireRasterControl(documentContext, "#raster-sampling-tool");
+        this.disclosure = requireRasterControl(documentContext, "#raster-sampling-disclosure");
+        this.disclosureSummary = requireRasterControl(documentContext, "#raster-sampling-disclosure > summary");
+        this.dimensions = requireRasterControl(documentContext, "#raster-sample-window-dimensions");
+        this.usesBox = true;
         this.samplingAreaSummary = requireRasterControl(
             documentContext,
             "#raster-sampling-area-summary"
@@ -85,6 +90,7 @@ export class RasterSamplingAreaControlsView {
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
         this.boundUseMapWindow = this.#handleUseMapWindow.bind(this);
+        this.boundVisibilityChange = this.#renderBoxVisibility.bind(this);
     }
 
     /**
@@ -95,6 +101,8 @@ export class RasterSamplingAreaControlsView {
      */
     bind(handlers) {
         this.handlers = handlers;
+        this.disclosure.addEventListener("toggle", this.boundVisibilityChange);
+        this.#root.addEventListener("change", this.boundVisibilityChange);
         this.sampleWindowRange.addEventListener(
             "input",
             this.boundSampleWindowRangeInput
@@ -120,6 +128,8 @@ export class RasterSamplingAreaControlsView {
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
     unbind() {
+        this.disclosure.removeEventListener("toggle", this.boundVisibilityChange);
+        this.#root.removeEventListener("change", this.boundVisibilityChange);
         this.sampleWindowRange.removeEventListener(
             "input",
             this.boundSampleWindowRangeInput
@@ -160,6 +170,38 @@ export class RasterSamplingAreaControlsView {
         );
         this.sampleWindowRange.setAttribute("aria-valuetext", `${value} kilometers`);
         this.sampleWindowNumber.value = String(value);
+        this.dimensions.textContent = `${value} × ${value} km`;
+    }
+
+    /** Show controls for an active sampling workflow, without selecting an area.
+     * @param {boolean} active Whether a sampling workflow is in the foreground.
+     * @param {boolean} usesBox Whether that workflow uses the shared map box.
+     * @return {void}
+     */
+    setActive(active, usesBox) {
+        this.tool.hidden = !active;
+        this.usesBox = usesBox;
+        if (!active) {
+            this.disclosure.open = false;
+        }
+        this.#renderBoxVisibility();
+    }
+
+    /** Open the existing area choices while leaving the current results visible.
+     * @return {void}
+     */
+    openAreaEditor() {
+        this.disclosure.open = true;
+        this.mapBoxControls.open = true;
+        this.#renderBoxVisibility();
+        this.disclosureSummary.focus();
+    }
+
+    /** Show box sizing only for a selected box used or explicitly edited here.
+     * @return {void}
+     */
+    #renderBoxVisibility() {
+        this.mapBoxControls.hidden = !this.useMapWindowButton.checked || !(this.usesBox || this.disclosure.open);
     }
 
     /**
@@ -169,6 +211,7 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     setSampleWindowInvalid(isInvalid) {
+        this.sampleWindowStatus.classList.toggle("visually-hidden", !isInvalid);
         if (isInvalid) {
             this.sampleWindowNumber.setAttribute("aria-invalid", "true");
         } else {
@@ -217,7 +260,7 @@ export class RasterSamplingAreaControlsView {
         if (this.vectorChoice) this.vectorChoice.checked = ["vector", "catalogSelection"].includes(mode);
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
-        this.mapBoxControls.hidden = mode !== "selectedArea";
+        this.#renderBoxVisibility();
         this.samplingAreaSummary.textContent = label || (
             mode === "none" ? "No raster selected" : "Whole raster"
         );

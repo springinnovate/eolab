@@ -41,7 +41,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} busy Whether calculations are running.
  * @property {"line"|"scatter"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,hasErrors:boolean,recoverable:boolean}} area Scope and execution availability supplied by the owner; the view does not inspect the sampling descriptor.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,hasErrors:boolean,recoverable:boolean}} area Scope and execution availability supplied by the owner.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {{id:number,scale:string}[]} plots Independent plot settings.
  * @property {boolean} showingPrevious Whether plots use retained results.
@@ -54,7 +54,7 @@ export class RasterSeriesView {
      * Find the plot's existing markup.
      * @param {Document} [documentContext=document] Owning browser document.
      * @param {Object} [options] Presentation callbacks.
-     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only chosen source/area context.
+     * @param {(context:{source:string,scope:string,usesSamplingBox:boolean})=>void} [options.onContextChange] Display-only source, area and box-control context.
      */
     constructor(documentContext = document, { onContextChange = () => {} } = {}) {
         this.document = documentContext;
@@ -168,7 +168,8 @@ export class RasterSeriesView {
     render(state) {
         const sources = state.sources.filter(source => source.selected);
         this.onContextChange({ source: state.temporal ? state.temporal.item?.properties.title || "Temporal dataset" : sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
-            scope: state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected" });
+            scope: state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected",
+            usesSamplingBox: state.area.areaChoice !== "whole" && state.area.area?.kind === "selectedArea" });
         this.pendingState = state;
         if (!state.active) {
             if (this.frame !== null) this.document.defaultView.cancelAnimationFrame(this.frame);

@@ -70,12 +70,15 @@ test("series publishes selected raster and owned area context while inactive wit
     const h = controlsFixture(), contexts = [];
     const view = new RasterSeriesView(h.document, { onContextChange: context => contexts.push(context) });
     view.render({ ...h.state, active: false });
-    assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole extent of each raster" });
+    assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole extent of each raster", usesSamplingBox: false });
     assert.equal(h.frames.size, 0);
     view.render({ ...h.state, active: false, sources: [...h.state.sources, { label: "Raster B", selected: true }],
         area: { ...h.state.area, areaChoice: "selection", areaLabel: "Selected watershed polygons" } });
-    assert.deepEqual(contexts.at(-1), { source: "2 selected rasters", scope: "Selected watershed polygons" });
+    assert.deepEqual(contexts.at(-1), { source: "2 selected rasters", scope: "Selected watershed polygons", usesSamplingBox: false });
     assert.equal(h.frames.size, 0);
+    view.render({ ...h.state, active: false, area: { ...h.state.area, areaChoice: "selection",
+        area: { kind: "selectedArea" }, areaLabel: "Sampling box" } });
+    assert.equal(contexts.at(-1).usesSamplingBox, true);
 });
 
 /** Observe writes to existing controls, including redundant assignments a fake DOM normally hides.

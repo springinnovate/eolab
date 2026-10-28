@@ -524,6 +524,20 @@ export class RasterControlsView {
         this.#histogramView.setSamplingAreaMode(mode, label);
     }
 
+    /** Present shared sampling controls for the foreground workflow.
+     * @param {boolean} active Whether a sampling workflow is visible.
+     * @param {boolean} usesBox Whether it uses the shared map box.
+     * @return {void}
+     */
+    setSamplingControlsActive(active, usesBox) {
+        this.#samplingAreaView.setActive(active, usesBox);
+    }
+
+    /** Focus area choices without opening or recalculating a histogram. @return {void} */
+    openSamplingControls() {
+        this.#samplingAreaView.openAreaEditor();
+    }
+
     /**
      * Reveal the contextual histogram for an explicit sampling request.
      * The current result remains owned by the histogram adapter.

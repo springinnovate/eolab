@@ -38,6 +38,45 @@ test("sampling-area adapter requires its semantic subgroup root", () => {
     );
 });
 
+test("showing, editing and minimizing sampling controls never changes the chosen area", () => {
+    const document = new FakeRasterControlDocument();
+    const view = new RasterSamplingAreaControlsView(document);
+    const edits = [];
+    view.bind({ onUseMapWindow: () => edits.push("box"), onClearSampleWindow: () => edits.push("whole"),
+        onSampleWindowRangeInput: value => edits.push(value) });
+    view.setSampleWindowSize(200, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+    view.setSamplingAreaMode("selectedArea", "200 km box");
+    view.setActive(true, true);
+    assert.equal(view.tool.hidden, false);
+    assert.equal(view.mapBoxControls.hidden, false);
+    assert.equal(view.dimensions.textContent, "200 × 200 km");
+    view.mapBoxControls.open = false;
+    view.setActive(false, false);
+    assert.equal(view.tool.hidden, true);
+    view.setActive(true, true);
+    assert.equal(view.mapBoxControls.open, false, "a minimized box control stays minimized");
+    assert.equal(view.sampleWindowNumber.value, "200");
+    view.setActive(true, false);
+    assert.equal(view.mapBoxControls.hidden, true, "whole-raster workflows do not show box sizing");
+    view.openAreaEditor();
+    assert.equal(view.mapBoxControls.hidden, false, "an explicit edit exposes the retained box");
+    assert.equal(document.activeElement, view.disclosureSummary);
+    view.disclosure.open = false;
+    view.disclosure.dispatchEvent(new Event("toggle"));
+    assert.equal(view.mapBoxControls.hidden, true);
+    view.setActive(true, true);
+    // A radio change hides sizing before a proposed polygon selection is accepted.
+    view.useMapWindowButton.checked = false;
+    document.querySelector("#raster-sampling-area-controls").dispatchEvent(new Event("change"));
+    assert.equal(view.mapBoxControls.hidden, true);
+    view.setSamplingAreaMode("vector", "Selected polygons");
+    assert.equal(view.mapBoxControls.hidden, true);
+    view.setSamplingAreaMode("wholeRaster");
+    assert.equal(view.mapBoxControls.hidden, true);
+    assert.deepEqual(edits, []);
+    view.unbind();
+});
+
 test("logarithmic box controls preserve exact kilometers and accessible values", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterSamplingAreaControlsView(documentContext);

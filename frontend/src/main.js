@@ -75,6 +75,7 @@ import {
 } from "./catalog-map-actions.js";
 import { renderCatalogMapAction } from "./catalog-map-action-view.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { RasterControlsView } from "./raster/controls-view.js";
 import { loadTemporalTimes } from "./raster/temporal-api.js";
 import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
 import { RasterSeriesController } from "./raster/series.js";
@@ -874,12 +875,28 @@ async function initializeCatalog(
         area: rasterVisualization?.getSelectedArea() ?? null,
         pixelPoint,
     });
-    /** Open and focus the shared sampling controls. @return {void} */
+    const rasterControls = new RasterControlsView(document);
+    const samplingTools = new Map([
+        ["histogram", true], ["calculations", false], ["raster-series", false], ["raster-clips", false],
+    ]);
+    let activeSamplingTool = null;
+    /** Reflect tool-owned scope in the shared controls without changing calculation inputs.
+     * @param {string} tool Sampling workflow name.
+     * @param {{source:string,scope:string,usesSamplingBox:boolean}} context Display context from its view.
+     * @return {void}
+     */
+    const presentSamplingContext = (tool, context) => {
+        mapInspection.setToolContext(tool, context);
+        samplingTools.set(tool, context.usesSamplingBox);
+        if (activeSamplingTool === tool) rasterControls.setSamplingControlsActive(true, context.usesSamplingBox);
+    };
+    mapInspection.subscribeActiveTool(tool => {
+        activeSamplingTool = tool;
+        rasterControls.setSamplingControlsActive(samplingTools.has(tool), samplingTools.get(tool) ?? false);
+    });
+    /** Focus shared area choices without switching tools or starting calculations. @return {void} */
     const editProcessingArea = () => {
-        mapInspection.showHistogram();
-        document.querySelector("#raster-sampling-disclosure").open = true;
-        document.querySelector("#raster-sampling-vector-disclosure").open = true;
-        document.querySelector("#raster-sampling-disclosure summary").focus();
+        rasterControls.openSamplingControls();
     };
     const calculationRequests = new CalculationRequests({
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
@@ -887,7 +904,7 @@ async function initializeCatalog(
     });
     calculations = new SummaryStatisticsController({
         api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(document, {
-            onContextChange: context => mapInspection.setToolContext("calculations", context),
+            onContextChange: context => presentSamplingContext("calculations", context),
         }),
         calculationRequests,
         sourceMode: "query", getQuerySources: enabledRasterSources,
@@ -899,7 +916,7 @@ async function initializeCatalog(
     mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
     const rasterClips = new RasterClipsController({
         api: processingApi, jobs: processingJobs, view: new RasterClipsView(document, {
-            onContextChange: context => mapInspection.setToolContext("raster-clips", context),
+            onContextChange: context => presentSamplingContext("raster-clips", context),
         }),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: processingContext,
@@ -920,6 +937,7 @@ async function initializeCatalog(
     void rasterClips.start();
 
     rasterVisualization = initializeRasterViewer({
+        controlsView: rasterControls,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
@@ -931,10 +949,11 @@ async function initializeCatalog(
         },
         onSamplingAreaChange: area => {
             calculations.setSelection(area);
+            rasterClips.setSelection(area);
             updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
         },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
-            activate: !selectingMapClick && !calculations.isActive && mapInspection.activeTool !== "models",
+            activate: !selectingMapClick && !["calculations", "raster-series", "raster-clips", "models"].includes(mapInspection.activeTool),
         }),
         onHistogramChange: snapshot => {
             latestHistogramPresentation = snapshot;
@@ -1374,9 +1393,9 @@ async function initializeCatalog(
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         loadTemporalTimes,
-        onEditArea: () => calculations.open(),
+        onEditArea: editProcessingArea,
         view: new RasterSeriesView(document, {
-            onContextChange: context => mapInspection.setToolContext("raster-series", context),
+            onContextChange: context => presentSamplingContext("raster-series", context),
         }),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });

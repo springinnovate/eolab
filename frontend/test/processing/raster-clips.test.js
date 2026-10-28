@@ -342,8 +342,8 @@ test("changing unsubmitted sampling intent keeps the chosen raster and accepted 
     h.view.elements.new.dispatchEvent(new Event("click"));
     h.view.elements.source.value = "1"; h.view.elements.source.dispatchEvent(new Event("change"));
     h.view.elements["edit-area"].dispatchEvent(new Event("click"));
-    h.controller.setActive(false); h.context.area.selectedBounds.west = 76;
-    h.controller.open();
+    h.controller.setSelection({ ...box, selectedBounds: { ...box.selectedBounds, west: 76 } });
+    assert.equal(h.contexts.at(-1).usesSamplingBox, true);
     assert.equal(h.controller.state.review, true);
     assert.equal(h.controller.state.source.itemId, "other");
     assert.equal(h.controller.state.area.selectedBounds.west, 76);
@@ -376,11 +376,14 @@ test("uncertain download recovery stays visible with original inputs after map c
     const h = fixture({ submitClip: async value => { h.requests.push(value); throw Error("Response lost"); } }, new Map(), true);
     h.controller.open(); await h.controller.submit();
     const saved = h.storage.read();
+    h.controller.setSelection({ ...box, selectedBounds: { ...box.selectedBounds, west: 76 } });
+    assert.deepEqual(h.storage.read(), saved);
     h.setContext({ sources: [], area: null }); h.controller.open(source, null);
     assert.equal(h.view.elements["source-name"].textContent, source.label);
     assert.equal(h.view.elements["retry-submission"].hidden, false);
     assert.equal(h.view.elements.source.disabled, true);
     assert.equal(h.view.elements["edit-area"].disabled, true);
+    assert.equal(h.contexts.at(-1).usesSamplingBox, false);
     assert.equal(h.view.elements.create.disabled, true);
     assert.match(h.contexts.at(-1).scope, /W 77.0000/);
     h.controller.destroy();

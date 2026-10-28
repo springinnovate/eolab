@@ -11,7 +11,7 @@ export class RasterClipsView {
     /** Find clip controls and publish their owned review context through composition.
      * @param {Document} [documentContext=globalThis.document] Owning document.
      * @param {Object} [options] Presentation callbacks.
-     * @param {(context:{source:string,scope:string})=>void} [options.onContextChange] Display-only source/area context.
+     * @param {(context:{source:string,scope:string,usesSamplingBox:boolean})=>void} [options.onContextChange] Display-only source, area and editable-box context.
      */
     constructor(documentContext = globalThis.document, { onContextChange = () => {} } = {}) {
         this.document = documentContext;
@@ -105,7 +105,8 @@ export class RasterClipsView {
         e.current.hidden = review;
         e.new.hidden = review;
         this.onContextChange({ source: review ? e["source-name"].textContent : this.sourceName(current, state.sources),
-            scope: review ? e["area-description"].textContent : describeClipArea(current.area) });
+            scope: review ? e["area-description"].textContent : describeClipArea(current.area),
+            usesSamplingBox: review && !locked && area?.kind === "selectedArea" });
         e.create.disabled = locked || !source || !area;
         e.create.textContent = state.submitting ? "Submitting download…" : "Prepare download";
         e.message.textContent = state.message;

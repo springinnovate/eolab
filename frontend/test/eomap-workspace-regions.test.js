@@ -306,7 +306,7 @@ test("successful catalog additions reveal Map layers through composition", () =>
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?activate: !selectingMapClick && !calculations\.isActive/
+        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?activate: !selectingMapClick && !\["calculations", "raster-series", "raster-clips", "models"\]\.includes\(mapInspection\.activeTool\)/
     );
     assert.match(
         COMPOSITION_SOURCE,
@@ -363,17 +363,20 @@ test("map-layer Info can reveal Catalog through composition", () => {
     );
 });
 
-test("raster histogram owns its sampling controls and results", () => {
+test("shared sampling controls stay above tools while histograms own their results", () => {
     const panel = requireElementRange("control-panel");
     const exploration = requireElementRange("map-histogram-panel");
     const disclosure = requireElementRange("raster-sampling-disclosure");
     const sampling = requireElementRange("raster-sampling-area-controls");
+    const toolbar = requireElementRange("map-tools-toolbar");
+    const box = requireElementRange("raster-map-box-controls");
+    assert.ok(disclosure.start > toolbar.start && box.end < toolbar.end);
+    assert.ok(box.start > disclosure.end, "box sizing is visible without opening area choices");
+    assert.doesNotMatch(exploration.source, /id="raster-sampling-/);
     assert.ok(exploration.start > panel.end);
     assert.match(exploration.source, /role="region"/);
     assert.match(exploration.source, /aria-labelledby="map-click-histogram"/);
     for (const id of [
-        "raster-sampling-disclosure",
-        "raster-sampling-area-controls",
         "raster-comparison-mode",
         "raster-histogram-list",
         "raster-histogram",
@@ -384,10 +387,10 @@ test("raster histogram owns its sampling controls and results", () => {
     }
     assert.match(disclosure.source, /^\s*<details[^>]*>/);
     assert.doesNotMatch(disclosure.source, /^\s*<details[^>]*\bopen\b/);
-    assert.match(disclosure.source, />\s*Sampling area\s*</);
+    assert.match(disclosure.source, />\s*Map sampling area\s*</);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
-    assert.match(sampling.source, /geographic area used by every visible raster histogram/);
+    assert.match(sampling.source, /Choose the area to sample/);
     for (const choice of [
         "clear-raster-sample-window",
         "use-map-window-for-raster",
@@ -397,7 +400,7 @@ test("raster histogram owns its sampling controls and results", () => {
             new RegExp(`id="${choice}"[^>]*type="radio"[^>]*name="raster-sampling-area"`, "s")
         );
     }
-    assert.match(sampling.source, /id="raster-map-box-controls"[^>]*hidden/);
+    assert.match(box.source, /id="raster-map-box-controls"[^>]*hidden/);
     assert.match(exploration.source, /1D – visible rasters/);
     assert.match(exploration.source, /2D – compare rasters/);
     assert.match(exploration.source, /No visible raster layers/);
