@@ -1393,7 +1393,7 @@ async function initializeCatalog(
     rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.capabilities?.calculations),
         temporalDatasets(mapLayerController.snapshots()));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
-    for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
+    for (const id of ["open-raster-series", "open-raster-series-dock"]) {
         document.querySelector(`#${id}`).addEventListener("click",
             /** Reopen the combined raster summary with its retained inputs and results.
              * @return {void}

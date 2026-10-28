@@ -62,7 +62,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {string} key Raster identity.
  * @property {string} signature Serialized presentation last rendered in the card.
  * @property {HTMLElement} root Article owning the chart and actions.
- * @property {HTMLButtonElement|null} button Optional legacy detail-selection button.
+ * @property {HTMLButtonElement|null} button Optional detailed-histogram selection button.
+ * @property {HTMLElement} pointValue Exact clicked value shown below the chart.
  * @property {SVGSVGElement|null} chart Continuous chart with a resize observer.
  * @property {HistogramAxisControls|null} axisControls Continuous chart's axis editor.
  * @property {Array<{button:HTMLButtonElement,handleClick:()=>void}>} listeners Owned action listeners.
@@ -122,6 +123,8 @@ export class RasterHistogramControlsView {
         );
         /** @type {Map<string, HistogramSummaryCard>} */
         this.summaryCards = new Map();
+        /** @type {{position:{longitude:number,latitude:number},samples:ReadonlyArray<RasterPointValuePresentation>}|null} */
+        this.pointSnapshot = null;
         this.axisStates = new Map();
         this.categoryExpansions = new Map();
         this.detailAxisControls = null;
@@ -209,6 +212,7 @@ export class RasterHistogramControlsView {
             if (current !== card.root) this.histogramList.insertBefore(card.root, current);
         }
         this.histogramEmpty.hidden = summaries.length > 0;
+        this.#renderPointDetails();
         this.#synchronizeSummaryExpansion();
         if (focusedCard) {
             // Reordering can blur a retained input. Removal instead needs a
@@ -223,7 +227,7 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Render exact in-bounds raster values retained from one map click.
+     * Associate exact clicked values with their raster cards, retaining paired values separately.
      *
      * @param {{position:Readonly<{longitude:number,latitude:number}>,samples:ReadonlyArray<Readonly<RasterPointValuePresentation>>}}
      * snapshot Immutable point results with optional owner-prepared value text.
@@ -256,14 +260,28 @@ export class RasterHistogramControlsView {
         ) {
             throw new TypeError("Raster point-sample snapshot is invalid");
         }
-        const samples = snapshot.samples.filter(
-            (sample) => sample.state !== "outside"
-        );
-        if (samples.length === 0) {
-            this.clearPointSamples();
-            return;
+        this.pointSnapshot = snapshot;
+        this.#renderPointDetails();
+    }
+
+    /** Update secondary point details without replacing charts, axes or focused controls.
+     * Paired charts and point-only results retain a collapsed, labeled value list.
+     * @return {void}
+     */
+    #renderPointDetails() {
+        const samples = this.pointSnapshot?.samples.filter(sample => sample.state !== "outside") ?? [];
+        for (const [key, card] of this.summaryCards) {
+            const sample = samples.find(value => value.key === key);
+            card.pointValue.hidden = !sample;
+            card.pointValue.textContent = sample ? `Clicked pixel · ${this.#pointValueText(sample)}` : "";
+            card.pointValue.setAttribute("data-state", sample?.state ?? "");
+            card.pointValue.setAttribute("aria-busy", String(sample?.state === "loading"));
+            card.pointValue.title = sample
+                ? `At ${this.pointSnapshot.position.latitude}, ${this.pointSnapshot.position.longitude}` : "";
         }
-        const rows = samples.map((sample) => {
+        const separateSamples = samples.filter(sample => !this.modeIsCompatible || !this.summaryCards.has(sample.key));
+        this.pointSamples.hidden = separateSamples.length === 0;
+        const rows = separateSamples.map((sample) => {
             const row = this.documentContext.createElement("div");
             row.className = "raster-point-sample-row";
             row.setAttribute("data-state", sample.state);
@@ -281,32 +299,35 @@ export class RasterHistogramControlsView {
             name.append(label);
             const value = this.documentContext.createElement("dd");
             value.className = "raster-point-sample-value";
-            value.textContent = {
-                loading: "Reading…",
-                value: sample.state === "value"
-                    ? sample.displayValue ?? formatRasterPixelValue(sample.value)
-                    : "",
-                nodata: "No data",
-                error: sample.errorMessage === ""
-                    ? "Unavailable"
-                    : `Unavailable: ${sample.errorMessage}`,
-            }[sample.state];
+            value.textContent = this.#pointValueText(sample);
             row.append(name, value);
             return row;
         });
         this.pointSampleList.replaceChildren(...rows);
-        this.pointSamples.hidden = false;
         this.pointSamples.setAttribute(
             "aria-busy",
-            String(samples.some((sample) => sample.state === "loading"))
+            String(separateSamples.some((sample) => sample.state === "loading"))
         );
+    }
+
+    /** Format the point reader's state without confusing it with an area result.
+     * @param {RasterPointValuePresentation} sample Validated point presentation.
+     * @return {string} Exact value or point-read status.
+     */
+    #pointValueText(sample) {
+        return {
+            loading: "Reading…",
+            value: sample.state === "value" ? sample.displayValue ?? formatRasterPixelValue(sample.value) : "",
+            nodata: "No data",
+            outside: "Outside raster",
+            error: sample.errorMessage === "" ? "Unavailable" : `Unavailable: ${sample.errorMessage}`,
+        }[sample.state];
     }
 
     /** Hide and remove exact values from the previous map click. @return {void} */
     clearPointSamples() {
-        this.pointSampleList.replaceChildren();
-        this.pointSamples.hidden = true;
-        this.pointSamples.setAttribute("aria-busy", "false");
+        this.pointSnapshot = null;
+        this.#renderPointDetails();
     }
 
     /**
@@ -346,6 +367,7 @@ export class RasterHistogramControlsView {
         // In 1D each layer labels its own scope; only 2D has one shared scope.
         this.mapScope.hidden = isCompatible;
         this.histogramList.hidden = !isCompatible;
+        this.#renderPointDetails();
         const isVisible = isCompatible && this.isAvailable && !this.automatic;
         this.histogram.hidden = !isVisible;
         this.histogram.setAttribute("aria-hidden", String(!isVisible));
@@ -547,7 +569,11 @@ export class RasterHistogramControlsView {
         container.className = "raster-histogram-summary";
         container.setAttribute("aria-label", `Histogram — ${summary.label}`);
         container.setAttribute("tabindex", "-1");
-        const card = { key: summary.key, signature, root: container,
+        const pointValue = this.documentContext.createElement("p");
+        pointValue.className = "raster-histogram-point-value";
+        pointValue.hidden = true;
+        pointValue.setAttribute("role", "status");
+        const card = { key: summary.key, signature, root: container, pointValue,
             button: null, chart: null, axisControls: null, listeners: [] };
         const content = summary.automatic
             ? container
@@ -607,6 +633,7 @@ export class RasterHistogramControlsView {
             content.append(this.#createSummaryPreview(summary));
         }
         content.append(scope);
+        container.append(pointValue);
         const actions = this.documentContext.createElement("div");
         actions.className = "raster-histogram-summary-actions";
         const style = this.documentContext.createElement("button");

@@ -50,11 +50,12 @@ test("showing, editing and minimizing sampling controls never changes the chosen
     assert.equal(view.tool.hidden, false);
     assert.equal(view.mapBoxControls.hidden, false);
     assert.equal(view.dimensions.textContent, "200 × 200 km");
-    view.mapBoxControls.open = false;
+    assert.equal(view.samplingAreaSummary.textContent, "Sampling box · 200 × 200 km");
+    view.disclosure.open = false;
     view.setActive(false, false);
     assert.equal(view.tool.hidden, true);
     view.setActive(true, true);
-    assert.equal(view.mapBoxControls.open, false, "a minimized box control stays minimized");
+    assert.equal(view.disclosure.open, false, "the sampling disclosure stays collapsed");
     assert.equal(view.sampleWindowNumber.value, "200");
     view.setActive(true, false);
     assert.equal(view.mapBoxControls.hidden, true, "whole-raster workflows do not show box sizing");
