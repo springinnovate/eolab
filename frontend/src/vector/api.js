@@ -18,7 +18,7 @@ import {
  * @param {{field:string,search:string,offset:number}} query Field and matching page.
  * @param {AbortSignal} signal Cancellation when the editor or query changes.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP transport.
- * @return {Promise<{field:string,values:string[],nextOffset:number|null}>} Up to 50 exact values.
+ * @return {Promise<{field:string,values:string[],nextOffset:number|null,truncated:boolean}>} Up to 50 exact values and whether the field has values beyond the prepared choices.
  * @throws {Error} If the request fails, values are unavailable or the response is invalid.
  * @throws {DOMException} If the request is aborted.
  */
@@ -47,7 +47,7 @@ export async function getVectorFieldValues(source, query, signal, fetchImplement
     }
     const result = await response.json().catch(() => null);
     if (result?.field !== query.field || !Array.isArray(result.values) || result.values.length > page.limit ||
-        result.values.some(value => typeof value !== "string") ||
+        result.values.some(value => typeof value !== "string") || typeof result.truncated !== "boolean" ||
         !(result.nextOffset === null || (Number.isSafeInteger(result.nextOffset) && result.values.length > 0 &&
             result.nextOffset === query.offset + result.values.length))) {
         throw new Error("Available values returned an invalid response. Try again.");

@@ -11,7 +11,7 @@ export class VectorFilterValuePicker {
      * @param {HTMLInputElement} options.input Existing scalar input, focused after selection.
      * @param {string} options.field Exact field name for labels and queries.
      * @param {number} options.condition One-based rule number for accessible labels.
-     * @param {(query:{field:string,search:string,offset:number},signal:AbortSignal)=>Promise<{values:string[],nextOffset:number|null}>} options.loadValues Prepared-value API callback.
+     * @param {(query:{field:string,search:string,offset:number},signal:AbortSignal)=>Promise<{values:string[],nextOffset:number|null,truncated:boolean}>} options.loadValues Prepared-value API callback; truncated means the field has values beyond the prepared choices.
      * @param {(value:string)=>boolean} options.acceptsValue Current filter-contract validation.
      * @param {(value:string)=>void} options.selectValue Set the exact scalar through the editor.
      * @param {()=>boolean} options.isCurrent Whether the source is still selected.
@@ -127,6 +127,9 @@ export class VectorFilterValuePicker {
             this.status.textContent = page.values.length
                 ? `Values ${offset + 1}–${offset + page.values.length}. Choose one to set the condition.${unavailable ? " Dimmed values exceed the filter's text length or character limits." : ""}`
                 : "No available values match. You can still enter a value directly.";
+            if (page.truncated) {
+                this.status.textContent += " Only 255 values are available in this list. More values exist; enter a value directly to use one that is not listed.";
+            }
             this.previous.disabled = this.previousOffsets.length === 0; this.next.disabled = page.nextOffset === null;
         } catch (error) {
             if (request !== this.request || !this.isCurrent() || error.name === "AbortError") return;

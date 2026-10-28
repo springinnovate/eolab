@@ -21,7 +21,7 @@ test("prepared field values send only Catalog identity and matching page, preser
     const source = { collectionId: "vectors", itemId: "countries", path: "must-not-send", filter: {} };
     const query = { field: "name", search: " ß ", offset: 50 };
     const controller = new AbortController();
-    const page = { field: "name", values: ["", "  literal  ", "NULL", "é", "a\nb", "x".repeat(257)], nextOffset: 56 };
+    const page = { field: "name", values: ["", "  literal  ", "NULL", "é", "a\nb", "x".repeat(257)], nextOffset: 56, truncated: true };
     assert.deepEqual(await getVectorFieldValues(source, query, controller.signal, async (url, options) => {
         assert.equal(url, "/api/catalog/vector-field-values");
         assert.equal(options.method, "POST"); assert.equal(options.signal, controller.signal);
@@ -33,7 +33,7 @@ test("prepared field values send only Catalog identity and matching page, preser
 
 test("prepared upload values use the browser cookie and encode exact search text", async () => {
     const source = { uploadId: "owned/id" }, query = { field: "Group & name", search: "a+b &é", offset: 0 };
-    const page = { field: query.field, values: ["a+b &é"], nextOffset: null };
+    const page = { field: query.field, values: ["a+b &é"], nextOffset: null, truncated: false };
     assert.deepEqual(await getVectorFieldValues(source, query, undefined, async (url, options) => {
         const parsed = new URL(url, "https://eolab.test");
         assert.equal(parsed.pathname, "/api/vector-uploads/owned%2Fid/field-values");
@@ -47,10 +47,11 @@ test("prepared upload values use the browser cookie and encode exact search text
 
 test("prepared value lookup rejects malformed pages and preserves unavailable, transport and abort failures", async () => {
     const source = { collectionId: "vectors", itemId: "countries" }, query = { field: "name", search: "", offset: 0 };
-    const valid = { field: "name", values: ["exact"], nextOffset: null };
+    const valid = { field: "name", values: ["exact"], nextOffset: null, truncated: false };
     for (const page of [null, {...valid, field: "other"}, {...valid, values: [null]}, {...valid, values: [1]},
         {...valid, values: Array(51).fill("a")}, {...valid, nextOffset: 0}, {...valid, nextOffset: 2},
-        {...valid, values: [], nextOffset: 1}, {field: "name", values: []}]) {
+        {...valid, values: [], nextOffset: 1}, {...valid, truncated: "false"}, {...valid, truncated: undefined},
+        {field: "name", values: []}]) {
         await assert.rejects(getVectorFieldValues(source, query, undefined, async () => Response.json(page)), /invalid response/);
     }
     await assert.rejects(getVectorFieldValues(source, query, undefined, async () => new Response("not JSON")), /invalid response/);

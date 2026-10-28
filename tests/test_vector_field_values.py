@@ -25,7 +25,13 @@ from eolab_app.vector_field_values import (
 def test_pages_preserve_exact_strings_and_unicode_search() -> None:
     """Keep case/Unicode distinctions while matching full Unicode casefold text."""
     values = sorted({"", "Straße", "STRASSE", "e\u0301", "é", "Alpha", "alpha"})
-    inventory = {"name": [(value, value.casefold()) for value in values], "empty": []}
+    inventory = {
+        "name": {
+            "values": [(value, value.casefold()) for value in values],
+            "truncated": False,
+        },
+        "empty": {"values": [], "truncated": False},
+    }
     collected = []
     offset = 0
     while True:
@@ -33,6 +39,7 @@ def test_pages_preserve_exact_strings_and_unicode_search() -> None:
             inventory, VectorFieldValueQuery(field="name", offset=offset, limit=2)
         )
         collected.extend(page.values)
+        assert not page.truncated
         if page.next_offset is None:
             break
         offset = page.next_offset
@@ -80,7 +87,10 @@ def test_public_catalog_metadata_never_contains_inventories(projected: bool) -> 
     """Strip private values even when a STAC projection omits Item identity."""
     properties = {
         VECTOR_FIELD_VALUES_KEY: {
-            "name": [["private vocabulary", "private vocabulary"]]
+            "name": {
+                "values": [["private vocabulary", "private vocabulary"]],
+                "truncated": False,
+            }
         },
         "title": "Visible",
     }
@@ -95,7 +105,9 @@ def test_public_catalog_metadata_never_contains_inventories(projected: bool) -> 
 def test_catalog_value_route_validates_identity_and_pages() -> None:
     """Use a path-free lookup contract independent of vector styling services."""
     lookup = AsyncMock(
-        return_value=VectorFieldValuePage(field="name", values=("Exact",), nextOffset=1)
+        return_value=VectorFieldValuePage(
+            field="name", values=("Exact",), nextOffset=1, truncated=True
+        )
     )
     app = FastAPI()
     app.include_router(create_catalog_router(AsyncMock(), AsyncMock(), lookup))
@@ -109,7 +121,12 @@ def test_catalog_value_route_validates_identity_and_pages() -> None:
     }
     response = client.post("/api/catalog/vector-field-values", json=body)
     assert response.status_code == 200
-    assert response.json() == {"field": "name", "values": ["Exact"], "nextOffset": 1}
+    assert response.json() == {
+        "field": "name",
+        "values": ["Exact"],
+        "nextOffset": 1,
+        "truncated": True,
+    }
     assert response.headers["cache-control"] == "no-store"
     assert lookup.await_args.args[0].model_dump(by_alias=True) == {**body, "offset": 0}
     for invalid in (
@@ -138,7 +155,7 @@ def test_catalog_adapter_returns_only_requested_metadata_page(
 ) -> None:
     """Bind all query inputs and use prepared Unicode search rather than SQL lower."""
     cursor = AsyncMock()
-    cursor.fetchone.return_value = (True, True, ["STRASSE", "Straße", "extra"])
+    cursor.fetchone.return_value = (True, True, True, ["STRASSE", "Straße", "extra"])
     connection = AsyncMock()
     connection.__aenter__.return_value = connection
     connection.execute.return_value = cursor
@@ -155,6 +172,7 @@ def test_catalog_adapter_returns_only_requested_metadata_page(
     )
     page = asyncio.run(PgStacCatalogDatabase().get_vector_field_values(query))
     assert page.values == ("STRASSE", "Straße") and page.next_offset == 7
+    assert page.truncated
     sql, params = connection.execute.await_args.args
     assert "WITH ORDINALITY" in sql and "lower(" not in sql
     assert params == (
@@ -163,10 +181,11 @@ def test_catalog_adapter_returns_only_requested_metadata_page(
         "layer",
         "name",
         "name",
+        "name",
         "strasse",
         5,
         3,
     )
-    cursor.fetchone.return_value = (False, None, [])
+    cursor.fetchone.return_value = (False, None, None, [])
     with pytest.raises(VectorFieldValuesUnavailable, match="scan"):
         asyncio.run(PgStacCatalogDatabase().get_vector_field_values(query))

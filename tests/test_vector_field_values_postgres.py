@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -13,18 +14,21 @@ from eolab_app.vector_field_values import (
     VECTOR_FIELD_VALUES_KEY,
     CatalogVectorFieldValueQuery,
     VectorFieldValuesUnavailable,
+    read_field_value_inventory,
 )
 from test_processing_jobs import store  # noqa: F401
+from test_vector_field_value_admission import write_text_layer
 
 
 def test_catalog_inventory_query_refresh_and_removal(
-    store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch
+    store: PostgresJobStore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Verify actual JSON paging, Unicode matching and replacement/deletion behavior.
 
     Args:
         store: Existing fixture enforcing an explicit disposable database name.
         monkeypatch: Route only this adapter's connections to the disposable DSN.
+        tmp_path: Disposable native source for the production admission helper.
     """
     # The query uses only these pgSTAC columns; no deployed Catalog is modified.
     with psycopg.connect(store.conninfo) as connection:
@@ -45,16 +49,18 @@ def test_catalog_inventory_query_refresh_and_removal(
 
     monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
     database = PgStacCatalogDatabase()
-    exact = sorted(
-        [
-            "",
-            "Straße",
-            "STRASSE",
-            "é",
-            "e\u0301",
-            *[f"value {i:04d}" for i in range(550)],
-        ]
-    )
+    source_values = [
+        "",
+        "Straße",
+        "STRASSE",
+        "é",
+        "e\u0301",
+        *[f"value {i:04d}" for i in range(550)],
+    ]
+    source = tmp_path / "values.gpkg"
+    write_text_layer(source, "GPKG", source_values)
+    inventory = read_field_value_inventory(str(source), "values", {"label": "str"})
+    exact = sorted(source_values[:255])
 
     def publish(properties: dict[str, Any]) -> None:
         """Replace the Item's admitted properties in the real database.
@@ -94,28 +100,39 @@ def test_catalog_inventory_query_refresh_and_removal(
         )
 
     try:
-        publish(
-            {
-                VECTOR_FIELD_VALUES_KEY: {
-                    "label": [(value, value.casefold()) for value in exact]
-                }
-            }
-        )
+        publish({VECTOR_FIELD_VALUES_KEY: inventory})
         collected = []
         offset = 0
         while True:
             page = query(offset=offset, limit=100)
             collected.extend(page.values)
+            assert page.truncated
             if page.next_offset is None:
                 break
             offset = page.next_offset
         assert collected == exact
         assert query(search="STRASSE").values == ("STRASSE", "Straße")
         assert query(search="%_").values == ()  # Substring, not SQL wildcard syntax.
+        assert (
+            query(search="value 0549").values == ()
+            and query(search="value 0549").truncated
+        )
         assert query(offset=1000).values == ()
-        publish({VECTOR_FIELD_VALUES_KEY: {"label": [["replacement", "replacement"]]}})
+        publish(
+            {
+                VECTOR_FIELD_VALUES_KEY: {
+                    "label": {
+                        "values": [["replacement", "replacement"]],
+                        "truncated": False,
+                    }
+                }
+            }
+        )
         assert query().values == ("replacement",)
-        publish({VECTOR_FIELD_VALUES_KEY: {"label": []}})
+        assert not query().truncated
+        publish(
+            {VECTOR_FIELD_VALUES_KEY: {"label": {"values": [], "truncated": False}}}
+        )
         assert query().values == () and query().next_offset is None
         publish({VECTOR_FIELD_VALUES_KEY: {}})
         with pytest.raises(VectorFieldValuesUnavailable, match="string field"):

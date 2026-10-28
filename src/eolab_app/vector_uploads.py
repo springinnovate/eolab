@@ -76,9 +76,10 @@ def inspect_geopackage(result: ProcessResultWriter, path: Path) -> None:
     Args:
         result: Pipe receiving layer metadata or a safe admission error string.
         path: Server-created staging file, never a client-supplied path. Its
-            sibling values.json receives complete string inventories; the source
+            sibling values.json receives up to 255 choices per field; the source
             is never rewritten. The staging owner removes failed preparations.
     """
+
     try:
         with fiona.open(path, enabled_drivers=["GPKG"]) as dataset:
             if len(fiona.listlayers(path)) != 1:
