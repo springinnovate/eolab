@@ -102,7 +102,7 @@ export class CalculationExecutor {
     stop() {
         this.#pending = null;
         this.#cancelSaved();
-        if (!this.#saved) this.#status.message = "Calculation cancelled.";
+        if (!this.#saved) { this.storage.clear(); this.#status.message = "Calculation cancelled."; }
         void this.#advance();
         this.#notify();
     }
@@ -187,7 +187,9 @@ export class CalculationExecutor {
             } else this.#status.message = this.#saved.cancelRequested || job.status === "cancelled"
                 ? "Calculation cancelled." : job.error?.detail ?? "Calculation interrupted. Calculate to try again.";
             this.jobs.tracked.delete(job.jobId);
-            this.storage.clear();
+            // Keep explicit requests, including finished peers, together across reload.
+            // Replacing inputs or cancelling releases these per-position records.
+            if (this.#saved.context?.automatic !== false || this.#saved.cancelRequested) this.storage.clear();
             this.#saved = null;
             this.#status.currentJob = null;
             this.#status.phase = "idle";

@@ -78,7 +78,8 @@ export class RasterSeriesController {
             onAddPlot: () => this.addPlot(),
             onRemovePlot: id => this.removePlot(id),
             onPlotScale: (id, scale) => this.setPlotScale(id, scale),
-            onCalculate: () => void this.areaStatistics.calculateRemainingRasters(),
+            onCalculate: () => this.calculate(),
+            onAutomatic: automatic => this.areaStatistics.setAutomatic(automatic),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
@@ -103,6 +104,48 @@ export class RasterSeriesController {
         this.render();
     }
 
+    /** Restore the inputs and results of explicitly started calculations after reload.
+     * Automatic requests are cancelled by the calculation owner. Recovered inputs
+     * remain selected even if their sources are no longer in Map layers.
+     * @return {Promise<void>} Saved jobs and any temporal metadata have been retrieved.
+     */
+    async start() {
+        const area = this.areaStatistics;
+        const started = area.start();
+        if (area.manual) {
+            this.formulas = area.formulas.map(formula => ({...formula}));
+            this.formulaSerial = Math.max(...this.formulas.map(formula => formula.id));
+            this.statisticDisplay = new Map(this.formulas.map((formula, index) =>
+                [formula.id, {plotId: 1, visible: true, styleIndex: index}]));
+            this.selectedArea = area.area;
+            this.selectedAreaLabel = area.areaLabel;
+            this.areaChoice = area.area.kind === "wholeRaster" ? "whole" : "selection";
+            this.position = area.pixelPoint;
+            this.sources = area.sources;
+            this.selectedKeys = new Set(area.sources.map(source => source.key));
+            this.selectionOverrides = new Map(area.sources.map(source => [source.key, true]));
+            if (area.temporalMode) {
+                this.sourceMode = "temporal";
+                const source = area.temporalSource;
+                const dataset = {key: source.collectionId + "/" + source.itemId, ...source, label: source.itemId};
+                Object.assign(this.temporal, {datasets: [dataset], datasetKey: dataset.key, variable: source.variable,
+                    periodMode: "times", startTime: source.startTime.replace(/Z$/, ""), endTime: source.endTime.replace(/Z$/, "")});
+                try { this.temporal.item = await this.getTemporalItem(dataset); }
+                catch (error) { this.temporal.error = `Dataset could not be loaded: ${error.message} Refresh to try again.`; }
+            }
+        }
+        await started;
+        this.render();
+    }
+
+    /** Start the selected calculations explicitly so they continue while this panel is closed.
+     * @return {void} Results arrive through the existing progress listener.
+     */
+    calculate() {
+        this.selectionOverrides = new Map(this.sources.map(source => [source.key, this.selectedKeys.has(source.key)]));
+        this.areaStatistics.calculateRemainingRasters();
+    }
+
     /**
      * Update available rasters and reconcile their default selections.
      * Untouched sources follow map visibility; explicit checklist choices override
@@ -112,6 +155,11 @@ export class RasterSeriesController {
      * @return {void}
      */
     updateAvailableRasters(sources, datasets = []) {
+        if (this.areaStatistics.manual) {
+            sources = [...sources, ...this.sources.filter(source => this.selectedKeys.has(source.key) && !sources.some(item => item.key === source.key))];
+            datasets = [...datasets, ...this.temporal.datasets.filter(dataset => dataset.key === this.temporal.datasetKey && !datasets.some(item => item.key === dataset.key))];
+            for (const source of sources) this.selectionOverrides.set(source.key, this.selectedKeys.has(source.key));
+        }
         if (!this.sources.length && !this.temporal.datasets.length && !sources.length && datasets.length) this.sourceMode = "temporal";
         this.temporal.datasets = datasets;
         if (this.temporal.datasetKey && !datasets.some(dataset => dataset.key === this.temporal.datasetKey)) {
@@ -196,13 +244,14 @@ export class RasterSeriesController {
      * @return {void}
      */
     setPosition(position) {
+        if (!this.active && this.areaStatistics.manual) return;
         if (this.position?.longitude === position?.longitude && this.position?.latitude === position?.latitude) return;
         this.position = isCanonicalWgs84Position(position) ? Object.freeze({ ...position }) : null;
         this.updateAreaInputs();
     }
 
     /**
-     * Start calculations when shown; cancel unfinished work when hidden.
+     * Start automatic calculations when shown; keep explicit work running when hidden.
      * Completed values and settings remain available when the panel is reopened.
      * @param {boolean} panelVisible Whether Raster series is the visible, active tool.
      * @return {void}
@@ -245,6 +294,7 @@ export class RasterSeriesController {
      * @param {string} [label="Current sampling area"] Area description. @return {void}
      */
     setArea(area, label = "Current sampling area") {
+        if (!this.active && this.areaStatistics.manual) return;
         this.selectedArea = area; this.selectedAreaLabel = label; this.updateAreaInputs();
     }
 
@@ -372,7 +422,7 @@ export class RasterSeriesController {
         this.view.render({
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
-                recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
+                recoverable: area.needsRecovery, hasErrors: area.hasErrors, automatic: area.automatic }, statistics, plots: this.plots,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType,
@@ -397,7 +447,7 @@ export class RasterSeriesController {
             })}));
         this.view.render({active: this.active, temporal: {...this.temporal, selectionError: this.temporalSelectionError()},
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: area.area, areaLabel: area.areaLabel,
-                results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
+                results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors, automatic: area.automatic},
             statistics, plots: this.plots, sources: [], rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: null, showingPrevious: false, busy: area.busy, chartType: this.chartType,
             message: this.temporalSelectionError() || area.message,

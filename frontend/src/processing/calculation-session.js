@@ -139,8 +139,13 @@ export class CalculationSessionStorage {
                 !(value.pending === null || (value.pending?.planId === undefined && /^[A-Za-z0-9_-]{16,80}$/.test(value.pending?.requestId))) ||
                 (!value.jobId && !value.pending)) return null;
             if (value.client !== undefined && !["summary", "raster-series", "summary-query"].includes(value.client)) return null;
+            const presentation = value.presentation;
+            if (presentation !== undefined && (typeof presentation.key !== "string" || !presentation.key || presentation.key.length > 2048 ||
+                !Array.isArray(presentation.names) || presentation.names.length !== value.intent.calculations.length ||
+                presentation.names.some(name => typeof name !== "string" || name.length > 80))) return null;
             return { intent: calculationIntent(value.intent), jobId: value.jobId, pending: value.pending,
-                context: Object.freeze({ automatic: value.automatic, ...(value.client ? { client: value.client } : {}) }), cancelRequested: value.cancelRequested };
+                context: Object.freeze({ automatic: value.automatic, ...(value.client ? { client: value.client } : {}),
+                    ...(presentation ? {presentation} : {}) }), cancelRequested: value.cancelRequested };
         } catch { return null; }
     }
     /** Save only this caller's submission before transport; never overwrite a peer.
@@ -152,7 +157,8 @@ export class CalculationSessionStorage {
     write(record) {
         if (!this.storage) throw new Error("Browser session storage is needed for recoverable calculations.");
         const { context, ...execution } = record;
-        const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}) });
+        const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}),
+            ...(context?.presentation ? {presentation: context.presentation} : {}) });
         if (text.length > 16384) throw new Error("Calculation recovery information is too large.");
         this.storage.setItem(KEY_PREFIX + this.client, text);
     }

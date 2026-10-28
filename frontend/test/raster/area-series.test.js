@@ -159,6 +159,52 @@ test("standard deviation submits the population formula per raster and retains r
     h.close();
 });
 
+test("explicit calculations keep their sources, point and area while hidden and recover finished peers after reload", async () => {
+    const h = fixture();
+    h.view.actions.onAutomatic(false);
+    h.controller.addFormula("pixel");
+    h.controller.setPosition({longitude: 0.5, latitude: 0.5});
+    await h.open();
+    assert.equal(h.requests.length, 0);
+    h.view.actions.onCalculate(); await flush();
+    await h.finish("ready", false, "1");
+    h.controller.updateSamplingForPanelVisibility(false);
+    h.controller.setArea(box(10), "Another map box");
+    h.controller.setPosition({longitude: 10.5, latitude: 0.5});
+    h.controller.updateAvailableRasters([source("3")]);
+    await flush();
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
+    assert.deepEqual(h.area.area, box(0));
+    assert.deepEqual(h.area.sources.map(source => source.key), ["1", "2"]);
+    assert.equal(h.data.size, 2, "finished and unfinished requests are retained together");
+    h.close();
+    const restored = fixture(h.api, h.data);
+    await restored.controller.start(); await flush();
+    assert.deepEqual(restored.controller.formulas.map(formula => formula.expression), ["mean(a)", "pixelValue(a)"]);
+    assert.deepEqual(restored.area.pixelPoint, {longitude: 0.5, latitude: 0.5});
+    assert.equal(restored.area.results.size, 1);
+    assert.equal(restored.area.pending.size, 1);
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2, "reload observes existing jobs");
+    await h.finish("ready", false, "2");
+    await restored.jobs.refresh(); await flush();
+    assert.equal(restored.area.complete, true);
+    assert.equal(restored.view.state.rows.filter(row => row.state === "value").length, 4);
+    restored.view.actions.onCancel(); await flush();
+    assert.equal(h.data.size, 0);
+    restored.close();
+});
+
+test("retrying a failed raster keeps the successful peer's saved result", async () => {
+    const h = fixture(); h.view.actions.onAutomatic(false); await h.open();
+    h.view.actions.onCalculate(); await flush();
+    await h.finish("ready", false, "1"); await h.finish("failed", false, "2");
+    h.view.actions.onCalculate(); await flush();
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 3);
+    const records = [...h.data.values()].map(value => JSON.parse(value));
+    assert.deepEqual(records.map(record => record.intent.source.itemId).sort(), ["1", "2"]);
+    h.close();
+});
+
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
     const h=fixture();h.controller.addFormula("area");await h.open();
     assert.equal(h.requests.filter(([k])=>k==="submit").length,2);
