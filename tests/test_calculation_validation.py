@@ -289,15 +289,14 @@ def test_reused_request_still_requires_its_uploaded_polygon_copy() -> None:
 
 
 def test_expression_help_lists_every_function_with_valid_examples() -> None:
-    """Keep the visible function list complete and its copyable examples accepted."""
+    """Check Raster statistics documents every function with valid formula examples."""
     markup = Path("frontend/index.html").read_text(encoding="utf-8")
-    help_text = markup.split('id="calculations-help"', 1)[1].split("</details>", 1)[0]
-    function_list = help_text.split('<ul class="calculation-functions">', 1)[1].split(
-        "</ul>", 1
-    )[0]
+    help_text = markup.split('class="raster-series-help raster-series-settings"', 1)[
+        1
+    ].split("</details>", 1)[0]
+    function_list = help_text.split("<ul>", 1)[1].split("</ul>", 1)[0]
     examples = [
-        unescape(value)
-        for value in re.findall(r"<li><code>(.*?)</code>", function_list)
+        unescape(value) for value in re.findall(r"<code>(.*?)</code>", function_list)
     ]
     assert {value.split("(", 1)[0] for value in examples} == FUNCTIONS
     for value in re.findall(r"<code>(.*?)</code>", help_text):
