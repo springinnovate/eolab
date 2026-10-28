@@ -385,6 +385,10 @@ export class RasterSeriesView {
         }
         const areaChoice = this.document.querySelector("#raster-series-area");
         if (areaChoice.value !== area.areaChoice) areaChoice.value = area.areaChoice;
+        const selectedArea = this.document.querySelector("#raster-series-selected-area");
+        const selectedAreaLabel = area.area?.kind === "catalogSelection" ? "Selected vector features"
+            : area.area?.kind === "polygonArea" ? "Selected polygons" : "Map sampling area";
+        if (selectedArea.textContent !== selectedAreaLabel) selectedArea.textContent = selectedAreaLabel;
         const vector = this.document.querySelector("#raster-series-vector-area");
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const editArea = this.document.querySelector("#raster-series-edit-area");
