@@ -234,7 +234,7 @@ test("pending and failed summaries do not present cached charts as the current s
             loading: "Updating histogram…", error: "Histogram unavailable", ready: "",
         }[state]);
         assert.equal(row.children[1].hidden, state === "ready");
-        assert.equal(row.children.at(-2).textContent, "200 km map sample");
+        assert.equal(row.children.at(-3).textContent, "200 km map sample");
         if (state === "ready") {
             assert.equal(row.children[2].classList.contains("raster-histogram-chart"), true);
             assert.equal(row.children[2].getAttribute("viewBox"), "0 0 640 190");
@@ -367,8 +367,8 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     const firstButton = firstRow.children[0];
     const secondButton = secondRow.children[0];
     firstButton.dispatchEvent(new Event("click"));
-    firstRow.children[1].children[0].dispatchEvent(new Event("click"));
-    const actions = firstRow.children[1].children;
+    firstRow.children.at(-1).children[0].dispatchEvent(new Event("click"));
+    const actions = firstRow.children.at(-1).children;
     assert.deepEqual(actions.map(button => button.getAttribute("aria-label")), [
         "Style first-raster.tif", "Calculate statistics for first-raster.tif over this area", "Download clip of first-raster.tif",
     ]);
@@ -642,5 +642,49 @@ test("histogram Processing actions follow the source capability while interactiv
     ]);
     view.renderLayerHistograms([summary], "weather");
     assert.equal(list.children[0].children.at(-1).children.length, 1);
+    view.unbind();
+});
+
+
+test("clicked values update below their own charts without replacing axes or repeating raster names", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    const summary = { key: "first", label: "Temperature", state: "ready", canCalculate: true,
+        scope: "Completed 100 km map sample", automatic: true, counts: [1, 4, 2],
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    view.renderLayerHistograms([summary], "first");
+    const card = doc.querySelector("#raster-histogram-list").children[0];
+    const chart = card.children[2];
+    const actions = card.children.at(-1);
+    actions.children[0].focus();
+    for (const [state, value, expected] of [["loading", null, "Reading…"], ["value", 12.5, "1.250e+1"],
+        ["nodata", null, "No data"], ["error", null, "Unavailable: Source read failed"]]) {
+        view.renderPointSamples({ position: { latitude: 2, longitude: 1 }, samples: [
+            { key: "first", label: "Temperature", axis: null, state, value, errorMessage: "Source read failed" },
+        ] });
+        assert.equal(card.children[2], chart, "point results leave the area chart untouched");
+        assert.equal(doc.activeElement, actions.children[0]);
+        const detail = card.children.at(-2);
+        assert.equal(detail.textContent, `Clicked pixel · ${expected}`);
+        assert.equal(detail.title, "At 2, 1");
+        assert.equal(detail.hidden, false);
+        assert.equal(doc.querySelector("#raster-point-samples").hidden, true, "no second raster list before charts");
+        assert.equal(card.children[0].textContent, "Temperature");
+        assert.equal(card.children.at(-3).textContent, "Completed 100 km map sample");
+    }
+    view.setModeCompatible(false);
+    assert.equal(doc.querySelector("#raster-point-samples").hidden, false, "paired charts retain distinct point details");
+    view.setModeCompatible(true);
+    assert.equal(doc.querySelector("#raster-point-samples").hidden, true);
+    view.renderLayerHistograms([{ ...summary, scope: "Completed 150 km map sample" }], "first");
+    const updatedCard = doc.querySelector("#raster-histogram-list").children[0];
+    assert.match(updatedCard.children.at(-2).textContent, /Source read failed/, "area refresh keeps the latest point result");
+    view.renderPointSamples({ position: { latitude: 2, longitude: 1 }, samples: [
+        { key: "first", label: "Temperature", axis: null, state: "outside", value: null, errorMessage: "" },
+    ] });
+    assert.equal(updatedCard.children.at(-2).hidden, true, "outside points do not show an in-bounds value");
+    assert.equal(doc.querySelector("#raster-point-samples").hidden, true);
+    view.clearPointSamples();
+    assert.equal(updatedCard.children.at(-2).hidden, true);
     view.unbind();
 });

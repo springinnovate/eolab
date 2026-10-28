@@ -42,6 +42,7 @@ export class RasterSamplingAreaControlsView {
         this.disclosureSummary = requireRasterControl(documentContext, "#raster-sampling-disclosure > summary");
         this.dimensions = requireRasterControl(documentContext, "#raster-sample-window-dimensions");
         this.usesBox = true;
+        this.areaLabel = "No raster selected";
         this.samplingAreaSummary = requireRasterControl(
             documentContext,
             "#raster-sampling-area-summary"
@@ -171,6 +172,7 @@ export class RasterSamplingAreaControlsView {
         this.sampleWindowRange.setAttribute("aria-valuetext", `${value} kilometers`);
         this.sampleWindowNumber.value = String(value);
         this.dimensions.textContent = `${value} × ${value} km`;
+        this.#renderAreaSummary();
     }
 
     /** Show controls for an active sampling workflow, without selecting an area.
@@ -192,7 +194,6 @@ export class RasterSamplingAreaControlsView {
      */
     openAreaEditor() {
         this.disclosure.open = true;
-        this.mapBoxControls.open = true;
         this.#renderBoxVisibility();
         this.disclosureSummary.focus();
     }
@@ -252,6 +253,7 @@ export class RasterSamplingAreaControlsView {
      * @param {string} mode Selection discriminator.
      * @param {string} [label=""] Readable selected-area description.
      * @return {void}
+     * @throws {RangeError} If the mode is outside the sampling-area contract.
      */
     setSamplingAreaMode(mode, label = "") {
         if (!["none", "wholeRaster", "selectedArea", "catalogSelection", "vector"].includes(mode)) {
@@ -261,9 +263,17 @@ export class RasterSamplingAreaControlsView {
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
         this.#renderBoxVisibility();
-        this.samplingAreaSummary.textContent = label || (
-            mode === "none" ? "No raster selected" : "Whole raster"
-        );
+        this.areaLabel = label || (mode === "none" ? "No raster selected" : "Whole raster");
+        this.#renderAreaSummary();
+    }
+
+    /** Label the collapsed control from the existing area and size controls.
+     * @return {void}
+     */
+    #renderAreaSummary() {
+        this.samplingAreaSummary.textContent = this.useMapWindowButton.checked
+            ? `Sampling box · ${this.dimensions.textContent}`
+            : `Sampling area · ${this.areaLabel}`;
     }
 
     /** Convert a logarithmic slider edit to integer kilometers. @return {void} */

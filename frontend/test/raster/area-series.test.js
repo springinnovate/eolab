@@ -92,7 +92,7 @@ function stackOpeners(h, area = null) {
 }
 
 test("normal stack openers preserve a deliberate whole-raster choice through background area changes", async () => {
-    for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
+    for (const id of ["open-raster-series", "open-raster-series-dock"]) {
         const h = fixture(); h.controller.chooseArea("whole"); h.controller.setArea(box(10), "Background map selection");
         stackOpeners(h, box(10)).get(`#${id}`)(); await h.tick();
         assert.equal(h.view.state.area.areaChoice, "whole");

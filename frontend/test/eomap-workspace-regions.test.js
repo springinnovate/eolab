@@ -221,7 +221,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
     assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
-    assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Raster analysis"/);
+    assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Analysis results"/);
     assert.match(inspection.source, /id="open-raster-series-dock"[\s\S]*?aria-controls="raster-series"/);
     assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
     assert.match(
@@ -229,7 +229,6 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         /id="style-inspected-vector-layer"[\s\S]*?aria-controls="layer-style-editor"/
     );
     for (const [tab, panelId] of [
-        ["feature", "vector-feature-inspector"],
         ["time-series", "vector-time-series"],
         ["feature-profile", "vector-feature-profile"],
         ["raster-clips", "raster-clips-panel"],
@@ -363,15 +362,18 @@ test("map-layer Info can reveal Catalog through composition", () => {
     );
 });
 
-test("shared sampling controls stay above tools while histograms own their results", () => {
+test("one collapsed sampling control stays outside the toolbar and results column", () => {
     const panel = requireElementRange("control-panel");
     const exploration = requireElementRange("map-histogram-panel");
     const disclosure = requireElementRange("raster-sampling-disclosure");
     const sampling = requireElementRange("raster-sampling-area-controls");
     const toolbar = requireElementRange("map-tools-toolbar");
     const box = requireElementRange("raster-map-box-controls");
-    assert.ok(disclosure.start > toolbar.start && box.end < toolbar.end);
-    assert.ok(box.start > disclosure.end, "box sizing is visible without opening area choices");
+    const inspection = requireElementRange("map-inspection");
+    const panels = requireElementRange("map-inspection-panels");
+    assert.ok(disclosure.start > toolbar.end && disclosure.end < inspection.end);
+    assert.ok(disclosure.start > panels.end, "sampling shares the top layer but stays outside the result column");
+    assert.ok(box.start > disclosure.start && box.end < disclosure.end, "one disclosure exposes box sizing and area choices");
     assert.doesNotMatch(exploration.source, /id="raster-sampling-/);
     assert.ok(exploration.start > panel.end);
     assert.match(exploration.source, /role="region"/);
@@ -387,7 +389,6 @@ test("shared sampling controls stay above tools while histograms own their resul
     }
     assert.match(disclosure.source, /^\s*<details[^>]*>/);
     assert.doesNotMatch(disclosure.source, /^\s*<details[^>]*\bopen\b/);
-    assert.match(disclosure.source, />\s*Map sampling area\s*</);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
     assert.match(sampling.source, /Choose the area to sample/);
@@ -411,46 +412,33 @@ test("shared sampling controls stay above tools while histograms own their resul
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
 });
 
-test("inspection header groups two raster destinations separately from clicked-point features", () => {
-    const headerEnd = MARKUP.indexOf("</header>", requireMarkupPosition("map-inspection-dock-title"));
-    assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
-    assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
-    const raster = requireElementRange("map-inspection-raster-analysis");
-    const point = requireElementRange("map-click-navigation");
-    assert.ok(raster.end < point.start);
-    assert.match(point.source, /^<nav[^>]*aria-labelledby="map-click-navigation-label"/);
-    assert.match(requireElementRange("map-click-navigation-label").source,
-        /^<strong[^>]*>Features at inspected point<\/strong>$/);
-    assert.doesNotMatch(point.source, /<details\b|<summary\b/);
-    assert.equal(countMarkupId("map-click-disclosure"), 0);
-    assert.equal(countMarkupId("map-click-navigation"), 1);
-    assert.equal(countMarkupId("map-click-navigation-label"), 1);
-    assert.match(STYLESHEET, /#map-inspection\[data-active-tool=""\]\s*\{[^}]*height:\s*auto/s);
-    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*max-height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
-    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\]\s*\{\s*display:\s*none/s);
-    assert.match(point.source, /Features at inspected point/);
+test("analysis destinations share one compact navigation above the selected result", () => {
+    const navigation = requireElementRange("map-inspection-raster-analysis");
+    const histogram = requireElementRange("map-histogram-panel");
     for (const [id, panel, caption] of [
         ["map-click-histogram", "map-histogram-panel", "Histograms"],
         ["open-raster-series-dock", "raster-series", "Raster statistics"],
+        ["map-inspection-tab-feature", "vector-feature-inspector", "Features"],
     ]) {
         const control = requireElementRange(id);
-        assert.ok(control.start > raster.start && control.end < raster.end);
-        assert.match(control.source, new RegExp(`aria-controls="${panel}"`));
+        assert.ok(control.start > navigation.start && control.end < navigation.end);
+        assert.ok(control.source.includes(`aria-controls="${panel}"`));
         assert.match(control.source, /aria-pressed="false"/);
-        assert.doesNotMatch(control.source, /role="tab"/);
-        assert.match(control.source, new RegExp(`>${caption}</button>`));
-        assert.match(requireElementRange(panel).source, new RegExp(`role="region"[\\s\\S]*?aria-labelledby="${id}"`));
+        assert.ok(control.source.includes(`>${caption}</button>`));
     }
-    assert.equal(countMarkupId("map-inspection-tab-histogram"), 0);
-    assert.equal(countMarkupId("map-inspection-tab-calculations"), 0);
-    assert.equal(countMarkupId("map-inspection-tab-raster-series"), 0);
-    assert.doesNotMatch(point.source, /map-click-histogram-status|map-click-histogram"/);
-    assert.equal(countMarkupId("map-click-position"), 0);
+    assert.ok(navigation.end < histogram.start);
+    assert.doesNotMatch(navigation.source, /<strong/);
+    for (const removed of ["map-click-navigation", "map-click-summary", "map-click-feature", "open-raster-series-histogram", "map-histogram-heading"]) {
+        assert.equal(countMarkupId(removed), 0);
+    }
+    const features = requireElementRange("vector-feature-inspector");
+    const point = requireElementRange("map-click-context");
+    assert.ok(point.start > features.start && point.end < features.end);
+    assert.doesNotMatch(STYLESHEET, /max-height: 45%|\.map-click-results|\.map-click-summary/);
 });
 
-test("Raster histogram leads with sampling before results and mode", () => {
-    assert.match(requireElementRange("map-histogram-heading").source,
-        />Raster histograms</);
+test("histogram charts precede optional help, point details and mode controls", () => {
+    assert.ok(requireElementRange("raster-histogram").end < requireElementRange("raster-point-samples").start);
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histograms">×/);
     assert.match(requireElementRange("map-click-histogram").source,
@@ -460,7 +448,6 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
     const sampling = requireElementRange("raster-sampling-disclosure");
     for (const id of ["raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
-        assert.ok(sampling.end < requireElementRange(id).start, `sampling precedes ${id}`);
         assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
     }
     assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
@@ -679,7 +666,7 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     assert.match(minimize, /aria-expanded="true"/);
     assert.match(minimize, /aria-controls="map-inspection"/);
     assert.match(minimize, />Minimize<\/button>$/);
-    for (const id of ["workspace-tool-actions", "map-click-navigation", "map-inspection-tabs", "map-inspection-panels"]) {
+    for (const id of ["workspace-tool-actions", "map-inspection-raster-analysis", "map-inspection-tabs", "map-inspection-panels"]) {
         assert.equal(countMarkupId(id), 1, `supporting control target ${id} exists once`);
     }
     for (const [id, accessibleName] of [

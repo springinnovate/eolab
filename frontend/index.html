@@ -577,100 +577,6 @@
           <strong id="map-filter-summary-heading" class="map-filter-summary-heading">Currently filtered vector layers</strong>
           <div id="map-filter-indicators" class="map-filter-indicators" hidden></div>
         </div>
-        <section id="raster-sampling-tool" aria-label="Raster sampling controls" hidden>
-            <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
-              <summary aria-controls="raster-sampling-disclosure-body">
-                <span>Map sampling area</span>
-                <span id="raster-sampling-area-summary">No raster selected</span>
-                <span class="raster-disclosure-chevron" aria-hidden="true"></span>
-              </summary>
-              <div class="raster-sampling-disclosure-body"
-                id="raster-sampling-disclosure-body">
-                <fieldset class="raster-style-controls" id="raster-style-controls" hidden>
-                  <legend class="visually-hidden">Choose a raster sampling area</legend>
-                  <section class="raster-control-group raster-active-raster"
-                    id="raster-active-controls"
-                    aria-labelledby="raster-active-raster-heading"
-                    aria-describedby="raster-sample-window-status raster-histogram-status">
-                    <strong id="raster-active-raster-heading">Raster</strong>
-                    <p class="raster-active-layer-label" id="raster-active-layer-label"></p>
-                  </section>
-                  <section class="raster-control-group raster-sample-window"
-                    id="raster-sampling-area-controls"
-                    aria-labelledby="raster-sampling-area-heading">
-                    <strong id="raster-sampling-area-heading">Sampling area</strong>
-                    <p id="raster-sample-window-description">
-                      Choose the area to sample. Raster statistics can also use each raster’s whole extent.
-                    </p>
-                    <div class="raster-sampling-area-options" role="radiogroup"
-                      aria-labelledby="raster-sampling-area-heading">
-                      <label class="raster-sampling-area-option"
-                        for="clear-raster-sample-window">
-                        <input id="clear-raster-sample-window" type="radio"
-                          name="raster-sampling-area" value="wholeRaster" checked />
-                        <span>
-                          <strong id="raster-sampling-area-whole-label">Whole raster</strong>
-                          <small>Use all available raster values.</small>
-                        </span>
-                      </label>
-                      <label class="raster-sampling-area-option"
-                        for="use-map-window-for-raster">
-                        <input id="use-map-window-for-raster" type="radio"
-                          name="raster-sampling-area" value="selectedArea" />
-                        <span>
-                          <strong>Sampling box</strong>
-                          <small>Start at the map center; click the map to reposition.</small>
-                        </span>
-                      </label>
-                      <label class="raster-sampling-area-option" for="use-vector-for-raster">
-                        <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
-                        <span><strong>Vector layer</strong><small>Use all polygon features that match a layer’s filter.</small></span>
-                      </label>
-
-                    </div>
-                  </section>
-                </fieldset>
-                <details class="raster-sampling-vector" id="vector-sampling-disclosure">
-                  <summary><span>Sample by vector layer</span><span class="raster-disclosure-chevron" aria-hidden="true"></span></summary>
-                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area">
-                    <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
-                    <small data-vector-sampling="predicate"></small>
-                    <div class="downloads-actions">
-                      <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
-                      <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
-                      <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
-                      <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
-                    </div>
-                    <p data-vector-sampling="status" role="status"></p>
-                  </section>
-                </details>
-
-              </div>
-            </details>
-                      <details class="raster-map-box-controls" id="raster-map-box-controls" open hidden>
-                        <summary>Sampling box <output id="raster-sample-window-dimensions" for="raster-sample-window-range raster-sample-window-number">200 × 200 km</output></summary>
-                        <div class="raster-sample-window-size">
-                          <label for="raster-sample-window-range">
-                            <span class="visually-hidden">Box size</span>
-                            <input id="raster-sample-window-range" type="range"
-                              min="0" max="1000" step="any"
-                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
-                          </label>
-                          <label for="raster-sample-window-number">
-                            <span class="visually-hidden">km</span>
-                            <input id="raster-sample-window-number" type="number"
-                              min="1" step="1" value="200"
-                              inputmode="numeric" aria-label="Box size in kilometers"
-                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
-                          </label>
-                        </div>
-                      </details>
-                    <p class="raster-sample-window-status visually-hidden"
-                      id="raster-sample-window-status" role="status"
-                      aria-live="polite" aria-atomic="true">
-                      Select a raster to choose its sampling area.
-                    </p>
-        </section>
       </div>
       <div id="workspace-tool-actions" popover="auto" role="group" aria-label="Map and analysis tools">
         <div class="workspace-tool-actions-group">
@@ -696,26 +602,17 @@
         <header class="map-inspection-dock-header">
           <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Explore data</strong>
           <p id="map-inspection-context" class="map-inspection-context" hidden></p>
-          <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Raster analysis">
-            <strong>Raster analysis</strong>
+          <nav id="map-inspection-raster-analysis" class="map-inspection-raster-analysis" aria-label="Analysis results">
             <div class="map-inspection-raster-actions">
               <button id="map-click-histogram" class="map-inspection-tab" type="button" aria-controls="map-histogram-panel"
                 aria-describedby="map-click-histogram-status" aria-pressed="false">Histograms</button>
               <button id="open-raster-series-dock" class="map-inspection-tab" type="button"
                 aria-controls="raster-series" aria-pressed="false">Raster statistics</button>
+              <button id="map-inspection-tab-feature" class="map-inspection-tab" type="button"
+                aria-controls="vector-feature-inspector" aria-describedby="map-click-feature-status" aria-pressed="false" disabled>Features</button>
             </div>
             <p id="map-click-histogram-status" class="map-inspection-raster-feedback" role="status" hidden></p>
-          </nav>
-          <nav id="map-click-navigation" class="map-click-navigation" aria-labelledby="map-click-navigation-label" hidden>
-          <strong id="map-click-navigation-label">Features at inspected point</strong>
-          <section id="map-click-summary" class="map-click-summary" aria-labelledby="map-click-context" hidden>
-            <p id="map-click-context" class="map-inspection-context"></p>
-            <div class="map-click-results">
-              <button id="map-click-feature" type="button" aria-controls="vector-feature-inspector" aria-pressed="false" hidden>
-                <strong>Vector features at this point</strong><span id="map-click-feature-status" role="status"></span>
-              </button>
-            </div>
-          </section>
+            <p id="map-click-feature-status" class="map-inspection-raster-feedback" role="status" hidden></p>
           </nav>
           <div class="map-inspection-navigation">
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
@@ -725,9 +622,6 @@
             <button id="map-inspection-tab-raster-clips" class="map-inspection-tab"
               type="button" role="tab" aria-controls="raster-clips-panel"
               aria-selected="false" tabindex="-1" hidden>Download raster clip</button>
-            <button id="map-inspection-tab-feature" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="vector-feature-inspector"
-              aria-selected="false" tabindex="-1" hidden>Features</button>
             <button id="map-inspection-tab-time-series" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-time-series"
               aria-selected="false" tabindex="-1" hidden>Field across features</button>
@@ -778,10 +672,9 @@
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster statistics</h2>
               <button id="close-raster-series" class="analysis-panel-action analysis-panel-close" type="button" aria-label="Close raster statistics">&times;</button>
             </header>
-            <p class="map-analysis-purpose">Calculate statistics for a selected area. View values for one raster, or plot comparisons across rasters or dates.</p>
+            <details class="map-analysis-help"><summary>About Raster statistics</summary><p>Calculate statistics for a selected area. View values for one raster, or plot comparisons across rasters or dates.</p></details>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sampling area selected</p>
               <div class="raster-series-controls">
@@ -919,7 +812,7 @@
               <div id="raster-clips-jobs"></div>
             </details>
           </section>
-          <section id="vector-feature-inspector" role="tabpanel"
+          <section id="vector-feature-inspector" role="region"
             aria-labelledby="map-inspection-tab-feature" hidden>
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
@@ -932,6 +825,7 @@
                   type="button" aria-label="Close feature inspector">×</button>
               </div>
             </header>
+            <p id="map-click-context" class="map-inspection-context"></p>
             <div id="vector-feature-inspector-details">
               <div class="vector-feature-inspector-plots">
                 <span class="immediate-action-help">
@@ -1123,20 +1017,8 @@
           </section>
           <section id="map-histogram-panel" role="region"
             aria-labelledby="map-click-histogram" hidden>
-            <header class="map-histogram-toolbar">
-              <h2 id="map-histogram-heading">Raster histograms</h2>
-              <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close" type="button"
-                aria-label="Close raster histograms">×</button>
-            </header>
-            <p class="map-analysis-purpose">See the spread of raster values over an area. Result details identify exact or sampled reads.</p>
-            <button id="open-raster-series-histogram" class="secondary-button" type="button"
-              aria-controls="raster-series">Raster statistics</button>
-            <section class="raster-point-samples" id="raster-point-samples"
-              aria-labelledby="raster-point-samples-heading" aria-live="polite"
-              aria-atomic="true" aria-busy="false" hidden>
-              <h3 id="raster-point-samples-heading">Raster values at click</h3>
-              <dl id="raster-point-sample-list"></dl>
-            </section>
+            <button id="close-map-histogram" class="analysis-panel-action analysis-panel-close histogram-close" type="button"
+              aria-label="Close raster histograms">×</button>
             <section id="map-histogram-overview" class="raster-histogram-overview"
               aria-label="Visible raster histograms">
               <p class="raster-histogram-empty" id="raster-histogram-empty">
@@ -1268,6 +1150,13 @@
                   role="status" aria-live="polite" aria-atomic="true"></p>
               </div>
             </section>
+            <details class="raster-point-samples" id="raster-point-samples"
+              aria-labelledby="raster-point-samples-heading" aria-live="polite"
+              aria-atomic="true" aria-busy="false" hidden>
+              <summary id="raster-point-samples-heading">Clicked pixel values</summary>
+              <dl id="raster-point-sample-list"></dl>
+            </details>
+            <details class="map-analysis-help"><summary>About histograms</summary><p>See the spread of raster values over an area. Result details identify exact or sampled reads. Clicked pixel values refer to the exact point, independently of that area.</p></details>
             <section class="raster-bivariate-controls" id="raster-bivariate-controls"
               data-eomap-region="raster-interpretation" aria-label="Histogram mode">
               <label for="raster-comparison-mode">
@@ -1727,6 +1616,99 @@
       </div>
     </section>
         </div>
+        <section id="raster-sampling-tool" aria-label="Raster sampling controls" hidden>
+            <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
+              <summary aria-controls="raster-sampling-disclosure-body">
+                <span id="raster-sampling-area-summary">No raster selected</span>
+                <span class="raster-disclosure-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="raster-sampling-disclosure-body"
+                id="raster-sampling-disclosure-body">
+                      <div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
+                        <p>Box size <output id="raster-sample-window-dimensions" for="raster-sample-window-range raster-sample-window-number">200 × 200 km</output></p>
+                        <div class="raster-sample-window-size">
+                          <label for="raster-sample-window-range">
+                            <span class="visually-hidden">Box size</span>
+                            <input id="raster-sample-window-range" type="range"
+                              min="0" max="1000" step="any"
+                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
+                          </label>
+                          <label for="raster-sample-window-number">
+                            <span class="visually-hidden">km</span>
+                            <input id="raster-sample-window-number" type="number"
+                              min="1" step="1" value="200"
+                              inputmode="numeric" aria-label="Box size in kilometers"
+                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
+                          </label>
+                        </div>
+                      </div>
+                <fieldset class="raster-style-controls" id="raster-style-controls" hidden>
+                  <legend class="visually-hidden">Choose a raster sampling area</legend>
+                  <section class="raster-control-group raster-active-raster"
+                    id="raster-active-controls"
+                    aria-labelledby="raster-active-raster-heading"
+                    aria-describedby="raster-sample-window-status raster-histogram-status">
+                    <strong id="raster-active-raster-heading">Raster</strong>
+                    <p class="raster-active-layer-label" id="raster-active-layer-label"></p>
+                  </section>
+                  <section class="raster-control-group raster-sample-window"
+                    id="raster-sampling-area-controls"
+                    aria-labelledby="raster-sampling-area-heading">
+                    <strong id="raster-sampling-area-heading">Sampling area</strong>
+                    <p id="raster-sample-window-description">
+                      Choose the area to sample. Raster statistics can also use each raster’s whole extent.
+                    </p>
+                    <div class="raster-sampling-area-options" role="radiogroup"
+                      aria-labelledby="raster-sampling-area-heading">
+                      <label class="raster-sampling-area-option"
+                        for="clear-raster-sample-window">
+                        <input id="clear-raster-sample-window" type="radio"
+                          name="raster-sampling-area" value="wholeRaster" checked />
+                        <span>
+                          <strong id="raster-sampling-area-whole-label">Whole raster</strong>
+                          <small>Use all available raster values.</small>
+                        </span>
+                      </label>
+                      <label class="raster-sampling-area-option"
+                        for="use-map-window-for-raster">
+                        <input id="use-map-window-for-raster" type="radio"
+                          name="raster-sampling-area" value="selectedArea" />
+                        <span>
+                          <strong>Sampling box</strong>
+                          <small>Start at the map center; click the map to reposition.</small>
+                        </span>
+                      </label>
+                      <label class="raster-sampling-area-option" for="use-vector-for-raster">
+                        <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
+                        <span><strong>Vector layer</strong><small>Use all polygon features that match a layer’s filter.</small></span>
+                      </label>
+
+                    </div>
+                  </section>
+                </fieldset>
+                <details class="raster-sampling-vector" id="vector-sampling-disclosure">
+                  <summary><span>Sample by vector layer</span><span class="raster-disclosure-chevron" aria-hidden="true"></span></summary>
+                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area">
+                    <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+                    <small data-vector-sampling="predicate"></small>
+                    <div class="downloads-actions">
+                      <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
+                    </div>
+                    <p data-vector-sampling="status" role="status"></p>
+                  </section>
+                </details>
+
+              </div>
+            </details>
+                    <p class="raster-sample-window-status visually-hidden"
+                      id="raster-sample-window-status" role="status"
+                      aria-live="polite" aria-atomic="true">
+                      Select a raster to choose its sampling area.
+                    </p>
+        </section>
       </aside>
     </main>
 

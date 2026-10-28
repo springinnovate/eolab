@@ -336,62 +336,35 @@ test("context validates its presentation boundary and vector identities clear wi
     h.controller.destroy();
 });
 
-test("persistent point navigation keeps its feedback separate from area distributions", () => {
+test("compact Features navigation preserves progress, errors and unread results without stealing focus", () => {
     const h = fixture();
-    const navigation = h.doc.querySelector("#map-click-navigation");
-    const label = h.doc.querySelector("#map-click-navigation-label");
-    h.controller.showStyle("GEA Italy");
-    h.controller.beginMapClick({ lat: 37.5, lng: 14 });
-    h.controller.setClickResult("histogram", { state: "loading", message: "Updating this area" });
-    assert.equal(navigation.hidden, true, "area results do not create point-feature navigation");
-    h.controller.setClickResult("feature", { state: "loading", message: "Inspecting this point" });
-    assert.equal(navigation.hidden, false);
-    assert.equal(label.textContent, "Features at inspected point · Updating…");
-    h.controller.setClickResult("histogram", { state: "error", message: "No overlap" });
-    assert.doesNotMatch(label.textContent, /unavailable/);
-    assert.equal(label.textContent, "Features at inspected point · Updating…");
-    assert.match(h.doc.querySelector("#map-click-histogram-status").textContent, /No overlap.*New results/);
-    h.controller.setClickResult("feature", { state: "error", message: "Point inspection failed" });
-    assert.equal(navigation.hidden, false, "result updates keep point navigation visible");
-    assert.equal(label.textContent, "Features at inspected point · Some unavailable · New results");
-    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
-    assert.equal(navigation.hidden, false);
-    assert.equal(label.textContent, "Features at inspected point · Some unavailable");
-    h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
-    assert.equal(label.textContent, "Features at inspected point");
-    h.controller.showRasterSeries();
-    assert.equal(navigation.hidden, false, "switching tasks keeps point navigation visible");
-    h.controller.closeHistogram();
-    assert.equal(navigation.hidden, false, "closing an area tool retains independent point recovery");
-    h.controller.destroy();
-});
-
-test("point navigation stays visible across tools and new results and follows dock minimization", () => {
-    const h = fixture();
-    const navigation = h.doc.querySelector("#map-click-navigation");
     h.controller.showHistogram();
-    h.controller.beginMapClick({ lat: 22, lng: 78 });
-    h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
-    assert.equal(navigation.hidden, false);
     h.map.focus();
-    h.controller.showRasterSeries();
-    assert.equal(navigation.hidden, false);
-    h.controller.showRasterSeries();
-    assert.equal(navigation.hidden, false);
-    h.controller.showFeatureInspector();
-    assert.equal(navigation.hidden, false);
-    h.controller.setClickResult("feature", { state: "error", message: "Point unavailable" });
-    assert.equal(navigation.hidden, false);
-    h.controller.beginMapClick({ lat: 23, lng: 79 });
+    h.controller.beginMapClick({ lat: 37.5, lng: 14 });
+    h.controller.showFeatureInspector({ activate: false });
     h.controller.setClickResult("feature", { state: "loading", message: "Inspecting point" });
-    assert.equal(navigation.hidden, false);
+    const status = h.doc.querySelector("#map-click-feature-status");
+    assert.equal(h.featureTab.hidden, false);
+    assert.equal(h.featureTab.getAttribute("data-loading"), "true");
+    assert.equal(status.hidden, true, "background progress is indicated in its compact navigation");
+    h.controller.setClickResult("feature", { state: "error", message: "Point inspection failed" });
+    assert.equal(status.hidden, false, "background failures remain visible");
+    assert.match(status.textContent, /Point inspection failed.*New results/);
+    assert.equal(h.controller.activeTool, "histogram");
+    assert.equal(h.doc.activeElement, h.map);
+    h.controller.setFeatureResultCount(3);
+    h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
+    assert.equal(status.hidden, true, "routine completed feedback does not repeat the count");
+    assert.equal(h.featureTab.textContent, "Features · 3");
+    assert.equal(h.featureTab.getAttribute("data-unread"), "true");
+    h.featureTab.dispatchEvent(new Event("click"));
+    assert.equal(h.controller.activeTool, "feature");
+    assert.equal(h.featureTab.getAttribute("data-unread"), "false");
+    h.controller.showRasterSeries();
+    assert.equal(h.featureTab.hidden, false);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(navigation.hidden, true);
-    h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(navigation.hidden, false);
-    assert.equal(h.doc.activeElement, h.map, "updates never steal focus");
-    h.controller.showStyle("Countries");
-    assert.equal(navigation.hidden, false, "styling also keeps point navigation visible");
+    assert.equal(h.featureTab.getAttribute("aria-pressed"), "false");
+    assert.equal(h.doc.activeElement, h.map);
     h.controller.destroy();
 });
 
@@ -406,11 +379,11 @@ test("map-click summaries retain the chosen panel and expose unseen peer results
     h.controller.setClickResult("feature", {state: "ready", message: "3 features returned"});
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.doc.activeElement, h.map);
-    assert.equal(h.doc.querySelector("#map-click-feature").getAttribute("data-unread"), "true");
+    assert.equal(h.doc.querySelector("#map-inspection-tab-feature").getAttribute("data-unread"), "true");
     assert.equal(h.histogram.getAttribute("data-inspection-loading"), "true");
-    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
+    h.doc.querySelector("#map-inspection-tab-feature").dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "feature");
-    assert.equal(h.doc.querySelector("#map-click-feature").getAttribute("data-unread"), "false");
+    assert.equal(h.doc.querySelector("#map-inspection-tab-feature").getAttribute("data-unread"), "false");
     h.controller.setClickResult("histogram", {state: "ready", message: "Map box · Ready"});
     assert.equal(h.controller.activeTool, "feature");
     assert.equal(h.histogramTab.getAttribute("data-unread"), "true");
@@ -427,7 +400,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     const h = fixture();
     const tabs = h.doc.querySelector("#map-inspection-tabs");
     const raster = h.doc.querySelector("#map-click-histogram");
-    const feature = h.doc.querySelector("#map-click-feature");
+    const feature = h.doc.querySelector("#map-inspection-tab-feature");
     h.controller.showHistogram();
     h.controller.showFeatureInspector({activate: false});
     assert.equal(h.dockTitle.textContent, "Raster analysis · Histograms");
@@ -436,7 +409,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     h.controller.setClickResult("histogram", {state: "ready", message: "Ready"});
     h.controller.setClickResult("feature", {state: "ready", message: "One feature"});
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.featureTab.hidden, true);
+    assert.equal(h.featureTab.hidden, false);
     assert.equal(tabs.hidden, true);
     assert.equal(raster.getAttribute("aria-pressed"), "true");
     assert.equal(feature.getAttribute("aria-pressed"), "false");
@@ -451,7 +424,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     assert.equal(feature.getAttribute("aria-pressed"), "true");
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(tabs.hidden, true);
-    assert.equal(h.doc.querySelector("#map-click-summary").hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection").getAttribute("data-minimized"), "true");
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(feature.getAttribute("aria-pressed"), "true");
     h.controller.setClickResult("histogram", null);
@@ -467,7 +440,7 @@ test("distributions remain reachable before a click and after empty or failed ar
     button.dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "histogram");
     assert.equal(h.controller.hasClick, false, "opening a view does not fabricate a map click");
-    assert.equal(h.doc.querySelector("#map-click-navigation").hidden, true);
+    assert.equal(h.featureTab.disabled, true);
     for (const state of ["empty", "error", "invalidated"]) {
         h.controller.showStyle("Countries");
         h.controller.setClickResult("histogram", { state, message: `${state} distribution` });
@@ -475,7 +448,7 @@ test("distributions remain reachable before a click and after empty or failed ar
         button.dispatchEvent(new Event("click"));
         assert.equal(h.controller.activeTool, "histogram");
         assert.equal(h.doc.querySelector("#map-inspection-context").textContent, "Visible rasters · Whole raster");
-        assert.equal(h.doc.querySelector("#map-click-navigation").hidden, true);
+        assert.equal(h.featureTab.disabled, true);
     }
     h.controller.destroy();
 });
@@ -487,11 +460,11 @@ test("empty and failed streams remain understandable without opening unavailable
     h.controller.setClickResult("feature", {state: "empty", message: "No features at this click"});
     assert.equal(h.doc.querySelector("#map-click-histogram").hidden, false);
     assert.equal(h.doc.querySelector("#map-click-histogram").disabled, false);
-    assert.equal(h.doc.querySelector("#map-click-feature").disabled, true);
+    assert.equal(h.doc.querySelector("#map-inspection-tab-feature").disabled, false);
     assert.equal(h.controller.activeTool, null);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.setClickResult("feature", {state: "error", message: "Inspection unavailable"});
-    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
+    h.doc.querySelector("#map-inspection-tab-feature").dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "feature");
     h.controller.showRasterSeries();
     h.controller.beginMapClick({lat: 1, lng: 1});
@@ -499,7 +472,7 @@ test("empty and failed streams remain understandable without opening unavailable
     h.controller.showHistogram(null, {activate:false});
     assert.equal(h.controller.activeTool, "raster-series");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.doc.querySelector("#map-click-summary").hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection").getAttribute("data-minimized"), "true");
     h.controller.destroy();
 });
 
@@ -815,7 +788,7 @@ test("dock minimization retains open tools and selecting a tab expands it", () =
 
 test("open dock tabs support wrapping horizontal keyboard navigation", () => {
     const h = fixture();
-    h.controller.showFeatureInspector();
+    h.controller.showVectorTimeSeries();
     h.controller.showStyle();
     h.styleTab.focus();
 
@@ -823,12 +796,12 @@ test("open dock tabs support wrapping horizontal keyboard navigation", () => {
     Object.defineProperty(left, "key", { value: "ArrowLeft" });
     h.styleTab.dispatchEvent(left);
     assert.equal(left.defaultPrevented, true);
-    assert.equal(h.doc.activeElement, h.featureTab);
-    assert.equal(h.featureTab.getAttribute("aria-selected"), "true");
+    assert.equal(h.doc.activeElement, h.timeSeriesTab);
+    assert.equal(h.timeSeriesTab.getAttribute("aria-selected"), "true");
 
     const right = new Event("keydown", { cancelable: true });
     Object.defineProperty(right, "key", { value: "ArrowRight" });
-    h.featureTab.dispatchEvent(right);
+    h.timeSeriesTab.dispatchEvent(right);
     assert.equal(right.defaultPrevented, true);
     assert.equal(h.doc.activeElement, h.styleTab);
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
@@ -936,7 +909,6 @@ test("closing the last tool hides its empty surface while raster navigation rema
     h.controller.beginMapClick({ lat: -10, lng: -60 });
     h.controller.setClickResult("histogram", { state: "ready", message: "1 raster ready" });
     h.controller.showHistogram(1);
-    const results = h.doc.querySelector("#map-click-summary");
     const reopen = h.doc.querySelector("#map-click-histogram");
     assert.equal(h.panels.hidden, false);
 
@@ -944,8 +916,8 @@ test("closing the last tool hides its empty surface while raster navigation rema
 
     assert.equal(h.histogram.hidden, true);
     assert.equal(h.panels.hidden, true, "the empty top-layer container must not intercept map clicks");
-    assert.equal(results.hidden, true, "raster results do not create point features");
-    assert.equal(h.doc.querySelector("#map-click-histogram-status").hidden, false);
+    assert.equal(h.featureTab.disabled, true, "raster results do not create point features");
+    assert.equal(h.doc.querySelector("#map-click-histogram-status").hidden, true);
     assert.equal(reopen.disabled, false);
     assert.deepEqual(h.calls, ["show"], "retained results keep their popover");
     assert.equal(h.doc.activeElement, h.map);
@@ -987,7 +959,7 @@ for (const [name, show, hide, args] of [
         assert.equal(h.panels.hidden, false);
         h.controller[hide]();
         assert.equal(h.panels.hidden, true);
-        assert.equal(h.doc.querySelector("#map-click-summary").hidden, false);
+        assert.equal(h.featureTab.hidden, false);
         assert.deepEqual(h.calls, ["show"]);
         h.controller.destroy();
     });
@@ -1000,7 +972,7 @@ test("mixed raster and vector clicks never restore an empty inspection surface",
     h.controller.showHistogram();
     h.controller.setClickResult("feature", { state: "ready", message: "Two features" });
     h.controller.showFeatureInspector({ activate: false });
-    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
+    h.doc.querySelector("#map-inspection-tab-feature").dispatchEvent(new Event("click"));
     h.controller.showVectorFeatureProfile();
     h.controller.showStyle("Countries");
     h.controller.hideStyle();

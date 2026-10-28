@@ -49,7 +49,7 @@ test("map overlays and inspection surfaces retain contrast contracts", () => {
   );
   assert.match(
     STYLESHEET,
-    /\.raster-point-samples\s*\{[^}]*border-bottom:/s,
+    /\.raster-histogram-point-value\[data-state="error"\]\s*\{[^}]*color: var\(--status-danger\)/s,
   );
   assert.match(STYLESHEET, /\.raster-histogram-bar\.is-hovered/);
 });
