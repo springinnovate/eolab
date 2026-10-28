@@ -19,14 +19,22 @@ from eolab_app.main import create_app
         ("POST", "/stac/search", True),
     ],
 )
-def test_stac_proxy_omits_private_temporal_source(
+def test_stac_proxy_omits_private_source_metadata(
     configured_environment: None,
     version_file_path: Path,
     method: str,
     path: str,
     projected: bool,
 ) -> None:
-    """Keep descriptor paths private in Item reads and projected search results."""
+    """Keep paths and complete string inventories out of public Item/search replies.
+
+    Args:
+        configured_environment: Application settings isolated by the fixture.
+        version_file_path: Disposable application version file.
+        method: Public proxy HTTP method.
+        path: Item or search route.
+        projected: Whether the upstream result omits Item identity.
+    """
     private_path = "file:///private/mounted-weather/dataset.yaml"
     item: dict[str, Any] = {
         "assets": {
@@ -42,6 +50,9 @@ def test_stac_proxy_omits_private_temporal_source(
                 "properties": {"eolab:source": "preserved public metadata"},
             }
         )
+    item.setdefault("properties", {})["eolab:vector-field-values"] = {
+        "label": [["private vocabulary", "private vocabulary"]]
+    }
     is_search = path.endswith("/search")
     payload = (
         {"type": "FeatureCollection", "features": [item], "numberMatched": 1}
@@ -69,17 +80,19 @@ def test_stac_proxy_omits_private_temporal_source(
             number_matched_estimate_lookup=exact_count,
         )
     )
-    request_options = {"json": {"fields": {"include": ["assets"]}}} if projected else {}
+    request_options = {"json": {"fields": {"include": ["assets", "properties.eolab:vector-field-values"]}}} if projected else {}
     response = client.request(method, path, **request_options)
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/geo+json"
     assert private_path not in response.text
     assert "eolab:temporal-source" not in response.text
+    assert "eolab:vector-field-values" not in response.text
+    assert "private vocabulary" not in response.text
     public_item = response.json()["features"][0] if is_search else response.json()
     assert public_item["assets"] == {}
     if not projected:
-        assert public_item["properties"] == item["properties"]
+        assert public_item["properties"] == {"eolab:source": "preserved public metadata"}
     if method == "POST":
         assert response.headers["x-eolab-number-matched-estimated"] == "false"
     assert item["assets"]["eolab:temporal-source"]["href"] == private_path

@@ -33,7 +33,7 @@ from eolab_app.catalog.vector import (
     TABLE_EXTENSION,
     build_bbox_polygon,
     build_vector_source_properties,
-    build_vector_table_properties,
+    read_vector_table_properties,
 )
 
 
@@ -508,12 +508,14 @@ def _build_stac_item(
         archived_shapefile: Validated internal component group to inspect.
 
     Returns:
-        A STAC Item with projection, table, and archive Asset metadata.
+        A STAC Item with projection, table, private string inventories and
+        archive Asset metadata.
 
     Raises:
         ValueError: If components, CRS, geometry, or bounds violate the vector
             catalog contract.
         fiona.errors.FionaError: If GDAL cannot open or inspect the dataset.
+        RuntimeError: If the native attribute inventory cannot be read.
     """
     del source_root
     components: dict[str, PurePosixPath] = {}
@@ -563,7 +565,8 @@ def _build_stac_item(
             **build_vector_source_properties(
                 "zipped-shapefile", "archive", internal_path_text
             ),
-            **build_vector_table_properties(
+            **read_vector_table_properties(
+                dataset_path, None,
                 feature_count,
                 geometry_type,
                 (

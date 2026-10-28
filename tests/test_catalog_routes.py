@@ -23,17 +23,18 @@ CATALOG_ITEM = {
 def catalog_client(random_item_lookup: Any) -> TestClient:
     """Create an isolated application around the Catalog route."""
     application = FastAPI()
-    application.include_router(create_catalog_router(random_item_lookup, AsyncMock()))
+    application.include_router(create_catalog_router(random_item_lookup, AsyncMock(), AsyncMock()))
     return TestClient(application)
 
 
-def test_surprise_route_omits_private_temporal_source() -> None:
-    """Return temporal metadata without exposing the server's descriptor path."""
+def test_surprise_route_omits_private_source_metadata() -> None:
+    """Omit private source paths and full string inventories from discovery."""
     private_path = "file:///private/mounted-weather/dataset.yaml"
     item = {
         **CATALOG_ITEM,
         "id": "era5",
         "collection": "eolab-temporal-datasets",
+        "properties": {"eolab:vector-field-values": {"label": [["private", "private"]]}},
         "assets": {
             "eolab:temporal-source": {"href": private_path},
             "2000-01": {"href": "urn:eolab:temporal:era5:2000-01"},
@@ -53,6 +54,8 @@ def test_surprise_route_omits_private_temporal_source() -> None:
 
     assert response.status_code == 200
     assert private_path not in response.text
+    assert "eolab:vector-field-values" not in response.text
+    assert response.json()["item"]["properties"] == {}
     assert response.json()["item"]["assets"] == {
         "2000-01": {"href": "urn:eolab:temporal:era5:2000-01"}
     }

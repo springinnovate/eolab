@@ -507,6 +507,7 @@ def create_app(
         create_catalog_router(
             catalog_database.random_matching_item,
             raster_source_authorizer.get_time_choices,
+            catalog_database.get_vector_field_values,
         )
     )
     application.include_router(

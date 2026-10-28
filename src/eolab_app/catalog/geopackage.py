@@ -16,7 +16,7 @@ from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
     build_vector_source_properties,
-    build_vector_table_properties,
+    read_vector_table_properties,
 )
 
 
@@ -69,9 +69,9 @@ def build_stac_items(
 ) -> tuple[dict[str, Any], ...]:
     """Build one STAC Item per catalogable GeoPackage vector layer.
 
-    Layer inspection uses Fiona's metadata APIs for names, schemas, counts,
-    bounds, and coordinate reference systems. It never iterates through the
-    layer's complete feature collection. Nonspatial tables are ignored.
+    Fiona supplies names, schemas, counts, bounds and coordinate reference
+    systems; geometry-free OGR reads prepare complete string inventories.
+    Nonspatial tables are ignored.
     Expected failures in one layer are logged and do not discard valid sibling
     layers. When every spatial layer fails, the source becomes a normal
     per-dataset scan error.
@@ -115,6 +115,7 @@ def build_stac_items(
             OSError,
             OverflowError,
             RasterioError,
+            RuntimeError,
             ValueError,
         ) as error:
             layer_errors.append((layer_name, error))
@@ -160,12 +161,14 @@ def _build_layer_item(
         file_size: Source GeoPackage size in bytes.
 
     Returns:
-        A complete spatial-vector Item, or ``None`` for a nonspatial table.
+        A complete spatial-vector Item with private string inventories, or
+        ``None`` for a nonspatial table.
 
     Raises:
         ValueError: If a spatial layer lacks features, CRS, valid bounds, or a
             supported declared GeoJSON geometry type.
         fiona.errors.FionaError: If GDAL cannot open or inspect the layer.
+        RuntimeError: If the native attribute inventory cannot be read.
         rasterio.errors.RasterioError: If the layer CRS or bounds cannot be
             transformed to WGS 84.
     """
@@ -222,7 +225,8 @@ def _build_layer_item(
                 "geopackage", "data", layer_name
             ),
             "proj:bbox": native_bbox,
-            **build_vector_table_properties(
+            **read_vector_table_properties(
+                str(geopackage_path), layer_name,
                 feature_count,
                 geometry_type,
                 (

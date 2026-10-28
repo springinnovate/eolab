@@ -12,6 +12,7 @@ from eolab_app.routes.browser_identity import get_browser_owner_hash
 from eolab_app.routes.vector_http import PrivateVectorRoute
 from eolab_app.vector.sources import resolve_uploaded_vector
 from eolab_app.vector_uploads import VectorUpload, VectorUploadError, VectorUploadStore
+from eolab_app.vector_field_values import VectorFieldValuePage, VectorFieldValueQuery
 
 
 def upload_browser(request: Request, response: Response) -> str:
@@ -135,6 +136,30 @@ def create_vector_uploads_router(store: VectorUploadStore) -> APIRouter:
             VectorUploadError: If admission or storage fails.
         """
         return await store.create(browser, name, request.stream())
+
+    @router.get("/{identifier}/field-values", response_model=VectorFieldValuePage)
+    def field_values(
+        identifier: UUID,
+        browser: Browser,
+        response: Response,
+        query: Annotated[VectorFieldValueQuery, Query()],
+    ) -> VectorFieldValuePage:
+        """Search this browser's prepared string values without opening the source.
+
+        Args:
+            identifier: Opaque owned upload ID.
+            browser: Identity supplied by the private cookie boundary.
+            response: Response receiving private no-store headers.
+            query: Field, search text and bounded page.
+
+        Returns:
+            Original strings and the next offset, when more values match.
+
+        Raises:
+            VectorUploadError: If the upload or prepared field values are unavailable.
+        """
+        response.headers["Cache-Control"] = "private, no-store"
+        return store.get_field_values(browser, identifier, query)
 
     @router.delete("/{identifier}", status_code=204)
     def delete_upload(identifier: UUID, browser: Browser) -> None:

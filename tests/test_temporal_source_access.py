@@ -539,7 +539,7 @@ def test_catalog_time_choices_follow_actual_labels_and_explicit_refresh(
     )
     application = FastAPI()
     application.include_router(
-        create_catalog_router(AsyncMock(), authorizer.get_time_choices)
+        create_catalog_router(AsyncMock(), authorizer.get_time_choices, AsyncMock())
     )
     query = {
         "collectionId": ITEM_KEY[0],

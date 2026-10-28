@@ -11,10 +11,72 @@ from eolab_app.catalog.collections import (
     TEMPORAL_COLLECTION_ID,
 )
 from eolab_app.catalog.models import CatalogItemSource
+from eolab_app.vector_field_values import (
+    CatalogVectorFieldValueQuery,
+    VectorFieldValuePage,
+    VectorFieldValuesUnavailable,
+    VECTOR_FIELD_VALUES_KEY,
+)
 
 
 class PgStacCatalogDatabase:
     """Implement catalog database operations through libpq."""
+
+    async def get_vector_field_values(
+        self, query: CatalogVectorFieldValueQuery
+    ) -> VectorFieldValuePage | None:
+        """Search prepared Item metadata and return only one bounded value page.
+
+        Args:
+            query: Catalog identity, string field, Unicode substring and page bounds.
+
+        Returns:
+            Exact stored strings in admission order, or None for an absent Item.
+            No source features or complete inventory are returned to the caller.
+
+        Raises:
+            VectorFieldValuesUnavailable: If explicit scan/refresh is needed or
+                the chosen field has no string inventory.
+            psycopg.Error: If the Catalog database is unavailable.
+        """
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute(
+                """
+                WITH source AS (
+                    SELECT content->'properties'->%s AS inventory
+                    FROM pgstac.items WHERE collection = %s AND id = %s
+                )
+                SELECT inventory IS NOT NULL, inventory ? %s,
+                    ARRAY(
+                        SELECT entry->>0
+                        FROM jsonb_array_elements(COALESCE(inventory->%s, '[]'::jsonb))
+                            WITH ORDINALITY AS choices(entry, position)
+                        WHERE strpos(entry->>1, %s) > 0
+                        ORDER BY position OFFSET %s LIMIT %s
+                    )
+                FROM source
+                """,
+                (
+                    VECTOR_FIELD_VALUES_KEY, query.collection_id, query.item_id,
+                    query.field, query.field, query.search.casefold(),
+                    query.offset, query.limit + 1,
+                ),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        prepared, field_prepared, values = row
+        if not prepared:
+            raise VectorFieldValuesUnavailable(
+                "Values were not prepared for this source. Run a Catalog scan to refresh it."
+            )
+        if not field_prepared:
+            raise VectorFieldValuesUnavailable("Choose a string field with prepared values.")
+        return VectorFieldValuePage(
+            field=query.field,
+            values=tuple(values[:query.limit]),
+            nextOffset=query.offset + query.limit if len(values) > query.limit else None,
+        )
 
     async def existing_item_keys(
         self,
