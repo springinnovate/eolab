@@ -224,7 +224,9 @@ def test_openfilegdb_builds_deterministic_items_for_spatial_layers(
         "datetime": "2025-05-06T07:08:09Z",
         "eolab:layer_name": "habitat",
         "eolab:layer_alias": "Priority habitat",
-        "eolab:vector-field-values": {"name": [("wetland", "wetland")]},
+        "eolab:vector-field-values": {
+            "name": {"values": [("wetland", "wetland")], "truncated": False}
+        },
         "eolab:vector_source": {
             "kind": "mounted",
             "format": "file-geodatabase",

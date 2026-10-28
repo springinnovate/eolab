@@ -13,7 +13,7 @@ def copy_public_catalog_metadata(value: JsonValue) -> JsonValue:
     Apply this at public response boundaries, including STAC field projections
     that may omit an Item's collection or other identifying fields. The reserved
     key ``eolab:temporal-source`` contains the descriptor's server-side location;
-    ``eolab:vector-field-values`` holds complete server-only string inventories.
+    ``eolab:vector-field-values`` holds server-only string suggestions.
 
     Args:
         value: Catalog JSON from the internal STAC service or database.
@@ -22,6 +22,7 @@ def copy_public_catalog_metadata(value: JsonValue) -> JsonValue:
         JSON with every private source/inventory entry omitted. The original
         value and all other metadata remain unchanged.
     """
+
     if isinstance(value, dict):
         return {
             key: copy_public_catalog_metadata(child)

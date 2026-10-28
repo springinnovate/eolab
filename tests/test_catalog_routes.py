@@ -34,7 +34,11 @@ def test_surprise_route_omits_private_source_metadata() -> None:
         **CATALOG_ITEM,
         "id": "era5",
         "collection": "eolab-temporal-datasets",
-        "properties": {"eolab:vector-field-values": {"label": [["private", "private"]]}},
+        "properties": {
+            "eolab:vector-field-values": {
+                "label": {"values": [["private", "private"]], "truncated": False}
+            }
+        },
         "assets": {
             "eolab:temporal-source": {"href": private_path},
             "2000-01": {"href": "urn:eolab:temporal:era5:2000-01"},

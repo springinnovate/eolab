@@ -31,14 +31,16 @@ class PgStacCatalogDatabase:
             query: Catalog identity, string field, Unicode substring and page bounds.
 
         Returns:
-            Exact stored strings in admission order, or None for an absent Item.
-            No source features or complete inventory are returned to the caller.
+            Exact stored strings in admission order and whether source values
+            were omitted, or None for an absent Item. No source features or
+            entire inventory are returned to the caller.
 
         Raises:
             VectorFieldValuesUnavailable: If explicit scan/refresh is needed or
                 the chosen field has no string inventory.
             psycopg.Error: If the Catalog database is unavailable.
         """
+
         async with await psycopg.AsyncConnection.connect() as connection:
             cursor = await connection.execute(
                 """
@@ -47,9 +49,10 @@ class PgStacCatalogDatabase:
                     FROM pgstac.items WHERE collection = %s AND id = %s
                 )
                 SELECT inventory IS NOT NULL, inventory ? %s,
+                    (inventory->%s->>'truncated')::boolean,
                     ARRAY(
                         SELECT entry->>0
-                        FROM jsonb_array_elements(COALESCE(inventory->%s, '[]'::jsonb))
+                        FROM jsonb_array_elements(COALESCE(inventory->%s->'values', '[]'::jsonb))
                             WITH ORDINALITY AS choices(entry, position)
                         WHERE strpos(entry->>1, %s) > 0
                         ORDER BY position OFFSET %s LIMIT %s
@@ -57,15 +60,21 @@ class PgStacCatalogDatabase:
                 FROM source
                 """,
                 (
-                    VECTOR_FIELD_VALUES_KEY, query.collection_id, query.item_id,
-                    query.field, query.field, query.search.casefold(),
-                    query.offset, query.limit + 1,
+                    VECTOR_FIELD_VALUES_KEY,
+                    query.collection_id,
+                    query.item_id,
+                    query.field,
+                    query.field,
+                    query.field,
+                    query.search.casefold(),
+                    query.offset,
+                    query.limit + 1,
                 ),
             )
             row = await cursor.fetchone()
         if row is None:
             return None
-        prepared, field_prepared, values = row
+        prepared, field_prepared, truncated, values = row
         if not prepared:
             raise VectorFieldValuesUnavailable(
                 "Values were not prepared for this source. Run a Catalog scan to refresh it."
@@ -74,8 +83,11 @@ class PgStacCatalogDatabase:
             raise VectorFieldValuesUnavailable("Choose a string field with prepared values.")
         return VectorFieldValuePage(
             field=query.field,
-            values=tuple(values[:query.limit]),
-            nextOffset=query.offset + query.limit if len(values) > query.limit else None,
+            values=tuple(values[: query.limit]),
+            nextOffset=(
+                query.offset + query.limit if len(values) > query.limit else None
+            ),
+            truncated=truncated,
         )
 
     async def existing_item_keys(

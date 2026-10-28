@@ -37,7 +37,7 @@ def read_vector_table_properties(
         open_options: Native format options preserving the admitted string schema.
 
     Returns:
-        Table Extension metadata plus a complete private string inventory.
+        Table Extension metadata plus up to 255 private choices per string field.
         Public Catalog responses omit the inventory; lookup returns paged values.
 
     Raises:
@@ -45,6 +45,7 @@ def read_vector_table_properties(
         RuntimeError: If GDAL cannot read the admitted layer.
         OSError: If the underlying source cannot be accessed.
     """
+
     field_map = dict(fields)
     return {
         **build_vector_table_properties(feature_count, geometry_type, field_map.items()),

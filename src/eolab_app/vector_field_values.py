@@ -1,15 +1,31 @@
-"""Prepare private string-value inventories and describe their paged lookup."""
+"""Prepare up to 255 string suggestions per field and page their search results."""
 
 from collections.abc import Mapping
 from threading import Event
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from eolab_app.vector_fields import visit_vector_fields
 
 VECTOR_FIELD_VALUES_KEY = "eolab:vector-field-values"
-FieldValueInventory: TypeAlias = dict[str, list[tuple[str, str]]]
+FIELD_VALUE_LIMIT = 255
+
+
+class PreparedFieldValues(TypedDict):
+    """Store one field's retained choices and whether other source values exist.
+
+    Attributes:
+        values: Up to 255 exact strings paired with their casefolded search text,
+            sorted by the exact string's Unicode code points.
+        truncated: True when the source contains more distinct strings.
+    """
+
+    values: list[tuple[str, str]]
+    truncated: bool
+
+
+FieldValueInventory: TypeAlias = dict[str, PreparedFieldValues]
 INVENTORY_ADAPTER = TypeAdapter(FieldValueInventory)
 
 
@@ -18,7 +34,7 @@ class VectorFieldValueQuery(BaseModel):
 
     Search uses Unicode casefold without trimming or changing stored strings.
     Offset counts matching distinct values, ordered by exact Unicode code points.
-    Empty search includes every value; nulls are excluded, empty strings retained.
+    Empty search includes every retained value; nulls are excluded, empty strings retained.
     Pages default to 50 values and permit at most 100. Offset and continuation
     fit signed 64-bit database offsets and native iterator positions.
     """
@@ -32,12 +48,14 @@ class VectorFieldValueQuery(BaseModel):
 
 
 class VectorFieldValuePage(BaseModel):
-    """Return exact stored strings and the next matching-value offset, if any.
+    """Return a page of retained strings and disclose omitted source values.
 
     Attributes:
         field: Requested source field name.
         values: Original distinct strings in deterministic Unicode order.
         next_offset: Next matching position, or None when this search is exhausted.
+        truncated: Whether source values were omitted from the prepared choices,
+            independent of the current search and its remaining pages.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -45,6 +63,7 @@ class VectorFieldValuePage(BaseModel):
     field: str
     values: tuple[str, ...]
     next_offset: int | None = Field(alias="nextOffset")
+    truncated: bool
 
 
 class CatalogVectorFieldValueQuery(VectorFieldValueQuery):
@@ -83,7 +102,7 @@ def read_field_value_inventory(
     *,
     open_options: tuple[str, ...] = (),
 ) -> FieldValueInventory:
-    """Read every distinct string once during source admission.
+    """Retain the first 255 distinct strings per field during source admission.
 
     Args:
         source_path: Authorized native dataset or validated archive-member path.
@@ -92,8 +111,10 @@ def read_field_value_inventory(
         open_options: Format-owned GDAL options preserving literal text values.
 
     Returns:
-        Private per-field arrays of exact value and Unicode-casefold search text,
-        sorted by the exact value's Unicode code points. No null entries.
+        Per-field choices sorted by exact Unicode code points, with casefolded
+        search text and a flag for omitted values. Nulls are excluded; duplicates
+        do not count toward the cap. At most 255 strings per field are retained
+        in memory while scanning, regardless of source size.
 
     Raises:
         ValueError: If a selected field is absent or contains a non-string value.
@@ -102,11 +123,12 @@ def read_field_value_inventory(
     """
     names = string_field_names(fields)
     values: dict[str, set[str]] = {name: set() for name in names}
+    truncated: set[str] = set()
     if not names:
         return {}
 
     def collect(properties: Mapping[str, Any]) -> None:
-        """Retain exact non-null strings from one geometry-free row.
+        """Keep a field's first distinct strings and flag values beyond its cap.
 
         Args:
             properties: Native scalar values for the admitted string fields.
@@ -115,12 +137,17 @@ def read_field_value_inventory(
             ValueError: If a string field contains another scalar type.
         """
         for name, value in properties.items():
-            if value is not None:
+            if value is not None and name not in truncated:
                 if not isinstance(value, str):
                     raise ValueError(
                         f"String field {name!r} contains a non-string value"
                     )
-                values[name].add(value)
+                distinct = values[name]
+                if value not in distinct:
+                    if len(distinct) < FIELD_VALUE_LIMIT:
+                        distinct.add(value)
+                    else:
+                        truncated.add(name)
 
     visit_vector_fields(
         source_path,
@@ -132,7 +159,10 @@ def read_field_value_inventory(
         open_options=open_options,
     )
     return {
-        name: [(value, value.casefold()) for value in sorted(distinct)]
+        name: {
+            "values": [(value, value.casefold()) for value in sorted(distinct)],
+            "truncated": name in truncated,
+        }
         for name, distinct in values.items()
     }
 
@@ -147,7 +177,8 @@ def page_field_values(
         query: Requested field, case-insensitive search and page bounds.
 
     Returns:
-        Exact strings from one page and a continuation offset when more exist.
+        Exact strings from one page, a continuation offset when more retained
+        matches exist, and whether admission omitted other source values.
 
     Raises:
         VectorFieldValuesUnavailable: If the field has no prepared string values.
@@ -157,7 +188,8 @@ def page_field_values(
             "Choose a string field with prepared values."
         )
     search = query.search.casefold()
-    matches = (value for value, folded in inventory[query.field] if search in folded)
+    prepared = inventory[query.field]
+    matches = (value for value, folded in prepared["values"] if search in folded)
     from itertools import islice
 
     page = tuple(islice(matches, query.offset, query.offset + query.limit + 1))
@@ -165,4 +197,5 @@ def page_field_values(
         field=query.field,
         values=page[: query.limit],
         nextOffset=query.offset + query.limit if len(page) > query.limit else None,
+        truncated=prepared["truncated"],
     )

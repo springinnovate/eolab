@@ -51,7 +51,10 @@ def test_stac_proxy_omits_private_source_metadata(
             }
         )
     item.setdefault("properties", {})["eolab:vector-field-values"] = {
-        "label": [["private vocabulary", "private vocabulary"]]
+        "label": {
+            "values": [["private vocabulary", "private vocabulary"]],
+            "truncated": False,
+        }
     }
     is_search = path.endswith("/search")
     payload = (

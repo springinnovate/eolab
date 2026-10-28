@@ -70,7 +70,7 @@ def build_stac_items(
     """Build one STAC Item per catalogable GeoPackage vector layer.
 
     Fiona supplies names, schemas, counts, bounds and coordinate reference
-    systems; geometry-free OGR reads prepare complete string inventories.
+    systems; geometry-free OGR reads prepare up to 255 choices per string field.
     Nonspatial tables are ignored.
     Expected failures in one layer are logged and do not discard valid sibling
     layers. When every spatial layer fails, the source becomes a normal
@@ -91,6 +91,7 @@ def build_stac_items(
         fiona.errors.FionaError: If GDAL cannot inspect the GeoPackage
             container or list its layers.
     """
+
     relative_path_text = geopackage_path.relative_to(source_root).as_posix()
     file_status = geopackage_path.stat()
     filesystem_modified_at = datetime.fromtimestamp(

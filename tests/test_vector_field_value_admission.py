@@ -63,7 +63,7 @@ def write_text_layer(
         ("file-geodatabase", "OpenFileGDB", ".gdb"),
     ],
 )
-def test_every_admitted_format_prepares_complete_rare_values(
+def test_every_admitted_format_prepares_values_within_the_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, driver: str, suffix: str
 ) -> None:
     """Exercise actual format admission, then page/search without opening features.
@@ -96,7 +96,8 @@ def test_every_admitted_format_prepares_complete_rare_values(
     assert result.error is None
     inventory = result.items[0]["properties"][VECTOR_FIELD_VALUES_KEY]
     assert set(inventory) == {"label"}
-    assert [entry[0] for entry in inventory["label"]] == sorted(exact)
+    assert [entry[0] for entry in inventory["label"]["values"]] == sorted(exact)
+    assert not inventory["label"]["truncated"]
 
     def no_read(*args: Any, **kwargs: Any) -> None:
         """Reject an accidental native read during metadata-only lookup."""
@@ -110,6 +111,46 @@ def test_every_admitted_format_prepares_complete_rare_values(
         inventory, VectorFieldValueQuery(field="label", offset=220, limit=100)
     )
     assert page.values == tuple(sorted(exact)[220:]) and page.next_offset is None
+    assert not page.truncated
+
+
+@pytest.mark.parametrize("unique_count", [254, 255, 256, 1000])
+def test_admission_caps_distinct_choices_and_reports_omitted_values(
+    tmp_path: Path, unique_count: int
+) -> None:
+    """Keep the first 255 distinct values and disclose omissions on every search.
+
+    Args:
+        tmp_path: Disposable source directory.
+        unique_count: Number of distinct strings around and beyond the cap.
+    """
+    source = tmp_path / "capped.gpkg"
+    values = [f"value {index:04d}" for index in range(unique_count)]
+    write_text_layer(source, "GPKG", [None, *values, *values[:10], None])
+    result = build_dataset_metadata(tmp_path, DatasetCandidate(source, "geopackage"))
+    assert result.error is None
+    inventory = result.items[0]["properties"][VECTOR_FIELD_VALUES_KEY]
+    assert inventory["label"] == {
+        "values": [(value, value.casefold()) for value in values[:255]],
+        "truncated": unique_count > 255,
+    }
+    collected = []
+    offset = 0
+    while True:
+        page = page_field_values(
+            inventory, VectorFieldValueQuery(field="label", offset=offset, limit=100)
+        )
+        assert page.truncated == (unique_count > 255)
+        collected.extend(page.values)
+        if page.next_offset is None:
+            break
+        offset = page.next_offset
+    assert collected == values[:255]
+    missing = page_field_values(
+        inventory, VectorFieldValueQuery(field="label", search="value 0255")
+    )
+    assert missing.values == () and missing.next_offset is None
+    assert missing.truncated == (unique_count > 255)
 
 
 def test_geojson_null_empty_and_mixed_fields(tmp_path: Path) -> None:
@@ -142,13 +183,16 @@ def test_geojson_null_empty_and_mixed_fields(tmp_path: Path) -> None:
     result = build_dataset_metadata(tmp_path, DatasetCandidate(source, "geojson"))
     assert result.error is None
     assert result.items[0]["properties"][VECTOR_FIELD_VALUES_KEY] == {
-        "label": [("", ""), ("Upper", "upper")],
-        "date_text": [("2026-01-01T00:00:00Z", "2026-01-01t00:00:00z")],
+        "label": {"values": [("", ""), ("Upper", "upper")], "truncated": False},
+        "date_text": {
+            "values": [("2026-01-01T00:00:00Z", "2026-01-01t00:00:00z")],
+            "truncated": False,
+        },
     }
     empty = tmp_path / "empty.gpkg"
     write_text_layer(empty, "GPKG", [])
     assert read_field_value_inventory(str(empty), "values", {"label": "str"}) == {
-        "label": []
+        "label": {"values": [], "truncated": False}
     }
 
 
@@ -176,7 +220,7 @@ def test_inventory_failure_preserves_sibling_layers(
     result = build_dataset_metadata(tmp_path, DatasetCandidate(source, "geopackage"))
     assert result.error is None and len(result.items) == 1
     assert result.items[0]["properties"][VECTOR_FIELD_VALUES_KEY] == {
-        "label": [("good", "good")]
+        "label": {"values": [("good", "good")], "truncated": False}
     }
 
 
@@ -212,6 +256,7 @@ def test_upload_value_lookup_is_private_stored_and_deleted(
             "field": "label",
             "values": ["Café wetlands"],
             "nextOffset": None,
+            "truncated": False,
         }
         assert response.headers["cache-control"] == "private, no-store"
         assert "Café wetlands" not in owner.get(BASE).text

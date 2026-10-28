@@ -61,18 +61,19 @@ for (const inline of [false, true]) test(`${inline ? "inline model/analysis" : "
     assert.equal(p.search.getAttribute("role"), "combobox"); assert.equal(p.list.getAttribute("role"), "listbox");
     assert.equal(p.search.getAttribute("aria-controls"), p.list.id); assert.equal(h.document.activeElement, p.search);
     assert.deepEqual(h.requests[0].source, h.target.source);
-    h.requests[0].resolve({values: Array.from({length: 50}, (_, index) => `common ${index}`), nextOffset: 50}); await flush();
+    h.requests[0].resolve({values: Array.from({length: 50}, (_, index) => `common ${index}`), nextOffset: 50, truncated: false}); await flush();
+    assert.doesNotMatch(p.status.textContent, /More values exist/);
     p.next.focus(); click(p.next); assert.equal(h.requests[1].query.offset, 50);
     assert.equal(h.document.activeElement, p.search, "Keep focus inside the picker before disabling the page button");
-    h.requests[1].resolve({values: ["rare exact value"], nextOffset: null}); await flush();
+    h.requests[1].resolve({values: ["rare exact value"], nextOffset: null, truncated: false}); await flush();
     assert.equal(p.next.disabled, true); assert.equal(p.previous.disabled, false);
     p.previous.focus(); click(p.previous); assert.equal(h.requests[2].query.offset, 0);
     assert.equal(h.document.activeElement, p.search);
-    h.requests[2].resolve({values: ["first"], nextOffset: 1}); await flush();
+    h.requests[2].resolve({values: ["first"], nextOffset: 1, truncated: false}); await flush();
     type(p.search, "rare"); assert.equal(p.list.children.length, 0); assert.equal(h.requests.length, 3);
     assert.equal(h.controls.draft.rules[0].value, "original"); assert.equal(h.applied.length, 0);
     h.runTimers(200); assert.deepEqual(h.requests[3].query, {field: "name", search: "rare", offset: 0});
-    h.requests[3].resolve({values: [" rare exact value "], nextOffset: null}); await flush();
+    h.requests[3].resolve({values: [" rare exact value "], nextOffset: null, truncated: false}); await flush();
     key(p.search, "ArrowDown"); assert.equal(p.search.getAttribute("aria-activedescendant"), p.list.children[0].id);
     assert.equal(p.list.children[0].getAttribute("aria-selected"), "true");
     key(p.search, "Enter"); assert.equal(p.panel.hidden, true); assert.equal(h.document.activeElement, p.input);
@@ -83,16 +84,34 @@ for (const inline of [false, true]) test(`${inline ? "inline model/analysis" : "
     h.controls.destroy();
 });
 
+test("truncated choices keep their notice after paging and empty searches while allowing direct entry", async () => {
+    const h = fixture(), p = picker(h.controls); click(p.toggle);
+    const notice = "Only 255 values are available in this list. More values exist; enter a value directly to use one that is not listed.";
+    const values = Array.from({length: 255}, (_, index) => `listed ${index}`);
+    for (let offset = 0; offset < values.length; offset += 50) {
+        if (offset > 0) click(p.next);
+        const nextOffset = offset + 50 < values.length ? offset + 50 : null;
+        h.requests[offset / 50].resolve({values: values.slice(offset, offset + 50), nextOffset, truncated: true}); await flush();
+        assert.ok(p.status.textContent.endsWith(notice)); assert.equal(p.next.disabled, nextOffset === null);
+    }
+    type(p.search, "unlisted"); h.runTimers(200);
+    h.requests[6].resolve({values: [], nextOffset: null, truncated: true}); await flush();
+    assert.match(p.status.textContent, /No available values match/); assert.ok(p.status.textContent.endsWith(notice));
+    type(p.input, "unlisted value"); h.runTimers(450); await flush();
+    assert.equal(h.applied[0].rules[0].value, "unlisted value");
+    h.controls.destroy();
+});
+
 test("exact empty, null-like and Unicode strings remain scalar values; unsupported literals stay unavailable", async () => {
     const h = fixture(), p = picker(h.controls); click(p.toggle);
-    h.requests[0].resolve({values: ["x".repeat(257), "a\nb", "", "NULL", "  é 😃  "], nextOffset: null}); await flush();
+    h.requests[0].resolve({values: ["x".repeat(257), "a\nb", "", "NULL", "  é 😃  "], nextOffset: null, truncated: false}); await flush();
     assert.equal(p.list.children[0].getAttribute("aria-disabled"), "true"); assert.match(p.status.textContent, /character limits/);
     click(p.list.children[1]); assert.equal(h.controls.draft.rules[0].value, "original");
     key(p.search, "ArrowDown"); assert.equal(p.search.getAttribute("aria-activedescendant"), p.list.children[2].id);
     key(p.search, "Enter"); assert.equal(h.controls.draft.rules[0].value, "");
-    click(p.toggle); h.requests[1].resolve({values: ["NULL", "  é 😃  "], nextOffset: null}); await flush();
+    click(p.toggle); h.requests[1].resolve({values: ["NULL", "  é 😃  "], nextOffset: null, truncated: false}); await flush();
     click(p.list.children[0]); assert.equal(h.controls.draft.rules[0].value, "NULL");
-    click(p.toggle); h.requests[2].resolve({values: ["  é 😃  "], nextOffset: null}); await flush();
+    click(p.toggle); h.requests[2].resolve({values: ["  é 😃  "], nextOffset: null, truncated: false}); await flush();
     click(p.list.children[0]); assert.equal(h.controls.draft.rules[0].value, "  é 😃  ");
     type(p.input, "direct entry"); assert.equal(h.controls.draft.rules[0].value, "direct entry");
     h.controls.destroy();
@@ -103,28 +122,28 @@ test("new searches, field/source changes, close and teardown abort work and igno
     type(p.search, "a"); assert.equal(h.requests[0].signal.aborted, true);
     type(p.search, "ab"); p.toggle.focus(); h.runTimers(200); assert.equal(h.requests.length, 2);
     assert.equal(h.document.activeElement, p.toggle, "A debounced search must not steal focus from another enabled control");
-    h.requests[0].resolve({values: ["stale"], nextOffset: null}); await flush(); assert.equal(p.list.children.length, 0);
-    h.requests[1].resolve({values: ["current"], nextOffset: null}); await flush(); assert.equal(p.list.children[0].textContent, '"current"');
+    h.requests[0].resolve({values: ["stale"], nextOffset: null, truncated: false}); await flush(); assert.equal(p.list.children.length, 0);
+    h.requests[1].resolve({values: ["current"], nextOffset: null, truncated: false}); await flush(); assert.equal(p.list.children[0].textContent, '"current"');
     type(p.search, "next"); h.runTimers(200);
     p.row.children[0].value = "other"; p.row.children[0].dispatchEvent(new Event("change"));
-    assert.equal(h.requests[2].signal.aborted, true); h.requests[2].resolve({values: ["old field"], nextOffset: null}); await flush();
+    assert.equal(h.requests[2].signal.aborted, true); h.requests[2].resolve({values: ["old field"], nextOffset: null, truncated: false}); await flush();
     p = picker(h.controls); click(p.toggle); assert.equal(h.requests[3].query.field, "other");
     h.controls.open("different-source"); assert.equal(h.requests[3].signal.aborted, true);
     h.requests[3].reject(Error("old source")); await flush();
     p = picker(h.controls); click(p.toggle); h.controls.close(); assert.equal(h.requests[4].signal.aborted, true);
-    h.requests[4].resolve({values: ["closed"], nextOffset: null}); await flush(); assert.equal(p.list.children.length, 0);
+    h.requests[4].resolve({values: ["closed"], nextOffset: null, truncated: false}); await flush(); assert.equal(p.list.children.length, 0);
     h.controls.open("countries"); p = picker(h.controls); click(p.toggle); type(p.search, "scheduled"); h.controls.destroy();
     assert.equal(h.requests[5].signal.aborted, true); assert.equal(h.timers.size, 0);
 });
 
 test("empty/error/retry states retain direct entry; Escape and focusout dismiss only suggestions", async () => {
     const h = fixture(), p = picker(h.controls); click(p.toggle);
-    h.requests[0].resolve({values: [], nextOffset: null}); await flush(); assert.match(p.status.textContent, /No available values match/);
+    h.requests[0].resolve({values: [], nextOffset: null, truncated: false}); await flush(); assert.match(p.status.textContent, /No available values match/);
     type(p.search, "failure"); h.runTimers(200); h.requests[1].reject(Error("Values unavailable.")); await flush();
     assert.match(p.status.textContent, /Values unavailable/); assert.equal(p.retry.hidden, false);
     p.retry.focus(); click(p.retry); assert.equal(h.requests[2].query.search, "failure");
     assert.equal(h.document.activeElement, p.search, "Keep focus inside the picker before hiding Retry");
-    h.requests[2].resolve({values: ["working"], nextOffset: null}); await flush();
+    h.requests[2].resolve({values: ["working"], nextOffset: null, truncated: false}); await flush();
     assert.equal(p.retry.hidden, true); assert.equal(key(p.root, "Escape").defaultPrevented, true);
     assert.equal(p.panel.hidden, true); assert.equal(h.document.activeElement, p.toggle); assert.equal(h.controls.key, "countries");
     click(p.toggle); const event = new Event("focusout"); Object.defineProperty(event, "relatedTarget", {value: p.input}); p.root.dispatchEvent(event);
