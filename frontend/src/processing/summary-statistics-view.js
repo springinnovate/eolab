@@ -22,7 +22,7 @@ export class SummaryStatisticsView {
      * @param {Object} [browserContext] Browser capabilities supplied at the view boundary.
      * @param {{writeText:(text:string)=>Promise<void>}|null} [browserContext.clipboard]
      * Clipboard writer; unavailable or denied access is presented in the card.
-     * @param {(context:{source:string,scope:string})=>void} [browserContext.onContextChange]
+     * @param {(context:{source:string,scope:string,usesSamplingBox:boolean})=>void} [browserContext.onContextChange]
      * Publish display-only source/area context through browser composition.
      */
     constructor(documentContext = globalThis.document, {
@@ -162,7 +162,7 @@ export class SummaryStatisticsView {
             [rasterSourceKey(card.source), card.source.label])).values()];
         this.onContextChange({ source: state.sourceMode === "query" ? `${state.querySources.length} enabled rasters in this area` : sources.length === 1 ? sources[0]
             : sources.length ? `${sources.length} rasters in statistic cards` : "No raster selected",
-            scope: this.areaDescription(state) });
+            scope: this.areaDescription(state), usesSamplingBox: state.area?.kind === "selectedArea" });
         const working = state.statistics.some(card => card.pending);
         for (const opener of this.openers) {
             const name = opener === this.openers[0] ? "Raster statistics" : "Statistics";

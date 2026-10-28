@@ -123,6 +123,17 @@ export class RasterClipsController {
         this.onEditArea();
     }
 
+    /** Update the open clip form after a shared sampling-area edit.
+     * Submitted jobs and uncertain submissions retain their original inputs.
+     * @param {Readonly<Object>|null} area Validated, immutable map box or polygon selection; null clears it.
+     * @return {void}
+     */
+    setSelection(area) {
+        if (!this.active || !this.state.review || this.state.pending || this.state.submitting) return;
+        this.state.area = area;
+        this.render();
+    }
+
     /** Inspect one owned download without changing submitted inputs or dispatching work.
      * @param {string} id Owned clip job selected from the current listing.
      * @return {void}

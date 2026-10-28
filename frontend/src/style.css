@@ -4389,8 +4389,6 @@ article.raster-histogram-summary {
 @container map-inspection (max-width: 470px) {
   .vector-time-series-controls { grid-template-columns: minmax(0, 1fr); }
   .vector-feature-profile-controls { grid-template-columns: minmax(0, 1fr); }
-  .raster-sampling-disclosure > summary,
-  .raster-sample-window-size { grid-template-columns: minmax(0, 1fr); }
 }
 
 .map-histogram-toolbar {
@@ -4410,12 +4408,14 @@ article.raster-histogram-summary {
   font-size: 1rem;
   overflow-wrap: anywhere;
 }
-.raster-sampling-disclosure {
-  margin: 0 0 14px;
+#raster-sampling-tool {
+  margin-top: 4px;
   border: 1px solid var(--border-1);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--surface-2);
 }
+#raster-sampling-tool[hidden] { display: none; }
+.raster-sampling-disclosure { margin: 0; }
 .raster-sampling-disclosure > summary {
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
@@ -4423,7 +4423,7 @@ article.raster-histogram-summary {
   gap: 5px 10px;
   cursor: pointer;
   list-style: none;
-  padding: 10px 12px;
+  padding: 5px 8px;
   color: var(--text-1);
   font-size: 0.8rem;
   font-weight: 700;
@@ -4474,9 +4474,11 @@ summary:hover > .raster-disclosure-chevron {
 .raster-sampling-disclosure-body {
   display: grid;
   gap: 12px;
-  padding: 12px;
+  padding: 8px;
+  max-height: 32dvh;
+  overflow-y: auto;
 }
-#map-histogram-panel .raster-style-controls {
+.raster-sampling-disclosure .raster-style-controls {
   display: grid;
   order: 0;
   gap: 12px;
@@ -4485,11 +4487,11 @@ summary:hover > .raster-disclosure-chevron {
   background: transparent;
   padding: 0;
 }
-#map-histogram-panel .raster-style-controls[hidden],
+.raster-sampling-disclosure .raster-style-controls[hidden],
 .raster-map-box-controls[hidden] {
   display: none;
 }
-#map-histogram-panel .raster-control-group + .raster-control-group {
+.raster-sampling-disclosure .raster-control-group + .raster-control-group {
   margin-top: 0;
 }
 .raster-sampling-area-options {
@@ -4535,10 +4537,12 @@ summary:hover > .raster-disclosure-chevron {
   overflow-wrap: anywhere;
 }
 .raster-map-box-controls {
-  margin: -2px 0 2px 17px;
-  border-left: 2px solid var(--brand);
-  padding: 3px 0 3px 12px;
+  border-top: 1px solid var(--border-2);
+  padding: 5px 8px;
 }
+.raster-map-box-controls > summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+#raster-sample-window-dimensions { margin-left: 8px; font-variant-numeric: tabular-nums; }
+.raster-map-box-controls .raster-sample-window-size { margin-top: 5px; }
 .raster-sampling-vector {
   border-top: 1px solid var(--border-2);
 }
