@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
+import { MapLayerController } from "../../src/map-layers/controller.js";
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
 import {
   decodeSavedMapViewFragment,
@@ -82,7 +82,8 @@ for (const keepAvailableLayer of [true, false]) test(`published map saves curren
     publicationApi: { getForEditing: async () => ({ title: "Map", subtitle: "", revision: 1, view: saved }),
       async update(slug, request) { submissions.push({ slug, request }); return { ...request, slug, revision: 2 }; } },
     viewport: { restore() {}, snapshot: () => saved.viewport },
-    mapLayers: { retainedRecords: records, commitStaged(staged) { records.push(...staged.map(layer => layer.record)); } },
+    mapLayers: { retainedRecords: records, commitStaged(staged) { records.push(...staged.map(layer => layer.record)); },
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; } },
     catalogVisualization: { clear() {}, prepare: async item => item,
       async stage(item, presentation) { return { record: { entry: { item, ...presentation },
         adapter: { applySavedState() {}, exportSavedState: () => available.style } } }; } },
@@ -188,7 +189,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.splice(0, records.length, ...records.filter(r => r.entry.item === null)); },
       prepare: async item => item,
-      stage: async item => ({ record: { entry: { key: "catalog", item, visible: true, opacity: 1 }, adapter: {
+      stage: async (item, presentation) => ({ record: { entry: { item, ...presentation }, adapter: {
         applySavedState() {}, exportSavedState: () => catalog.style,
       } } }) },
     exportAnnotation: record => record === annotationRecord ? annotation : null,
@@ -202,7 +203,7 @@ test("mixed shared maps export invitations, preserve layer order and restore pre
   assert.equal(view.result.loaded, 2);
   assert.deepEqual(legendPreferences, saved.mapLegend);
   assert.ok(records.every(record => record.entry.legendIncluded === false));
-  assert.deepEqual(ordered.at(-1), ["catalog", "local:annotation:mine"]);
+  assert.deepEqual(ordered.at(-1), [records[0].entry.key, "local:annotation:mine"]);
   records.push({ entry: { key: "local:private", item: null }, polygons: ["do not share"] });
   await controller.copyMapLink();
   const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
@@ -229,7 +230,8 @@ test("shared viewer restores its starting presentation and never reads or writes
   const records = [];
   const controller = createController({ view, storage, restoreSharedMap: true,
     viewport: { snapshot: () => position, restore: value => { position = value; } },
-    mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)) },
+    mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)),
+      setLegendIncluded(key, value) { records.find(record => record.entry.key === key).entry.legendIncluded = value; } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: {
       clear() { records.length = 0; }, prepare: async item => item,
@@ -277,12 +279,14 @@ test("saved filters restore before commit and invalid filters never expose an un
       layers: [{ catalogItem: { collection: "vectors", id: "quakes" },
         visible: true, opacity: 1, style: { kind: "vector", definition: {} }, filter: state }],
     });
-    const layers = { retainedRecords: [], commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged; } };
+    const layers = { retainedRecords: [],
+      commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged.map(value => value.record); },
+      setLegendIncluded(key, value) { this.retainedRecords.find(record => record.entry.key === key).entry.legendIncluded = value; } };
     const controller = createController({ view,
       viewport: { snapshot: () => saved.viewport, restore() {} }, mapLayers: layers,
       catalogItems: { get: async (identity) => identity },
       catalogVisualization: { clear() {}, prepare: async (item) => item,
-        stage: async (item) => ({ record: { entry: { item, label: "Quakes" }, adapter: {
+        stage: async (item, presentation) => ({ record: { entry: { item, ...presentation, label: "Quakes" }, adapter: {
           applySavedState() { calls.push("style"); },
           applyFilterState(_record, restored) {
             calls.push("filter"); assert.deepEqual(restored, state);
@@ -443,12 +447,86 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   assert.deepEqual(view.busy, [true, false]);
 });
 
+for (const kind of ["raster", "vector"]) test(`repeated ${kind} views survive export and reload and can be removed independently`, async () => {
+  const style = kind === "vector" ? { kind, definition: { color: "#123456" } } : {
+    kind, appearanceVersion: 1, mode: "continuous",
+    continuous: { definition: { ...DEFAULT_RASTER_STYLE }, paletteName: "custom", styleWasEdited: true },
+    categorical: null,
+  };
+  const first = { catalogItem: { collection: kind, id: "source" }, customName: "First view",
+    visible: true, opacity: 0.7, style,
+    ...(kind === "vector" ? { filter: { enabled: true, match: "all",
+      rules: [{ field: "ISO3", operator: "eq", value: "PER" }] } } : {}) };
+  const second = { ...structuredClone(first), customName: "Second view", visible: false,
+    opacity: 0.3, legendIncluded: false };
+  if (kind === "vector") {
+    second.style.definition.color = "#ABCDEF";
+    second.filter.rules[0].value = "BRA";
+  } else {
+    second.style.continuous.definition.minimumColor = "#ABCDEF";
+  }
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [first, second] };
+  const view = createView(), storage = createStorage(), timers = createTimers();
+  const mapLayers = new MapLayerController({
+    leafletMap: { removeLayer() {} },
+    view: { bind() {}, unbind() {}, render() {}, setStatus() {} },
+  });
+  const adapter = {
+    label: item => item.id,
+    publish: async item => ({ id: item.id }),
+    createState: () => ({}),
+    createLayer: () => ({ addTo() {}, setOpacity() {}, setZIndex() {} }),
+    renderDescriptor: record => ({ layerName: record.publication.id }),
+    snapshot: () => ({ datasetKind: kind }),
+    tileErrorMessage: "Test layer tiles unavailable",
+    applySavedState(record, value) { record.state.style = structuredClone(value); },
+    exportSavedState: record => record.state.style,
+    ...(kind === "vector" ? {
+      applyFilterState(record, value) { record.state.filter = structuredClone(value); },
+      exportFilterState: record => record.state.filter,
+    } : {}),
+  };
+  const controller = createController({ view, storage, mapLayers,
+    viewport: { snapshot: () => saved.viewport, restore() {} },
+    catalogItems: { get: async identity => identity },
+    catalogVisualization: { clear: () => mapLayers.clear(), prepare: async item => item,
+      stage: (item, presentation) => mapLayers.stage(item, adapter, presentation) },
+    viewerVersion: "0.9.0", viewerOrigin: saved.viewer.origin,
+    setTimer: timers.setTimer.bind(timers), clearTimer: timers.clearTimer.bind(timers),
+  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
+    maximumInputBytes: 512 * 1024,
+  }));
+  assert.deepEqual(view.result.details, []);
+  assert.equal(view.result.loaded, 2);
+  const originalKeys = mapLayers.retainedRecords.map(record => record.entry.key);
+  assert.equal(new Set(originalKeys).size, 2);
+  await controller.copyMapLink();
+  const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  assert.deepEqual(exported.layers, saved.layers);
+  controller.scheduleRemember();
+  timers.runOnly();
+  assert.deepEqual(JSON.parse(storage.serialized).layers, saved.layers);
+  await controller.restoreStartupView();
+  const restored = mapLayers.retainedRecords;
+  assert.equal(restored.length, 2);
+  assert.ok(restored.every(record => !originalKeys.includes(record.entry.key)));
+  mapLayers.removeKey(restored[0].entry.key);
+  assert.equal(mapLayers.retainedRecords[0], restored[1]);
+  await controller.copyMapLink();
+  const remaining = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  assert.deepEqual(remaining.layers, [second]);
+  controller.destroy();
+  mapLayers.destroy();
+});
+
 test("saved map controller stages concurrently and commits final saved order", async () => {
   const view = createView();
   const viewportCalls = [];
   const calls = [];
   const mapLayers = {
     retainedRecords: [{ entry: { item: { collection: "old", id: "layer" } } }],
+    setLegendIncluded(key, value) { this.retainedRecords.find(record => record.entry.key === key).entry.legendIncluded = value; },
     commitStaged(staged, options) {
       calls.push([
         "commit",
@@ -474,7 +552,7 @@ test("saved map controller stages concurrently and commits final saved order", a
           },
         },
       };
-      return { key: getCatalogItemKey(item), record, layer: {} };
+      return { key: presentation.key, record, layer: {} };
     },
   };
   const saved = createSavedMapView({
@@ -522,9 +600,11 @@ test("saved map controller stages concurrently and commits final saved order", a
     { maximumInputBytes: 512 * 1024 },
   ));
 
+  const restoredKeys = mapLayers.retainedRecords.map(record => record.entry.key);
+  assert.equal(new Set(restoredKeys).size, 2);
   assert.deepEqual(calls.filter(([kind]) => kind === "stage"), [
-    ["stage", "top", { visible: true, opacity: 0.5, customName: "Protected areas" }],
-    ["stage", "bottom", { visible: false, opacity: 0.8 }],
+    ["stage", "top", { key: restoredKeys[0], visible: true, opacity: 0.5, customName: "Protected areas" }],
+    ["stage", "bottom", { key: restoredKeys[1], visible: false, opacity: 0.8 }],
   ]);
   assert.deepEqual(calls.filter(([kind]) => kind === "commit"), [
     ["commit", ["top", "bottom"], { fitToBounds: false }],
@@ -559,9 +639,11 @@ test("saved map restoration bounds work and isolates layer failures", async () =
   });
   const mapLayers = {
     retainedRecords: [],
+    setLegendIncluded(key, value) { this.retainedRecords.find(record => record.entry.key === key).entry.legendIncluded = value; },
     commitStaged(staged) {
       commitWhileActive = active;
       committed = staged;
+      this.retainedRecords = staged.map(value => value.record);
     },
   };
   const catalogVisualization = {
@@ -585,7 +667,7 @@ test("saved map restoration bounds work and isolates layer failures", async () =
           },
         },
       };
-      return { key: getCatalogItemKey(item), record, layer: {} };
+      return { key: presentation.key, record, layer: {} };
     },
   };
   const controller = createController({
@@ -654,7 +736,7 @@ test("destroyed saved map restoration never commits its detached batch", async (
         reportStageStarted();
         await stageReleased;
         return {
-          key: getCatalogItemKey(item),
+          key: presentation.key,
           record: {
             entry: { item, ...presentation, label: "Roads" },
             adapter: { applySavedState() {} },
@@ -920,6 +1002,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
   const calls = [];
   const mapLayers = {
     retainedRecords: [originalRecord],
+    setLegendIncluded(key, value) { this.retainedRecords.find(record => record.entry.key === key).entry.legendIncluded = value; },
     commitStaged(staged) {
       this.retainedRecords = staged.map(({ record }) => record);
       calls.push(["commit", this.retainedRecords.map(({ entry }) => entry.item.id)]);
@@ -943,7 +1026,7 @@ test("reset and one-step undo reuse complete validated restore documents", async
         },
       };
       return {
-        key: getCatalogItemKey(catalogItem),
+        key: presentation.key,
         record: restoredRecord,
         layer: {},
       };
@@ -1188,7 +1271,7 @@ test("temporal views restore independently in mixed map order and retain unavail
       restoreOrder(keys) { order.push(keys); records.sort((a, b) => keys.indexOf(a.entry.key) - keys.indexOf(b.entry.key)); } },
     catalogItems: { get: async identity => identity },
     catalogVisualization: { clear() { records.length = 0; }, prepare: async item => item,
-      stage: async (item, presentation) => ({ record: { entry: { key: "catalog", item, ...presentation },
+      stage: async (item, presentation) => ({ record: { entry: { item, ...presentation },
         adapter: { applySavedState() {}, exportSavedState: () => catalog.style } } }) },
     exportTemporal: record => record.savedTemporal ?? null,
     restoreTemporal: async (layer, isCurrent) => {
@@ -1203,7 +1286,7 @@ test("temporal views restore independently in mixed map order and retain unavail
     maximumInputBytes: 512 * 1024,
   }));
   assert.equal(view.result.loaded, 3);
-  assert.deepEqual(order, [["local:temporal:First", "catalog", "local:temporal:Second"]]);
+  assert.deepEqual(order, [["local:temporal:First", records[1].entry.key, "local:temporal:Second"]]);
   assert.match(records[2].error, /unavailable/);
   await controller.copyMapLink();
   const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));

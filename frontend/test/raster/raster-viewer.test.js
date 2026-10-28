@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
 import { MapLayerStyleEditor } from "../../src/map-layers/style-editor.js";
@@ -1529,6 +1530,45 @@ test("categorical styles round-trip through save, copy/paste and removed-layer u
     await flushPromises();
     assert.ok(h.controlsView.layerHistograms.every(summary => summary.state === "ready" && summary.categorical));
     h.destroy();
+});
+
+test("another Catalog raster view copies appearance and keeps histogram actions tied to that view", async () => {
+    let catalog;
+    const item = createRasterItem("two-views");
+    const calculations = [], downloads = [];
+    const h = visibleLayerFixture(undefined, {}, {
+        onCalculateRequested: (...args) => calculations.push(args),
+        onDownloadRequested: (...args) => downloads.push(args),
+    }, {restoreRemovedLayer: (snapshot, isCurrent) =>
+        catalog.restoreRemovedLayer(snapshot, async () => item, isCurrent)});
+    catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
+    try {
+        await h.viewer.show(item);
+        const original = h.mapLayers.retainedRecords[0];
+        editCategoricalAppearance(h, original.entry.key);
+        h.mapLayers.renameLayer(original.entry.key, "Land cover");
+        h.mapLayers.setOpacity(original.entry.key, 0.4);
+        const appearance = original.adapter.exportSavedState(original);
+        const copiedKey = await h.mapLayers.addAnotherView(original.entry.key);
+        const copied = h.mapLayers.getRecord(copiedKey);
+        assert.equal(copied.entry.item, item);
+        assert.notEqual(copied.state.analysis, original.state.analysis);
+        assert.deepEqual(copied.adapter.exportSavedState(copied), appearance);
+        assert.equal(copied.entry.label, "Land cover");
+        assert.equal(copied.entry.opacity, 0.4);
+        h.mapLayers.renameLayer(copiedKey, "Forest only");
+        const changed = categoricalAppearance();
+        changed.categories[0].color = "#ff0000";
+        editCategoricalAppearance(h, copiedKey, changed);
+        assert.deepEqual(original.adapter.exportSavedState(original), appearance);
+        h.controlsView.handlers.onCalculateHistogram(copiedKey);
+        h.controlsView.handlers.onDownloadHistogram(copiedKey);
+        assert.deepEqual(calculations[0], [item, null, "Forest only", copiedKey]);
+        assert.deepEqual(downloads[0], [item, null, "Forest only"]);
+        h.mapLayers.removeKey(original.entry.key);
+        assert.equal(h.mapLayers.findLayerKey(item), copiedKey);
+        assert.equal(h.mapLayers.getRecord(copiedKey), copied);
+    } finally { h.destroy(); }
 });
 
 test("CSV preview commits through the category editor and persists through the existing appearance contract", async () => {
@@ -3102,7 +3142,35 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     assert.equal(controlsView.renderingControlsAvailable, true);
     assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    viewer.exploreAt({lng: 0, lat: 0});
+    const selectedArea = viewer.getSelectedArea();
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+    assert.deepEqual(viewer.getSelectedArea(), selectedArea, "Re-selecting the retained source keeps the area chosen after handoff");
     viewer.destroy();
+});
+
+test("independently staged views copy detached sampling state without sharing mutable analysis", async () => {
+    const {leaflet} = createFakeLeaflet();
+    const viewer = initializeRasterViewer({leafletMap: createFakeMap(), leaflet,
+        wmsUrl: "/wms", onTileError() {}}, {
+        controlsView: createFakeControlsView(), layerStackView: createFakeLayerStackView(),
+        publishRaster: async () => ({layerName: "eolab:test", bbox: [-180, -90, 180, 90]}),
+        loadStatistics: async () => RASTER_STATISTICS,
+        samplePixel: async () => ({inBounds: true, value: 1}),
+    });
+    try {
+        viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
+        viewer.exploreAt({lng: 0, lat: 0});
+        await flushPromises();
+        const first = await viewer.stage(MOUNTED_GEOTIFF_ITEM, {key: "local:view:first", visible: true, opacity: 1});
+        const second = await viewer.stage(MOUNTED_GEOTIFF_ITEM, {key: "local:view:second", visible: true, opacity: 1});
+        assert.notEqual(first.record.state.analysis, second.record.state.analysis);
+        assert.deepEqual(first.record.state.analysis.selectedRasterBounds, second.record.state.analysis.selectedRasterBounds);
+        const selectedBounds = first.record.state.analysis.selectedRasterBounds;
+        viewer.exploreAt({lng: 10, lat: 10});
+        assert.equal(first.record.state.analysis.selectedRasterBounds, selectedBounds);
+        assert.equal(second.record.state.analysis.selectedRasterBounds, selectedBounds);
+    } finally {viewer.destroy();}
 });
 
 test("WMS handoff keeps the selected area and rejects an obsolete detached result", async () => {
@@ -4969,6 +5037,7 @@ function temporalItem() {
  */
 function temporalFixture(dependencies = {}) {
     const temporalViews = [];
+    let restoreTemporal;
     const fixture = visibleLayerFixture(undefined, {
         loadTimes: async () => ({months: ["2020-01"], month: "2020-01", times: ["2020-01-01T00:00:00Z", "2020-01-01T02:00:00Z"]}),
         getTemporalItem: async () => temporalItem(),
@@ -4979,7 +5048,13 @@ function temporalFixture(dependencies = {}) {
         },
         publishRaster: async raster => ({layerName: `eolab:${raster.source.variable}-${raster.source.time}`, bbox: raster.bbox}),
         ...dependencies,
-    });
+    }, {}, {restoreRemovedLayer: (snapshot, isCurrent) => restoreTemporal(snapshot, isCurrent)});
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const restoreSource = main.slice(main.indexOf("async function restoreRemovedTemporal("),
+        main.indexOf("savedMapViewController = new SavedMapViewController({"));
+    restoreTemporal = new Function("catalogItemClient", "rasterVisualization", "mapLayerController",
+        `${restoreSource}; return restoreRemovedTemporal;`)(
+        {get: async () => temporalItem()}, fixture.viewer, fixture.mapLayers);
     return {...fixture, temporalViews};
 }
 
@@ -5024,7 +5099,8 @@ test("independent temporal views preserve explicit saved selections and reset ra
     try {
         const first = await fixture.viewer.showTemporal(temporalItem());
         await flushPromises();
-        const second = await fixture.temporalViews[0].handlers.onAddView();
+        const secondKey = await fixture.mapLayers.addAnotherView(first.entry.key);
+        const second = fixture.mapLayers.getRecord(secondKey);
         assert.notEqual(first.entry.key, second.entry.key);
         assert.equal(fixture.mapLayers.retainedRecords.length, 2);
         await fixture.temporalViews[1].handlers.onTimeChange("2020-01-01T02:00:00Z");

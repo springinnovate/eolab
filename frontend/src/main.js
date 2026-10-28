@@ -107,7 +107,7 @@ import { ModelsController } from "./models/controller.js";
 import { describeRasterSource } from "./raster/source-api.js";
 import { ModelOutputLayers } from "./model-output-preview/controller.js";
 import { createArtifactPreviewLayer } from "./model-output-preview/leaflet.js";
-import { labeledRasterSource, rasterSourceKey } from "./raster-source.js";
+import { labeledRasterSource } from "./raster-source.js";
 import { ModelsView } from "./models/view.js";
 import "./models/style.css";
 import { ProcessingApiClient } from "./processing/api.js";
@@ -927,7 +927,7 @@ async function initializeCatalog(
     mapLayerController.onCalculate = (key) => {
         const record = mapLayerController.getRecord(key);
         if (record) {
-            rasterSeries.selectSource(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label));
+            rasterSeries.selectSource(describeCalculationSource(mapLayerController.snapshots().find(layer => layer.key === key).source, record.entry.label), undefined, key);
             mapInspection.showRasterSeries();
         }
     };
@@ -939,9 +939,9 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onDownloadRequested: (item, area) => rasterClips.open(describeCalculationSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area),
-        onCalculateRequested: (item, area) => {
-            rasterSeries.selectSource(describeCalculationSource(item, mapLayerController.getRecord(rasterSourceKey(item))?.entry.label), area);
+        onDownloadRequested: (item, area, label) => rasterClips.open(describeCalculationSource(item, label), area),
+        onCalculateRequested: (item, area, label, key) => {
+            rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
             rasterSeries.calculate();
         },
@@ -973,6 +973,14 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    /** Find every retained view of this browser's uploaded vector.
+     * @param {string} uploadId Stored upload identity.
+     * @return {string[]} View keys in map drawing order.
+     */
+    function getUploadedVectorKeys(uploadId) {
+        return mapLayerController.retainedRecords.filter(record => record.adapter === vectorMapLayerAdapter &&
+            record.adapter.describeSource(record).source.uploadId === uploadId).map(record => record.entry.key);
+    }
     /** Publish an admitted upload and add it with the ordinary vector controls.
      * An upload already on the map keeps its current appearance.
      * @param {import("./vector-uploads/api.js").VectorUpload} upload This browser's stored polygon layer.
@@ -980,21 +988,21 @@ async function initializeCatalog(
      * @throws {Error} If publication or map construction fails.
      */
     async function addUploadedVector(upload) {
-        if (mapLayerController.getRecord(`local:upload:${upload.id}`)) return;
+        if (getUploadedVectorKeys(upload.id).length) return;
         const source = { kind: "upload", ...upload };
         const publication = await vectorMapLayerAdapter.publish(source);
         const record = mapLayerController.addLocal({
             key: `local:upload:${upload.id}`, label: upload.name, sourceName: upload.name,
-            upload: source, publication,
+            upload: source, publication, canAddView: true,
         }, vectorMapLayerAdapter);
         onRenderingWorkspaceRequested();
         vectorMapLayerAdapter.added(record);
         mapLayerStackView.announceStatus(`${upload.name} added to map.`);
     }
-    /** Undo map removal using the upload's captured appearance and immutable source.
+    /** Restore an upload view using its captured appearance and immutable source.
      * The WMS endpoint authorizes each request for the restored layer.
      * @param {import("./map-layers/controller.js").RemovedMapLayer} snapshot Removed upload and presentation.
-     * @param {()=>boolean} isCurrent Whether this Undo still belongs to the current action.
+     * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
      * @return {void}
      * @throws {Error} If the layer can no longer be added to this map.
      */
@@ -1004,7 +1012,7 @@ async function initializeCatalog(
         mapLayerController.addLocal({
             key: snapshot.key, label: snapshot.label, sourceName: upload.name,
             customName: snapshot.customName, visible: snapshot.visible, opacity: snapshot.opacity,
-            upload, publication, restore: snapshot.local,
+            upload, publication, restore: snapshot.local, canAddView: true,
         }, vectorMapLayerAdapter);
         mapLayerController.reorder(snapshot.key, Math.min(snapshot.index, mapLayerController.snapshots().length - 1));
     }
@@ -1019,10 +1027,10 @@ async function initializeCatalog(
         const upload = { kind: "upload", ...await getUpload(layer.uploadId) };
         const publication = await vectorMapLayerAdapter.publish(upload);
         if (!isCurrent()) return null;
-        const key = `local:upload:${upload.id}`;
+        const key = `local:view:${globalThis.crypto.randomUUID()}`;
         const record = mapLayerController.addLocal({
             key, label: upload.name, sourceName: upload.name, customName: layer.customName,
-            upload, publication, visible: false, opacity: layer.opacity,
+            upload, publication, visible: false, opacity: layer.opacity, canAddView: true,
         }, vectorMapLayerAdapter);
         /** Check that asynchronous restoration still owns this map layer. @return {boolean} */
         const stillRetained = () => isCurrent() && mapLayerController.getRecord(key) === record;
@@ -1040,19 +1048,18 @@ async function initializeCatalog(
             if (!isCurrent() && mapLayerController.getRecord(key) === record) mapLayerController.removeKey(key);
         }
     }
-    /** Forget the deleted upload's map layer and map-removal Undo.
+    /** Remove every view of a deleted upload and forget its map-removal Undo.
      * Accepted Processing jobs keep their server-owned source until they finish.
      * @param {string} uploadId Upload successfully deleted by the server.
      * @return {void}
      */
     function removeDeletedUpload(uploadId) {
-        const key = `local:upload:${uploadId}`;
-        mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.key === key);
-        if (mapLayerController.getRecord(key)) mapLayerController.removeKey(key);
+        mapLayerController.forgetUnavailableRemoval(snapshot => snapshot.local?.kind === "uploaded-vector" && snapshot.local.upload.id === uploadId);
+        for (const key of getUploadedVectorKeys(uploadId)) mapLayerController.removeKey(key);
     }
     if (!isSharedViewer) new UploadPolygonsDialog({
         document, addToMap: addUploadedVector,
-        isOnMap: id => mapLayerController.getRecord(`local:upload:${id}`) !== null,
+        isOnMap: id => getUploadedVectorKeys(id).length > 0,
         onDeleted: removeDeletedUpload,
     });
     let modelFilterControls = null;
@@ -1104,7 +1111,7 @@ async function initializeCatalog(
          * @throws {Error} If an owner cannot capture its layer for restoration.
          */
         captureRunLayers: id => mapLayerController.snapshots().filter(layer => layer.group?.id === id)
-            .map(layer => mapLayerController.copyLayerForUndo(layer.key)),
+            .map(layer => mapLayerController.captureLayerSnapshot(layer.key)),
         /** Restore deleted-run displays with the ordinary layer restoration path.
          * @param {Object[]} snapshots Presentations captured before run deletion.
          * @param {()=>boolean} isCurrent Whether the restored run remains available.
@@ -1305,9 +1312,9 @@ async function initializeCatalog(
         vectorMapLayerAdapter
     );
     const catalogItemClient = new SavedMapViewCatalogClient(catalogUrl);
-    /** Restore a removed temporal view with its original key, position and style.
+    /** Restore a temporal view with its requested key, position and style.
      * @param {Object} snapshot Removed map-layer snapshot.
-     * @param {()=>boolean} isCurrent Whether this Undo still applies.
+     * @param {()=>boolean} isCurrent Whether restoration still belongs to the current action.
      * @return {Promise<void>} Completion after the view is retained.
      * @throws {Error} If its Catalog dataset cannot be retrieved.
      */

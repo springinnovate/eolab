@@ -318,12 +318,12 @@ test("selected Item mirrors pending and success states", async () => {
     ["prepare", item.id], ["activate-analysis", item.id],
     ["render-inspector", item.id], ["show", item.id], ["open-rendering"],
   ]);
-  assert.equal(h.layerButton.textContent, "Remove from map");
+  assert.equal(h.layerButton.textContent, "Remove first view");
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), false);
   assert.equal(h.onMap.hidden, false);
   assert.equal(h.row.state.retained, true);
   assert.equal(h.actionStatus.textContent, "Raster added to the map.");
-  assert.equal(h.status.textContent, "This raster is on the map.");
+  assert.equal(h.status.textContent, "This dataset is on the map. Add another view using its controls in Map layers.");
   assert.equal(h.actionContainer.getAttribute("aria-busy"), "false");
   assert.equal(h.row.state.pendingAction, null);
 });
@@ -350,7 +350,7 @@ test("row removal skips assessment and updates row and matching inspector", asyn
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), true);
   assert.equal(h.onMap.hidden, true);
   assert.equal(h.row.state.retained, false);
-  assert.equal(h.actionStatus.textContent, "Raster removed from the map.");
+  assert.equal(h.actionStatus.textContent, "First dataset view removed from the map.");
   assert.equal(h.calls.some(([call]) => call === "open-rendering"), false);
   assert.deepEqual(h.calls, [["remove", item.id, true], ["activate-analysis", item.id]]);
   assert.deepEqual(h.transitions, [["removed", item, "raster"]]);
@@ -365,7 +365,7 @@ test("removing an unselected raster or a vector preserves analysis selection and
     assert.equal(h.state.selectedItem, selected);
     assert.equal(h.transitions[0][0], "removed");
     assert.equal(h.actions.state(item).feedback.message,
-      item.collection === "eolab-mounted-geotiffs" ? "Raster removed from the map." : "Vector layer removed from the map.");
+      "First dataset view removed from the map.");
   }
 });
 

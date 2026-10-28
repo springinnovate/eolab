@@ -21,7 +21,6 @@ import { formatCatalogVisualizationReason } from "./catalog.js";
  */
 export function renderCatalogMapAction(elements, item, state) {
     const { visualization, supported, retained, canZoom, pendingAction, feedback } = state;
-    const isTemporal = visualization?.metadata?.temporal === true;
     elements.container.hidden = !supported;
     elements.container.setAttribute("aria-busy", String(pendingAction !== null));
     elements.toggle.disabled = pendingAction !== null;
@@ -39,17 +38,10 @@ export function renderCatalogMapAction(elements, item, state) {
     elements.onMap.hidden = !retained;
     elements.toggle.classList.toggle("catalog-add-action", !retained);
     elements.toggle.textContent = pendingAction?.buttonText ?? (
-        retained ? isTemporal ? "Remove first view" : "Remove from map" : "Add to map"
+        retained ? "Remove first view" : "Add to map"
     );
     elements.layerStatus.textContent = [
         formatCatalogVisualizationReason(item, visualization?.metadata?.reason),
-        retained
-            ? isTemporal
-                ? "The first view of this dataset is on the map."
-                : visualization?.kind === "vector"
-                ? "This vector is on the map."
-                : "This raster is on the map."
-            : "",
-        isTemporal ? "Add another view using this dataset's controls in Map layers." : "",
+        retained ? "This dataset is on the map. Add another view using its controls in Map layers." : "",
     ].filter((message) => message !== "").join(" ");
 }

@@ -146,15 +146,11 @@ function validateSavedMapView(candidate) {
     });
     const identities = new Set();
     for (const layer of layers) {
-        if (layer.temporalSource) continue;
-        const key = layer.sharedAnnotation ? `annotation:${layer.sharedAnnotation.id}`
-            : layer.uploadId ? `upload:${layer.uploadId}` : JSON.stringify([
-            layer.catalogItem.collection,
-            layer.catalogItem.id,
-        ]);
+        if (!layer.sharedAnnotation) continue;
+        const key = layer.sharedAnnotation.id;
         if (identities.has(key)) {
             throw new SavedMapViewValidationError(
-                "Saved map layers cannot repeat a layer."
+                "Saved maps cannot repeat a shared polygon layer."
             );
         }
         identities.add(key);

@@ -251,7 +251,7 @@ export class CatalogMapActions {
         if (this.commands.contains(item)) {
             this.commands.remove(item);
             this.commands.onRemoved(item, visualization.kind);
-            this.#setFeedback(item, `${datasetNoun} removed from the map.`);
+            this.#setFeedback(item, "First dataset view removed from the map.");
             return;
         }
 

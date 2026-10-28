@@ -323,9 +323,10 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   const view = new MapLayerStackView(documentContext, { allowRemoval: false });
   const calls = [];
   view.bind({ onStyle: key => calls.push(key), onAllVisibility: visible => calls.push(visible) });
-  view.render(LAYERS, LAYERS[0].key);
+  view.render(LAYERS.map(layer => ({...layer, canAddView: true})), LAYERS[0].key);
   const list = documentContext.querySelector("#raster-layer-list");
   assert.equal(elementsByClass(list, "map-layer-remove-button").length, 0);
+  assert.throws(() => actionControl(list, "add-view"), /expected one add-view/);
   actionControl(list.children[0], "style").dispatchEvent(new Event("click"));
   for (const action of ["info", "zoom", "visibility", "copy-style", "paste-style"]) {
     actionControl(list.children[0], action);
@@ -334,6 +335,23 @@ test("shared viewer omits removal but retains included-layer interaction tools",
   assert.deepEqual(calls, [LAYERS[0].key, false]);
   view.showRemoval({ label: "Old removal", index: 0 }, false, null);
   assert.equal(documentContext.querySelector("#map-layer-removal").hidden, true);
+});
+
+test("the shared row action names the source view and disables only its pending addition", () => {
+  const doc = new FakeLayerStackDocument(), view = new MapLayerStackView(doc), added = [];
+  view.bind({onAddView: key => added.push(key)});
+  const layers = [{...LAYERS[0], canAddView: true}, {...LAYERS[1], canAddView: false}];
+  view.render(layers, layers[0].key);
+  const list = doc.querySelector("#raster-layer-list");
+  const button = actionControl(list.children[0], "add-view");
+  assert.equal(button.textContent, "Add another view");
+  assert.ok(button.getAttribute("aria-label").includes(layers[0].label));
+  button.dispatchEvent(new Event("click"));
+  assert.deepEqual(added, [layers[0].key]);
+  assert.throws(() => actionControl(list.children[1], "add-view"), /expected one add-view/);
+  view.render([{...layers[0], addingView: true}], layers[0].key);
+  assert.equal(actionControl(list.children[0], "add-view").disabled, true);
+  assert.equal(actionControl(list.children[0], "add-view").textContent, "Adding view…");
 });
 
 test("active filter strips show full layer names and status beside explicit editing actions", () => {
