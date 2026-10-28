@@ -27,7 +27,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} visible Whether to plot the statistic.
  * @property {number} plotId Assigned plot identity.
  * @property {number} styleIndex Stable line/marker identity.
- * @property {SeriesValueRow[]} rows Current ordered values.
+ * @property {SeriesValueRow[]} rows One row per requested raster or returned temporal observation, including unavailable values.
  * @property {SeriesValueRow[]|null} previousRows Retained values for replacement calculations.
  */
 
@@ -66,6 +66,8 @@ export class RasterSeriesView {
         this.sourceSummary = documentContext.querySelector("#raster-series-source-summary");
         this.chartNote = documentContext.querySelector("#raster-series-chart-note");
         this.table = documentContext.querySelector("#raster-series-table-body");
+        this.values = documentContext.querySelector("#raster-series-values");
+        this.valueCaption = documentContext.querySelector("#raster-series-value-caption");
         this.download = documentContext.querySelector("#raster-series-download");
         this.sourceSignature = null;
         this.formulaRows = documentContext.querySelector("#raster-series-formulas");
@@ -142,7 +144,7 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
-        for (const [id, target] of [["show-plots", "plots"], ["edit-statistics", "statistics-title"],
+        for (const [id, target] of [["show-results", "results"], ["edit-statistics", "statistics-title"],
             ["edit-data", "source-summary"]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", () => {
                 if (id === "edit-data") this.document.querySelector("#raster-series-data-settings").open = true;
@@ -188,10 +190,20 @@ export class RasterSeriesView {
 
     /** Update changed controls and figures from one coalesced snapshot.
      * Unchanged presentation leaves existing DOM nodes and attributes intact.
+     * One result position opens the existing values table instead of drawing a
+     * chart. Unavailable values still occupy their requested positions.
      * @param {SeriesPresentation} state Latest presentation supplied to render().
      * @return {void}
      */
     draw(state) {
+        const singleResult = state.statistics[0].rows.length === 1;
+        if (this.singleResult !== singleResult) {
+            this.singleResult = singleResult;
+            this.root.classList.toggle("raster-series-single-result", singleResult);
+            this.values.open = singleResult;
+        }
+        const valueCaption = singleResult ? state.statistics[0].rows[0].label : "";
+        if (this.valueCaption.textContent !== valueCaption) this.valueCaption.textContent = valueCaption;
         this.renderAreaControls(state);
         this.renderTemporalControls(state.temporal);
         const scope = state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected";
@@ -231,11 +243,11 @@ export class RasterSeriesView {
                 }
             }
         }
-        const showingPrevious = state.showingPrevious;
+        const showingPrevious = state.showingPrevious && !singleResult;
         if (this.chartNote.hidden !== !showingPrevious) this.chartNote.hidden = !showingPrevious;
         const chartNote = showingPrevious ? "Previous results — calculating replacements." : "";
         if (this.chartNote.textContent !== chartNote) this.chartNote.textContent = chartNote;
-        this.plotsView.renderPlots(state);
+        if (!singleResult) this.plotsView.renderPlots(state);
         const tableValues = state.rows.map(row => [row.label, row.statisticLabel,
             row.state === "value" ? (row.rawValue ?? formatSeriesNumber(row.value)) + (row.unit ? " " + row.unit : "") : "-",
             row.errorMessage || (row.state === "value" ? (row.cached ? "Cached" : "Value") : STATES[row.state])]);
