@@ -7,10 +7,51 @@ from typing import Any
 from eolab_app.catalog.vector_contract import (
     MOUNTED_VECTOR_COLLECTION_ID as MOUNTED_VECTOR_COLLECTION_ID,
 )
+from eolab_app.vector_field_values import VECTOR_FIELD_VALUES_KEY, read_field_value_inventory
 
 VECTOR_SOURCE_METADATA_KEY = "eolab:vector_source"
 TABLE_EXTENSION = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 PRIMARY_GEOMETRY_COLUMN = "geometry"
+
+
+def read_vector_table_properties(
+    source_path: str,
+    layer_name: str | None,
+    feature_count: int,
+    geometry_type: str,
+    fields: Iterable[tuple[str, str]],
+    *,
+    open_options: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Prepare vector table schema and private string inventories at admission.
+
+    Call inside the format handler's layer-admission boundary so a failed read
+    rejects that layer while independently valid sibling layers remain usable.
+
+    Args:
+        source_path: Authorized source path, including validated ZIP members.
+        layer_name: Exact native layer name, or None for the first layer.
+        feature_count: Admitted feature count.
+        geometry_type: Declared GeoJSON geometry type.
+        fields: Ordered source attribute names and types.
+        open_options: Native format options preserving the admitted string schema.
+
+    Returns:
+        Table Extension metadata plus a complete private string inventory.
+        Public Catalog responses omit the inventory; lookup returns paged values.
+
+    Raises:
+        ValueError: If schema or native scalar values violate their contract.
+        RuntimeError: If GDAL cannot read the admitted layer.
+        OSError: If the underlying source cannot be accessed.
+    """
+    field_map = dict(fields)
+    return {
+        **build_vector_table_properties(feature_count, geometry_type, field_map.items()),
+        VECTOR_FIELD_VALUES_KEY: read_field_value_inventory(
+            source_path, layer_name, field_map, open_options=open_options
+        ),
+    }
 
 
 def build_vector_source_properties(

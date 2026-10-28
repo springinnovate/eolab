@@ -15,7 +15,7 @@ from eolab_app.catalog.vector import (
     TABLE_EXTENSION,
     build_bbox_polygon,
     build_vector_source_properties,
-    build_vector_table_properties,
+    read_vector_table_properties,
 )
 
 
@@ -112,6 +112,7 @@ def build_stac_item(
         ValueError: If required components, CRS, bounds, or the declared
             geometry type violate the Shapefile catalog contract.
         fiona.errors.FionaError: If GDAL cannot open or inspect the dataset.
+        RuntimeError: If the native attribute inventory cannot be read.
     """
     relative_path = shapefile_path.relative_to(source_root)
     relative_path_text = relative_path.as_posix()
@@ -158,7 +159,8 @@ def build_stac_item(
             **build_vector_source_properties(
                 "shapefile", "shp", shapefile_path.stem
             ),
-            **build_vector_table_properties(
+            **read_vector_table_properties(
+                str(shapefile_path), shapefile_path.stem,
                 feature_count,
                 geometry_type,
                 (

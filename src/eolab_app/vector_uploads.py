@@ -25,6 +25,14 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
 )
 from eolab_app.source_files import finish_source_task
+from eolab_app.vector_field_values import (
+    INVENTORY_ADAPTER,
+    VectorFieldValuePage,
+    VectorFieldValueQuery,
+    VectorFieldValuesUnavailable,
+    page_field_values,
+    read_field_value_inventory,
+)
 
 LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -63,11 +71,13 @@ class VectorUpload(UploadLayer):
 
 
 def inspect_geopackage(result: ProcessResultWriter, path: Path) -> None:
-    """Inspect an untrusted file in a supervised native process without rewriting it.
+    """Inspect an upload and prepare its private string inventory before publication.
 
     Args:
         result: Pipe receiving layer metadata or a safe admission error string.
-        path: Server-created staging file, never a client-supplied path.
+        path: Server-created staging file, never a client-supplied path. Its
+            sibling values.json receives complete string inventories; the source
+            is never rewritten. The staging owner removes failed preparations.
     """
     try:
         with fiona.open(path, enabled_drivers=["GPKG"]) as dataset:
@@ -90,9 +100,13 @@ def inspect_geopackage(result: ProcessResultWriter, path: Path) -> None:
                 crs_wkt=dataset.crs.to_wkt(),
                 fields=dict(dataset.schema["properties"]),
             )
+        inventory = read_field_value_inventory(
+            str(path), metadata.layer_name, metadata.fields
+        )
+        (path.parent / "values.json").write_bytes(INVENTORY_ADAPTER.dump_json(inventory))
     except VectorUploadError as error:
         result.put(str(error))
-    except (fiona.errors.FionaError, ValueError, OSError):
+    except (fiona.errors.FionaError, RuntimeError, ValueError, OSError):
         result.put("The file could not be read as a GeoPackage.")
     else:
         result.put(metadata)
@@ -299,6 +313,43 @@ class VectorUploadStore:
             LOGGER.exception("Could not read vector upload metadata or locate its file")
             raise VectorUploadError(
                 503, "Upload storage could not be read. Try again shortly."
+            ) from error
+
+    def get_field_values(
+        self, owner: str, identifier: UUID, query: VectorFieldValueQuery
+    ) -> VectorFieldValuePage:
+        """Return a page of this browser's prepared upload field values.
+
+        Args:
+            owner: Hash supplied by the validated browser identity boundary.
+            identifier: Opaque upload ID.
+            query: Field, substring search and matching-value page bounds.
+
+        Returns:
+            Exact strings from stored metadata, without reopening the GeoPackage.
+
+        Raises:
+            VectorUploadError: If ownership/storage fails, the inventory is
+                missing, or the field is not a prepared string field.
+        """
+        _metadata, source_path = self.get_upload_source(owner, identifier)
+        try:
+            values_path = (source_path.parent / "values.json").resolve(strict=True)
+            if values_path.parent != source_path.parent:
+                raise VectorUploadError(
+                    404, "This upload is not available to this browser."
+                )
+            inventory = INVENTORY_ADAPTER.validate_json(values_path.read_bytes())
+            return page_field_values(inventory, query)
+        except FileNotFoundError as error:
+            raise VectorUploadError(
+                409, "Values were not prepared for this upload. Upload the file again."
+            ) from error
+        except VectorFieldValuesUnavailable as error:
+            raise VectorUploadError(422, str(error)) from error
+        except (OSError, ValidationError) as error:
+            raise VectorUploadError(
+                503, "Upload field values could not be read."
             ) from error
 
     def prepare_source_read(self, source_path: Path) -> None:

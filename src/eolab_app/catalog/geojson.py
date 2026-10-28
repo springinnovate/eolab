@@ -15,7 +15,7 @@ from eolab_app.catalog.vector import (
     TABLE_EXTENSION,
     build_bbox_polygon,
     build_vector_source_properties,
-    build_vector_table_properties,
+    read_vector_table_properties,
 )
 
 
@@ -269,9 +269,9 @@ def discover_geojson_datasets(
 def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
     """Stream one GeoJSON FeatureCollection into a vector STAC Item.
 
-    Memory use is independent of the FeatureCollection's feature count. The
-    parser retains at most one feature plus aggregate bounds, geometry types,
-    and a capped property-column map.
+    Geometry parsing retains one feature plus aggregate bounds, geometry types
+    and a capped property-column map. A geometry-free attribute pass then
+    prepares private inventories, retaining distinct strings for each text field.
 
     Args:
         source_root: Root directory mounted for scanning.
@@ -279,13 +279,14 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
 
     Returns:
         A STAC Item with WGS 84 bounds, Table Extension schema metadata, and a
-        source-file Asset.
+        source-file Asset, including private inventories for string-only fields.
 
     Raises:
         ValueError: If the document is malformed, is not a FeatureCollection,
             exceeds schema bounds, declares an unsupported legacy CRS, has
             invalid geometry, or has no spatial footprint.
         OSError: If the source file cannot be opened or inspected.
+        RuntimeError: If the native attribute inventory cannot be read.
     """
     relative_path = geojson_path.relative_to(source_root)
     relative_path_text = relative_path.as_posix()
@@ -331,10 +332,12 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
         "proj:epsg": 4326,
         "proj:bbox": bbox,
         **build_vector_source_properties("geojson", "data", None),
-        **build_vector_table_properties(
+        **read_vector_table_properties(
+            str(geojson_path), None,
             feature_count,
             geometry_type,
             field_columns,
+            open_options=("DATE_AS_STRING=YES",),
         ),
     }
     footprint = build_bbox_polygon(bbox)

@@ -17,7 +17,7 @@ from eolab_app.catalog.vector import (
     TABLE_EXTENSION,
     build_bbox_polygon,
     build_vector_source_properties,
-    build_vector_table_properties,
+    read_vector_table_properties,
 )
 
 
@@ -110,6 +110,7 @@ def build_stac_items(
             OSError,
             OverflowError,
             RasterioError,
+            RuntimeError,
             ValueError,
         ) as error:
             layer_errors.append((layer_name, error))
@@ -154,13 +155,14 @@ def build_layer_stac_item(
         modified_at: Latest modification time in the container directory tree.
 
     Returns:
-        A complete STAC Item for a spatial layer, or ``None`` for a
-        nonspatial table.
+        A complete STAC Item with private string inventories for a spatial
+        layer, or ``None`` for a nonspatial table.
 
     Raises:
         ValueError: If GDAL selects a different driver or required spatial
             metadata is missing, non-finite, or unsupported.
         fiona.errors.FionaError: If GDAL cannot open or inspect the layer.
+        RuntimeError: If the native attribute inventory cannot be read.
         rasterio.errors.RasterioError: If the layer CRS or bounds cannot be
             transformed to WGS 84.
     """
@@ -205,7 +207,8 @@ def build_layer_stac_item(
             **build_vector_source_properties(
                 "file-geodatabase", "data", layer_name
             ),
-            **build_vector_table_properties(
+            **read_vector_table_properties(
+                str(geodatabase_path), layer_name,
                 feature_count,
                 geometry_type,
                 (

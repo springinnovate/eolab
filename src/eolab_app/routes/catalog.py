@@ -16,6 +16,11 @@ from eolab_app.routes.http_disconnect import (
     run_until_http_disconnect,
 )
 from eolab_app.routes.raster_http import raster_http_exception
+from eolab_app.vector_field_values import (
+    CatalogVectorFieldValueQuery,
+    VectorFieldValuePage,
+    VectorFieldValuesUnavailable,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +32,9 @@ RandomCatalogItemLookup = Callable[
 
 
 TemporalTimeLookup = Callable[[TemporalTimeQuery], Awaitable[TemporalTimeChoices]]
+VectorFieldValueLookup = Callable[
+    [CatalogVectorFieldValueQuery], Awaitable[VectorFieldValuePage | None]
+]
 
 
 class CatalogItemIdentity(BaseModel):
@@ -65,17 +73,49 @@ class CatalogSurpriseRequest(BaseModel):
 def create_catalog_router(
     random_item_lookup: RandomCatalogItemLookup,
     temporal_time_lookup: TemporalTimeLookup,
+    vector_field_value_lookup: VectorFieldValueLookup,
 ) -> APIRouter:
     """Create Catalog discovery endpoints without rendering dependencies.
 
     Args:
         random_item_lookup: Authoritative filtered random Item lookup.
         temporal_time_lookup: Authorized observation-label lookup from source metadata.
+        vector_field_value_lookup: Paged string lookup from private admission metadata.
 
     Returns:
-        Router for random discovery and exact temporal choices.
+        Router for random discovery, temporal choices and prepared string values.
     """
     router = APIRouter(prefix="/api/catalog", tags=["catalog"])
+
+    @router.post("/vector-field-values", response_model=VectorFieldValuePage)
+    async def vector_field_values(
+        body: CatalogVectorFieldValueQuery, response: Response
+    ) -> VectorFieldValuePage:
+        """Return prepared string suggestions using only a Catalog Item identity.
+
+        Args:
+            body: Catalog identity, string field, substring and bounded page.
+            response: Response receiving no-store headers for explicit refresh.
+
+        Returns:
+            Exact strings and a continuation offset, without source paths.
+
+        Raises:
+            HTTPException: If the Item or inventory is missing, or storage fails.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            page = await vector_field_value_lookup(body)
+        except VectorFieldValuesUnavailable as error:
+            raise HTTPException(
+                409, str(error), headers={"Cache-Control": "no-store"}
+            ) from error
+        except psycopg.Error as error:
+            LOGGER.exception("Catalog field value lookup failed")
+            raise HTTPException(503, "Catalog field values are unavailable.") from error
+        if page is None:
+            raise HTTPException(404, "Catalog Item not found")
+        return page
 
     @router.post("/surprise")
     async def surprise_me(request: CatalogSurpriseRequest) -> dict[str, Any]:
