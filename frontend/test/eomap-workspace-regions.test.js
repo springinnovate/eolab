@@ -430,7 +430,7 @@ test("inspection header groups three raster destinations separately from clicked
     assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\]\s*\{\s*display:\s*none/s);
     assert.match(point.source, /Features at inspected point/);
     for (const [id, panel, caption] of [
-        ["map-click-histogram", "map-histogram-panel", "Distributions"],
+        ["map-click-histogram", "map-histogram-panel", "Histograms"],
         ["open-calculations-dock", "calculations-panel", "Statistics"],
         ["open-raster-series-dock", "raster-series", "Raster stack"],
     ]) {
@@ -451,11 +451,11 @@ test("inspection header groups three raster destinations separately from clicked
 
 test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(requireElementRange("map-histogram-heading").source,
-        />Raster distributions</);
+        />Raster histograms</);
     assert.match(requireElementRange("close-map-histogram").source,
-        /aria-label="Close raster histogram">×/);
+        /aria-label="Close raster histograms">×/);
     assert.match(requireElementRange("map-click-histogram").source,
-        />Distributions</);
+        />Histograms</);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
@@ -692,7 +692,7 @@ test("supporting analysis controls preserve native buttons, clear names and disc
         ["close-vector-inspector", "Close feature inspector"],
         ["close-vector-time-series", "Close vector series"],
         ["close-vector-feature-profile", "Close feature-field plot"],
-        ["close-map-histogram", "Close raster histogram"],
+        ["close-map-histogram", "Close raster histograms"],
         ["close-vector-filter", null],
         ["close-layer-style", "Close style editor"],
     ]) {

@@ -374,7 +374,7 @@ test("area choices use histogram terminology and follow the map without Update c
     const labels = () => h.view.setup.inputs.area.areaMode.children.map(option => option.textContent);
     assert.deepEqual(labels(), ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
     assert.equal(h.view.setup.bounds, undefined); assert.equal(h.view.setup.updateArea, undefined);
-    assert.match(h.view.setup.inputs.area.mapHelp.textContent, /sampling area shown in Raster distributions/);
+    assert.match(h.view.setup.inputs.area.mapHelp.textContent, /sampling area shown in Histograms/);
     h.state.draft.inputs.area.areaOrigin = "run"; h.state.draft.inputs.area.areaMode = "captured"; h.view.render(h.state);
     assert.equal(labels().at(-1), "Area from original run"); assert.match(h.view.setup.inputs.area.mapHelp.textContent, /exact area from the original run/);
     h.state.draft = createModelDraft(model, {rasters: [raster]}, "no-selected-area"); h.view.render(h.state);

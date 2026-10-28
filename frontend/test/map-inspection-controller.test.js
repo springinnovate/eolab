@@ -43,7 +43,7 @@ function fixture(configureDocument = () => {}) {
     const toolActions = doc.querySelector("#workspace-tool-actions");
     const mapToolsButton = doc.querySelector("#map-tools-more-summary");
     for (const [id, caption] of [
-        ["map-click-histogram", "Distributions"],
+        ["map-click-histogram", "Histograms"],
         ["open-calculations-dock", "Statistics"],
         ["open-raster-series-dock", "Raster stack"],
     ]) {
@@ -268,7 +268,7 @@ test("task headers retain their own source and scope while clicks and peer conte
     assert.equal(h.dockTitle.textContent, "Export · Download raster clip");
     assert.equal(context.textContent, "GEA Chile · Captured box");
     h.controller.showHistogram();
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Distributions");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Histograms");
     assert.equal(context.textContent, "6 raster layers · New map sample");
     h.controller.showFeatureInspector();
     assert.match(context.textContent, /Visible vector layers · Point · 40\.0000, 20\.0000/);
@@ -432,7 +432,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     const feature = h.doc.querySelector("#map-click-feature");
     h.controller.showHistogram();
     h.controller.showFeatureInspector({activate: false});
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Distributions");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Histograms");
     assert.equal(h.histogramTab.hidden, false);
     h.controller.beginMapClick({lat: 22, lng: 78});
     h.controller.setClickResult("histogram", {state: "ready", message: "Ready"});
@@ -673,7 +673,7 @@ test("histogram and style have independent visibility on one persistent surface"
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.hidden, false);
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.histogramTab.textContent, "Distributions");
+    assert.equal(h.histogramTab.textContent, "Histograms");
     assert.equal(h.histogramTab.title, "2 raster results");
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);

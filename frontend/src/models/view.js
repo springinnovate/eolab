@@ -355,7 +355,7 @@ export class ModelsView {
         controls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(value.areaMode);
         controls.mapHelp.textContent = ({
             viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
-            samplingArea: `Uses the sampling area shown in Raster distributions. Click the map to move the box. ${runLabel} uses its latest position and size.`,
+            samplingArea: `Uses the sampling area shown in Histograms. Click the map to move the box. ${runLabel} uses its latest position and size.`,
             mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[value.areaMode] ?? "";
