@@ -388,8 +388,8 @@ test("area choices use histogram terminology and follow the map without Update c
 test("vector setup offers Edit filter and describes the predicate belonging to this run", () => {
     const h = fixture(); h.state.draft.inputs.area.areaMode = "vector"; h.view.render(h.state);
     assert.equal(h.view.setup.inputs.area.editFilter.disabled, true);
-    const source = {collectionId: "eolab-mounted-vectors", itemId: "basins", label: "Basins", filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
-    h.state.draft.inputs.area.vectors = [source]; h.state.draft.inputs.area.vectorKey = JSON.stringify([source.collectionId, source.itemId]);
+    const source = {key: "view:basins", collectionId: "eolab-mounted-vectors", itemId: "basins", label: "Basins", filter: {enabled: true, match: "all", rules: [{field: "BASIN", operator: "eq", value: "North"}]}};
+    h.state.draft.inputs.area.vectors = [source]; h.state.draft.inputs.area.vectorKey = source.key;
     h.state.draft.inputs.area.area = null; h.view.render(h.state);
     assert.equal(h.view.setup.inputs.area.editFilter.disabled, false); assert.match(h.view.setup.inputs.area.filterDescription.textContent, /BASIN equals "North"/);
     h.view.setup.inputs.area.editFilter.dispatchEvent(new Event("click")); assert.equal(h.actions.at(-1)[0], "EditFilter");
@@ -409,8 +409,8 @@ test("setup offers only map layers and explains how to add a missing raster", ()
 
 test("vector checks leave Edit filter available and show selection errors next to the count", () => {
     const h = fixture(); const draft = h.state.draft;
-    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = '["vectors","countries"]';
-    draft.inputs.area.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries"}];
+    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = "view:countries";
+    draft.inputs.area.vectors = [{key: "view:countries", collectionId: "vectors", itemId: "countries", label: "Countries"}];
     draft.inputs.area.area = null; draft.inputs.area.selecting = true; h.view.render(h.state);
     assert.equal(h.view.setup.inputs.area.editFilter.textContent, "Edit filter");
     assert.equal(h.view.setup.inputs.area.editFilter.disabled, false);
@@ -429,8 +429,8 @@ test("vector checks leave Edit filter available and show selection errors next t
 test("selected features have one prominent count and predicate; removed layers keep their error visible", () => {
     const h = fixture(), draft = h.state.draft;
     const filter = {enabled: true, match: "all", rules: [{field: "NAME", operator: "eq", value: "Cuba"}]};
-    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = '["vectors","countries"]';
-    draft.inputs.area.vectors = [{collectionId: "vectors", itemId: "countries", label: "Countries", filter}];
+    draft.inputs.area.areaMode = "vector"; draft.inputs.area.vectorKey = "view:countries";
+    draft.inputs.area.vectors = [{key: "view:countries", collectionId: "vectors", itemId: "countries", label: "Countries", filter}];
     draft.inputs.area.area = {kind: "catalogSelection", selection: {filter}}; draft.inputs.area.vectorInfo = {matched: 1, total: 253};
     h.view.render(h.state);
     assert.equal(h.view.setup.inputs.area.selectedCount.textContent, "1 of 253 features selected");

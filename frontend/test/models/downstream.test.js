@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ModelsController } from "../../src/models/controller.js";
 import { ModelsView } from "../../src/models/view.js";
-import { captureModelSubmission, modelSourceKey } from "../../src/models/inputs.js";
+import { captureModelSubmission } from "../../src/models/inputs.js";
 import { ProcessingApiClient } from "../../src/processing/api.js";
 import { SummaryControlDocument } from "../../test-support/processing/summary-document.js";
 import { downstreamModel, raster, selection, job, fileManifest } from "../../test-support/models/fixtures.js";
@@ -18,7 +18,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
  */
 function fixture(overrides = {}) {
     const requests = [], filters = [], cancelled = [], values = new Map();
-    const context = {rasters: [structuredClone(raster)], vectors: [{...selection, itemId: "starting-areas", label: "Starting areas"}]};
+    const context = {rasters: [structuredClone(raster)], vectors: [{...selection, key: "view:starting-areas", itemId: "starting-areas", label: "Starting areas"}]};
     const api = {submitModelRun: async value => { requests.push(value); return job(); }, getJob: async () => job(),
         readModelInvocation: async () => ({model: {...downstreamModel, definition: downstreamModel}, inputs: requests[0].inputs, parameters: requests[0].parameters, label: "Saved run"}), ...overrides};
     const doc = new SummaryControlDocument(), view = new ModelsView(doc);
@@ -39,7 +39,7 @@ function fixture(overrides = {}) {
  */
 async function chooseInputs(harness) {
     harness.controller.editInput("people", {raster: harness.context.rasters[0]});
-    await harness.controller.chooseVector("start", modelSourceKey(harness.context.vectors[0]));
+    await harness.controller.chooseVector("start", harness.context.vectors[0].key);
 }
 
 test("model-configured hydrology has no setup control or eligibility request", async () => {
@@ -95,7 +95,7 @@ test("raster masks have positive-cell semantics, do not follow map clicks, and r
 test("map refresh does not guess or replace the user's mask and values choices", async () => {
     const h = fixture(); await settle();
     h.context.rasters.push({...raster, itemId: "another-value", visible: false});
-    h.context.vectors.push({...selection, itemId: "another-mask"});
+    h.context.vectors.push({...selection, key: "view:another-mask", itemId: "another-mask"});
     h.controller.refreshMapLayers();
     assert.equal(h.controller.state.draft.inputs.people.raster, null);
     assert.equal(h.controller.state.draft.inputs.start.area, null);
@@ -112,7 +112,7 @@ test("duplicate preserves mask, values and formula without a hydrology check or 
         const h = fixture();
         if (uploaded) {
             const source = {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "starting_areas", filter: selection.filter};
-            h.context.vectors = [{...source, label: "My starting areas"}];
+            h.context.vectors = [{...source, key: "view:starting-areas", label: "My starting areas"}];
             h.controller.prepareVector = async () => ({selection: source, matched: 1, total: 3});
             h.controller.refreshMapLayers();
         }

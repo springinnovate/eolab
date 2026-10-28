@@ -151,9 +151,12 @@ export class ModelsController {
         for (const [name, input] of Object.entries(draft.inputs)) {
             if (draft.model.inputs[name].type === "habitat_stack") void this.loadHabitatOptions(draft, name);
             if (input.area?.kind !== "catalogSelection") continue;
-            const key = modelSourceKey(input.area.selection);
+            const source = input.vectors.find(value => modelSourceKey(value) === modelSourceKey(input.area.selection));
             input.areaMode = "vector";
-            if (input.vectors.some(value => modelSourceKey(value) === key)) void this.chooseVector(name, key);
+            if (source) {
+                source.filter = structuredClone(input.area.selection.filter);
+                void this.chooseVector(name, source.key);
+            }
             else { input.area = null; input.selectionError = "Choose a vector layer from Map layers."; this.render(); }
         }
     }
@@ -468,7 +471,7 @@ export class ModelsController {
     /** Read matching features and commit their predicate only after a successful selection.
      * Failed filter edits preserve the previous selection for the same vector.
      * @param {string} name Input name declared by the recipe.
-     * @param {string} key Catalog choice-list identity.
+     * @param {string} key Map view identity from the vector choice list.
      * @param {Object|null} [filter=null] Explicit edited filter, otherwise this draft's saved filter.
      * @return {Promise<Object|null>} Reviewed selection, or null for a cleared or superseded request.
      * @throws {Error} If reading or validating the selected features fails.
@@ -477,7 +480,7 @@ export class ModelsController {
         const draft = this.state.draft;
         if (!draft) return null;
         const input = draft.inputs[name];
-        const source = input.vectors.find(value => modelSourceKey(value) === key);
+        const source = input.vectors.find(value => value.key === key);
         if (input.vectorKey !== key) { if (input.filterEditing) this.closeVectorFilter(); input.mapFilterMessage = ""; }
         this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
         const previous = input.vectorKey === key ? {area: input.area, info: input.vectorInfo} : {area: null, info: null};
@@ -494,7 +497,7 @@ export class ModelsController {
             }
             input.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
             input.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
-            input.vectors = input.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
+            input.vectors = input.vectors.map(value => value.key === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
             if (filter !== null) void this.updateMapFilter(source, area.selection.filter, draft, name, abort);
             else input.mapFilterMessage = "";
             return area;
@@ -538,7 +541,7 @@ export class ModelsController {
         const draft = this.state.draft;
         if (!draft) return;
         const input = draft.inputs[name];
-        const source = input.vectors.find(value => modelSourceKey(value) === input.vectorKey);
+        const source = input.vectors.find(value => value.key === input.vectorKey);
         if (!source || input.filterEditing || this.state.submitting) return;
         this.closeVectorFilter();
         const key = input.vectorKey, openingRequest = this.vectorSelectionRequests.get(name);
@@ -615,10 +618,10 @@ export class ModelsController {
                 continue;
             }
             if (["habitat_stack", "raster_preparation"].includes(type)) continue;
-            const previous = new Map(input.vectors.map(source => [modelSourceKey(source), source]));
+            const previous = new Map(input.vectors.map(source => [source.key, source]));
             input.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
-                filter: structuredClone(previous.get(modelSourceKey(source))?.filter ?? source.filter)}));
-            if (input.vectorKey && !input.vectors.some(source => modelSourceKey(source) === input.vectorKey)) {
+                filter: structuredClone(previous.get(source.key)?.filter ?? source.filter)}));
+            if (input.vectorKey && !input.vectors.some(source => source.key === input.vectorKey)) {
                 if (input.filterEditing) this.closeVectorFilter();
                 this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
                 input.vectorKey = ""; input.area = null; input.vectorInfo = null; input.selecting = false;
@@ -946,10 +949,11 @@ export class ModelsController {
                 input.areaDescription = "Exact area and filter copied from the original run.";
                 if (input.area.kind === "catalogSelection") {
                     const selection = input.area.selection;
-                    const key = modelSourceKey(selection);
-                    input.vectorKey = key; input.areaMode = "vector";
-                    if (input.vectors.some(value => modelSourceKey(value) === key)) {
-                        input.vectors = input.vectors.map(value => modelSourceKey(value) === key ? {...value, filter: structuredClone(selection.filter)} : value);
+                    const source = input.vectors.find(value => modelSourceKey(value) === modelSourceKey(selection));
+                    input.areaMode = "vector";
+                    if (source) {
+                        input.vectorKey = source.key;
+                        source.filter = structuredClone(selection.filter);
                     } else {
                         input.vectorKey = ""; input.area = null;
                         input.selectionError = "Add the original vector layer to Map layers, or choose another layer.";

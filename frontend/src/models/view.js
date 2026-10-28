@@ -351,7 +351,7 @@ export class ModelsView {
         } else this.options(controls.maskRaster, [{value: "", label: "Choose a starting raster…"}, ...draft.sources.filter(source => source.kind !== "runArtifact")
             .map(source => ({value: modelSourceKey(source), label: source.label + (source.visible === false ? " (hidden on map)" : "")}))], value.maskRaster ? modelSourceKey(value.maskRaster) : "");
         controls.vectorGroup.hidden = value.areaMode !== "vector";
-        this.options(controls.vector, [{value: "", label: "Choose a vector layer…"}, ...value.vectors.map(source => ({value: modelSourceKey(source), label: source.label}))], value.vectorKey);
+        this.options(controls.vector, [{value: "", label: "Choose a vector layer…"}, ...value.vectors.map(source => ({value: source.key, label: source.label}))], value.vectorKey);
         controls.mapHelp.hidden = !["viewport", "samplingArea", "mapPolygons", "captured"].includes(value.areaMode);
         controls.mapHelp.textContent = ({
             viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
@@ -359,7 +359,7 @@ export class ModelsView {
             mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
             captured: "Uses the exact area from the original run. Choose another area above to change it.",
         })[value.areaMode] ?? "";
-        const vectorSource = value.vectors.find(source => modelSourceKey(source) === value.vectorKey);
+        const vectorSource = value.vectors.find(source => source.key === value.vectorKey);
         controls.selectionCard.hidden = !vectorSource;
         controls.editFilter.disabled = !vectorSource || Boolean(value.filterEditing);
         controls.editFilter.textContent = value.filterOpening ? "Opening filter…" : "Edit filter";
