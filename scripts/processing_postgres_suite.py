@@ -81,6 +81,7 @@ class RequiredDatabaseTests:
 def main() -> int:
     """Execute fixed database suites using an explicit disposable DSN.
 
+    Report each test name and the ten slowest test phases.
     The repository root makes shared test fixtures importable; application code
     still comes from the installed package because src is not added to sys.path.
 
@@ -102,8 +103,10 @@ def main() -> int:
                 "addopts=",
                 "-p",
                 "no:cacheprovider",
+                "-v",
                 "-ra",
                 "--tb=short",
+                "--durations=10",
                 f"--processing-dsn={args.dsn}",
                 *(str(root / "tests" / name) for name in SUITES),
                 str(root / "tests" / "test_processing_database_safety.py"),

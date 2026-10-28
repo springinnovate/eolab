@@ -2,7 +2,7 @@
 
 import subprocess
 import tarfile
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -10,6 +10,61 @@ from scripts.processing_postgres_suite import SUITES
 from scripts import test_processing_postgres as launcher
 
 pytest_plugins = ["pytester"]
+
+
+@pytest.mark.parametrize("wait_result", [0, 1, "timeout"])
+def test_runner_logs_precede_cleanup_after_exit_or_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    wait_result: int | Literal["timeout"],
+) -> None:
+    """Keep runner output before removal and preserve its exit or timeout outcome.
+
+    Args:
+        monkeypatch: Replace Docker subprocesses without changing launcher flow.
+        capsys: Capture runner output and the launcher's cleanup confirmation.
+        wait_result: Container exit code, or a simulated Docker wait timeout.
+    """
+    commands: list[list[str]] = []
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Record Docker commands and supply the requested runner outcome.
+
+        Args:
+            args: Docker command and arguments.
+            kwargs: Subprocess timeout and output options.
+
+        Returns:
+            Successful Docker response, including the container's exit code.
+
+        Raises:
+            subprocess.TimeoutExpired: When the runner wait simulates a timeout.
+        """
+        commands.append(args)
+        if args[1] == "wait":
+            assert kwargs["timeout"] == 900
+            if wait_result == "timeout":
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            return subprocess.CompletedProcess(args, 0, str(wait_result))
+        if args[1] == "logs":
+            assert kwargs["stdout"] is None
+            print("Runner output before cleanup")
+        return subprocess.CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    if wait_result == "timeout":
+        with pytest.raises(subprocess.TimeoutExpired):
+            launcher.run_suite("eolab-application:test")
+    else:
+        assert launcher.run_suite("eolab-application:test") == wait_result
+
+    logs = next(i for i, command in enumerate(commands) if command[1] == "logs")
+    removal = next(i for i, command in enumerate(commands) if command[1] == "rm")
+    assert logs < removal
+    assert commands[logs][-1] == commands[removal][-1]
+    output = capsys.readouterr().out
+    assert "Runner output before cleanup" in output
+    assert "Processing test cleanup verified:" in output
 
 
 @pytest.mark.parametrize("skip", [False, True])

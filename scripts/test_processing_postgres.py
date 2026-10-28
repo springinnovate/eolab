@@ -237,7 +237,9 @@ def disposable_database() -> Iterator[tuple[str, str, str]]:
 
 
 def run_suite(image: str, *, inject_failure: bool = False) -> int:
-    """Run the installed application tests within one disposable database lifetime.
+    """Run installed application tests and print their logs before Docker cleanup.
+
+    Logs are printed even when the test runner times out or is interrupted.
 
     Args:
         image: Prepared test image.
@@ -248,6 +250,8 @@ def run_suite(image: str, *, inject_failure: bool = False) -> int:
 
     Raises:
         subprocess.CalledProcessError: If Docker execution fails.
+        subprocess.TimeoutExpired: If the suite exceeds fifteen minutes or a
+            Docker command exceeds its deadline.
     """
     with disposable_database() as (name, network, dsn):
         command = [
@@ -292,9 +296,10 @@ def run_suite(image: str, *, inject_failure: bool = False) -> int:
             *command,
         )
         print(f"Processing test runner started: {name}", flush=True)
-        status = int(docker("wait", name + "_runner", timeout=600))
-        docker("logs", name + "_runner", capture=False)
-        return status
+        try:
+            return int(docker("wait", name + "_runner", timeout=900))
+        finally:
+            docker("logs", name + "_runner", timeout=30, capture=False)
 
 
 def interrupt(signum: int, frame: object) -> None:
