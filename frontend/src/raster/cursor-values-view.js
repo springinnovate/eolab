@@ -191,7 +191,8 @@ export class RasterCursorValuesView {
     /**
      * Render visible results beside their picked location. Keep the prior pick
      * during replacement loading, then commit the new position and values
-     * together on the first available result. Outside-only results disappear.
+     * together on the first available result. Initial loading stays hidden;
+     * outside-only results disappear.
      *
      * @param {Readonly<RasterCursorValueSnapshot>} snapshot Pixel-picker
      * snapshot with optional owner-prepared display text for value results.
@@ -213,10 +214,12 @@ export class RasterCursorValuesView {
         const samples = snapshot.samples.filter(
             (sample) => sample.state !== "outside"
         );
-        if (this.snapshot !== null && samples.length > 0 &&
+        if (samples.length > 0 &&
             samples.every((sample) => sample.state === "loading")) {
-            this.pending.hidden = false;
-            this.root.setAttribute("aria-busy", "true");
+            if (this.snapshot !== null) {
+                this.pending.hidden = false;
+                this.root.setAttribute("aria-busy", "true");
+            }
             return;
         }
         if (samples.length === 0) {
