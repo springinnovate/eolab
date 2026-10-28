@@ -135,7 +135,8 @@ export class RasterSeriesController {
             if (area.temporalMode) {
                 this.sourceMode = "temporal";
                 const source = area.temporalSource;
-                const dataset = {key: source.collectionId + "/" + source.itemId, ...source, label: source.itemId};
+                const dataset = {key: rasterSourceKey({collectionId: source.collectionId, itemId: source.itemId}),
+                    ...source, label: source.itemId};
                 Object.assign(this.temporal, {datasets: [dataset], datasetKey: dataset.key, variable: source.variable,
                     periodMode: "times", startTime: source.startTime.replace(/Z$/, ""), endTime: source.endTime.replace(/Z$/, "")});
                 try { this.temporal.item = await this.getTemporalItem(dataset); }

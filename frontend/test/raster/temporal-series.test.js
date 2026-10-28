@@ -7,7 +7,7 @@ import { CalculationRequests } from "../../src/processing/calculation-requests.j
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 
-const DATASET = {key: "weather", collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
+const DATASET = {key: '["eolab-temporal-datasets","weather"]', collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
 const AREA = {kind: "selectedArea", selectedBounds: {west: -64, south: -5, east: -62, north: -3}};
 const ORDINARY = {key: "raster", label: "Raster", item: {collection: "catalog", id: "raster"}, visible: true};
 
@@ -80,6 +80,8 @@ test("a temporal request restores its period, formulas and result after reload w
     const starting = restored.controller.start();
     restored.controller.updateAvailableRasters([ORDINARY], [DATASET]);
     await starting;
+    assert.equal(restored.view.state.temporal.datasetKey, DATASET.key);
+    assert.equal(restored.view.state.temporal.datasets.length, 1);
     assert.equal(restored.view.state.temporal.variable, "temperature");
     assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
     restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();
