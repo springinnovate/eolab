@@ -155,14 +155,16 @@ export class RasterSeriesController {
         this.areaStatistics.calculateRemainingRasters();
     }
 
-    /** Select one original raster for a layer or histogram action.
+    /** Select an existing view of an original raster, or add the source when it is not listed.
      * @param {Object} source Labeled original-source descriptor, including hidden sources.
      * @param {Object} [area] Explicit histogram area; omission retains the chosen scope.
      * @return {void}
      */
     selectSource(source, area) {
-        const key = rasterSourceKey(source);
-        if (!this.sources.some(item => item.key === key)) this.sources.push({key, source, label: source.label});
+        const sourceKey = rasterSourceKey(source);
+        const existing = this.sources.find(item => rasterSourceKey(item) === sourceKey);
+        const key = existing?.key ?? sourceKey;
+        if (!existing) this.sources.push({key, source, label: source.label});
         this.sourceMode = "layers";
         this.selectedKeys = new Set([key]);
         this.selectionOverrides = new Map(this.sources.map(item => [item.key, item.key === key]));

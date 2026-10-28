@@ -127,13 +127,16 @@ test("catalog user removal requests Undo while internal removal keeps its existi
     const calls = [];
     const coordinator = new CatalogVisualizationCoordinator({}, {
         remove: item => calls.push(["internal", item]),
+        findLayerKey: item => item === RASTER_ITEM ? "local:view:topmost" : null,
         removeWithUndo: key => calls.push(["user", key]),
     }, {});
     coordinator.remove(RASTER_ITEM);
     coordinator.remove(RASTER_ITEM, true);
     assert.equal(calls[0][0], "internal");
     assert.equal(calls[1][0], "user");
-    assert.equal(typeof calls[1][1], "string");
+    assert.equal(calls[1][1], "local:view:topmost");
+    coordinator.remove(VECTOR_ITEM, true);
+    assert.equal(calls.length, 2, "a missing view has nothing to remove");
 });
 
 

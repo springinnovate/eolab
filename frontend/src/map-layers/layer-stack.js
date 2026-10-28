@@ -2,15 +2,15 @@
  * Domain state and invariants for the retained map-layer stack.
  *
  * This module owns active selection, visibility, opacity, and top-first
- * ordering keyed by Catalog identities or explicit local layer identifiers. It performs no publication,
- * DOM, Leaflet, statistics, or styling work.
+ * ordering keyed by map view identifiers. Each Catalog view retains its source
+ * Item separately. It performs no publication, DOM, Leaflet, statistics, or styling work.
  */
 
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 
 /**
  * @typedef {Object} MapLayerStackEntry
- * @property {string} key Stable Catalog Item key or local layer identifier.
+ * @property {string} key Stable map view identifier.
  * @property {Object|null} item Catalog STAC Item; null for browser-owned layers.
  * @property {string} label Readable layer label.
  * @property {string|null} [customName] Optional map-specific name; source metadata is unchanged.
@@ -34,20 +34,22 @@ export class MapLayerStack {
     }
 
     /**
-     * Add one unique Item at the top and make it active.
+     * Add one Catalog view at the top and make it active.
      *
-     * A new entry is visible by default. Adding an existing Item is
-     * idempotent and merely activates it.
+     * A new entry is visible by default. Reusing a view key is idempotent and
+     * merely activates it. Different keys may refer to the same source Item.
      *
      * @param {Object} item Catalog STAC Item.
      * @param {string} label Readable layer label.
      * @param {number} [retentionOrder=this.nextRetentionOrder] Monotonic
      * add-intent order used to make asynchronous completion deterministic.
+     * @param {string} [key=getCatalogItemKey(item)] View identity; ordinary Add
+     * uses the source key, while callers restoring independent views supply their own.
      * @return {{entry: MapLayerStackEntry, added: boolean}} Result entry
      * and whether the stack changed.
      */
-    add(item, label, retentionOrder = this.nextRetentionOrder) {
-        return this.#addEntry(getCatalogItemKey(item), item, label, retentionOrder);
+    add(item, label, retentionOrder = this.nextRetentionOrder, key = getCatalogItemKey(item)) {
+        return this.#addEntry(key, item, label, retentionOrder);
     }
 
     /**
@@ -136,10 +138,21 @@ export class MapLayerStack {
      * Return whether a Catalog Item is retained.
      *
      * @param {Object} item Catalog STAC Item.
-     * @return {boolean} Whether its composite identity exists in the stack.
+     * @return {boolean} Whether any view of the source exists in the stack.
      */
     hasItem(item) {
-        return this.get(getCatalogItemKey(item)) !== null;
+        return this.findLayerKey(item) !== null;
+    }
+
+    /**
+     * Find the topmost retained view of a Catalog Item.
+     * @param {Object} item Catalog source identity.
+     * @return {string|null} View key, or null when the source is not on the map.
+     */
+    findLayerKey(item) {
+        const sourceKey = getCatalogItemKey(item);
+        return this.entries.find(entry => entry.item !== null &&
+            getCatalogItemKey(entry.item) === sourceKey)?.key ?? null;
     }
 
     /**
