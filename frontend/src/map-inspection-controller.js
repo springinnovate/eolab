@@ -26,7 +26,6 @@ export class MapInspectionController {
         this.panels = documentContext.querySelector("#map-inspection-panels");
         this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
         this.dockContext = documentContext.querySelector("#map-inspection-context");
-        this.dockCalculationOpener = documentContext.querySelector("#open-calculations-dock");
         this.tabList = documentContext.querySelector("#map-inspection-tabs");
         this.toolActions = documentContext.querySelector("#workspace-tool-actions");
         this.mapToolsButton = documentContext.querySelector("#map-tools-more-summary");
@@ -70,7 +69,6 @@ export class MapInspectionController {
         this.style = documentContext.querySelector("#layer-style-editor");
         this.filter = documentContext.querySelector("#vector-filter-panel");
         this.rasterClips = documentContext.querySelector("#raster-clips-panel");
-        this.calculations = documentContext.querySelector("#calculations-panel");
         this.annotations = documentContext.querySelector("#annotations-panel");
         this.rasterSeries = documentContext.querySelector("#raster-series");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
@@ -91,12 +89,10 @@ export class MapInspectionController {
         this.tools = [
             { name: "models", label: "Models", panel: documentContext.querySelector("#models-panel"),
                 tab: documentContext.querySelector("#map-inspection-tab-models") },
-            { name: "raster-series", label: "Raster stack", panel: this.rasterSeries, raster: true,
+            { name: "raster-series", label: "Raster statistics", panel: this.rasterSeries, raster: true,
                 tab: documentContext.querySelector("#open-raster-series-dock") },
             { name: "annotations", label: "Shared layer", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
-            { name: "calculations", label: "Statistics", panel: this.calculations, raster: true,
-                tab: this.dockCalculationOpener },
             {
                 name: "raster-clips", label: "Download raster clip", panel: this.rasterClips,
                 tab: documentContext.querySelector("#map-inspection-tab-raster-clips"),
@@ -140,7 +136,7 @@ export class MapInspectionController {
         ];
         const tasks = {
             style: "Appearance", filter: "Data selection", annotations: "Shared layers",
-            "raster-clips": "Export", histogram: "Raster analysis", calculations: "Raster analysis",
+            "raster-clips": "Export", histogram: "Raster analysis",
             "raster-series": "Raster analysis", feature: "Point inspection",
         };
         for (const tool of this.tools) {
@@ -348,11 +344,6 @@ export class MapInspectionController {
     /** Hide Models while its controller retains setup and run observation. @return {void} */
     hideModels() { this.#hideTool("models"); }
 
-    /** Reveal calculations independently of peer tools. @return {void} */
-    showCalculations() { this.#showTool("calculations"); }
-
-    /** Hide calculations without changing peer panels. @return {void} */
-    hideCalculations() { this.#hideTool("calculations"); }
 
     /** Reveal the raster clip tool while retaining peer panels. @return {void} */
     showRasterClips() { this.#showTool("raster-clips"); }
@@ -933,7 +924,6 @@ export class MapInspectionController {
         this.style.hidden = true;
         this.filter.hidden = true;
         this.rasterClips.hidden = true;
-        this.calculations.hidden = true;
         this.annotations.hidden = true;
         this.rasterSeries.hidden = true;
         this.feature.hidden = true;

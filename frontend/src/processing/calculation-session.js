@@ -2,7 +2,7 @@
 import { labeledRasterSource } from "../raster-source.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
-const CLIENT = /^(summary|(?:raster-series|summary-query):(0|[1-9][0-9]{0,15}))$/;
+const CLIENT = /^raster-series:(0|[1-9][0-9]{0,15})$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
 /** Validate the optional number of pixels processed in each calculation batch.
@@ -88,14 +88,14 @@ export function validateModelIdentity(model) {
  * Session cookies are not copied into these records.
  */
 export class CalculationSessionStorage {
-    /** Bind one recovery record for a fixed summary or independent multi-raster position.
+    /** Bind one recovery record for an independent raster position.
      * Each record retains its size limit; browser storage bounds total saved data.
      * @param {Storage|null} storage Browser sessionStorage.
-     * @param {string} [client="summary"] Caller identity.
+     * @param {string} [client="raster-series:0"] Caller identity.
      * @throws {TypeError} If the caller identity is unsupported.
      */
-    constructor(storage, client = "summary") {
-        if (!CLIENT.test(client) || (client !== "summary" && !Number.isSafeInteger(Number(client.split(":")[1])))) {
+    constructor(storage, client = "raster-series:0") {
+        if (!CLIENT.test(client) || !Number.isSafeInteger(Number(client.split(":")[1]))) {
             throw new TypeError("Unsupported calculation caller.");
         }
         this.storage = storage;
@@ -107,7 +107,7 @@ export class CalculationSessionStorage {
      * @throws {TypeError} If the caller identity is unsupported.
      */
     forClient(client) { return new CalculationSessionStorage(this.storage, client); }
-    /** List saved unfinished calculations without assuming a maximum raster count.
+    /** List retained calculations without assuming a maximum raster count.
      * Only this component's current per-caller keys are considered.
      * Invalid records are ignored.
      * @return {string[]} Callers requiring startup recovery.
@@ -119,12 +119,12 @@ export class CalculationSessionStorage {
                 const key = this.storage.key(index);
                 if (key?.startsWith(KEY_PREFIX)) {
                     const client = key.slice(KEY_PREFIX.length);
-                    if (CLIENT.test(client) && (client === "summary" || Number.isSafeInteger(Number(client.split(":")[1])))) clients.add(client);
+                    if (CLIENT.test(client) && Number.isSafeInteger(Number(client.split(":")[1]))) clients.add(client);
                 }
             }
         } catch { /* read() also handles browsers denying storage access. */ }
         return [...clients].filter(client => this.forClient(client).read())
-            .sort((a, b) => a === b ? 0 : a === "summary" ? -1 : b === "summary" ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1]));
+            .sort((a, b) => Number(a.split(":")[1]) - Number(b.split(":")[1]));
     }
     /** Read one calculation's saved inputs, job identifier and cancellation request.
      * @return {Object|null} Validated recovery record, or null if absent, invalid or unreadable.
@@ -138,25 +138,29 @@ export class CalculationSessionStorage {
                 !(value.jobId === null || ID.test(value.jobId)) ||
                 !(value.pending === null || (value.pending?.planId === undefined && /^[A-Za-z0-9_-]{16,80}$/.test(value.pending?.requestId))) ||
                 (!value.jobId && !value.pending)) return null;
-            if (value.client !== undefined && !["summary", "raster-series", "summary-query"].includes(value.client)) return null;
+            const presentation = value.presentation;
+            if (!presentation || typeof presentation.key !== "string" || !presentation.key || presentation.key.length > 2048 ||
+                !Array.isArray(presentation.names) || presentation.names.length !== value.intent.calculations.length ||
+                presentation.names.some(name => typeof name !== "string" || name.length > 80) ||
+                value.intent.calculations.some(formula => !/^stat-[1-9][0-9]*$/.test(formula.label) || !Number.isSafeInteger(Number(formula.label.slice(5))))) return null;
             return { intent: calculationIntent(value.intent), jobId: value.jobId, pending: value.pending,
-                context: Object.freeze({ automatic: value.automatic, ...(value.client ? { client: value.client } : {}) }), cancelRequested: value.cancelRequested };
+                context: Object.freeze({ automatic: value.automatic, presentation }), cancelRequested: value.cancelRequested };
         } catch { return null; }
     }
     /** Save only this caller's submission before transport; never overwrite a peer.
      * Store the caller's automatic/manual context alongside its execution data.
-     * @param {Object} record Execution data and optional caller context.
+     * @param {Object} record Execution data, automatic/manual policy and source/formula presentation.
      * @return {void}
      * @throws {Error} If storage is unavailable, full, or the record exceeds its bound.
      */
     write(record) {
         if (!this.storage) throw new Error("Browser session storage is needed for recoverable calculations.");
         const { context, ...execution } = record;
-        const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}) });
+        const text = JSON.stringify({ ...execution, automatic: context.automatic, presentation: context.presentation });
         if (text.length > 16384) throw new Error("Calculation recovery information is too large.");
         this.storage.setItem(KEY_PREFIX + this.client, text);
     }
-    /** Remove this caller's recovery record after its job has finished. @return {void} */
+    /** Remove this caller's recovery record when cancelled, replaced, or finished automatically. @return {void} */
     clear() {
         this.storage?.removeItem(KEY_PREFIX + this.client);
     }

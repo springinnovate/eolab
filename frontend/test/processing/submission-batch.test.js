@@ -8,7 +8,7 @@ import { ProcessingJobs } from "../../src/processing/jobs.js";
 /** @param {number} n Raster identity. @return {Object} Independent valid submission. */
 function submission(n) {
     return {requestId: `request-${String(n).padStart(16, "0")}`, source: {collectionId: "rasters", itemId: `r${n}`, label: `Raster ${n}`},
-        area: {kind: "wholeRaster"}, calculations: [{label: "Mean", expression: "mean(a)"}]};
+        area: {kind: "wholeRaster"}, calculations: [{label: "stat-1", expression: "mean(a)"}]};
 }
 /** @param {number} n Identifier. @return {Object} Accepted queued job. */
 function job(n) { return {jobId: String(n + 1).padStart(32, "0"), status: "queued", operation: "raster.aggregate.v1", progress: {}}; }
@@ -38,7 +38,7 @@ test("completed submission results use one batch request and only pending jobs o
                 const value = {...job(index), status: statuses[index], error: {code: "source_unavailable", detail: "Unavailable"}};
                 if (value.status === "ready") value.result = {
                     url: `/api/processing/jobs/${value.jobId}/result`, provenanceUrl: `/api/processing/jobs/${value.jobId}/provenance`,
-                    rows: [{label: "Mean", expression: "mean(a)", state: "ok", value: "12.5", valueType: "float", unit: null, aggregates: []}],
+                    rows: [{label: "stat-1", expression: "mean(a)", state: "ok", value: "12.5", valueType: "float", unit: null, aggregates: []}],
                 };
                 return {index, job: value};
             })});
@@ -49,7 +49,7 @@ test("completed submission results use one batch request and only pending jobs o
         const jobs = new ProcessingJobs(api, {setTimeout: () => 1, clearTimeout: () => {}});
         const requests = new CalculationRequests({api, jobs, storage, requestId: () => submission(key++).requestId});
         const clients = [0,1].map(i => requests.createClient(`raster-series:${i}`, () => {}));
-        clients.forEach((client,i) => client.submit(submission(i)));
+        clients.forEach((client,i) => client.submit(submission(i), {automatic: true, presentation: {key: String(i), names: ["Mean"]}}));
         await flush(); await flush();
         assert.deepEqual(paths, ["/api/processing/raster-calculations/batch"]);
         assert.equal(streams.length, statuses.includes("queued") ? 1 : 0);
@@ -150,7 +150,7 @@ test("executors retain batch retry keys after lost replies and cancel only the s
     const jobs = new ProcessingJobs(api, {setTimeout: () => 1, clearTimeout: () => {}});
     const requests = new CalculationRequests({api, jobs, storage, requestId: () => submission(key++).requestId});
     const clients = [0,1].map(i => requests.createClient(`raster-series:${i}`, () => {}));
-    clients.forEach((client,i) => client.submit(submission(i)));
+    clients.forEach((client,i) => client.submit(submission(i), {automatic: true, presentation: {key: String(i), names: ["Mean"]}}));
     await flush();
     assert.ok(clients.every(client => client.snapshot.recoverable));
     clients[0].stop();

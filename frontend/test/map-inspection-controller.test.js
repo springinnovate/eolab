@@ -27,7 +27,6 @@ function fixture(configureDocument = () => {}) {
     doc.querySelector("#vector-filter-panel").hidden = true;
     doc.querySelector("#raster-clips-panel").hidden = true;
     doc.querySelector("#models-panel").hidden = true;
-    doc.querySelector("#calculations-panel").hidden = true;
     doc.querySelector("#annotations-panel").hidden = true;
     doc.querySelector("#raster-series").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
@@ -44,8 +43,7 @@ function fixture(configureDocument = () => {}) {
     const mapToolsButton = doc.querySelector("#map-tools-more-summary");
     for (const [id, caption] of [
         ["map-click-histogram", "Histograms"],
-        ["open-calculations-dock", "Statistics"],
-        ["open-raster-series-dock", "Raster stack"],
+        ["open-raster-series-dock", "Raster statistics"],
     ]) {
         const button = doc.querySelector(`#${id}`);
         button.id = id;
@@ -152,7 +150,7 @@ test("map-center and statistics menu actions remain enabled in every panel state
         () => h.minimizeButton.dispatchEvent(new Event("click")),
         () => h.controller.closeHistogram()]) {
         update();
-        for (const id of ["open-analysis-tools", "open-calculations"]) {
+        for (const id of ["open-analysis-tools", "open-raster-series"]) {
             const action = h.doc.querySelector(`#${id}`);
             assert.equal(action.hidden, false, `${id} remains available`);
             assert.equal(action.disabled, false, `${id} remains enabled`);
@@ -254,10 +252,10 @@ test("task headers retain their own source and scope while clicks and peer conte
     h.controller.showFilter("WWF Biomes");
     assert.equal(h.dockTitle.textContent, "Data selection · Filter");
     assert.equal(context.textContent, "WWF Biomes");
-    h.controller.setToolContext("calculations", { source: "GEA Italy", scope: "Whole raster" });
-    h.controller.showCalculations();
+    h.controller.setToolContext("raster-series", { source: "GEA Italy", scope: "Whole raster" });
+    h.controller.showRasterSeries();
     h.controller.setToolContext("histogram", { source: "6 raster layers", scope: "New map sample" });
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Statistics");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     assert.equal(context.textContent, "GEA Italy · Whole raster");
     h.controller.setToolContext("raster-clips", { source: "GEA Chile", scope: "Captured box" });
     h.controller.showRasterClips();
@@ -273,48 +271,48 @@ test("task headers retain their own source and scope while clicks and peer conte
     h.controller.showFeatureInspector();
     assert.match(context.textContent, /Visible vector layers · Point · 40\.0000, 20\.0000/);
     h.controller.destroy();
-    assert.equal(h.doc.querySelector("#open-calculations").hidden, false);
+    assert.equal(h.doc.querySelector("#open-raster-series").hidden, false);
 });
 
 test("raster destinations retain their buttons and focus through opening, closing and minimization", () => {
     const h = fixture();
-    const opener = h.doc.querySelector("#open-calculations-dock");
+    const opener = h.doc.querySelector("#open-raster-series-dock");
     const context = h.doc.querySelector("#map-inspection-context");
-    h.controller.setToolContext("calculations", { source: "Resistance", scope: "Whole raster" });
+    h.controller.setToolContext("raster-series", { source: "Resistance", scope: "Whole raster" });
     h.controller.showStyle("Countries");
-    for (const id of ["map-click-histogram", "open-calculations-dock", "open-raster-series-dock"]) {
+    for (const id of ["map-click-histogram", "open-raster-series-dock"]) {
         assert.equal(h.doc.querySelector(`#${id}`).hidden, false);
         assert.equal(h.doc.querySelector(`#${id}`).getAttribute("aria-pressed"), "false");
     }
 
     opener.focus();
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     assert.equal(opener.hidden, false);
     assert.equal(opener.getAttribute("aria-pressed"), "true");
     assert.equal(h.doc.activeElement, opener, "opening never replaces the focused destination");
-    assert.equal(h.doc.querySelector("#calculations-panel").getAttribute("aria-labelledby"), opener.id);
+    assert.equal(h.doc.querySelector("#raster-series").getAttribute("aria-labelledby"), opener.id);
     assert.equal(context.textContent, "Resistance · Whole raster");
     const arrow = new Event("keydown", { cancelable: true });
     Object.defineProperty(arrow, "key", { value: "ArrowRight" });
     opener.dispatchEvent(arrow);
     assert.equal(arrow.defaultPrevented, false, "raster destinations use native button navigation");
-    assert.equal(h.controller.activeTool, "calculations");
+    assert.equal(h.controller.activeTool, "raster-series");
 
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.panels.hidden, true);
     assert.equal(opener.hidden, false);
     assert.equal(opener.getAttribute("aria-pressed"), "false");
     opener.focus();
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     assert.equal(h.panels.hidden, false);
     assert.equal(opener.getAttribute("aria-pressed"), "true");
     assert.equal(h.doc.activeElement, opener);
     assert.equal(context.textContent, "Resistance · Whole raster");
     h.map.focus();
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     assert.equal(h.doc.activeElement, h.map, "background presentation never steals focus");
 
-    h.controller.hideCalculations();
+    h.controller.hideRasterSeries();
     assert.equal(h.controller.activeTool, "style");
     assert.equal(opener.hidden, false);
     assert.equal(opener.getAttribute("aria-pressed"), "false");
@@ -324,7 +322,7 @@ test("raster destinations retain their buttons and focus through opening, closin
 test("context validates its presentation boundary and vector identities clear without moving focus", () => {
     const h = fixture();
     for (const invalid of [{ source: 3, scope: "" }, { source: "Layer" }, "Layer"]) {
-        assert.throws(() => h.controller.setToolContext("calculations", invalid), TypeError);
+        assert.throws(() => h.controller.setToolContext("raster-series", invalid), TypeError);
     }
     assert.throws(() => h.controller.setToolContext("unknown", null), RangeError);
     h.controller.showVectorTimeSeries();
@@ -361,7 +359,7 @@ test("persistent point navigation keeps its feedback separate from area distribu
     assert.equal(label.textContent, "Features at inspected point · Some unavailable");
     h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
     assert.equal(label.textContent, "Features at inspected point");
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     assert.equal(navigation.hidden, false, "switching tasks keeps point navigation visible");
     h.controller.closeHistogram();
     assert.equal(navigation.hidden, false, "closing an area tool retains independent point recovery");
@@ -376,7 +374,7 @@ test("point navigation stays visible across tools and new results and follows do
     h.controller.setClickResult("feature", { state: "ready", message: "3 features found" });
     assert.equal(navigation.hidden, false);
     h.map.focus();
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     assert.equal(navigation.hidden, false);
     h.controller.showRasterSeries();
     assert.equal(navigation.hidden, false);
@@ -443,7 +441,7 @@ test("raster buttons stay stable beside point results and other retained tools",
     assert.equal(raster.getAttribute("aria-pressed"), "true");
     assert.equal(feature.getAttribute("aria-pressed"), "false");
     h.controller.showStyle("Countries");
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     raster.dispatchEvent(new Event("click"));
     assert.equal(tabs.hidden, false);
     assert.equal(h.styleTab.tabIndex, 0, "the remaining tab list has its own keyboard entry");
@@ -495,11 +493,11 @@ test("empty and failed streams remain understandable without opening unavailable
     h.controller.setClickResult("feature", {state: "error", message: "Inspection unavailable"});
     h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
     assert.equal(h.controller.activeTool, "feature");
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     h.controller.beginMapClick({lat: 1, lng: 1});
     h.controller.showFeatureInspector({activate:false});
     h.controller.showHistogram(null, {activate:false});
-    assert.equal(h.controller.activeTool, "calculations");
+    assert.equal(h.controller.activeTool, "raster-series");
     h.minimizeButton.dispatchEvent(new Event("click"));
     assert.equal(h.doc.querySelector("#map-click-summary").hidden, true);
     h.controller.destroy();
@@ -525,16 +523,16 @@ test("Raster clips is transient while retained analysis results remain available
 test("active-tool subscriptions report expanded presentation, support detachment, and clear on destroy", () => {
     const h = fixture(); const changes = [];
     const unsubscribe = h.controller.subscribeActiveTool(tool => changes.push(tool));
-    h.controller.showCalculations();
+    h.controller.showRasterSeries();
     h.controller.showHistogram(1, {activate:false});
     h.controller.showFeatureInspector({activate:false});
-    assert.deepEqual(changes, [null, "calculations"]);
+    assert.deepEqual(changes, [null, "raster-series"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Statistics");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Raster analysis · Statistics");
+    assert.equal(h.dockTitle.textContent, "Raster analysis · Raster statistics");
     h.histogramTab.dispatchEvent(new Event("click"));
-    assert.deepEqual(changes, [null, "calculations", null, "calculations", "histogram"]);
+    assert.deepEqual(changes, [null, "raster-series", null, "raster-series", "histogram"]);
     unsubscribe(); h.controller.showRasterClips();
     assert.equal(changes.at(-1), "histogram");
     const final = []; h.controller.subscribeActiveTool(tool => final.push(tool));
@@ -975,7 +973,7 @@ for (const [name, show, hide, args] of [
     ["features", "showFeatureInspector", "hideFeatureInspector", []],
     ["field across features", "showVectorTimeSeries", "hideVectorTimeSeries", []],
     ["fields from feature", "showVectorFeatureProfile", "hideVectorFeatureProfile", []],
-    ["summaries", "showCalculations", "hideCalculations", []],
+    ["summaries", "showRasterSeries", "hideRasterSeries", []],
     ["raster-clips", "showRasterClips", "hideRasterClips", []],
     ["style", "showStyle", "hideStyle", ["Raster"]],
     ["filter", "showFilter", "hideFilter", ["Countries"]],

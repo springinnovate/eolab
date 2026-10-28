@@ -7,7 +7,7 @@ import { CalculationRequests } from "../../src/processing/calculation-requests.j
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 
-const DATASET = {key: "weather", collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
+const DATASET = {key: '["eolab-temporal-datasets","weather"]', collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
 const AREA = {kind: "selectedArea", selectedBounds: {west: -64, south: -5, east: -62, north: -3}};
 const ORDINARY = {key: "raster", label: "Raster", item: {collection: "catalog", id: "raster"}, visible: true};
 
@@ -17,10 +17,11 @@ const ORDINARY = {key: "raster", label: "Raster", item: {collection: "catalog", 
 const flush = async () => { for (let index = 0; index < 120; index++) await Promise.resolve(); };
 
 /** Connect the real stack controller and execution lifecycle to a controlled server.
+ * @param {Object} [persisted={}] Server jobs and browser records retained across reload.
  * @return {Object} User actions, captured API requests and explicit server completion.
  */
-function fixture() {
-    const submitted = [], cancelled = [], downloads = [], discovery = [], server = new Map(), saved = new Map(), timers = new Map();
+function fixture({server = new Map(), saved = new Map()} = {}) {
+    const submitted = [], cancelled = [], downloads = [], discovery = [], timers = new Map();
     let serial = 0;
     const clock = {setTimeout(callback, delay) { const id = ++serial; timers.set(id, {callback, delay}); return id; },
         clearTimeout(id) { timers.delete(id); }};
@@ -65,8 +66,32 @@ function fixture() {
         await jobs.refresh(); await flush();
     };
     const close = () => { calculations.destroy(); requests.destroy(); jobs.destroy(); };
-    return {controller, view, calculations, api, submitted, cancelled, downloads, discovery, server, tick, finish, close};
+    return {controller, view, calculations, api, submitted, cancelled, downloads, discovery, server, saved, tick, finish, close};
 }
+
+test("a temporal request restores its period, formulas and result after reload without resubmitting", async () => {
+    const h = fixture();
+    h.view.actions.onSourceMode("temporal"); await h.controller.chooseTemporalDataset(DATASET.key);
+    h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
+    h.view.actions.onCalculate(); await flush();
+    const job = [...h.server.values()][0];
+    h.close();
+    const restored = fixture(h);
+    const starting = restored.controller.start();
+    restored.controller.updateAvailableRasters([ORDINARY], [DATASET]);
+    await starting;
+    assert.equal(restored.view.state.temporal.datasetKey, DATASET.key);
+    assert.equal(restored.view.state.temporal.datasets.length, 1);
+    assert.equal(restored.view.state.temporal.variable, "temperature");
+    assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
+    restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();
+    assert.equal(restored.submitted.length, 0);
+    assert.equal(restored.cancelled.length, 0);
+    const observations = [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", value: "298.5", state: "ok", unit: "K"}]}];
+    await restored.finish(job.jobId, "ready", {observations, csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,298.5"});
+    assert.equal(restored.view.state.rows[0].value, 298.5);
+    restored.close();
+});
 
 test("temporal stack explicitly samples one independent period and reuses completed values for presentation", async () => {
     const h = fixture();
@@ -175,7 +200,7 @@ test("failed temporal downloads retry the completed job and discard a cancelled 
     } finally { h.close(); }
 });
 
-test("replacing or closing a temporal slice cancels work and waits for another explicit Calculate", async () => {
+test("replacing a temporal slice cancels obsolete work; closing keeps the explicit calculation running", async () => {
     const h = fixture();
     try {
         h.view.actions.onSourceMode("temporal"); await h.controller.chooseTemporalDataset(DATASET.key);
@@ -192,11 +217,12 @@ test("replacing or closing a temporal slice cancels work and waits for another e
         assert.equal(h.submitted[1].source.startTime, "2000-01-01T01:00:00.000Z");
         const second = [...h.server.values()][1];
         h.controller.updateSamplingForPanelVisibility(false); await flush();
-        assert.deepEqual(h.cancelled, [first.jobId, second.jobId]);
-        await h.finish(second.jobId, "cancelled");
+        assert.deepEqual(h.cancelled, [first.jobId]);
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
         assert.equal(h.submitted.length, 2);
         h.view.actions.onSourceMode("layers"); await h.tick();
+        assert.deepEqual(h.cancelled, [first.jobId, second.jobId]);
+        await h.finish(second.jobId, "cancelled");
         assert.equal(h.submitted.length, 3, "ordinary raster selection retains automatic calculation");
         assert.equal(h.submitted[2].source.itemId, "raster");
         assert.equal(h.submitted[2].kind, undefined);

@@ -18,9 +18,9 @@ export class CalculationRequests {
     }
 
     /** Create an independent executor with its own saved submission record for reload recovery.
-     * The summary caller and all selected series positions can proceed independently.
+     * All selected raster positions can proceed independently.
      * Replacing work in one position still waits for that position's cancellation.
-     * @param {string} name "summary", or "raster-series:"/"summary-query:" followed by a nonnegative integer.
+     * @param {string} name "raster-series:" followed by a nonnegative integer.
      * @param {(snapshot:import("./calculation-executor.js").CalculationExecutionSnapshot)=>void} onChange Caller progress.
      * @return {CalculationExecutor} Executor owned by this caller.
      * @throws {TypeError} If the identity is unsupported or already registered.
@@ -39,7 +39,7 @@ export class CalculationRequests {
         return executor;
     }
 
-    /** Find unfinished callers after reload without starting or cancelling their work.
+    /** Find retained callers after reload without starting or cancelling their work.
      * @return {string[]} Valid saved caller identities.
      */
     savedClientNames() { return this.dependencies.storage.savedClientNames(); }

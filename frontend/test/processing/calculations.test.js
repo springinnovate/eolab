@@ -116,15 +116,15 @@ function fixture(overrides = {}, data = new Map()) {
         onActivity: area=>activity.push(area),requestId:()=>`request-${String(id).padStart(16,"0")}`};
     const controller = new CalculationExecutor(options);
     view.state=controller.snapshot;
-    const intent = change => ({source,area:box(77),calculations:[{label:"Mean",expression:"mean(a)"}],...change});
+    const intent = change => ({source,area:box(77),calculations:[{label:"stat-1",expression:"mean(a)"}],...change});
     const execute = (calculation, automatic = false) => {
-        controller.submit(calculation, Object.freeze({automatic}));
+        controller.submit(calculation, Object.freeze({automatic, presentation: {key: "hfp", names: ["Mean"]}}));
     };
     const click = west => { controller.stop(); execute(intent({area:box(west)}), true); };
     const tick = async delay => { const due=[...timers.entries()].filter(([,item])=>item.delay===delay); for(const [key,item]of due){timers.delete(key);item.fn();}await flush(); };
     const finish = async (status="ready",value="12.5") => {
         const old=server.get(controller.snapshot.currentJob.jobId);
-        server.set(old.jobId,{...old,status,result:status==="ready"?{url:`/api/processing/jobs/${old.jobId}/result`,provenanceUrl:`/api/processing/jobs/${old.jobId}/provenance`,rows:[{label:"Mean",expression:"mean(a)",value,valueType:"float",state:"ok",aggregates:[{function:"mean",matchedPixels:8,validPixels:8,invalidArithmeticPixels:0}]}]}:null});
+        server.set(old.jobId,{...old,status,result:status==="ready"?{url:`/api/processing/jobs/${old.jobId}/result`,provenanceUrl:`/api/processing/jobs/${old.jobId}/provenance`,rows:[{label:"stat-1",expression:"mean(a)",value,valueType:"float",state:"ok",aggregates:[{function:"mean",matchedPixels:8,validPixels:8,invalidArithmeticPixels:0}]}]}:null});
         await jobs.refresh(); await flush();
     };
     const run = async automatic => { execute(intent(),automatic); await flush(); };
@@ -258,9 +258,10 @@ test("explicit Run freezes intent, publishes measured progress and inline result
     const h=fixture();await h.run(false);
     assert.equal(h.view.state.currentJob.progress.totalBlocks,4);
     assert.deepEqual(h.activity.at(-1),box(77));
-    h.controller.discardPendingCalculation();assert.equal(h.requests.filter(r=>r[0]==="cancel").length,0);
+    assert.equal(h.requests.filter(r=>r[0]==="cancel").length,0);
     await h.finish();assert.equal(h.view.state.completedJob.result.rows[0].value,"12.5");
-    assert.deepEqual(h.view.state.completedCalculation.area,box(77));assert.equal(h.storage.read(),null);
+    assert.deepEqual(h.view.state.completedCalculation.area,box(77));
+    assert.equal(h.storage.read().jobId, h.view.state.completedJob.jobId);
     assert.equal(h.activity.at(-1),null);
 });
 
@@ -379,7 +380,7 @@ test("uploaded vector calculations preserve the original identity and filter thr
     const h = fixture();
     const intent = h.intent({area: {kind: "catalogSelection", catalogSelection: uploaded}});
     const requestId = "uploaded-calculation-request";
-    h.storage.write({intent, jobId: null, pending: {requestId}, cancelRequested: false});
+    h.storage.write({intent, jobId: null, pending: {requestId}, cancelRequested: false, context: {automatic: true, presentation: {key: "hfp", names: ["Mean"]}}});
     const recovered = h.storage.read();
     assert.deepEqual(recovered.intent.area, intent.area);
     const requests = [];
@@ -405,7 +406,7 @@ test("uploaded vector calculations preserve the original identity and filter thr
 
 test("caller metadata survives reload without requesting cancellation", async () => {
     const h = fixture();
-    const context = { automatic: true };
+    const context = { automatic: true, presentation: {key: "hfp", names: ["Mean"]} };
     h.controller.submit(h.intent(), context); await flush();
     context.automatic = false;
     const stored = JSON.parse([...h.data.values()][0]);
@@ -413,7 +414,6 @@ test("caller metadata survives reload without requesting cancellation", async ()
     assert.equal(stored.context, undefined, "caller metadata is stored as top-level fields");
     assert.equal(stored.cancelRequested, false);
     assert.equal(h.storage.read().cancelRequested, false, "reading storage makes no cancellation decision");
-    h.controller.discardPendingCalculation(); await flush();
     assert.equal(h.requests.some(([kind]) => kind === "cancel"), false);
     h.controller.destroy();
     const restored = new CalculationExecutor({ ...h.options, onChange: () => {} });
@@ -435,7 +435,7 @@ test("polygon uploads use owned transport and recovery stores only their small r
         requests.push({url, ...options});
         const response = url.endsWith("/jobs") ? {jobs:[]} : url.endsWith("/polygon-areas") && options.method === "POST"
             ? {polygonArea,bbox:[0,0,1,1],matched:1} : url.endsWith("/raster-calculations/batch")
-                ? {items:[{index:0,job:{jobId:"d".repeat(32),operation:"raster.aggregate.v1",status:"queued",sources:{a:source},calculations:[{label:"Mean",expression:"mean(a)"}],area:{kind:"polygons",bounds:[0,0,1,1]},grid:null,progress:{},result:null}}]} : {deleted:true};
+                ? {items:[{index:0,job:{jobId:"d".repeat(32),operation:"raster.aggregate.v1",status:"queued",sources:{a:source},calculations:[{label:"stat-1",expression:"mean(a)"}],area:{kind:"polygons",bounds:[0,0,1,1]},grid:null,progress:{},result:null}}]} : {deleted:true};
         return new Response(JSON.stringify(response), {status:200,headers:{"Content-Type":"application/json"}});
     });
     const polygons = [{type:"Polygon",coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}];
@@ -451,7 +451,7 @@ test("polygon uploads use owned transport and recovery stores only their small r
     assert.equal(planned.wholeRaster,undefined);
     assert.equal(planned.polygons,undefined);
     assert.equal(requests[3].method,"DELETE");
-    h.storage.write({intent,jobId:"d".repeat(32),pending:null,cancelRequested:false});
+    h.storage.write({intent,jobId:"d".repeat(32),pending:null,cancelRequested:false,context:{automatic:true,presentation:{key:"hfp",names:["Mean"]}}});
     assert.deepEqual(h.storage.read().intent.area,intent.area);
     assert.ok([...h.data.values()][0].length<1000);
     await assert.rejects(api.submitCalculation({...intent,requestId:"r".repeat(32),area:{...intent.area,polygons}}),/Invalid polygon calculation area/);

@@ -222,7 +222,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
     assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Explore data/);
     assert.match(inspection.source, /class="map-inspection-raster-analysis" aria-label="Raster analysis"/);
-    assert.match(inspection.source, /id="open-calculations-dock"[\s\S]*?aria-controls="calculations-panel"/);
+    assert.match(inspection.source, /id="open-raster-series-dock"[\s\S]*?aria-controls="raster-series"/);
     assert.doesNotMatch(inspection.source, /popovertarget="workspace-tool-actions"/);
     assert.match(
         inspection.source,
@@ -270,7 +270,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         STYLESHEET,
         /#map-inspection-tab-style\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#calculations-panel,\s*#models-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#raster-series,\s*#annotations-panel,\s*#models-panel,\s*#raster-clips-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
@@ -306,7 +306,7 @@ test("successful catalog additions reveal Map layers through composition", () =>
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?activate: !selectingMapClick && !\["calculations", "raster-series", "raster-clips", "models"\]\.includes\(mapInspection\.activeTool\)/
+        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?activate: !selectingMapClick && !\["raster-series", "raster-clips", "models"\]\.includes\(mapInspection\.activeTool\)/
     );
     assert.match(
         COMPOSITION_SOURCE,
@@ -347,7 +347,7 @@ test("composition forwards inspection layout and CSS does not infer it from chan
 test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*updateRasterSeriesArea\(area, [^;]+\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);\s*updateRasterSeriesArea\(null, ""\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*updateRasterSeriesArea\(area, [^;]+\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*updateRasterSeriesArea\(null, ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });
@@ -411,7 +411,7 @@ test("shared sampling controls stay above tools while histograms own their resul
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
 });
 
-test("inspection header groups three raster destinations separately from clicked-point features", () => {
+test("inspection header groups two raster destinations separately from clicked-point features", () => {
     const headerEnd = MARKUP.indexOf("</header>", requireMarkupPosition("map-inspection-dock-title"));
     assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
     assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
@@ -431,8 +431,7 @@ test("inspection header groups three raster destinations separately from clicked
     assert.match(point.source, /Features at inspected point/);
     for (const [id, panel, caption] of [
         ["map-click-histogram", "map-histogram-panel", "Histograms"],
-        ["open-calculations-dock", "calculations-panel", "Statistics"],
-        ["open-raster-series-dock", "raster-series", "Raster stack"],
+        ["open-raster-series-dock", "raster-series", "Raster statistics"],
     ]) {
         const control = requireElementRange(id);
         assert.ok(control.start > raster.start && control.end < raster.end);
@@ -630,18 +629,18 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
 
 test("workspace overflow shares one native action list and keeps statistics settings with their owner", () => {
     const actions = requireElementRange("workspace-tool-actions");
-    const summary = requireElementRange("calculations-panel");
+    const summary = requireElementRange("raster-series");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
-    for (const id of ["open-calculations", "open-analysis-tools", "open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+    for (const id of ["open-analysis-tools", "open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }
     for (const id of ["map-tools-more-summary"]) {
         assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools <span aria-hidden="true">▾<\/span><\/button>/);
     }
-    assert.match(summary.source, /id="summary-auto"/);
-    assert.doesNotMatch(actions.source, /id="summary-auto"/);
+    assert.match(summary.source, /id="raster-series-automatic"/);
+    assert.doesNotMatch(actions.source, /id="raster-series-automatic"/);
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
@@ -657,7 +656,7 @@ test("one persistent toolbar owns Tools, minimize and active filters outside ret
     }
     assert.equal(countMarkupId("map-inspection-more-summary"), 0);
     assert.equal(countMarkupId("map-inspection-filter-indicators"), 0);
-    for (const id of ["open-calculations", "open-analysis-tools"]) {
+    for (const id of ["open-analysis-tools"]) {
         const command = requireElementRange(id);
         assert.ok(command.start > actions.start && command.end < actions.end);
     }
@@ -685,9 +684,8 @@ test("supporting analysis controls preserve native buttons, clear names and disc
     }
     for (const [id, accessibleName] of [
         ["models-close", "Close Models"],
-        ["close-raster-series", "Close raster series"],
         ["close-annotations", "Close shared layer"],
-        ["calculations-close", "Close raster statistics"],
+        ["close-raster-series", "Close raster statistics"],
         ["raster-clips-close", "Close raster download"],
         ["close-vector-inspector", "Close feature inspector"],
         ["close-vector-time-series", "Close vector series"],
@@ -754,7 +752,7 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection-tab-feature-profile",
         "map-inspection-raster-analysis",
         "map-click-histogram",
-        "open-calculations-dock",
+        "open-raster-series-dock",
         "open-raster-series-dock",
         "map-inspection-tab-style",
         "toggle-map-inspection-dock",
