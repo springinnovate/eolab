@@ -278,12 +278,20 @@ mounts. The file setting is the absolute path **inside the container**. Never pu
 the key in browser configuration or commit it. Leave both settings blank to use
 only manually selected rasters.
 
-The backend accepts `stack: {kind: earthEngine, year: 2018}` with an explicit
-analysis area and user-selected reference sites. The preparation grid remains
-explicit; downloaded bands use nearest-neighbor resampling, while selected masks
-use their requested methods. Browser controls are not yet available. See the
-[model integration tests](tests/test_habitat_earth_engine_model.py) for an executable
-request and result example.
+In **Tools → Models → Habitat condition**, choose **Original model inputs from
+Earth Engine** as the input source, select the assessment year, then choose an
+explicit **Analysis area** and **Reference sites** before selecting **Run model**.
+Use a representative Montana area and 2018 for the first demonstration, with
+enough reference coverage for the configured spatial validation. **Choose raster
+layers** remains available for manually selected inputs.
+
+The first run downloads the original predictor and response tiles; later runs
+reuse matching completed tiles. The preparation grid remains explicit; downloaded
+bands use nearest-neighbor resampling, while selected masks use their requested
+methods. Follow progress and inspect or download results in **Runs**. **Duplicate
+with changes** restores the chosen inputs, including the source mode and year.
+See the [model integration tests](tests/test_habitat_earth_engine_model.py) for an
+executable request and result example.
 
 Habitat keeps completed input tiles under `PROCESSING_DATA_PATH/habitat-cache`,
 beside run files on the same filesystem for atomic publication. Tiles survive run
