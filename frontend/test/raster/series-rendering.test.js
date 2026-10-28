@@ -37,7 +37,8 @@ function controlsFixture() {
     h.view.plotsView = { renderPlots: state => plots.push(state) };
     h.view.actions = {};
     const source = { key: "a", label: "Raster A", selected: true };
-    const formula = { id: 1, label: "Mean", expression: "mean(a)", visible: true, plotId: 1, styleIndex: 0 };
+    const formula = { id: 1, label: "Mean", expression: "mean(a)", visible: true, plotId: 1, styleIndex: 0,
+        rows: [{ label: "Raster A", statisticLabel: "Mean", state: "waiting", value: null, rawValue: null }] };
     const state = { active: true, busy: true, sources: [source], rows: [], previousRows: null,
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
@@ -47,16 +48,16 @@ function controlsFixture() {
     return { ...h, plots, state, draw };
 }
 
-test("raster stack places plots before configuration and keeps scope and execution actions outside disclosures", async () => {
+test("raster stack places plots and values before configuration and keeps execution actions outside disclosures", async () => {
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
-    const positions = ["raster-series-context", "raster-series-status", "raster-series-plots",
-        "raster-series-statistics", "raster-series-data-settings", "Formula reference", "Values &amp; download"]
+    const positions = ["raster-series-context", "raster-series-status", "raster-series-plots", "Values &amp; download",
+        "raster-series-statistics", "raster-series-data-settings", "Formula reference"]
         .map(name => panel.indexOf(name));
     // Match owning elements rather than aria-controls references in the section navigation.
     positions[2] = panel.indexOf('id="raster-series-plots"');
-    positions[3] = panel.indexOf('id="raster-series-statistics"');
-    positions[4] = panel.indexOf('id="raster-series-data-settings"');
+    positions[4] = panel.indexOf('id="raster-series-statistics"');
+    positions[5] = panel.indexOf('id="raster-series-data-settings"');
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
     const disclosures = [...panel.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map(match => match[0]);
     for (const id of ["context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
@@ -145,16 +146,82 @@ test("changed controls remain current without overwriting a focused formula edit
     assert.equal(expression.value, "mean(a)", "unfocused inputs reflect the supplied state");
 });
 
-test("series renders each statistic through the same plots and values table", () => {
+test("one raster opens the existing values table for every statistic instead of drawing a chart", () => {
     const h = controlsFixture();
     h.state.rows = [{label:"Raster A",statisticLabel:"Pixel value",state:"value",value:3,rawValue:"3"},
-        {label:"Raster A",statisticLabel:"Mean",state:"value",value:2.5,rawValue:"2.5"}];
+        {label:"Raster A",statisticLabel:"Mean",state:"value",value:2.5,rawValue:"2.5000000000000001",unit:"K"}];
     h.draw();
-    assert.equal(h.plots.length,1);
-    assert.equal(h.plots[0],h.state);
+    assert.equal(h.plots.length,0);
+    assert.equal(h.view.values.open,true);
+    assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
-        ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5","Value"]]);
+        ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5000000000000001 K","Value"]]);
     assert.equal(h.view.context.textContent,"Whole extent of each raster · 1 raster");
+    assert.equal(h.view.valueCaption.textContent,"Raster A");
+});
+
+test("result presentation counts requested positions, including waiting, failed and NoData values", () => {
+    const h = controlsFixture();
+    const rows = h.state.statistics[0].rows;
+    h.state.rows = rows;
+    h.draw();
+    assert.equal(h.view.values.open, true, "one pending position already uses the table");
+    for (const [state, status] of [["error", "Unavailable"], ["no_valid_data", "No valid data"]]) {
+        rows[0].state = state; h.draw();
+        assert.equal(h.view.table.children[0].children[3].textContent, status);
+        assert.equal(h.plots.length, 0);
+    }
+    rows.push({...rows[0], label: "Raster B", state: "value", value: 4, rawValue: "4"});
+    h.draw();
+    assert.equal(h.view.values.open, false);
+    assert.equal(h.plots.length, 1, "one successful value among several positions remains a graph");
+    assert.equal(h.plots[0], h.state);
+    assert.equal(h.view.table.children.length, 2);
+    assert.equal(h.view.valueCaption.textContent, "");
+    assert.equal(h.view.root.classList.contains("raster-series-single-result"), false);
+    rows.length = 0; h.draw();
+    assert.equal(h.view.values.open, false, "zero positions do not masquerade as a scalar");
+});
+
+test("one temporal observation uses values; several timestamps in the same dataset use plots", () => {
+    const h = controlsFixture();
+    h.view.renderTemporalControls = () => {};
+    h.state.sources = [];
+    h.state.temporal = {item: {properties: {title: "Temperature"}}, variable: "temperature",
+        periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-01T02:00"};
+    const rows = h.state.statistics[0].rows;
+    rows.length = 0; h.draw();
+    assert.equal(h.view.values.open, false, "pending temporal results have an unknown observation count");
+    const row = {label: "2000-01-01 00:00 UTC", statisticLabel: "Mean", state: "value",
+        value: 280.5, rawValue: "280.5", unit: "K"};
+    rows.push(row); h.state.rows = rows; h.draw();
+    assert.equal(h.view.values.open, true);
+    assert.equal(h.view.valueCaption.textContent, row.label);
+    assert.deepEqual(h.view.table.children[0].children.map(cell => cell.textContent),
+        [row.label, "Mean", "280.5 K", "Value"]);
+    rows.push({...row, label: "2000-01-01 01:00 UTC", state: "no_valid_data", value: null, rawValue: null});
+    h.draw();
+    assert.equal(h.view.values.open, false);
+    assert.equal(h.plots.at(-1), h.state);
+    assert.equal(h.view.table.children.length, 2);
+});
+
+test("progress preserves the values disclosure and focus; changing result count restores the presentation", () => {
+    const h = controlsFixture(); h.draw();
+    const row = h.state.statistics[0].rows[0];
+    h.view.values.open = false;
+    h.view.download.focus();
+    h.state.message = "Calculating"; h.draw();
+    assert.equal(h.view.values.open, false, "do not reopen a disclosure the user closed");
+    assert.equal(h.document.activeElement, h.view.download);
+    h.state.statistics[0].rows.push({...row, label: "Raster B"}); h.draw();
+    h.view.values.open = true; h.draw();
+    assert.equal(h.view.values.open, true, "multi-result table also retains the user's choice");
+    h.state.statistics[0].rows.pop(); h.draw();
+    assert.equal(h.view.values.open, true);
+    assert.equal(h.plots.length, 2, "single-result updates never redraw hidden plots");
+    h.state.showingPrevious = true; h.draw();
+    assert.equal(h.view.chartNote.hidden, true, "the current-values table does not claim to show previous-area plots");
 });
 
 test("compact rows retain focused drafts and editor disclosures when other statistics change", () => {
@@ -214,7 +281,7 @@ test("section shortcuts focus owned destinations and open data settings without 
         "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onSourceMode", "onTemporalDataset",
         "onTemporalVariable", "onTemporalEdit", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
     h.view.bind(actions);
-    for (const [button, target] of [["show-plots", "plots"], ["edit-statistics", "statistics-title"], ["edit-data", "source-summary"]]) {
+    for (const [button, target] of [["show-results", "results"], ["edit-statistics", "statistics-title"], ["edit-data", "source-summary"]]) {
         h.document.querySelector("#raster-series-" + button).dispatchEvent(new Event("click"));
         const destination = h.document.querySelector("#raster-series-" + target);
         assert.equal(h.document.activeElement, destination);

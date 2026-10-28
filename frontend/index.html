@@ -801,12 +801,23 @@
             </div>
             <p id="raster-series-chart-note" hidden></p>
             <nav class="raster-series-section-links" aria-label="Raster stack sections">
-              <button id="raster-series-show-plots" class="summary-text-button" type="button" aria-controls="raster-series-plots">Plots</button>
+              <button id="raster-series-show-results" class="summary-text-button" type="button" aria-controls="raster-series-results">Results</button>
               <button id="raster-series-edit-statistics" class="summary-text-button" type="button" aria-controls="raster-series-statistics">Statistics</button>
               <button id="raster-series-edit-data" class="summary-text-button" type="button" aria-controls="raster-series-data-settings">Data and order</button>
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
             </nav>
-            <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
+            <div id="raster-series-results" tabindex="-1" role="region" aria-label="Statistic results">
+              <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
+              <details id="raster-series-values" class="raster-series-settings">
+                <summary>Values &amp; download</summary>
+                <div class="raster-series-table-scroll">
+                  <table><caption id="raster-series-value-caption"></caption><thead><tr><th id="raster-series-value-source" scope="col">Raster</th><th scope="col">Statistic</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
+                </div>
+                <div class="raster-series-actions">
+                  <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>
+                </div>
+              </details>
+            </div>
             <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
               <div class="raster-series-statistics-header">
                 <h3 id="raster-series-statistics-title" tabindex="-1">Statistics</h3>
@@ -851,15 +862,6 @@
                 <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
               </ul>
               <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter area statistics: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one calculation per raster. Assign statistics with different units or ranges to separate plots as needed.</p>
-            </details>
-            <details class="raster-series-settings">
-              <summary>Values &amp; download</summary>
-              <div class="raster-series-table-scroll">
-                <table><thead><tr><th id="raster-series-value-source" scope="col">Raster</th><th scope="col">Statistic</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
-              </div>
-              <div class="raster-series-actions">
-                <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>
-              </div>
             </details>
           </section>
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
