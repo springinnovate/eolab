@@ -45,6 +45,7 @@ export class RasterAppearanceControlsView {
             "#raster-appearance-layer"
         );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
+        this.reverseColorsButton = requireRasterControl(documentContext, "#reverse-raster-colors");
         this.appearanceMode = requireRasterControl(documentContext, "#raster-appearance-mode");
         this.continuousControls = requireRasterControl(documentContext, "#raster-continuous-controls");
         this.categoricalEditor = new CategoricalRasterEditorView(documentContext);
@@ -99,6 +100,7 @@ export class RasterAppearanceControlsView {
         this.boundStyleInput = this.#handleStyleInput.bind(this);
         this.boundStyleChange = this.#handleStyleChange.bind(this);
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
+        this.boundReverseColors = this.#reverseColors.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
         this.boundAppearanceModeChange = () => {
             this.setAppearanceMode(this.appearanceMode.value);
@@ -138,6 +140,7 @@ export class RasterAppearanceControlsView {
             input.addEventListener("change", this.boundStyleChange);
         }
         this.palette.addEventListener("change", this.boundPaletteChange);
+        this.reverseColorsButton.addEventListener("click", this.boundReverseColors);
         this.resetStyleButton.addEventListener("click", this.boundResetStyle);
         this.appearanceMode.addEventListener("change", this.boundAppearanceModeChange);
         this.categoricalEditor.bind(handlers);
@@ -154,6 +157,7 @@ export class RasterAppearanceControlsView {
             input.removeEventListener("change", this.boundStyleChange);
         }
         this.palette.removeEventListener("change", this.boundPaletteChange);
+        this.reverseColorsButton.removeEventListener("click", this.boundReverseColors);
         this.resetStyleButton.removeEventListener("click", this.boundResetStyle);
         this.appearanceMode.removeEventListener("change", this.boundAppearanceModeChange);
         this.categoricalEditor.unbind();
@@ -357,6 +361,7 @@ export class RasterAppearanceControlsView {
             input.disabled = !isEnabled;
         }
         this.palette.disabled = !isEnabled;
+        this.reverseColorsButton.disabled = !isEnabled;
         this.appearanceMode.disabled = !isEnabled;
         this.categoricalEditor.setEnabled(isEnabled);
         this.resetStyleButton.disabled = !isEnabled;
@@ -380,6 +385,20 @@ export class RasterAppearanceControlsView {
     /** Forward one palette selection to the raster viewer. @return {void} */
     #handlePaletteChange() {
         this.handlers.onPaletteChange();
+    }
+
+    /**
+     * Swap endpoint colors and commit through the ordinary color-edit handlers.
+     * Other input values, including any unfinished numeric edits, are unchanged.
+     *
+     * @return {void}
+     */
+    #reverseColors() {
+        const { minimumColor, maximumColor } = this.styleInputs;
+        [minimumColor.value, maximumColor.value] = [maximumColor.value, minimumColor.value];
+        this.setStatus("");
+        this.handlers.onStyleInput(true);
+        this.handlers.onStyleChange();
     }
 
     /** Forward the reset-style action to the raster viewer. @return {void} */

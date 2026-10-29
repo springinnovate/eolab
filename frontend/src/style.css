@@ -1029,9 +1029,15 @@ h5 {
   font-weight: 600;
 }
 
-.raster-palette {
+.raster-palette-row {
+  display: flex;
+  align-items: end;
+  gap: 8px;
   margin-bottom: 10px;
 }
+
+.raster-palette { flex: 1; min-width: 0; }
+.raster-palette-row .secondary-button { margin: 0; }
 
 .raster-palette select,
 .raster-style-stops input[type="number"] {
