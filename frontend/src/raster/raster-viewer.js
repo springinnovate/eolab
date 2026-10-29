@@ -4247,6 +4247,7 @@ export function initializeRasterViewer(
         if (!bivariateMode.active) {
             refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
         }
+        renderLayerHistogramSummaries();
         showHistogramWorkspace();
     }
 

@@ -3478,6 +3478,39 @@ test("raster viewer ignores publication completed after a reset", async () => {
     viewer.destroy();
 });
 
+for (const wholeState of ["ready", "error"]) {
+    test(`restoring a cached ${wholeState} whole-raster result replaces the box histogram card`, async () => {
+        const requests = [];
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area.kind);
+            if (area.kind === "wholeRaster" && wholeState === "error") {
+                throw new Error("Whole-raster read exceeds the bounded-work limit");
+            }
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        });
+        await h.viewer.show(createRasterItem(`whole-restore-${wholeState}`));
+        await flushPromises();
+        const wholeStatistics = h.controlsView.layerHistograms[0].statistics;
+        h.viewer.exploreAt({ lng: -74, lat: 41 });
+        await flushPromises();
+        assert.equal(h.controlsView.layerHistograms[0].scope, "200 km map sample");
+        assert.equal(h.controlsView.layerHistograms[0].state, "ready");
+
+        h.controlsView.handlers.onClearSampleWindow();
+
+        const summary = h.controlsView.layerHistograms[0];
+        assert.equal(summary.scope, "Whole raster");
+        assert.equal(summary.state, wholeState);
+        assert.equal(summary.statistics, wholeStatistics);
+        assert.equal(summary.errorMessage, wholeState === "error"
+            ? "Whole-raster read exceeds the bounded-work limit" : "");
+        if (wholeState === "error") assert.equal(summary.counts, null);
+        await flushPromises();
+        assert.deepEqual(requests, ["wholeRaster", "selectedArea"], "restoring cached state does not read again");
+        h.destroy();
+    });
+}
+
 test("selected statistics remain draft-only until the user applies them", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
