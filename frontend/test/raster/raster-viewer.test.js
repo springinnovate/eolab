@@ -4502,7 +4502,7 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     viewer.destroy();
 });
 
-test("map box starts at map center and resizes after a debounce", async () => {
+test("map box resizes immediately while committing only the final debounced area", async () => {
     const timers = new Map();
     let nextTimerId = 1;
     const clock = {
@@ -4517,15 +4517,19 @@ test("map box starts at map center and resizes after a debounce", async () => {
         },
     };
     const leafletMap = createFakeMap();
-    const { leaflet } = createFakeLeaflet();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
-    const statisticsRequests = [];
+    const statisticsRequests = [], committed = [], presentations = [];
+    let opened = 0;
     const viewer = initializeRasterViewer(
         {
             wmsUrl: "/geoserver/eolab/wms",
             leafletMap,
             leaflet,
             onTileError() {},
+            onSamplingAreaChange: area => committed.push(area),
+            onHistogramChange: snapshot => presentations.push(snapshot),
+            onHistogramRequested: () => { opened += 1; },
         },
         {
             controlsView,
@@ -4564,8 +4568,23 @@ test("map box starts at map center and resizes after a debounce", async () => {
     );
     assert.match(controlsView.samplingAreaLabel, /200 km × 200 km map box/);
 
-    controlsView.handlers.onSampleWindowNumberInput("75");
+    const rectangle = rectangleLayers.find(layer => layer.kind === "selection");
+    const oldGeometry = rectangle.boundsHistory.at(-1);
+    const before = statisticsRequests.length, committedBefore = committed.length, openedBefore = opened;
+    controlsView.handlers.onSampleWindowRangeInput(75);
+    const firstResize = rectangle.boundsHistory.at(-1);
+    assert.notDeepEqual(firstResize, oldGeometry);
     controlsView.handlers.onSampleWindowNumberInput("90");
+    const finalGeometry = rectangle.boundsHistory.at(-1);
+    assert.notDeepEqual(finalGeometry, firstResize);
+    assert.equal(rectangleLayers.length, 1, "reuse the selected rectangle");
+    assert.equal(statisticsRequests.length, before);
+    assert.equal(committed.length, committedBefore);
+    assert.deepEqual(viewer.getSelectedArea().selectedBounds, centeredRequest.selectedBounds);
+    assert.equal(presentations.at(-1).state, "loading");
+    assert.match(presentations.at(-1).message, /results show the previous area/);
+    assert.equal((finalGeometry[0][1] + finalGeometry[1][1]) / 2, 0);
+    assert.ok(Math.abs((finalGeometry[0][0] + finalGeometry[1][0]) / 2) < 1e-12);
     assert.equal(timers.size, 1);
     const pending = [...timers.values()][0];
     assert.equal(
@@ -4584,6 +4603,82 @@ test("map box starts at map center and resizes after a debounce", async () => {
     assert.notDeepEqual(resizedRequest.selectedBounds, centeredRequest.selectedBounds);
     assert.match(controlsView.samplingAreaLabel, /90 km × 90 km map box/);
     viewer.destroy();
+});
+
+for (const transition of ["whole", "vector", "close", "center", "invalid", "original"]) {
+    test(`pending resize cannot replace a newer ${transition} choice`, async () => {
+        const timers = new Map(), requests = [];
+        let timerId = 0;
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area);
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        }, {clock: {
+            setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
+            clearTimeout(id) { timers.delete(id); },
+        }});
+        await h.viewer.show(createRasterItem("resize-cancellation"));
+        h.viewer.exploreAt({lng: -75, lat: 40});
+        await flushPromises();
+        const original = h.viewer.getSelectedArea();
+        h.controlsView.handlers.onSampleWindowRangeInput(90);
+        assert.equal(timers.size, 1);
+        if (transition === "whole") h.controlsView.handlers.onClearSampleWindow();
+        if (transition === "vector") h.controlsView.handlers.onUseVectorArea();
+        if (transition === "close") h.viewer.cancelSampleWindowResize();
+        if (transition === "center") h.viewer.exploreAt({lng: -80, lat: 35});
+        if (transition === "invalid") h.controlsView.handlers.onSampleWindowNumberInput("");
+        if (transition === "original") h.controlsView.handlers.onSampleWindowRangeInput(200);
+        assert.equal(timers.size, 0);
+        await flushPromises();
+        if (["whole", "vector"].includes(transition)) {
+            assert.equal(h.viewer.getSelectedArea(), null);
+            assert.equal([...h.leafletMap.layers].some(layer => layer.kind === "selection"), false);
+            const count = requests.length;
+            h.controlsView.handlers.onSampleWindowNumberInput("75");
+            assert.equal(timers.size, 0);
+            assert.equal(requests.length, count);
+            assert.equal([...h.leafletMap.layers].some(layer => layer.kind === "selection"), false);
+        } else {
+            const area = h.viewer.getSelectedArea();
+            if (transition === "center") assert.notDeepEqual(area, original);
+            else assert.deepEqual(area, original);
+            const bounds = area.selectedBounds;
+            const rectangle = [...h.leafletMap.layers].find(layer => layer.kind === "selection");
+            assert.deepEqual(rectangle.boundsHistory.at(-1), [[bounds.south, bounds.west], [bounds.north, bounds.east]]);
+        }
+        h.destroy();
+    });
+}
+
+test("late histogram results stay scoped to the old area during a resize", async () => {
+    const requests = [], timers = new Map(), presentations = [];
+    let timerId = 0;
+    const h = visibleLayerFixture((item, area, signal) => {
+        if (area.kind === "wholeRaster") return Promise.resolve(createLayerStatistics(item));
+        const deferred = createDeferred();
+        requests.push({item, area, signal, deferred});
+        return deferred.promise;
+    }, {clock: {
+        setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
+        clearTimeout(id) { timers.delete(id); },
+    }}, {onHistogramChange: snapshot => presentations.push(snapshot)});
+    await h.viewer.show(createRasterItem("late-resize-result"));
+    h.viewer.exploreAt({lng: -75, lat: 40});
+    await flushPromises();
+    h.controlsView.handlers.onSampleWindowNumberInput("75");
+    requests[0].deferred.resolve(createLayerStatistics(requests[0].item, requests[0].area.selectedBounds));
+    await flushPromises();
+    assert.deepEqual(h.controlsView.displayedStatistics.selectedBounds, requests[0].area.selectedBounds);
+    assert.equal(presentations.at(-1).state, "loading");
+    assert.match(presentations.at(-1).message, /results show the previous area/);
+    const commit = [...timers.values()][0]; timers.clear(); commit();
+    await flushPromises();
+    assert.equal(requests.length, 2);
+    requests[1].deferred.resolve(createLayerStatistics(requests[1].item, requests[1].area.selectedBounds));
+    await flushPromises();
+    assert.deepEqual(h.controlsView.displayedStatistics.selectedBounds, h.viewer.getSelectedArea().selectedBounds);
+    assert.equal(presentations.at(-1).state, "ready");
+    h.destroy();
 });
 
 test("click pixel requests use backend coverage independently of histogram opening", async () => {

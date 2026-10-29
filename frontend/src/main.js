@@ -888,6 +888,7 @@ async function initializeCatalog(
     mapInspection.subscribeActiveTool(tool => {
         activeSamplingTool = tool;
         rasterControls.setSamplingControlsActive(samplingTools.has(tool), samplingTools.get(tool) ?? false);
+        if (!samplingTools.has(tool)) rasterVisualization?.cancelSampleWindowResize();
     });
     /** Focus shared area choices without switching tools or starting calculations. @return {void} */
     const editProcessingArea = () => {
