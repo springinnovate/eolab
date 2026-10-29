@@ -2,6 +2,8 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any
 
@@ -16,6 +18,23 @@ from eolab_app.saved_maps.models import (
     SavedMapError,
     UpdateSavedMap,
 )
+
+
+@dataclass(frozen=True)
+class SourceRevisionMigration:
+    """Report a selected map's obsolete fields and whether their removal committed.
+
+    Attributes:
+        slug: Unchanged map URL name.
+        revision: Current map revision after this operation.
+        changed_layers: Number of Catalog layers whose sourceRevision was removed.
+        applied: Whether the database was updated; false for previews and no-ops.
+    """
+
+    slug: str
+    revision: int
+    changed_layers: int
+    applied: bool
 
 
 class SavedMapStore:
@@ -147,6 +166,83 @@ class SavedMapStore:
                 'SELECT slug, title, deleted_at AS "deletedAt" FROM saved_maps.maps ORDER BY lower(title), slug'
             )
             return cursor.fetchall()
+
+    def migrate_source_revisions(
+        self, slug: str, *, apply: bool = False, expected_revision: int | None = None
+    ) -> SourceRevisionMigration:
+        """Preview or remove obsolete sourceRevision fields from one published map.
+
+        Call explicitly during an upgrade, after backup and stopping old app
+        writers. This is not run at startup or by the HTTP API. Only Catalog
+        layer fields are removed; all other JSON and map metadata stay intact.
+        Shared polygon storage is never accessed. A changed map advances its
+        revision once, invalidating old administrator drafts. Compatible maps
+        are no-ops, including a retry with the previously applied revision.
+
+        Args:
+            slug: Existing map's fixed URL name.
+            apply: Commit the validated change instead of only previewing it.
+            expected_revision: Revision reviewed in the preview; required to apply.
+
+        Returns:
+            Layer count, resulting revision and whether a change committed.
+
+        Raises:
+            SavedMapError: If missing or deleted, the reviewed revision is stale,
+                application lacks a revision, the candidate remains incompatible,
+                or the database transaction fails. Failures leave the map intact.
+        """
+        if apply and expected_revision is None:
+            raise SavedMapError(
+                422, "Applying a migration requires the preview revision."
+            )
+        with self.transaction() as cursor:
+            cursor.execute(
+                'SELECT slug, title, subtitle, view, revision, created_at AS "createdAt" '
+                "FROM saved_maps.maps WHERE slug=%s AND deleted_at IS NULL FOR UPDATE",
+                (slug,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise SavedMapError(404, "Saved map not found.")
+            candidate = deepcopy(row)
+            changed_layers = 0
+            # Persisted legacy JSON cannot satisfy the current contract until
+            # these fields are removed. Validate the entire result below.
+            layers = candidate["view"].get("layers")
+            if isinstance(layers, list):
+                for layer in layers:
+                    if (
+                        isinstance(layer, dict)
+                        and "catalogItem" in layer
+                        and "sourceRevision" in layer
+                    ):
+                        del layer["sourceRevision"]
+                        changed_layers += 1
+            try:
+                SavedMap.model_validate(candidate)
+            except ValidationError as error:
+                raise SavedMapError(
+                    422,
+                    "This map has other incompatible fields after removing sourceRevision. "
+                    "No changes were made; inspect the saved document before upgrading.",
+                ) from error
+            applied = apply and changed_layers > 0
+            if applied:
+                if expected_revision != row["revision"]:
+                    raise SavedMapError(
+                        409,
+                        "This map changed since preview. Preview its current revision again.",
+                    )
+                cursor.execute(
+                    "UPDATE saved_maps.maps SET view=%s, revision=revision+1 WHERE slug=%s "
+                    "RETURNING revision",
+                    (Jsonb(candidate["view"]), slug),
+                )
+                row["revision"] = cursor.fetchone()["revision"]
+            return SourceRevisionMigration(
+                slug, row["revision"], changed_layers, applied
+            )
 
     def set_map_deleted(self, slug: str, *, deleted: bool) -> None:
         """Hide or restore a published map while retaining its URL and configuration.
