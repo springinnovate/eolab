@@ -597,7 +597,54 @@ test("invalid axis drafts survive unrelated updates; removal and unbinding cance
     assert.equal(view.axisStates.size, 0);
 });
 
-test("changed sample, units, style, scope and retry state refresh only that card", () => {
+test("style changes repaint the chart without interrupting pending axis edits", async () => {
+    const doc = new FakeRasterControlDocument();
+    const { ResizeObserver, instances } = createFakeResizeObservers();
+    doc.defaultView = { ResizeObserver };
+    const view = new RasterHistogramControlsView(doc);
+    const first = { key: "first", label: "drought.tif", canCalculate: true, scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    const second = { ...first, key: "second", label: "rain.tif" };
+    view.renderLayerHistograms([first, second], "first");
+    const card = view.summaryCards.get("first"), untouched = view.summaryCards.get("second");
+    const chart = card.chart, editor = card.axisControls;
+    const otherChartContents = [...untouched.chart.children];
+    editor.root.open = true;
+    editor.root.dispatchEvent(new Event("toggle"));
+    const fields = editor.rows.get("y").fields;
+    fields.bounds.input.value = "values";
+    fields.bounds.input.dispatchEvent(new Event("change"));
+    fields.maximum.input.focus();
+    fields.maximum.input.value = "1";
+    fields.maximum.input.dispatchEvent(new Event("input"));
+    const recolored = { ...first, style: { ...DEFAULT_RASTER_STYLE,
+        minimumColor: "#000000", midpointColor: "#000000", maximumColor: "#000000" } };
+    view.renderLayerHistograms([recolored, second], "first");
+    assert.ok(view.summaryCards.get("first") === card);
+    assert.ok(card.chart === chart && card.axisControls === editor);
+    assert.ok(doc.activeElement === fields.maximum.input);
+    assert.equal(editor.root.open, true);
+    assert.equal(fields.maximum.input.value, "1");
+    const bars = chart.children.filter(child => child.classList.contains("raster-histogram-bar"));
+    assert.ok(bars.length > 0 && bars.every(bar => bar.style.fill === "#000000"));
+    assert.ok(view.summaryCards.get("second") === untouched);
+    assert.ok(untouched.chart.children.every((child, index) => child === otherChartContents[index]));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(editor.axes.y.maximum, 1, "The pending edit still commits after a style repaint");
+    fields.maximum.input.value = "2";
+    fields.maximum.input.dispatchEvent(new Event("change"));
+    assert.equal(editor.axes.y.maximum, 2);
+    assert.deepEqual(chart.children.filter(child => child.classList.contains("raster-histogram-bar"))
+        .map(bar => bar.style.fill), bars.map(() => "#000000"), "Later axis edits use the latest colors");
+    view.renderLayerHistograms([second], "second");
+    assert.equal(editor.enabled, false);
+    assert.equal(chart.children.length, 0);
+    assert.ok(instances.filter(observer => observer.target === chart).every(observer => observer.disconnected));
+    view.unbind();
+});
+
+test("changed sample, units, scope and retry state refresh only that card", () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);
     const retries = [];
@@ -613,7 +660,6 @@ test("changed sample, units, style, scope and retry state refresh only that card
         { canCalculate: true, scope: "200 km map sample" },
         { label: "Renamed raster" },
         { valueLabel: "Rainfall (mm)" },
-        { style: { ...DEFAULT_RASTER_STYLE, minimumColor: "#000000" } },
         { statistics: { ...RASTER_STATISTICS, validSampleCount: RASTER_STATISTICS.validSampleCount - 1 } },
         { state: "error", errorMessage: "Try again", canRetry: true },
     ]) {

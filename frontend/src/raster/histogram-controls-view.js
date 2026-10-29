@@ -66,6 +66,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {HTMLElement} pointValue Exact clicked value shown below the chart.
  * @property {SVGSVGElement|null} chart Continuous chart with a resize observer.
  * @property {HistogramAxisControls|null} axisControls Continuous chart's axis editor.
+ * @property {import("./style.js").RasterStyle|undefined} style Current continuous colors and thresholds.
+ * @property {(()=>void)|null} redraw Redraw the chart without replacing its controls.
  * @property {Array<{button:HTMLButtonElement,handleClick:()=>void}>} listeners Owned action listeners.
  */
 
@@ -168,7 +170,7 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Update changed raster cards while preserving other cards and pending edits.
+     * Replace changed samples and redraw style edits without replacing controls.
      * Compare presentation values because callers recreate summary objects. Move
      * only out-of-order cards; detaching unchanged inputs would lose browser focus.
      *
@@ -207,6 +209,9 @@ export class RasterHistogramControlsView {
             if (!card) {
                 card = this.#createSummaryCard(summary, signatures.get(summary.key));
                 this.summaryCards.set(summary.key, card);
+            } else if (JSON.stringify(card.style) !== JSON.stringify(summary.style)) {
+                card.style = summary.style;
+                card.redraw?.();
             }
             const current = this.histogramList.children[index] ?? null;
             if (current !== card.root) this.histogramList.insertBefore(card.root, current);
@@ -482,7 +487,8 @@ export class RasterHistogramControlsView {
         this.histogramChart.hidden = false;
         this.detailAxisControls?.dispose();
         const key = JSON.stringify([statistics.collectionId, statistics.itemId]);
-        this.detailAxisControls = this.#axisControls(key, this.histogramChart, statistics, style, valueLabel);
+        const { controls } = this.#createAxisControls(key, this.histogramChart, statistics, () => style, valueLabel);
+        this.detailAxisControls = controls;
         this.detailAxesHost.replaceChildren(this.detailAxisControls.root);
     }
 
@@ -519,8 +525,9 @@ export class RasterHistogramControlsView {
 
     /**
      * Validate a summary and identify changes in its displayed data and actions.
-     * Axis drafts and category expansion are local interaction state, deliberately
-     * excluded from the signature. Property order of the summary is irrelevant.
+     * Axis drafts and category expansion are local interaction state. Continuous
+     * style changes redraw the chart in place. These do not require a new card
+     * and are excluded from the signature. Summary property order is irrelevant.
      *
      * @param {RasterHistogramSummary} summary Incoming view model.
      * @return {string} Presentation values used to decide whether to rebuild a card.
@@ -556,7 +563,7 @@ export class RasterHistogramControlsView {
             summary.label, summary.scope, summary.state, summary.counts,
             summary.errorMessage ?? "", summary.unavailableMessage,
             summary.valueLabel ?? "Raster value", summary.categorical,
-            Boolean(summary.automatic), summary.statistics, summary.style,
+            Boolean(summary.automatic), summary.statistics,
             Boolean(summary.canRetry), summary.canCalculate,
         ]);
     }
@@ -577,7 +584,8 @@ export class RasterHistogramControlsView {
         pointValue.hidden = true;
         pointValue.setAttribute("role", "status");
         const card = { key: summary.key, signature, root: container, pointValue,
-            button: null, chart: null, axisControls: null, listeners: [] };
+            button: null, chart: null, axisControls: null, listeners: [],
+            style: summary.style, redraw: null };
         const content = summary.automatic
             ? container
             : this.documentContext.createElement("button");
@@ -628,9 +636,12 @@ export class RasterHistogramControlsView {
                 "http://www.w3.org/2000/svg", "svg"
             );
             chart.classList.add("raster-histogram-chart");
-            const controls = this.#axisControls(summary.key, chart, summary.statistics, summary.style, summary.valueLabel);
+            const { controls, redraw } = this.#createAxisControls(
+                summary.key, chart, summary.statistics, () => card.style, summary.valueLabel
+            );
             card.axisControls = controls;
             card.chart = chart;
+            card.redraw = redraw;
             content.append(chart, controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             content.append(this.#createSummaryPreview(summary));
@@ -724,26 +735,31 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Create a display-only editor retaining settings for this histogram identity.
+     * Create axis controls and a redraw callback that reads the current raster style.
+     * Redrawing preserves the controls' focused inputs, drafts and pending edits.
      * @param {string} key Chart identity.
      * @param {SVGSVGElement} chart Target SVG.
      * @param {Object} statistics Validated sample.
-     * @param {Object} style Committed raster style.
+     * @param {()=>import("./style.js").RasterStyle} getStyle Return the current committed raster style.
      * @param {string} valueLabel Value-axis units.
-     * @return {HistogramAxisControls} Editor owning only local redraws.
+     * @return {{controls:HistogramAxisControls,redraw:()=>void}} Axis editor and
+     * local redraw using its accepted display settings.
      */
-    #axisControls(key, chart, statistics, style, valueLabel = "Raster value") {
+    #createAxisControls(key, chart, statistics, getStyle, valueLabel = "Raster value") {
         if (!this.axisStates.has(key)) this.axisStates.set(key, {});
         const distribution = { ...statistics.histogram, total: statistics.validSampleCount };
+        /** Redraw the sample with current colors and supplied axes.
+         * @param {Object} axes Accepted axis settings. @return {void}
+         */
         const draw = axes => renderRasterHistogramChart(
-            chart, statistics, style, this.documentContext, valueLabel, [], axes,
+            chart, statistics, getStyle(), this.documentContext, valueLabel, [], axes,
         );
         const controls = new HistogramAxisControls(this.documentContext, [
             { ...distribution, key: "x", label: valueLabel },
             { ...distribution, key: "y", label: "Bar height (% of pixels)", frequency: true, nice: true },
         ], this.axisStates.get(key), draw);
         draw(controls.axes);
-        return controls;
+        return { controls, redraw: () => draw(controls.axes) };
     }
 
     /**
