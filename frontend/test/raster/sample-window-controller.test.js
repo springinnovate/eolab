@@ -86,6 +86,61 @@ test("sample window restores a retained selection in the canonical world", () =>
   ]);
 });
 
+test("resizing reuses the displayed rectangle without committing another selection", () => {
+  const map = createFakeLeafletMap();
+  const layers = [], selections = [], activity = [];
+  const factory = createFakeSampleLayerFactory(layers);
+  const controller = new RasterSampleWindowController(map, (bounds, kind) => {
+    const layer = factory(bounds, kind);
+    layer.getElement = () => ({classList: {toggle: (_, enabled) => activity.push(enabled)}});
+    return layer;
+  }, bounds => selections.push(bounds), () => {});
+  const center = {lng: 78, lat: 22};
+
+  assert.equal(controller.resizeSelectionAt(center), null);
+  assert.equal(layers.length, 0);
+  const committed = controller.selectAt(center);
+  const rectangle = layers[0];
+  controller.setActivityBounds(committed);
+  assert.equal(activity.at(-1), true);
+  controller.previewAt({lng: 79, lat: 23});
+  controller.setWindowSize(90);
+  const resized = controller.resizeSelectionAt(center);
+
+  assert.notDeepEqual(resized, committed);
+  assert.deepEqual(map.layers, [rectangle]);
+  assert.deepEqual(rectangle.boundsHistory.at(-1), [
+    [resized.south, resized.west], [resized.north, resized.east],
+  ]);
+  assert.equal(controller.selectedBounds, resized);
+  assert.deepEqual(selections, [committed]);
+  assert.equal(activity.at(-1), false);
+
+  controller.restoreSelection(committed);
+  assert.deepEqual(map.layers, [rectangle]);
+  assert.equal(controller.selectedBounds, committed);
+  assert.deepEqual(selections, [committed]);
+  assert.equal(activity.at(-1), true);
+});
+
+test("resizing across a pole or date line preserves the displayed rectangle", () => {
+  for (const center of [{lng: 179, lat: 0}, {lng: 0, lat: 89}]) {
+    const map = createFakeLeafletMap();
+    const layers = [], selections = [], guidance = [];
+    const controller = new RasterSampleWindowController(map, createFakeSampleLayerFactory(layers),
+      bounds => selections.push(bounds), message => guidance.push(message));
+    controller.setWindowSize(10);
+    const committed = controller.selectAt(center);
+    controller.setWindowSize(500);
+
+    assert.equal(controller.resizeSelectionAt(center), null);
+    assert.equal(controller.selectedBounds, committed);
+    assert.equal(layers[0].boundsHistory.length, 1);
+    assert.deepEqual(selections, [committed]);
+    assert.match(guidance.at(-1), /previous selection is unchanged/);
+  }
+});
+
 test("sample window replaces its rectangle and supports complete teardown", () => {
   const map = createFakeLeafletMap();
   const layers = [];

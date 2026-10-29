@@ -1303,7 +1303,8 @@ export function initializeRasterViewer(
         if (sessions.length === 0) { onHistogramChange(null); return; }
         const presentations = sessions.map(getLayerHistogramPresentation);
         const states = bivariateMode.active ? [pairedHistogramState] : presentations.map(item => item.state);
-        const loading = states.some(state => state === "loading" || state === "idle");
+        const resizing = rasterSampleWindowResizeTimeout !== null;
+        const loading = resizing || states.some(state => state === "loading" || state === "idle");
         const failures = states.filter(state => state === "error").length;
         const state = loading ? "loading" : failures ? "error" : "ready";
         const selection = bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection;
@@ -1314,7 +1315,7 @@ export function initializeRasterViewer(
         const participation = visibleCount > sessions.length
             ? `Top ${sessions.length} of ${visibleCount} visible rasters`
             : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
-        const progress = loading ? "Updating for this selection…" : failures
+        const progress = resizing ? "Resizing box; results show the previous area…" : loading ? "Updating for this selection…" : failures
             ? "Some histograms unavailable — see details" : "Ready";
         onHistogramChange(Object.freeze({state, source: participation, scope, message: `${participation} · ${scope} · ${progress}`}));
     }
@@ -1948,6 +1949,7 @@ export function initializeRasterViewer(
         if (rasterStyleCommitTimeout !== null) {
             commitRasterStyle();
         }
+        cancelSampleWindowResize();
         refreshActiveSessionPresentation();
         bivariateCatalogSelection = rasterAnalysis.selectedCatalogSelection;
         bivariateSelectedBounds = rasterAnalysis.selectedRasterBounds === null
@@ -1996,6 +1998,7 @@ export function initializeRasterViewer(
             renderBivariateAvailability(message);
             return;
         }
+        cancelSampleWindowResize();
         const keys = [bivariateMode.xKey, bivariateMode.yKey];
         pairedStatisticsController.clear();
         pointSamplesController.synchronize([]);
@@ -2442,6 +2445,7 @@ export function initializeRasterViewer(
         if (activeLayerKey === null) {
             return;
         }
+        cancelRasterSampleWindowResize();
         rasterStatisticsController.clear();
         rasterSampleWindowController.clear();
         pointSamplesController.clear();
@@ -3150,9 +3154,9 @@ export function initializeRasterViewer(
         }
         const statistics = editingLayerKey === null
             ? rasterAnalysis.rasterStatistics : session?.analysis.rasterStatistics ?? null;
-        const applicable = editingLayerKey === null
+        const applicable = rasterSampleWindowResizeTimeout === null && (editingLayerKey === null
             ? rasterAnalysis.rasterStatisticsIsApplicable
-            : session?.analysis.rasterStatisticsIsApplicable === true;
+            : session?.analysis.rasterStatisticsIsApplicable === true);
         if (statistics === null) {
             return null;
         }
@@ -3585,9 +3589,11 @@ export function initializeRasterViewer(
      *
      * @param {Object} bounds Canonical selected WGS 84 bounds.
      * @param {Readonly<{longitude:number,latitude:number}>} center Original click.
+     * @param {boolean} [openHistogram=true] Whether to reveal the histogram
+     * workflow; delayed size edits preserve the user's active workflow.
      * @return {void}
      */
-    function selectRasterSampleWindow(bounds, center) {
+    function selectRasterSampleWindow(bounds, center, openHistogram = true) {
         if (!canUseRasterMapInteractions()) {
             return;
         }
@@ -3602,7 +3608,7 @@ export function initializeRasterViewer(
                 rasterSampleWindowController.windowSizeKm;
             renderRasterSamplingAreaControls();
             renderRasterSampleWindowGuidance("");
-            showHistogramWorkspace();
+            if (openHistogram) showHistogramWorkspace();
             requestBivariateStatistics();
             return;
         }
@@ -3612,7 +3618,7 @@ export function initializeRasterViewer(
         rasterAnalysis.selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        showHistogramWorkspace();
+        if (openHistogram) showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         void rasterStatisticsController.activate(
             activeRasterItem,
@@ -3672,7 +3678,7 @@ export function initializeRasterViewer(
         return openHistogram;
     }
 
-    /** Cancel a pending box-size refresh without changing its current area. */
+    /** Cancel a pending box-size refresh without changing its current area. @return {void} */
     function cancelRasterSampleWindowResize() {
         if (rasterSampleWindowResizeTimeout === null) {
             return;
@@ -3682,18 +3688,19 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Rebuild the selected map box around its retained center after size edits.
+     * Commit the displayed box after size input settles, then request results.
      *
      * The mode and bounds identity guard prevents delayed work from replacing a
-     * newer map click, polygon selection selection, active raster, or comparison mode.
+     * newer map click, polygon selection, active raster, or comparison mode.
      *
      * @param {Object} bounds Current canonical WGS 84 selected bounds.
+     * @param {Object} resizedBounds Displayed bounds to commit after the delay.
+     * @param {Readonly<{longitude:number,latitude:number}>} center Retained center.
      * @return {void}
      */
-    function scheduleRasterSampleWindowResize(bounds) {
+    function scheduleRasterSampleWindowResize(bounds, resizedBounds, center) {
         cancelRasterSampleWindowResize();
         const scheduledBivariateMode = bivariateMode.active;
-        const [, , center] = getPresentedSampleWindow();
         rasterSampleWindowResizeTimeout = clock.setTimeout(() => {
             rasterSampleWindowResizeTimeout = null;
             const [currentBounds] = getPresentedSampleWindow();
@@ -3704,8 +3711,26 @@ export function initializeRasterViewer(
             ) {
                 return;
             }
-            rasterSampleWindowController.selectAt({lng: center.longitude, lat: center.latitude});
+            selectRasterSampleWindow(resizedBounds, center, false);
         }, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
+    }
+
+    /**
+     * Discard an unfinished resize when leaving a sampling workflow.
+     * Restore the committed box and its controls without requesting results.
+     * @return {void}
+     */
+    function cancelSampleWindowResize() {
+        if (rasterSampleWindowResizeTimeout === null) return;
+        cancelRasterSampleWindowResize();
+        const [bounds, size] = getPresentedSampleWindow();
+        rasterSampleWindowController.restoreSelection(bounds);
+        rasterSampleWindowController.setWindowSize(size);
+        controlsView.setSampleWindowSize(size, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        renderRasterSampleWindowGuidance("");
+        updateRasterPercentileValues();
+        if (bivariateMode.active) updateBivariatePercentileValues();
+        refreshActiveSessionPresentation();
     }
 
     /** Select a box at the current map center from the sampling-area control. */
@@ -3731,7 +3756,7 @@ export function initializeRasterViewer(
         try {
             rasterSampleWindowController.setWindowSize(sideLengthKm);
         } catch {
-            cancelRasterSampleWindowResize();
+            cancelSampleWindowResize();
             controlsView.setSampleWindowInvalid(true);
             controlsView.setSampleWindowStatus(
                 `Choose a whole-number window size from 1 through ` +
@@ -3741,21 +3766,30 @@ export function initializeRasterViewer(
         }
         controlsView.setSampleWindowInvalid(false);
         controlsView.setSampleWindowSize(sideLengthKm, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
-        const [presentedBounds, presentedWindowSizeKm] =
+        const [presentedBounds, presentedWindowSizeKm, center] =
             getPresentedSampleWindow();
         if (
             presentedBounds !== null &&
             presentedWindowSizeKm !== sideLengthKm
         ) {
-            controlsView.setSampleWindowStatus(
-                `Updating the selected map box to ${sideLengthKm} km × ` +
-                `${sideLengthKm} km…`
-            );
-            scheduleRasterSampleWindowResize(presentedBounds);
+            const resizedBounds = rasterSampleWindowController.resizeSelectionAt({lng: center.longitude, lat: center.latitude});
+            if (resizedBounds === null) {
+                cancelRasterSampleWindowResize();
+                rasterSampleWindowController.restoreSelection(presentedBounds);
+            } else {
+                controlsView.setSampleWindowStatus(
+                    `Updating the selected map box to ${sideLengthKm} km × ` +
+                    `${sideLengthKm} km…`
+                );
+                scheduleRasterSampleWindowResize(presentedBounds, resizedBounds, center);
+            }
         } else {
             cancelRasterSampleWindowResize();
+            if (presentedBounds !== null) rasterSampleWindowController.restoreSelection(presentedBounds);
             renderRasterSampleWindowGuidance("");
         }
+        updateRasterPercentileValues();
+        if (bivariateMode.active) updateBivariatePercentileValues();
         refreshActiveSessionPresentation();
         return true;
     }
@@ -3791,6 +3825,7 @@ export function initializeRasterViewer(
      */
     function useCatalogSelectionForRasterStatistics(selection) {
         invalidVectorSamplingId = null;
+        cancelRasterSampleWindowResize();
         if (bivariateMode.active) {
             if (!selection) return;
             rasterAnalysis.selectedCatalogSelection = selection;
@@ -3814,7 +3849,6 @@ export function initializeRasterViewer(
             renderRasterSamplingAreaControls();
             return;
         }
-        cancelRasterSampleWindowResize();
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
         rasterAnalysis.selectedRasterBounds = null;
@@ -4166,7 +4200,7 @@ export function initializeRasterViewer(
                 !(0 <= lower && lower < middle && middle < upper && upper <= 100)) {
                 message = "Choose increasing percentiles between 0 and 100.";
                 invalid = true;
-            } else if (bivariateMode.active && bivariateStatistics !== null) {
+            } else if (bivariateMode.active && bivariateStatistics !== null && rasterSampleWindowResizeTimeout === null) {
                 const estimates = [lower, middle, upper].map((percentile) =>
                     estimateRasterPairedHistogramPercentile(bivariateStatistics, axis, percentile));
                 const [minimum, midpoint, maximum] = estimates;
@@ -4209,6 +4243,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleApplyPercentiles() {
+        if (rasterSampleWindowResizeTimeout !== null) return;
         const session = editingSession();
         const percentiles = updateRasterPercentileValues();
         if (session === null || percentiles === null ||
@@ -4951,6 +4986,7 @@ export function initializeRasterViewer(
         remove,
         setVectorSelection,
         getSelectedArea,
+        cancelSampleWindowResize,
         setSamplingActivity: area => rasterSampleWindowController.setActivityBounds(area?.kind === "selectedArea" ? area.selectedBounds : null),
         destroy,
         /**

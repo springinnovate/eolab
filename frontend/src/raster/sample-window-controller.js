@@ -89,6 +89,22 @@ export class RasterSampleWindowController {
     }
 
     /**
+     * Resize an existing rectangle without notifying calculation consumers.
+     *
+     * @param {{lng:number,lat:number}} position Retained selection center.
+     * @return {Object|null} Displayed canonical bounds, or null without a
+     * selection or when the resized box crosses a pole or date line.
+     */
+    resizeSelectionAt(position) {
+        if (this.selectionLayer === null) return null;
+        const sampleWindow = this.#boundsAt(position);
+        if (sampleWindow === null) return null;
+        this.clearPreview();
+        this.restoreSelection(sampleWindow.bounds);
+        return sampleWindow.bounds;
+    }
+
+    /**
      * Preview the current window at one viewer-owned pointer position.
      *
      * @param {{lng: number, lat: number}} position Leaflet map position.
@@ -139,11 +155,12 @@ export class RasterSampleWindowController {
      * @return {void}
      */
     restoreSelection(bounds) {
-        this.clearSelection();
-        this.selectionLayer = this.layerFactory(
-            rasterSampleBoundsToLeaflet(bounds),
-            "selection"
-        ).addTo(this.leafletMap);
+        const leafletBounds = rasterSampleBoundsToLeaflet(bounds);
+        if (this.selectionLayer === null) {
+            this.selectionLayer = this.layerFactory(leafletBounds, "selection").addTo(this.leafletMap);
+        } else {
+            this.selectionLayer.setBounds(leafletBounds);
+        }
         this.selectionBounds = bounds;
         this.renderActivity();
     }
@@ -172,7 +189,7 @@ export class RasterSampleWindowController {
         this.onGuidance("");
     }
 
-    /** @return {Object|null} Last committed canonical WGS 84 bounds. */
+    /** @return {Object|null} Currently displayed canonical WGS 84 bounds. */
     get selectedBounds() {
         return this.selectionBounds;
     }
@@ -227,16 +244,7 @@ export class RasterSampleWindowController {
         if (sampleWindow === null) {
             return null;
         }
-        if (this.selectionLayer === null) {
-            this.selectionLayer = this.layerFactory(
-                sampleWindow.leafletBounds,
-                "selection"
-            ).addTo(this.leafletMap);
-        } else {
-            this.selectionLayer.setBounds(sampleWindow.leafletBounds);
-        }
-        this.selectionBounds = sampleWindow.bounds;
-        this.renderActivity();
+        this.restoreSelection(sampleWindow.bounds);
         this.onSelect(sampleWindow.bounds, Object.freeze({
             longitude: position.lng,
             latitude: position.lat,
