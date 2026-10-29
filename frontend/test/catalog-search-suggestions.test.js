@@ -25,7 +25,22 @@ class FakeElement extends EventTarget {
     this.selectionEnd = 0;
     this.textContent = "";
     this.value = "";
+    this.style = {};
+    this.bounds = { left: 40, top: 200, bottom: 236, width: 300, height: 128 };
+    this.popoverOpen = false;
   }
+
+  /** Return the layout supplied by the test. @return {Object} Element bounds. */
+  getBoundingClientRect() { return this.bounds; }
+
+  /** Show the native popup. @return {void} */
+  showPopover() { this.popoverOpen = true; }
+
+  /** Hide the native popup. @return {void} */
+  hidePopover() { this.popoverOpen = false; }
+
+  /** Record the option revealed by keyboard navigation. @param {Object} options Scroll alignment. @return {void} */
+  scrollIntoView(options) { this.ownerDocument.scrolledOption = { element: this, options }; }
 
   append(...children) {
     for (const child of children) {
@@ -67,10 +82,12 @@ class FakeElement extends EventTarget {
   }
 }
 
-class FakeDocument {
+class FakeDocument extends EventTarget {
   constructor() {
+    super();
     this.activeElement = null;
     this.elements = new Map();
+    this.defaultView = Object.assign(new EventTarget(), { innerWidth: 1366, innerHeight: 768 });
   }
 
   createElement() {
@@ -169,6 +186,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
 
   fixture.input.dispatchEvent(new Event("focus"));
   assert.equal(fixture.panel.hidden, false);
+  assert.equal(fixture.panel.popoverOpen, true);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "true");
   assert.equal(fixture.list.children.length, 3);
 
@@ -182,6 +200,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   assert.equal(fixture.input.value, "forest type:raster");
   assert.equal(fixture.input.selectionStart, 18);
   assert.equal(fixture.panel.hidden, true);
+  assert.equal(fixture.panel.popoverOpen, false);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "false");
   assert.equal(inputEvents, 1);
 });
@@ -235,6 +254,16 @@ test("Escape dismisses Catalog suggestions without changing the query", () => {
   assert.equal(fixture.panel.hidden, true);
 });
 
+test("Using every Catalog filter closes the helper instead of showing an empty popup", () => {
+  const { component, input, panel } = createSuggestionFixture();
+  component.open();
+  input.value = "type:raster date:2020 ";
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.dispatchEvent(new Event("input"));
+  assert.equal(panel.popoverOpen, false);
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+});
+
 test("Arrow Up starts at the final Catalog suggestion", () => {
   const fixture = createSuggestionFixture();
   fixture.input.dispatchEvent(new Event("focus"));
@@ -245,9 +274,40 @@ test("Arrow Up starts at the final Catalog suggestion", () => {
     fixture.input.getAttribute("aria-activedescendant"),
     "catalog-search-suggestion-date",
   );
+  assert.equal(fixture.document.scrolledOption.element.id, "catalog-search-suggestion-date");
+  assert.deepEqual(fixture.document.scrolledOption.options, { block: "nearest" });
 });
 
-test("Catalog suggestion markup and CSS form an overlaid accessible listbox", () => {
+test("Catalog suggestions stay above the input and follow viewport and scroll changes", () => {
+  const { component, document, input, panel } = createSuggestionFixture();
+  component.open();
+  assert.equal(panel.style.top, "68px");
+  assert.equal(panel.style.left, "40px");
+  assert.equal(panel.style.maxHeight, "160px");
+
+  document.defaultView.innerWidth = 320;
+  document.defaultView.dispatchEvent(new Event("resize"));
+  assert.equal(panel.style.left, "12px");
+
+  input.bounds = { left: 40, top: 24, bottom: 60, width: 300 };
+  document.dispatchEvent(new Event("scroll"));
+  assert.equal(panel.style.top, "64px", "use a short list below when the input is near the top edge");
+  assert.equal(panel.style.maxHeight, "160px");
+
+  input.bounds = { left: 40, top: -40, bottom: -4, width: 300 };
+  document.dispatchEvent(new Event("scroll"));
+  assert.equal(panel.popoverOpen, false, "hide suggestions when their input scrolls offscreen");
+
+  input.bounds = { left: 40, top: 24, bottom: 60, width: 300 };
+  component.open();
+  const focusout = new Event("focusout");
+  Object.defineProperty(focusout, "relatedTarget", { value: null });
+  component.root.dispatchEvent(focusout);
+  assert.equal(panel.popoverOpen, false);
+  assert.equal(input.getAttribute("aria-expanded"), "false");
+});
+
+test("Catalog suggestion markup retains an accessible listbox outside pane clipping", () => {
   const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const mainSource = readFileSync(
     new URL("../src/main.js", import.meta.url),
@@ -260,14 +320,14 @@ test("Catalog suggestion markup and CSS form an overlaid accessible listbox", ()
 
   assert.match(markup, /id="catalog-search"[\s\S]*role="combobox"/);
   assert.match(markup, /id="catalog-search-suggestion-list"[\s\S]*role="listbox"/);
-  assert.match(markup, /Words match filenames, descriptions, and indexed dates/);
+  assert.match(markup, /id="catalog-search-suggestions"\s+popover="manual"/);
   assert.match(mainSource, /new CatalogSearchSuggestions\(document\)/);
   assert.match(
     stylesheet,
-    /\.catalog-search-suggestions\s*\{[^}]*position:\s*absolute[^}]*z-index:/s,
+    /\.catalog-search-suggestions\s*\{[^}]*position:\s*fixed/s,
   );
   assert.match(
     stylesheet,
-    /\.catalog-search-suggestions\[hidden\]\s*\{[^}]*display:\s*none/s,
+    /\.catalog-search-suggestions\[hidden\],[^{]*\{[^}]*display:\s*none/s,
   );
 });

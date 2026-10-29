@@ -125,6 +125,8 @@ function getCatalogSearchSuggestionOptionId(filter) {
  */
 export class CatalogSearchSuggestions {
     /**
+     * Bind filter suggestions to the search input and its viewport.
+     *
      * @param {Document} [documentContext=document] Catalog document.
      * @param {ReadonlyArray<Object>} [filters=CATALOG_SEARCH_FILTERS]
      * Parser-owned supported filter descriptions.
@@ -168,27 +170,62 @@ export class CatalogSearchSuggestions {
                 this.close();
             }
         });
+        this.document.defaultView.addEventListener("resize", () => this.#positionSuggestions());
+        this.document.addEventListener("scroll", () => this.#positionSuggestions(), true);
     }
 
-    /** Open and refresh suggestions for the token at the input caret. */
+    /** Open suggestions above the input for the token at its caret. @return {void} */
     open() {
         this.visibleFilters = getCatalogSearchSuggestions(
             this.input.value,
             this.input.selectionStart ?? this.input.value.length,
             this.filters
         );
+        if (this.visibleFilters.length === 0) {
+            this.close();
+            return;
+        }
         this.activeIndex = -1;
         this.render();
         this.panel.hidden = false;
+        this.panel.showPopover();
         this.input.setAttribute("aria-expanded", "true");
+        this.#positionSuggestions();
     }
 
-    /** Close suggestions and remove the active-descendant relationship. */
+    /** Close suggestions and remove the active-descendant relationship. @return {void} */
     close() {
+        this.panel.hidePopover();
         this.panel.hidden = true;
         this.activeIndex = -1;
         this.input.setAttribute("aria-expanded", "false");
         this.input.removeAttribute("aria-activedescendant");
+    }
+
+    /**
+     * Keep the open helper above the input and within the viewport.
+     * When there is less than two rows of space above, use a short list below.
+     * Close it when the input scrolls offscreen. The native popover escapes
+     * the Catalog pane's clipping containers.
+     * @return {void}
+     */
+    #positionSuggestions() {
+        if (this.panel.hidden) return;
+        const { innerWidth, innerHeight } = this.document.defaultView;
+        const anchor = this.input.getBoundingClientRect();
+        if (anchor.bottom <= 0 || anchor.top >= innerHeight) {
+            this.close();
+            return;
+        }
+        const above = anchor.top - 12;
+        const below = innerHeight - anchor.bottom - 12;
+        const placeAbove = above >= 80 || above >= below;
+        const width = Math.min(anchor.width, innerWidth - 16);
+        this.panel.style.width = `${width}px`;
+        this.panel.style.maxHeight = `${Math.max(0, Math.min(160, placeAbove ? above : below))}px`;
+        this.panel.style.left = `${Math.max(8, Math.min(anchor.left, innerWidth - width - 8))}px`;
+        const height = this.panel.getBoundingClientRect().height;
+        this.panel.style.top = `${placeAbove ? anchor.top - height - 4 : anchor.bottom + 4}px`;
     }
 
     /**
@@ -201,7 +238,6 @@ export class CatalogSearchSuggestions {
             const option = this.document.createElement("button");
             const token = this.document.createElement("code");
             const label = this.document.createElement("strong");
-            const description = this.document.createElement("span");
             option.type = "button";
             option.id = getCatalogSearchSuggestionOptionId(filter);
             option.className = "catalog-search-suggestion";
@@ -213,8 +249,8 @@ export class CatalogSearchSuggestions {
             option.tabIndex = -1;
             token.textContent = filter.token;
             label.textContent = filter.label;
-            description.textContent = filter.description;
-            option.append(token, label, description);
+            option.title = filter.description;
+            option.append(token, label);
             option.addEventListener("pointerdown", (event) => {
                 event.preventDefault();
             });
@@ -232,6 +268,7 @@ export class CatalogSearchSuggestions {
                 "aria-activedescendant",
                 activeOption.id
             );
+            activeOption.scrollIntoView({ block: "nearest" });
         }
     }
 
