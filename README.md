@@ -256,6 +256,57 @@ Back up persistent volumes before upgrades. Run one `processing-worker`
 container and stop the previous one before replacing it: worker startup
 interrupts unfinished jobs. Deleting volumes deletes their stored data.
 
+### Upgrade an older published map
+
+Maps saved before removal of Catalog `sourceRevision` fields need a one-time
+conversion. The [migration command](src/eolab_app/saved_maps/migrate.py) previews
+one named map by default. It removes only those fields, preserves the map URL,
+layer order, styles and shared-polygon invitations, and never changes polygons
+or contributor ownership. Other incompatible formats cause an error with no
+changes; this command does not convert historical raster styles or URL-fragment
+links. Run it separately for each affected published map.
+
+For `/maps/nhi-site-condition-mapper`, use the following during a maintenance
+window. Have contributors finish saving first. Keep the same database volume,
+domain and browser cookies. Build the new application image containing this
+command, but stop the old app and worker before applying it: the old app still
+requires the removed fields.
+
+```sh
+docker compose stop app processing-worker
+docker compose exec -T database pg_dump -U eolab -d eolab --format=custom --file=/tmp/eolab-before-map-upgrade.dump
+docker compose cp database:/tmp/eolab-before-map-upgrade.dump ./eolab-before-map-upgrade.dump
+docker compose run --rm --no-deps --entrypoint python app -m eolab_app.saved_maps.migrate --slug nhi-site-condition-mapper
+```
+
+Keep the backup outside container storage and test restoring it to a separate
+database before proceeding. The preview reports `changed_layers`, `revision`
+and `applied: false`. Review the count, then replace `REVISION` below with that
+preview's revision. A conflicting edit requires a new preview. A successful
+change increments the map revision once; repeating it is a no-op.
+
+```sh
+docker compose run --rm --no-deps --entrypoint python app -m eolab_app.saved_maps.migrate --slug nhi-site-condition-mapper --apply --expected-revision REVISION
+```
+
+Complete the deployment using the new images, then open the original shared-map
+URL and check its layers, polygon counts and contributor editing access before
+reopening the workshop. In Coolify, use the equivalent commands in the existing
+deployment with its original persistent volumes; do not create a new deployment
+with an empty database. Keep the old image available for rollback.
+
+If verification fails while the maintenance window is still closed, stop the
+new app and worker, restore the database backup, and restart the old images.
+For example, after copying the backup back into the database container:
+
+```sh
+docker compose cp ./eolab-before-map-upgrade.dump database:/tmp/eolab-before-map-upgrade.dump
+docker compose exec -T database pg_restore -U eolab -d eolab --clean --if-exists --single-transaction --exit-on-error /tmp/eolab-before-map-upgrade.dump
+```
+
+A full restore replaces changes made since the backup, so do not use this
+rollback after contributors have resumed editing without reconciling that work.
+
 ## Model library
 
 Use **Tools → Models** to run **Raster summary** or **Raster clip**, then inspect
