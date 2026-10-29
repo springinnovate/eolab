@@ -337,8 +337,9 @@ export class ModelsView {
         if (value.capturedArea?.kind === "polygonArea" && value.areaOrigin === "map" && modelSupportsArea(input.type, value.capturedArea)) {
             areaChoices.push({value: "mapPolygons", label: "Polygons selected on map"});
         }
-        if (!usesRasterOrVector && value.areaOrigin === "run" && value.capturedArea?.kind !== "wholeRaster") {
-            areaChoices.push({value: "captured", label: "Area from original run"});
+        if (value.capturedArea && value.capturedArea.kind !== "wholeRaster" &&
+            (value.areaOrigin === "run" || value.capturedArea.kind === "catalogSelection")) {
+            areaChoices.push({value: "captured", label: value.areaOrigin === "run" ? "Area from original run" : "Selected features"});
         }
         this.options(controls.areaMode, areaChoices, value.areaMode);
         controls.maskGroup.hidden = !usesRasterOrVector || value.areaMode !== "raster";
@@ -357,7 +358,11 @@ export class ModelsView {
             viewport: `Uses the visible map area when you choose ${runLabel}. Pan or zoom to change it.`,
             samplingArea: `Uses the sampling area shown in Histograms. Click the map to move the box. ${runLabel} uses its latest position and size.`,
             mapPolygons: `Uses the polygons selected on the map when you choose ${runLabel}.`,
-            captured: "Uses the exact area from the original run. Choose another area above to change it.",
+            captured: value.capturedArea?.kind !== "catalogSelection"
+                ? "Uses the exact area from the original run. Choose another area above to change it."
+                : value.areaOrigin === "run"
+                    ? "Uses the original area and filter. Choose Vector layer to use a map view's current filter."
+                    : "Uses the selected features. Choose Vector layer to follow a map view's current filter.",
         })[value.areaMode] ?? "";
         const vectorSource = value.vectors.find(source => source.key === value.vectorKey);
         controls.selectionCard.hidden = !vectorSource;

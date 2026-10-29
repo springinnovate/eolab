@@ -250,6 +250,27 @@ export function createVectorMapLayerAdapter({
     if (typeof onTileError !== "function") {
         throw new TypeError("onTileError must be a function.");
     }
+    /**
+     * Accept checked rules, replacing the previous selection's rendering request and counts.
+     * @param {Object} record Retained vector record.
+     * @param {Object} candidate Filter already checked against the source fields.
+     * @param {{matched:number,total:number,complete:true}|null} count Exact counts, or null to request them separately.
+     * @return {Object} Detached accepted filter, also used to identify work for this selection.
+     */
+    function commitFilterState(record, candidate, count) {
+        record.state.filterRenderAbort?.abort();
+        record.state.filterRenderAbort = null;
+        record.state.filterCountAbort?.abort();
+        record.state.filterCountAbort = null;
+        const accepted = structuredClone(candidate);
+        record.state.filter = accepted;
+        record.state.filterCount = structuredClone(count);
+        record.state.filterCountError = null;
+        record.state.filterCounting = count === null && candidate.enabled && candidate.rules.length > 0;
+        onFilterChange(record);
+        return accepted;
+    }
+
     return Object.freeze({
         /**
          * Prepare initial colors with labels off before a new WMS layer is attached.
@@ -328,6 +349,7 @@ export function createVectorMapLayerAdapter({
                 filterCountError: null,
                 filterGeneration: 0,
                 filterApplyAbort: null,
+                filterRenderAbort: null,
                 filterCountAbort: null,
                 disposed: false,
                 style: normalizeVectorStyle(publication.style),
@@ -441,7 +463,7 @@ export function createVectorMapLayerAdapter({
             return applied;
         },
         /**
-         * Invalidate an in-flight apply without losing the current map predicate.
+         * Cancel an unaccepted map edit while allowing the accepted filter to finish rendering.
          * @param {Object} record Retained vector record.
          * @return {void}
          */
@@ -451,10 +473,11 @@ export function createVectorMapLayerAdapter({
             record.state.filterApplyAbort = null;
         },
         /**
-         * Apply one validated filter, then count it independently of rendering.
+         * Validate and apply map-filter edits, then request their feature counts.
          * @param {Object} record Retained vector record.
          * @param {Object} candidate Complete portable filter state.
          * @return {Promise<Object|null>} Applied state, or null for stale replies.
+         * @throws {Error} If candidate validation or current rendering preparation fails; the accepted filter stays unchanged.
          */
         async applyFilterState(record, candidate) {
             const normalized = normalizeVectorFilter(candidate, record.state.labelFields);
@@ -462,17 +485,20 @@ export function createVectorMapLayerAdapter({
             const generation = record.state.filterGeneration;
             const controller = new AbortController();
             record.state.filterApplyAbort = controller;
-            const result = await filter(record.state.source, normalized, controller.signal);
+            let result;
+            try {
+                result = await filter(record.state.source, normalized, controller.signal);
+            } catch (error) {
+                if (record.state.disposed || generation !== record.state.filterGeneration) return null;
+                throw error;
+            } finally {
+                if (record.state.filterApplyAbort === controller) record.state.filterApplyAbort = null;
+            }
             if (record.state.disposed || generation !== record.state.filterGeneration) return null;
-            record.state.filterApplyAbort = null;
-            record.state.filter = normalizeVectorFilter(result.filter, record.state.labelFields);
             record.publication = { ...record.publication, layerName: result.layerName };
             record.state.layer?.setParams({ layers: result.layerName });
-            record.state.filterCountAbort?.abort();
-            record.state.filterCount = null;
-            record.state.filterCountError = null;
-            record.state.filterCounting = normalized.enabled && normalized.rules.length > 0;
-            onFilterChange(record);
+            const accepted = commitFilterState(record, normalized, null);
+            if (record.state.disposed || record.state.filter !== accepted) return null;
             if (record.state.filterCounting) {
                 const counter = new AbortController();
                 record.state.filterCountAbort = counter;
@@ -490,7 +516,37 @@ export function createVectorMapLayerAdapter({
                     onFilterChange(record);
                 });
             }
-            return record.state.filter;
+            return accepted;
+        },
+        /**
+         * Accept independently checked rules and counts before updating their map rendering.
+         * Rendering failure leaves the accepted selection and counts intact.
+         * @param {Object} record Retained vector record.
+         * @param {Object} candidate Filter checked by the original-source selection boundary.
+         * @param {{matched:number,total:number,complete:true}} count Exact feature counts for these rules.
+         * @return {Promise<Object|null>} Accepted rules after rendering preparation, or null when superseded.
+         * @throws {Error} If current rendering preparation fails after the selection is accepted.
+         */
+        async applyCheckedFilter(record, candidate, count) {
+            this.cancelPendingFilter(record);
+            const accepted = commitFilterState(record, candidate, count);
+            if (record.state.disposed || record.state.filter !== accepted) return null;
+            const controller = new AbortController();
+            record.state.filterRenderAbort = controller;
+            let result;
+            try {
+                result = await filter(record.state.source, accepted, controller.signal);
+            } catch (error) {
+                if (record.state.disposed || record.state.filter !== accepted) return null;
+                throw error;
+            } finally {
+                if (record.state.filterRenderAbort === controller) record.state.filterRenderAbort = null;
+            }
+            if (record.state.disposed || record.state.filter !== accepted) return null;
+            record.publication = { ...record.publication, layerName: result.layerName };
+            record.state.layer?.setParams({ layers: result.layerName });
+            onFilterChange(record);
+            return record.state.disposed || record.state.filter !== accepted ? null : accepted;
         },
         /**
          * Export filter state separately from copyable visual appearance.
@@ -516,6 +572,7 @@ export function createVectorMapLayerAdapter({
         discardStaged(record) {
             record.state.disposed = true;
             this.cancelPendingFilter(record);
+            record.state.filterRenderAbort?.abort();
             record.state.filterCountAbort?.abort();
         },
         /**

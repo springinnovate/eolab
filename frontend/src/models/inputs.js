@@ -208,7 +208,8 @@ export function modelSupportsArea(type, area) {
  * @param {Object} context Catalog and map choices supplied by browser composition.
  * @param {string} id Local draft identity.
  * @return {Object} Draft with field state in inputs[name], shared source choices,
- * temporal controls and parameters. Each spatial field owns its vector filters.
+ * temporal controls and parameters. Spatial fields select live vector views or
+ * retain an explicitly captured area from the map or an earlier run.
  * @throws {Error} If the supplied map selection is invalid.
  */
 export function createModelDraft(model, context, id) {
@@ -292,7 +293,8 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
                 const area = state.area;
                 if (!area) throw new Error(state.selectionError || (startingMask ? "Choose the vector features where flow should start." : references ? "Choose the reference sites." : "Choose an analysis area before running the model."));
                 if (!modelSupportsArea(input.type, area)) throw new Error("Choose an area supported by this model.");
-                if (area.kind === "catalogSelection" && !state.vectors.some(source => modelSourceKey(source) === modelSourceKey(area.selection)))
+                if (area.kind === "catalogSelection" && state.areaMode !== "captured" &&
+                    !state.vectors.some(source => modelSourceKey(source) === modelSourceKey(area.selection)))
                     throw new Error("Add the selected vector layer to Map layers before running this model.");
                 if (area.kind === "selectedArea") modelAreaInput(area);
                 else if (area.kind === "catalogSelection") modelAreaInput({kind: area.kind, catalogSelection: area.selection});

@@ -16,14 +16,15 @@ const FIELDS = [
  * @param {Object} [options] Source and publication variants.
  * @param {"point"|"line"|"polygon"} [options.geometryKind="polygon"] Geometry class.
  * @param {Object} [options.properties] Catalog field and geometry metadata.
- * @return {{adapter:Object,record:Object,requests:Object[],counts:Object[],calls:string[],updates:Object[]}}
+ * @param {(record:Object)=>void} [options.onFilterChange] Optional synchronous composition callback.
+ * @return {{adapter:Object,record:Object,requests:Object[],counts:Object[],calls:string[],updates:Object[],notifications:Object[]}}
  * Adapter, retained record, pending requests, and observed external work.
  */
 function createFixture({ geometryKind = "polygon", properties = {
     "table:primary_geometry": "geometry",
     "table:columns": [{ name: "geometry", type: "geometry" }, ...FIELDS],
-} } = {}) {
-    const calls = [], requests = [], counts = [], updates = [];
+}, onFilterChange = () => {} } = {}) {
+    const calls = [], requests = [], counts = [], updates = [], notifications = [];
     const item = { collection: "vectors", id: "parcels", properties };
     const publication = {
         layerName: "eolab:parcels", styleName: "initial-style", bbox: [-1, -1, 1, 1],
@@ -51,16 +52,21 @@ function createFixture({ geometryKind = "polygon", properties = {
         classify: async () => { calls.push("classify"); return {}; },
         filter: (_item, candidate, signal) => {
             calls.push("apply filter");
-            return new Promise(resolve => requests.push({ candidate, signal, resolve }));
+            return new Promise((resolve, reject) => requests.push({ candidate, signal, resolve, reject }));
         },
         countFilter: (_item, candidate, signal) => {
             calls.push("count filter");
             return new Promise((resolve, reject) => counts.push({ candidate, signal, resolve, reject }));
         },
+        onFilterChange: record => {
+            notifications.push({filter: structuredClone(record.state.filter),
+                count: structuredClone(record.state.filterCount), layerName: record.publication.layerName});
+            onFilterChange(record);
+        },
     });
     const record = { entry: { key: "vectors:parcels", label: "Parcels", item }, publication,
         state: adapter.createState({ item, publication }) };
-    return { adapter, record, requests, counts, calls, updates };
+    return { adapter, record, requests, counts, calls, updates, notifications };
 }
 
 /**
@@ -138,6 +144,130 @@ test("filter descriptions follow applied rules and independent count success or 
         status: "Filter active · Count queue full; apply filter again to retry",
     });
     assert.deepEqual(calls, ["apply filter", "count filter", "apply filter", "count filter"]);
+});
+
+test("checked rules and counts are accepted before rendering without recounting or changing another view", async () => {
+    const {adapter, record, requests, counts, notifications, updates} = createFixture();
+    adapter.createLayer(record, () => {});
+    const other = {...record, entry: {...record.entry, key: "second-view"},
+        state: adapter.createState({item: record.entry.item, publication: record.publication})};
+    const candidate = yearFilter(2024), count = {matched: 3, total: 10, complete: true};
+    const pending = adapter.applyCheckedFilter(record, candidate, count);
+    assert.deepEqual(adapter.describeFilter(record), {filter: yearFilter(2024), status: "3 of 10 features match"});
+    assert.deepEqual(notifications, [{filter: candidate, count, layerName: "eolab:parcels"}]);
+    assert.equal(record.publication.layerName, "eolab:parcels");
+    assert.equal(adapter.exportFilterState(other).rules.length, 0);
+    candidate.rules[0].value = 2030; count.matched = 0;
+    assert.deepEqual(adapter.exportFilterState(record), yearFilter(2024));
+    assert.equal(record.state.filterCount.matched, 3);
+    requests[0].resolve({layerName: "eolab:checked", filter: yearFilter(2024)});
+    assert.deepEqual(await pending, yearFilter(2024));
+    assert.equal(notifications.length, 2);
+    assert.equal(notifications[1].layerName, "eolab:checked");
+    assert.deepEqual(updates, [{layers: "eolab:checked"}]);
+    assert.equal(counts.length, 0);
+});
+
+test("checked selection survives rendering failure while failed or cancelled map edits keep it unchanged", async () => {
+    const {adapter, record, requests, counts} = createFixture();
+    const checked = adapter.applyCheckedFilter(record, yearFilter(2024), {matched: 3, total: 10, complete: true});
+    requests[0].reject(new Error("Publication unavailable"));
+    await assert.rejects(checked, /Publication unavailable/);
+    const accepted = adapter.describeFilter(record);
+    assert.deepEqual(accepted, {filter: yearFilter(2024), status: "3 of 10 features match"});
+    const failed = adapter.applyFilterState(record, yearFilter(2025));
+    requests[1].reject(new Error("Invalid publication"));
+    await assert.rejects(failed, /Invalid publication/);
+    assert.deepEqual(adapter.describeFilter(record), accepted);
+    const cancelled = adapter.applyFilterState(record, yearFilter(2026));
+    adapter.cancelPendingFilter(record);
+    requests[2].reject(new DOMException("Cancelled", "AbortError"));
+    assert.equal(await cancelled, null);
+    assert.deepEqual(adapter.describeFilter(record), accepted);
+    assert.equal(record.publication.layerName, "eolab:parcels");
+    assert.equal(counts.length, 0);
+});
+
+test("checked commits replace pending map edits and counts, and later map edits replace checked rendering", async () => {
+    const fixture = createFixture();
+    const {adapter, record, requests, counts} = fixture;
+    await applyFilter(fixture, yearFilter(2020));
+    const obsoleteMap = adapter.applyFilterState(record, yearFilter(2021));
+    const checked = adapter.applyCheckedFilter(record, yearFilter(2022), {matched: 4, total: 10, complete: true});
+    assert.equal(requests[1].signal.aborted, true);
+    assert.equal(counts[0].signal.aborted, true);
+    requests[1].reject(new Error("Obsolete map error"));
+    counts[0].resolve({matched: 9, total: 10, complete: true});
+    assert.equal(await obsoleteMap, null);
+    await flush();
+    assert.equal(adapter.describeFilter(record).status, "4 of 10 features match");
+    const newerMap = adapter.applyFilterState(record, yearFilter(2023));
+    assert.equal(requests[2].signal.aborted, false);
+    requests[3].resolve({layerName: "eolab:newer-map", filter: yearFilter(2023)});
+    await newerMap;
+    assert.equal(requests[2].signal.aborted, true);
+    requests[2].resolve({layerName: "eolab:obsolete-checked", filter: yearFilter(2022)});
+    assert.equal(await checked, null);
+    counts[1].resolve({matched: 2, total: 10, complete: true});
+    await flush();
+    assert.equal(record.publication.layerName, "eolab:newer-map");
+    assert.deepEqual(adapter.describeFilter(record), {filter: yearFilter(2023), status: "2 of 10 features match"});
+    const removed = adapter.applyCheckedFilter(record, yearFilter(2024), {matched: 1, total: 10, complete: true});
+    adapter.removed(record);
+    assert.equal(requests[4].signal.aborted, true);
+    requests[4].reject(new Error("Removed view"));
+    assert.equal(await removed, null);
+    assert.equal(record.publication.layerName, "eolab:newer-map");
+});
+
+test("synchronous filter notifications cannot start stale counts or rendering after a replacement", async () => {
+    let replacement, fixture;
+    fixture = createFixture({onFilterChange: record => {
+        if (record.state.filter.rules[0]?.value === 2020) {
+            replacement = fixture.adapter.applyCheckedFilter(record, yearFilter(2022), {matched: 4, total: 10, complete: true});
+        }
+    }});
+    const {adapter, record, requests, counts} = fixture;
+    const first = adapter.applyFilterState(record, yearFilter(2020));
+    requests[0].resolve({layerName: "eolab:first", filter: yearFilter(2020)});
+    assert.equal(await first, null);
+    assert.equal(counts.length, 0);
+    requests[1].resolve({layerName: "eolab:replacement", filter: yearFilter(2022)});
+    await replacement;
+    const superseded = adapter.applyCheckedFilter(record, yearFilter(2020), {matched: 6, total: 10, complete: true});
+    assert.equal(await superseded, null);
+    assert.equal(requests.length, 3, "Only the synchronously accepted replacement requests rendering");
+    requests[2].resolve({layerName: "eolab:replacement", filter: yearFilter(2022)});
+    await replacement;
+    assert.deepEqual(adapter.describeFilter(record), {filter: yearFilter(2022), status: "4 of 10 features match"});
+});
+
+test("invalid editor drafts and failed replacement requests leave accepted-filter rendering underway", async () => {
+    const {adapter, record, requests, counts} = createFixture();
+    const checked = adapter.applyCheckedFilter(record, yearFilter(2024), {matched: 3, total: 10, complete: true});
+    const controls = new VectorFilterControls({
+        documentContext: new FakeRasterControlDocument(),
+        inspection: {showFilter() {}, hideFilter() {}, updateLayerEditorName() {}},
+        getTarget: () => ({label: record.entry.label, fields: adapter.describeSource(record).fields,
+            ...adapter.describeFilter(record), apply: candidate => adapter.applyFilterState(record, candidate),
+            cancelPending: () => adapter.cancelPendingFilter(record)}),
+    });
+    controls.open(record.entry.key);
+    const input = controls.rules.children[0].children[2];
+    input.value = "not-a-number"; input.dispatchEvent(new Event("input"));
+    assert.equal(requests[0].signal.aborted, false);
+    controls.close();
+    const replacement = adapter.applyFilterState(record, yearFilter(2025));
+    assert.equal(requests[0].signal.aborted, false);
+    requests[1].reject(new Error("Replacement failed"));
+    await assert.rejects(replacement, /Replacement failed/);
+    requests[0].resolve({layerName: "eolab:accepted-2024", filter: yearFilter(2024)});
+    assert.deepEqual(await checked, yearFilter(2024));
+    assert.equal(record.publication.layerName, "eolab:accepted-2024");
+    assert.deepEqual(adapter.describeFilter(record), {filter: yearFilter(2024), status: "3 of 10 features match"});
+    assert.equal(requests.length, 2);
+    assert.equal(counts.length, 0);
+    controls.destroy();
 });
 
 test("detached filter descriptions retain disabled typed rules without exposing applied state", async () => {

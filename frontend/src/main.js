@@ -1146,7 +1146,7 @@ async function initializeCatalog(
                 viewportBounds: {west: viewport.getWest(), south: viewport.getSouth(), east: viewport.getEast(), north: viewport.getNorth()},
             };
         },
-        /** Read the draft's vector and predicate without requiring a display layer.
+        /** Read selected features without requiring a display layer.
          * @param {Object} source Catalog or uploaded source and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
          * @return {Promise<Object>} Selection descriptor, bounds and matched feature count.
@@ -1165,20 +1165,22 @@ async function initializeCatalog(
                 getTarget: key => key === target.key && request.isCurrent() ? target : null});
             modelFilterControls.open(request.key, {filter: request.filter, apply: request.apply, complete: request.complete, cancel: request.cancel,
                 applyLabel: "Apply filter", filterLabel: "Selected features", onClose: request.close,
-                help: "Apply this filter to the model and its map layer.",
+                help: "Change the filter for this map view and every model input using it. Use another view for a different filter.",
             });
         },
         closeVectorFilter: () => modelFilterControls?.close(),
-        /** Apply reviewed rules to the corresponding map layer; Models reports display failures separately.
+        /** Store a checked selection's filter on its map view, then update rendering.
+         * Models receives the shared filter immediately and reports display failures separately.
          * @param {Object} source Vector choice with its Map layers key.
-         * @param {Object} filter Checked attribute rules.
+         * @param {Object} area Checked source/predicate, matched count, total count and bounds.
          * @return {Promise<Object|null>} Applied filter, or null when superseded.
          * @throws {Error} If the layer was removed or its map filter cannot be applied.
          */
-        applyMapFilter: async (source, filter) => {
+        applyMapFilter: (source, area) => {
             const record = mapLayerController.getRecord(source.key);
             if (!record || record.adapter !== vectorMapLayerAdapter) throw new Error("The vector layer is no longer in Map layers.");
-            return record.adapter.applyFilterState(record, filter);
+            return record.adapter.applyCheckedFilter(record, area.selection.filter,
+                {matched: area.matched, total: area.total, complete: true});
         },
         onOpen: () => mapInspection.showModels(),
         onClose: () => { mapInspection.hideModels(); leafletMap.getContainer().focus(); },

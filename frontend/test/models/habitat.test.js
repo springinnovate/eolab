@@ -71,7 +71,10 @@ async function fixture() {
             ? {uploadId: source.uploadId, layerName: source.layerName, filter: source.filter}
             : {...selection, filter: source.filter}, matched: source.filter.rules[0].value === "North" ? 3 : 1, total: 8}),
         editVectorFilter: request => { filters.push(request); }, closeVectorFilter: () => filters.at(-1)?.close(),
-        applyMapFilter: async (_source, filter) => filter, onOpen: () => {}, onClose: () => {},
+        applyMapFilter: async (source, area) => {
+            context.vectors.find(value => value.key === source.key).filter = area.selection.filter;
+            controller.refreshMapLayers(); return area.selection.filter;
+        }, onOpen: () => {}, onClose: () => {},
         storage: {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)},
         newId: () => String(++id).padStart(32, "0")});
     await controller.loadLibrary();
@@ -222,6 +225,11 @@ test("Habitat duplicates a large mixed stack and preserves unavailable private s
     assert.deepEqual(expected.stack.responses[0].source, {kind: "runArtifact", jobId: parentId, artifactId: source.artifactId});
     assert.equal(new Set(expected.stack.responses.map(value => modelSourceKey(value.source))).size, 18);
     await h.controller.duplicateRun();
+    const references = h.view.setup.inputs.references;
+    assert.equal(references.areaMode.value, "captured");
+    assert.equal(references.areaMode.children.find(option => option.value === "captured").textContent, "Area from original run");
+    assert.match(references.areaDescription.textContent, /BASIN equals "South"/);
+    assert.equal(references.vectorGroup.hidden, true);
     h.context.vectors.forEach(value => { value.filter = {enabled: false, match: "all", rules: []}; });
     h.context.area.selectedBounds.west = -5; h.controller.refreshMapLayers(); h.controller.refreshMapArea();
     assert.deepEqual(captureModelSubmission(h.controller.state.draft, "copied-stack").inputs, expected);
