@@ -5,17 +5,13 @@ export class VectorSamplingView {
      * @param {Document} [documentContext=document] Owning document.
      * @param {Object} [options] Mount selectors supplied by browser composition.
      * @param {string} [options.root="#vector-sampling"] Control container selector.
-     * @param {string|null} [options.choice="#use-vector-for-raster"] Optional disclosure opener.
-     * @param {string|null} [options.disclosure="#vector-sampling-disclosure"] Optional disclosure.
      */
-    constructor(documentContext = document, { root = "#vector-sampling", choice = "#use-vector-for-raster", disclosure = "#vector-sampling-disclosure" } = {}) {
+    constructor(documentContext = document, { root = "#vector-sampling" } = {}) {
         this.document = documentContext;
         this.root = documentContext.querySelector(root);
         this.elements = Object.fromEntries(["layer", "filter", "use", "confirm", "remove", "status", "predicate"]
             .map(name => [name, documentContext.querySelector(`${root} [data-vector-sampling="${name}"]`)]));
         this.useLabel = this.elements.use.textContent;
-        this.choice = choice ? documentContext.querySelector(choice) : null;
-        this.disclosure = disclosure ? documentContext.querySelector(disclosure) : null;
         this.abort = new AbortController();
     }
     /** @param {Object} handlers Semantic layer, selection and review handlers. */
@@ -25,7 +21,6 @@ export class VectorSamplingView {
         for (const [name, handler] of [["use", "onUse"], ["confirm", "onConfirm"], ["remove", "onRemove"], ["filter", "onFilter"]]) {
             on(this.elements[name], "click", () => handlers[handler]());
         }
-        if (this.choice && this.disclosure) on(this.choice, "change", () => { this.disclosure.open = true; this.elements.layer.focus(); });
     }
     /**
      * Show selection progress or a prominent large-area confirmation.

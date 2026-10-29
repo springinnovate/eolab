@@ -50,7 +50,7 @@ test("focused raster-control views depend only on DOM presentation providers", a
     }
 });
 
-test("RasterControlsView owns only composite DOM while composing focused views", async () => {
+test("RasterControlsView delegates DOM ownership to focused views", async () => {
     const source = await readFile(
         new URL("../../src/raster/controls-view.js", import.meta.url),
         "utf8"
@@ -59,12 +59,7 @@ test("RasterControlsView owns only composite DOM while composing focused views",
     for (const moduleName of Object.keys(FOCUSED_VIEW_IMPORTS)) {
         assert.match(source, new RegExp(`from ["']\\./${moduleName}["']`));
     }
-    assert.match(
-        source,
-        /import \{ requireRasterControl \} from "\.\/required-control\.js"/
-    );
-    assert.match(source, /"#raster-style-controls"/);
-    assert.match(source, /"#raster-active-layer-label"/);
+    assert.doesNotMatch(source, /requireRasterControl/);
     assert.doesNotMatch(source, /querySelector|addEventListener|removeEventListener/);
     assert.doesNotMatch(
         source,
@@ -117,8 +112,6 @@ test("focused raster views validate only their semantic subgroup roots", async (
     );
 
     assert.match(appearanceSource, /"#raster-appearance-controls"/);
-    assert.doesNotMatch(appearanceSource, /"#raster-style-controls"/);
-    assert.doesNotMatch(appearanceSource, /"#raster-active-layer-label"/);
     assert.match(samplingSource, /"#raster-sampling-area-controls"/);
     assert.match(histogramSource, /"#raster-histogram"/);
     assert.doesNotMatch(histogramSource, /"#raster-percentile/);
@@ -126,11 +119,10 @@ test("focused raster views validate only their semantic subgroup roots", async (
     assert.match(percentileSource, /"#raster-percentile-controls"/);
     assert.doesNotMatch(percentileSource, /"#raster-histogram"/);
     assert.match(styleHistogramSource, /"#raster-style-histogram"/);
-    assert.doesNotMatch(styleHistogramSource, /"#raster-style-controls"/);
     assert.doesNotMatch(styleHistogramSource, /"#raster-percentile-controls"/);
     assert.match(bivariateSource, /"#raster-bivariate-controls"/);
     assert.match(bivariateSource, /"#raster-bivariate-statistics"/);
-    assert.doesNotMatch(bivariateSource, /"#raster-(appearance|style-controls)"/);
+    assert.doesNotMatch(bivariateSource, /"#raster-appearance-controls"/);
 });
 
 test("histogram axis controls and transforms have only local presentation dependencies", async () => {

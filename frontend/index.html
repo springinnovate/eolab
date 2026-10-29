@@ -1624,71 +1624,40 @@
               </summary>
               <div class="raster-sampling-disclosure-body"
                 id="raster-sampling-disclosure-body">
-                      <div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
-                        <p>Box size <output id="raster-sample-window-dimensions" for="raster-sample-window-range raster-sample-window-number">200 × 200 km</output></p>
-                        <div class="raster-sample-window-size">
-                          <label for="raster-sample-window-range">
-                            <span class="visually-hidden">Box size</span>
-                            <input id="raster-sample-window-range" type="range"
-                              min="0" max="1000" step="any"
-                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
-                          </label>
-                          <label for="raster-sample-window-number">
-                            <span class="visually-hidden">km</span>
-                            <input id="raster-sample-window-number" type="number"
-                              min="1" step="1" value="200"
-                              inputmode="numeric" aria-label="Box size in kilometers"
-                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
-                          </label>
-                        </div>
-                      </div>
-                <fieldset class="raster-style-controls" id="raster-style-controls" hidden>
-                  <legend class="visually-hidden">Choose a raster sampling area</legend>
-                  <section class="raster-control-group raster-active-raster"
-                    id="raster-active-controls"
-                    aria-labelledby="raster-active-raster-heading"
-                    aria-describedby="raster-sample-window-status raster-histogram-status">
-                    <strong id="raster-active-raster-heading">Raster</strong>
-                    <p class="raster-active-layer-label" id="raster-active-layer-label"></p>
-                  </section>
-                  <section class="raster-control-group raster-sample-window"
-                    id="raster-sampling-area-controls"
-                    aria-labelledby="raster-sampling-area-heading">
-                    <strong id="raster-sampling-area-heading">Sampling area</strong>
-                    <p id="raster-sample-window-description">
-                      Choose the area to sample. Raster statistics can also use each raster’s whole extent.
-                    </p>
-                    <div class="raster-sampling-area-options" role="radiogroup"
-                      aria-labelledby="raster-sampling-area-heading">
-                      <label class="raster-sampling-area-option"
-                        for="clear-raster-sample-window">
-                        <input id="clear-raster-sample-window" type="radio"
-                          name="raster-sampling-area" value="wholeRaster" checked />
-                        <span>
-                          <strong id="raster-sampling-area-whole-label">Whole raster</strong>
-                          <small>Use all available raster values.</small>
-                        </span>
+                <div class="raster-sampling-area-options" id="raster-sampling-area-controls"
+                  role="radiogroup" aria-label="Sampling area">
+                  <label class="raster-sampling-area-option" for="use-map-window-for-raster">
+                    <input id="use-map-window-for-raster" type="radio"
+                      name="raster-sampling-area" value="selectedArea" disabled />
+                    <span>Sampling box</span>
+                  </label>
+                  <div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
+                    <output id="raster-sample-window-dimensions" for="raster-sample-window-range raster-sample-window-number">200 × 200 km</output>
+                    <div class="raster-sample-window-size">
+                      <label for="raster-sample-window-range">
+                        <span class="visually-hidden">Box size in kilometers</span>
+                        <input id="raster-sample-window-range" type="range"
+                          min="0" max="1000" step="any"
+                          aria-describedby="raster-sample-window-status" />
                       </label>
-                      <label class="raster-sampling-area-option"
-                        for="use-map-window-for-raster">
-                        <input id="use-map-window-for-raster" type="radio"
-                          name="raster-sampling-area" value="selectedArea" />
-                        <span>
-                          <strong>Sampling box</strong>
-                          <small>Start at the map center; click the map to reposition.</small>
-                        </span>
+                      <label for="raster-sample-window-number">
+                        <span class="visually-hidden">Box size in kilometers</span>
+                        <input id="raster-sample-window-number" type="number"
+                          min="1" step="1" value="200" inputmode="numeric"
+                          aria-describedby="raster-sample-window-status" />
                       </label>
-                      <label class="raster-sampling-area-option" for="use-vector-for-raster">
-                        <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
-                        <span><strong>Vector layer</strong><small>Use all polygon features that match a layer’s filter.</small></span>
-                      </label>
-
                     </div>
-                  </section>
-                </fieldset>
-                <details class="raster-sampling-vector" id="vector-sampling-disclosure">
-                  <summary><span>Sample by vector layer</span><span class="raster-disclosure-chevron" aria-hidden="true"></span></summary>
-                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area">
+                  </div>
+                  <label class="raster-sampling-area-option" for="clear-raster-sample-window">
+                    <input id="clear-raster-sample-window" type="radio"
+                      name="raster-sampling-area" value="wholeRaster" disabled />
+                    <span id="raster-sampling-area-whole-label">Whole raster</span>
+                  </label>
+                  <label class="raster-sampling-area-option" for="use-vector-for-raster">
+                    <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
+                    <span>Vector layer</span>
+                  </label>
+                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area" hidden>
                     <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
                     <small data-vector-sampling="predicate"></small>
                     <div class="downloads-actions">
@@ -1699,8 +1668,7 @@
                     </div>
                     <p data-vector-sampling="status" role="status"></p>
                   </section>
-                </details>
-
+                </div>
               </div>
             </details>
                     <p class="raster-sample-window-status visually-hidden"

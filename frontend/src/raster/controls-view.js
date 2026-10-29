@@ -1,11 +1,10 @@
 /**
- * Compatibility façade for the raster viewer's DOM controls and readouts.
+ * Compose the raster viewer's DOM controls and readouts.
  *
  * RasterControlsView preserves the viewer-facing contract while delegating
  * subgroup element lookup, direct event listeners, control reads, and
  * presentation to focused appearance, sampling-area, histogram, and percentile
- * adapters. The façade owns only its composite root visibility
- * and active-raster identity presentation. It contains no fetch, Leaflet,
+ * adapters. It contains no fetch, Leaflet,
  * rendering, statistics, or lifecycle decisions.
  */
 import { RasterAppearanceControlsView } from "./appearance-controls-view.js";
@@ -14,7 +13,6 @@ import { RasterHistogramControlsView } from "./histogram-controls-view.js";
 import {
     RasterPercentileControlsView,
 } from "./percentile-controls-view.js";
-import { requireRasterControl } from "./required-control.js";
 import {
     RasterSamplingAreaControlsView,
 } from "./sampling-area-controls-view.js";
@@ -45,6 +43,7 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
+ * @property {() => void} onUseVectorArea Stops box preview while choosing polygons.
  * @property {(mode: string) => void} onBivariateModeChange Changes explicit
  * overlay/bivariate mode.
  * @property {(paletteName: string) => void} onBivariatePaletteChange Changes
@@ -60,12 +59,10 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * composing focused adapters.
  */
 export class RasterControlsView {
-    #activeLayerLabel;
     #appearanceView;
     #bivariateView;
     #histogramView;
     #percentileView;
-    #root;
     #samplingAreaView;
     #styleHistogramView;
 
@@ -77,14 +74,6 @@ export class RasterControlsView {
      * @throws {Error} If any required raster-control element is missing.
      */
     constructor(documentContext = globalThis.document) {
-        this.#root = requireRasterControl(
-            documentContext,
-            "#raster-style-controls"
-        );
-        this.#activeLayerLabel = requireRasterControl(
-            documentContext,
-            "#raster-active-layer-label"
-        );
         this.#appearanceView = new RasterAppearanceControlsView(documentContext);
         this.#bivariateView = new BivariateRasterControlsView(documentContext);
         this.#histogramView = new RasterHistogramControlsView(documentContext);
@@ -111,16 +100,12 @@ export class RasterControlsView {
     }
 
     /**
-     * Identify the raster analysis target edited by these shared controls.
+     * Identify the active histogram and enable its analysis actions.
      *
      * @param {string} label Readable raster basename.
-     * @param {boolean} visible Whether its optional renderer is visible on map.
      * @return {void}
      */
-    setActiveLayer(label, visible) {
-        this.#activeLayerLabel.textContent = visible
-            ? label
-            : `${label} — not visible on the map`;
+    setActiveLayer(label) {
         this.#histogramView.setActiveLayer(label);
         this.#histogramView.enableActiveRasterActions();
     }
@@ -524,6 +509,13 @@ export class RasterControlsView {
         this.#histogramView.setSamplingAreaMode(mode, label);
     }
 
+    /** Return whether Sampling box is selected for pointer preview.
+     * @return {boolean} Whether the Sampling box radio is checked.
+     */
+    isSamplingBoxSelected() {
+        return this.#samplingAreaView.isSamplingBoxSelected();
+    }
+
     /** Present shared sampling controls for the foreground workflow.
      * @param {boolean} active Whether a sampling workflow is visible.
      * @param {boolean} usesBox Whether it uses the shared map box.
@@ -561,13 +553,13 @@ export class RasterControlsView {
     }
 
     /**
-     * Show or hide the complete composite raster-interpretation workspace.
+     * Show histogram controls and enable sampling actions for an active raster.
      *
-     * @param {boolean} isVisible Whether a raster is displayed.
+     * @param {boolean} isVisible Whether a raster owns the histogram controls.
      * @return {void}
      */
     setControlsVisible(isVisible) {
-        this.#root.hidden = !isVisible;
+        this.#samplingAreaView.setActiveRasterAvailable(isVisible);
         this.#histogramView.setActiveRasterAvailable(isVisible);
     }
 

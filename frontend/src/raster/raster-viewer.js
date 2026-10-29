@@ -1173,7 +1173,7 @@ export function initializeRasterViewer(
             (!primaryIsRetained || mapLayers.activeKey === primaryKey)) {
             renderLayerHistogramSummaries();
             pointSamplesController.synchronize(rasterPointSampleParticipants());
-            if (records[0]) controlsView.setActiveLayer(records[0].entry.label, records[0].entry.visible);
+            if (records[0]) controlsView.setActiveLayer(records[0].entry.label);
             refreshStyle();
             return;
         }
@@ -2315,7 +2315,7 @@ export function initializeRasterViewer(
                 return;
             }
             refreshActiveSessionPresentation();
-            controlsView.setActiveLayer(record.entry.label, visible);
+            controlsView.setActiveLayer(record.entry.label);
             renderRasterSampleWindowGuidance("");
             refreshActiveSessionPresentation();
             renderBivariateAvailability();
@@ -2494,7 +2494,7 @@ export function initializeRasterViewer(
         }
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(true);
-        controlsView.setActiveLayer(entry.label, entry.visible);
+        controlsView.setActiveLayer(entry.label);
         presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
 
@@ -2554,7 +2554,7 @@ export function initializeRasterViewer(
         selectActiveRasterSession(session);
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(false);
-        controlsView.setActiveLayer(session.label, true);
+        controlsView.setActiveLayer(session.label);
         presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
         if (!bivariateMode.active) {
@@ -3475,6 +3475,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreWholeRasterStatistics() {
+        rasterSampleWindowController.clearPreview();
         if (bivariateMode.active) {
             bivariateCatalogSelection = null;
             bivariateSelectedBounds = null;
@@ -4247,11 +4248,12 @@ export function initializeRasterViewer(
         if (!bivariateMode.active) {
             refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
         }
+        renderLayerHistogramSummaries();
         showHistogramWorkspace();
     }
 
     /**
-     * Preview the histogram sample window for one Leaflet map position.
+     * Preview a selected sampling box and request pixel values at the pointer.
      *
      * @param {Object} mapEvent Leaflet mousemove event in the single map world.
      * @return {void}
@@ -4268,7 +4270,7 @@ export function initializeRasterViewer(
             cursorSamplesController.clear();
             return;
         }
-        if (canUseRasterMapInteractions()) {
+        if (canUseRasterMapInteractions() && controlsView.isSamplingBoxSelected()) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
             rasterSampleWindowController.clearPreview();
@@ -4847,6 +4849,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onClearSampleWindow: handleClearSampleWindow,
         onUseMapWindow: useMapCenterForRasterStatistics,
+        onUseVectorArea: () => rasterSampleWindowController.clearPreview(),
         onBivariateModeChange: handleBivariateModeChange,
         onBivariatePaletteChange: handleBivariatePaletteChange,
         onBivariateSwapAxes: handleBivariateSwapAxes,

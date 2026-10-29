@@ -406,6 +406,10 @@ function createFakeControlsView() {
             this.samplingAreaMode = mode;
             this.samplingAreaLabel = label;
         },
+        /** @return {boolean} Whether the presented area is a sampling box. */
+        isSamplingBoxSelected() {
+            return this.samplingAreaMode === "selectedArea";
+        },
         showHistogramWidget() {
             this.histogramWidgetOpenCount =
                 (this.histogramWidgetOpenCount ?? 0) + 1;
@@ -462,8 +466,8 @@ function createFakeControlsView() {
         highlightPairedStatistics(xValue, yValue) {
             this.pairedHighlight = { xValue, yValue };
         },
-        setActiveLayer(label, visible) {
-            this.activeLayer = { label, visible };
+        setActiveLayer(label) {
+            this.activeLayer = { label };
         },
         renderPointSamples(snapshot) {
             this.pointSamples = snapshot;
@@ -2543,6 +2547,33 @@ test('color opacity stays per-layer, survives 2D, and resets with the style', as
     h.destroy();
 });
 
+test('accepting a vector area without a raster keeps its editor available without calculating', () => {
+    const requests = [];
+    const h = visibleLayerFixture((...args) => { requests.push(args); return RASTER_STATISTICS; });
+    const document = new FakeRasterControlDocument();
+    const sampling = new RasterSamplingAreaControlsView(document);
+    sampling.bind(h.controlsView.handlers);
+    h.controlsView.setSamplingAreaMode = (mode, label) => sampling.setSamplingAreaMode(mode, label);
+    sampling.setActiveRasterAvailable(false);
+    sampling.vectorChoice.checked = true;
+    document.querySelector('#raster-sampling-area-controls').dispatchEvent(new Event('change'));
+    sampling.openAreaEditor();
+
+    h.viewer.setVectorSelection({ selection: CATALOG_SELECTION, label: 'Countries' });
+
+    assert.equal(sampling.vectorChoice.checked, true);
+    assert.equal(sampling.vectorControls.hidden, false, 'accepted status and Clear selection stay accessible');
+    assert.equal(sampling.useMapWindowButton.disabled, true);
+    assert.equal(sampling.clearSampleWindowButton.disabled, true);
+    assert.equal(h.viewer.getSelectedArea(), null, 'editor visibility does not authorize a histogram');
+    assert.deepEqual(requests, []);
+    sampling.disclosure.open = false;
+    sampling.disclosure.dispatchEvent(new Event('toggle'));
+    assert.equal(sampling.samplingAreaSummary.textContent, 'Sampling area · Vector layer');
+    sampling.unbind();
+    h.destroy();
+});
+
 test('a vector AOI drives both histogram modes and invalidation cannot fall back to the whole raster', async () => {
     const areas = [], pairedAreas = [];
     const h = visibleLayerFixture(async (_item, area) => {
@@ -3140,7 +3171,6 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     assert.equal(wmsLayers.length, 1);
     assert.equal(viewer.isDisplayed, true);
     assert.equal(controlsView.renderingControlsAvailable, true);
-    assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     viewer.exploreAt({lng: 0, lat: 0});
     const selectedArea = viewer.getSelectedArea();
@@ -3365,6 +3395,67 @@ test("clearing analysis invalidates a pending renderer activation", async () => 
     viewer.destroy();
 });
 
+test("sampling radios stop hover boxes without changing pixel picking or pending vector inputs", async () => {
+    const timers = new Map(), cursorRequests = [];
+    let timerId = 0;
+    const h = visibleLayerFixture(undefined, {
+        clock: {
+            setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
+            clearTimeout(id) { timers.delete(id); },
+        },
+        sampleCursorPixel: async (_item, point) => {
+            cursorRequests.push(point);
+            return {inBounds: true, value: 7};
+        },
+    });
+    const sampling = new RasterSamplingAreaControlsView(new FakeRasterControlDocument());
+    sampling.bind(h.controlsView.handlers);
+    h.controlsView.setSamplingAreaMode = (mode, label) => sampling.setSamplingAreaMode(mode, label);
+    h.controlsView.isSamplingBoxSelected = () => sampling.isSamplingBoxSelected();
+    /** Simulate native radio exclusivity before dispatching its change. @param {Object} choice Radio to select. @return {void} */
+    const choose = choice => {
+        for (const radio of [sampling.useMapWindowButton, sampling.clearSampleWindowButton, sampling.vectorChoice]) radio.checked = radio === choice;
+        choice.dispatchEvent(new Event("change"));
+    };
+    /** Move the pointer and complete its existing pixel dwell. @param {number} lng Longitude. @return {Promise<void>} Settled pixel reads. */
+    const hover = async lng => {
+        h.leafletMap.emit("mousemove", {latlng: {lng, lat: 0}});
+        for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+        await flushPromises();
+    };
+    /** @return {boolean} Whether a pointer-preview rectangle is on the map. */
+    const hasPreview = () => [...h.leafletMap.layers].some(layer => layer.kind === "preview");
+    try {
+        await h.viewer.show(createRasterItem("preview-area"));
+        await flushPromises();
+        await hover(0);
+        assert.equal(hasPreview(), false, "Whole raster starts without a box preview");
+        assert.equal(cursorRequests.length, 1);
+        choose(sampling.useMapWindowButton);
+        await hover(1);
+        assert.equal(hasPreview(), true);
+        choose(sampling.clearSampleWindowButton);
+        assert.equal(hasPreview(), false, "Whole raster removes an existing preview immediately");
+        await hover(2);
+        assert.equal(hasPreview(), false);
+        assert.equal(cursorRequests.length, 3, "whole-raster pixel picking stays active");
+        choose(sampling.useMapWindowButton);
+        await hover(3);
+        assert.equal(hasPreview(), true);
+        const acceptedArea = h.viewer.getSelectedArea();
+        choose(sampling.vectorChoice);
+        assert.equal(hasPreview(), false, "opening Vector layer immediately removes the preview");
+        assert.deepEqual(h.viewer.getSelectedArea(), acceptedArea, "opening the editor does not replace the accepted area");
+        await hover(4);
+        assert.equal(hasPreview(), false);
+        assert.equal(cursorRequests.length, 5, "pixel picking also stays active while choosing polygons");
+        h.viewer.setVectorSelection({selection: CATALOG_SELECTION, label: "Countries"});
+        await hover(5);
+        assert.equal(hasPreview(), false, "accepted polygons also have no box preview");
+        assert.equal(cursorRequests.length, 6);
+    } finally { sampling.unbind(); h.destroy(); }
+});
+
 test("raster viewer samples click values only inside the single map world", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
@@ -3404,7 +3495,7 @@ test("raster viewer samples click values only inside the single map world", asyn
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
     assert.deepEqual(pixelRequests, []);
-    assert.equal(rectangleLayers.length, 1);
+    assert.equal(rectangleLayers.length, 0, "Whole raster does not preview a box");
     viewer.exploreAt({ lng: -122, lat: 48 });
     await flushPromises();
     assert.deepEqual(pixelRequests, [{
@@ -3451,6 +3542,39 @@ test("raster viewer ignores publication completed after a reset", async () => {
     assert.equal(wmsLayers.length, 0);
     viewer.destroy();
 });
+
+for (const wholeState of ["ready", "error"]) {
+    test(`restoring a cached ${wholeState} whole-raster result replaces the box histogram card`, async () => {
+        const requests = [];
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area.kind);
+            if (area.kind === "wholeRaster" && wholeState === "error") {
+                throw new Error("Whole-raster read exceeds the bounded-work limit");
+            }
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        });
+        await h.viewer.show(createRasterItem(`whole-restore-${wholeState}`));
+        await flushPromises();
+        const wholeStatistics = h.controlsView.layerHistograms[0].statistics;
+        h.viewer.exploreAt({ lng: -74, lat: 41 });
+        await flushPromises();
+        assert.equal(h.controlsView.layerHistograms[0].scope, "200 km map sample");
+        assert.equal(h.controlsView.layerHistograms[0].state, "ready");
+
+        h.controlsView.handlers.onClearSampleWindow();
+
+        const summary = h.controlsView.layerHistograms[0];
+        assert.equal(summary.scope, "Whole raster");
+        assert.equal(summary.state, wholeState);
+        assert.equal(summary.statistics, wholeStatistics);
+        assert.equal(summary.errorMessage, wholeState === "error"
+            ? "Whole-raster read exceeds the bounded-work limit" : "");
+        if (wholeState === "error") assert.equal(summary.counts, null);
+        await flushPromises();
+        assert.deepEqual(requests, ["wholeRaster", "selectedArea"], "restoring cached state does not read again");
+        h.destroy();
+    });
+}
 
 test("selected statistics remain draft-only until the user applies them", async () => {
     const leafletMap = createFakeMap();
@@ -3620,7 +3744,6 @@ test("raster viewer renders every retained layer", async () => {
     );
     assert.deepEqual(controlsView.activeLayer, {
         label: "third.tif",
-        visible: true,
     });
 
     const thirdKey = layerStackView.layers[0].key;
@@ -4115,7 +4238,6 @@ test("manual activation outranks an earlier deferred publication", async () => {
     assert.equal(layerStackView.activeKey, retainedKey);
     assert.deepEqual(controlsView.activeLayer, {
         label: "manual-activation-retained.tif",
-        visible: true,
     });
     assert.equal(controlsView.displayedStatistics.itemId, retained.id);
     assert.equal(
@@ -4191,7 +4313,6 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     assert.equal(wholeThirdRequest.signal.aborted, false);
     assert.deepEqual(controlsView.activeLayer, {
         label: "hidden-work-third.tif",
-        visible: false,
     });
 
     viewer.exploreAt({ lng: -74, lat: 41 });

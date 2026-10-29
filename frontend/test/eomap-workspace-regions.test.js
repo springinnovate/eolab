@@ -200,7 +200,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
         "catalog-layer-status",
         "map-layer-rendering-announcement",
         "raster-layer-stack",
-        "raster-style-controls",
+        "raster-sampling-area-controls",
         "raster-histogram",
     ]) {
         assert.doesNotMatch(
@@ -391,16 +391,25 @@ test("one collapsed sampling control stays outside the toolbar and results colum
     assert.doesNotMatch(disclosure.source, /^\s*<details[^>]*\bopen\b/);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
-    assert.match(sampling.source, /Choose the area to sample/);
+    assert.match(sampling.source, /role="radiogroup" aria-label="Sampling area"/);
+    assert.equal((disclosure.source.match(/<details\b/g) ?? []).length, 1);
+    assert.doesNotMatch(disclosure.source, /raster-active|raster-style-controls|Sample by vector layer|<small>Use all/);
     for (const choice of [
         "clear-raster-sample-window",
         "use-map-window-for-raster",
+        "use-vector-for-raster",
     ]) {
         assert.match(
             sampling.source,
             new RegExp(`id="${choice}"[^>]*type="radio"[^>]*name="raster-sampling-area"`, "s")
         );
     }
+    assert.ok(requireMarkupPosition("use-map-window-for-raster") < box.start);
+    assert.ok(box.end < requireMarkupPosition("clear-raster-sample-window"));
+    const vector = requireElementRange("vector-sampling");
+    assert.ok(requireMarkupPosition("use-vector-for-raster") < vector.start);
+    assert.ok(vector.end < sampling.end);
+    assert.match(vector.source, /aria-label="Vector sampling area" hidden/);
     assert.match(box.source, /id="raster-map-box-controls"[^>]*hidden/);
     assert.match(exploration.source, /1D – visible rasters/);
     assert.match(exploration.source, /2D – compare rasters/);
@@ -453,7 +462,6 @@ test("histogram charts precede optional help, point details and mode controls", 
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
-    const sampling = requireElementRange("raster-sampling-disclosure");
     for (const id of ["raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
         assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
     }
@@ -468,7 +476,6 @@ test("histogram charts precede optional help, point details and mode controls", 
     assert.match(STYLESHEET, /\.map-histogram-toolbar h2\s*\{[^}]*font-size:\s*1rem/s);
     assert.match(STYLESHEET, /\.raster-disclosure-chevron\s*\{[^}]*border:\s*1px solid var\(--border-1\)[^}]*border-radius:\s*50%/s);
     assert.match(STYLESHEET, /details\[open\] > summary > \.raster-disclosure-chevron::before\s*\{[^}]*rotate\(45deg\)/s);
-    assert.match(STYLESHEET, /\.raster-sampling-vector > summary\s*\{[^}]*display:\s*grid[^}]*cursor:\s*pointer/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
     assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Inspect map center<\/button>/);
@@ -719,8 +726,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-sampling-disclosure",
         "raster-sampling-disclosure-body",
         "raster-sampling-area-summary",
-        "raster-style-controls",
-        "raster-active-controls",
         "raster-sampling-area-controls",
         "use-map-window-for-raster",
         "raster-map-box-controls",

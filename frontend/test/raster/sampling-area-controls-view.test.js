@@ -19,9 +19,11 @@ test("sampling controls expose map boxes and vector selection without an upload 
     view.setSamplingAreaMode("catalogSelection", "Vector selection · countries");
     assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, true);
     assert.equal(documentContext.querySelector("#raster-map-box-controls").hidden, true);
+    assert.equal(view.vectorControls.hidden, false);
     assert.equal(view.setTemporaryAoiAvailability, undefined);
     view.setSamplingAreaMode("selectedArea", "80 km box");
     assert.equal(documentContext.querySelector("#raster-map-box-controls").hidden, false);
+    assert.equal(view.vectorControls.hidden, true);
     const choice = documentContext.querySelector("#use-map-window-for-raster");
     choice.dispatchEvent(new Event("change"));
     assert.deepEqual(received, ["box"]);
@@ -61,20 +63,49 @@ test("showing, editing and minimizing sampling controls never changes the chosen
     assert.equal(view.mapBoxControls.hidden, true, "whole-raster workflows do not show box sizing");
     view.openAreaEditor();
     assert.equal(view.mapBoxControls.hidden, false, "an explicit edit exposes the retained box");
+    assert.equal(view.samplingAreaSummary.textContent, "Sampling area", "expanded controls show dimensions only beside the slider");
+    view.setSampleWindowSize(80, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
+    assert.equal(view.samplingAreaSummary.textContent, "Sampling area");
+    assert.equal(view.dimensions.textContent, "80 × 80 km");
     assert.equal(document.activeElement, view.disclosureSummary);
     view.disclosure.open = false;
     view.disclosure.dispatchEvent(new Event("toggle"));
     assert.equal(view.mapBoxControls.hidden, true);
+    assert.equal(view.samplingAreaSummary.textContent, "Sampling box · 80 × 80 km");
     view.setActive(true, true);
     // A radio change hides sizing before a proposed polygon selection is accepted.
     view.useMapWindowButton.checked = false;
+    view.vectorChoice.checked = true;
     document.querySelector("#raster-sampling-area-controls").dispatchEvent(new Event("change"));
     assert.equal(view.mapBoxControls.hidden, true);
+    assert.equal(view.vectorControls.hidden, false, "the selected radio immediately reveals its controls");
     view.setSamplingAreaMode("vector", "Selected polygons");
     assert.equal(view.mapBoxControls.hidden, true);
     view.setSamplingAreaMode("wholeRaster");
     assert.equal(view.mapBoxControls.hidden, true);
+    assert.equal(view.vectorControls.hidden, true);
     assert.deepEqual(edits, []);
+    view.unbind();
+});
+
+test("area editing keeps vector selection and retained box sizing available without an active histogram", () => {
+    const document = new FakeRasterControlDocument();
+    const view = new RasterSamplingAreaControlsView(document);
+    view.bind({});
+    view.setActiveRasterAvailable(false);
+    assert.equal(view.useMapWindowButton.disabled, true);
+    assert.equal(view.clearSampleWindowButton.disabled, true);
+    assert.equal(view.vectorChoice.disabled, false);
+    view.vectorChoice.checked = true;
+    document.querySelector("#raster-sampling-area-controls").dispatchEvent(new Event("change"));
+    view.openAreaEditor();
+    assert.equal(view.vectorControls.hidden, false);
+    view.setSamplingAreaMode("selectedArea", "Retained box");
+    assert.equal(view.mapBoxControls.hidden, false);
+    assert.equal(view.sampleWindowNumber.disabled, false);
+    view.setActiveRasterAvailable(true);
+    assert.equal(view.useMapWindowButton.disabled, false);
+    assert.equal(view.clearSampleWindowButton.disabled, false);
     view.unbind();
 });
 

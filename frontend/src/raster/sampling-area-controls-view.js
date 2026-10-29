@@ -19,6 +19,7 @@ const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
+ * @property {() => void} onUseVectorArea Stops box preview while choosing polygons.
  */
 
 /** Present sampling controls without changing the selected area on show or hide. */
@@ -79,7 +80,8 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sample-window-status"
         );
-        this.vectorChoice = documentContext.querySelector("#use-vector-for-raster");
+        this.vectorChoice = requireRasterControl(documentContext, "#use-vector-for-raster");
+        this.vectorControls = requireRasterControl(documentContext, "#vector-sampling");
         this.handlers = null;
         this.boundSampleWindowRangeInput =
             this.#handleSampleWindowRangeInput.bind(this);
@@ -91,7 +93,8 @@ export class RasterSamplingAreaControlsView {
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
         this.boundUseMapWindow = this.#handleUseMapWindow.bind(this);
-        this.boundVisibilityChange = this.#renderBoxVisibility.bind(this);
+        this.boundUseVectorArea = this.#handleUseVectorArea.bind(this);
+        this.boundVisibilityChange = this.#renderSelectedControls.bind(this);
     }
 
     /**
@@ -125,6 +128,7 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundUseMapWindow
         );
+        this.vectorChoice.addEventListener("change", this.boundUseVectorArea);
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -152,6 +156,7 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundUseMapWindow
         );
+        this.vectorChoice.removeEventListener("change", this.boundUseVectorArea);
         this.handlers = null;
     }
 
@@ -186,7 +191,23 @@ export class RasterSamplingAreaControlsView {
         if (!active) {
             this.disclosure.open = false;
         }
-        this.#renderBoxVisibility();
+        this.#renderSelectedControls();
+    }
+
+    /** Keep vector-area editing available when there is no active raster.
+     * @param {boolean} available Whether a raster owns the box and whole-raster actions.
+     * @return {void}
+     */
+    setActiveRasterAvailable(available) {
+        this.useMapWindowButton.disabled = !available;
+        this.clearSampleWindowButton.disabled = !available;
+    }
+
+    /** Return whether Sampling box is selected for pointer preview.
+     * @return {boolean} Whether the Sampling box radio is checked.
+     */
+    isSamplingBoxSelected() {
+        return this.useMapWindowButton.checked;
     }
 
     /** Open the existing area choices while leaving the current results visible.
@@ -194,15 +215,17 @@ export class RasterSamplingAreaControlsView {
      */
     openAreaEditor() {
         this.disclosure.open = true;
-        this.#renderBoxVisibility();
+        this.#renderSelectedControls();
         this.disclosureSummary.focus();
     }
 
-    /** Show box sizing only for a selected box used or explicitly edited here.
+    /** Show subordinate controls only for the chosen area, without applying it.
      * @return {void}
      */
-    #renderBoxVisibility() {
+    #renderSelectedControls() {
         this.mapBoxControls.hidden = !this.useMapWindowButton.checked || !(this.usesBox || this.disclosure.open);
+        this.vectorControls.hidden = !this.vectorChoice.checked;
+        this.#renderAreaSummary();
     }
 
     /**
@@ -249,6 +272,7 @@ export class RasterSamplingAreaControlsView {
 
     /**
      * Present the current whole-raster, box, or catalog selection.
+     * No histogram raster ("none") leaves an explicitly chosen vector editor open.
      *
      * @param {string} mode Selection discriminator.
      * @param {string} [label=""] Readable selected-area description.
@@ -259,19 +283,20 @@ export class RasterSamplingAreaControlsView {
         if (!["none", "wholeRaster", "selectedArea", "catalogSelection", "vector"].includes(mode)) {
             throw new RangeError(`Unknown raster sampling-area mode: ${mode}`);
         }
-        if (this.vectorChoice) this.vectorChoice.checked = ["vector", "catalogSelection"].includes(mode);
+        this.vectorChoice.checked = ["vector", "catalogSelection"].includes(mode) ||
+            (mode === "none" && this.vectorChoice.checked);
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
-        this.#renderBoxVisibility();
-        this.areaLabel = label || (mode === "none" ? "No raster selected" : "Whole raster");
-        this.#renderAreaSummary();
+        this.areaLabel = mode === "none" && this.vectorChoice.checked ? "Vector layer" :
+            label || (mode === "none" ? "No raster selected" : "Whole raster");
+        this.#renderSelectedControls();
     }
 
-    /** Label the collapsed control from the existing area and size controls.
+    /** Describe the collapsed area without repeating dimensions when expanded.
      * @return {void}
      */
     #renderAreaSummary() {
-        this.samplingAreaSummary.textContent = this.useMapWindowButton.checked
+        this.samplingAreaSummary.textContent = this.disclosure.open ? "Sampling area" : this.useMapWindowButton.checked
             ? `Sampling box · ${this.dimensions.textContent}`
             : `Sampling area · ${this.areaLabel}`;
     }
@@ -332,6 +357,13 @@ export class RasterSamplingAreaControlsView {
     #handleUseMapWindow() {
         if (this.useMapWindowButton.checked) {
             this.handlers.onUseMapWindow();
+        }
+    }
+
+    /** Forward the choice to edit a vector sampling area. @return {void} */
+    #handleUseVectorArea() {
+        if (this.vectorChoice.checked) {
+            this.handlers.onUseVectorArea();
         }
     }
 
