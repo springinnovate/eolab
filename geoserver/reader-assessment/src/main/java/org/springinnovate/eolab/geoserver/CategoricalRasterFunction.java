@@ -128,7 +128,10 @@ public final class CategoricalRasterFunction extends FunctionExpressionImpl
         worker.setROI(CoverageUtilities.getROIProperty(source));
         var noData = CoverageUtilities.getNoDataProperty(source);
         worker.setNoData(noData == null ? null : noData.getAsRange());
-        worker.classify(buildColorMap(), null);
+        var colorMap = buildColorMap();
+        worker.classify(colorMap, null);
+        // Output samples are palette indices; source NoData values no longer describe them.
+        worker.setNoData(RangeFactory.create(colorMap.getDefaultValue(), colorMap.getDefaultValue()));
         PlanarImage classified = worker.getRenderedOperation();
         try {
             return new GridCoverageFactory().create("categorical", classified,

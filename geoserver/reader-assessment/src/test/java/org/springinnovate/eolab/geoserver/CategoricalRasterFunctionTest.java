@@ -40,6 +40,7 @@ import org.geotools.coverage.grid.io.OverviewPolicy;
 import org.geotools.coverage.util.CoverageUtilities;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.geometry.jts.ReferencedEnvelope;
+import org.geotools.image.ImageWorker;
 import org.geotools.gce.geotiff.GeoTiffFormat;
 import org.geotools.gce.geotiff.GeoTiffReader;
 import org.geotools.map.GridReaderLayer;
@@ -277,7 +278,7 @@ class CategoricalRasterFunctionTest {
         }
     }
 
-    /** Final symbolizer processing must not reinterpret source NoData as a valid palette index. */
+    /** Symbolizer processing and palette expansion preserve NoData with a 16-bit color table. */
     @ParameterizedTest
     @ValueSource(ints = {0, 255})
     void finalSymbolizerPreservesTransparentAndOpaquePaletteEntries(int noData) throws Exception {
@@ -290,12 +291,46 @@ class CategoricalRasterFunctionTest {
         var symbolizer = (RasterSymbolizer) fixture().rules().get(0).symbolizers().get(0);
         helper.visit(symbolizer);
         var finalCoverage = helper.execute();
-        var image = finalCoverage.getRenderedImage();
+        var image = new ImageWorker(finalCoverage.getRenderedImage()).forceComponentColorModel().getRenderedImage();
         assertEquals(0, argb(image, 0) >>> 24);
         assertEquals(0xff123456, argb(image, 1));
         assertEquals(0xff123456, argb(image, 2));
         assertEquals(0x40808080, argb(image, 3));
         finalCoverage.dispose(true);
+    }
+
+    /** Float NoData cannot hide a valid fallback color when the native renderer expands the palette. */
+    @ParameterizedTest
+    @ValueSource(doubles = {1, 0.5})
+    void rendersFloatFallbackAndTransparentSamples(double opacity) throws Exception {
+        var location = getClass().getResource("/categorical-float-nodata.tif");
+        assertNotNull(location);
+        var reader = new GeoTiffReader(new File(location.toURI()));
+        var content = new MapContent();
+        var canvas = new java.awt.image.BufferedImage(32, 32, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        var graphics = canvas.createGraphics();
+        try {
+            var featureStyle = fixture();
+            featureStyle.setTransformation(function("0:#ff0000:1;1:#00ff00:0", "#0000ff", "1"));
+            var symbolizer = (RasterSymbolizer) featureStyle.rules().get(0).symbolizers().get(0);
+            symbolizer.setOpacity(CommonFactoryFinder.getFilterFactory().literal(opacity));
+            var style = CommonFactoryFinder.getStyleFactory().createStyle();
+            style.featureTypeStyles().add(featureStyle);
+            content.addLayer(new GridReaderLayer(reader, style));
+            var renderer = new StreamingRenderer();
+            renderer.setMapContent(content);
+            renderer.paint(graphics, new java.awt.Rectangle(0, 0, 32, 32),
+                    new ReferencedEnvelope(reader.getOriginalEnvelope()));
+            int alpha = (int) Math.round(255 * opacity) << 24;
+            assertEquals(alpha | 0x00ff0000, canvas.getRGB(4, 16), "Explicit category");
+            assertEquals(alpha | 0x000000ff, canvas.getRGB(12, 16), "Unmatched fractional value");
+            assertEquals(0, canvas.getRGB(20, 16), "Source NaN");
+            assertEquals(0, canvas.getRGB(28, 16), "Transparent category");
+        } finally {
+            graphics.dispose();
+            content.dispose();
+            reader.dispose();
+        }
     }
 
     /** Rejects oversized work before native reading, and honors cancellation before classifying. */
