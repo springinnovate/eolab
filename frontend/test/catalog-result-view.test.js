@@ -78,8 +78,8 @@ test("state changes preserve controls/focus and keep On map distinct from Remove
   assert.equal(f.mapButton.getAttribute("aria-describedby"), f.status.id);
   f.update({ retained: true, feedback: { message: "Raster added to the map." } });
   assert.equal(f.onMap.hidden, false);
-  assert.equal(f.mapButton.textContent, "Remove");
-  assert.equal(f.mapButton.getAttribute("aria-label"), "Remove from map: future/wind.tif");
+  assert.equal(f.mapButton.textContent, "Remove first view");
+  assert.equal(f.mapButton.getAttribute("aria-label"), "Remove first view: future/wind.tif");
   assert.equal(f.mapButton.disabled, false);
   assert.equal(f.document.activeElement, f.mapButton);
   assert.deepEqual(f.actions.children, originalChildren);

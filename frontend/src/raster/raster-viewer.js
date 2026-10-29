@@ -199,8 +199,10 @@ function canRetryRasterStatistics(error) {
  * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
- * @property {(item:Object,area:Readonly<Object>|null)=>void} [onDownloadRequested]
- * Notify composition of a raster and its explicit selected area.
+ * @property {(item:Object,area:Readonly<Object>|null,label:string)=>void} [onDownloadRequested]
+ * Notify composition of a raster, its explicit selected area and originating view name.
+ * @property {(item:Object,area:Readonly<Object>|null,label:string,key:string)=>void} [onCalculateRequested]
+ * Calculate the original raster with its explicit area and originating view name/key.
  * @property {(selectedKeys:string[]|null)=>void}
  * [onBivariateRenderingChange] Requests isolated source rendering for selected
  * catalog keys, or ordinary composite rendering for null.
@@ -261,10 +263,10 @@ export function initializeRasterViewer(
         leaflet,
         onTileError,
         onTemporalInfo = /** @param {Object} _item Temporal Catalog Item. @return {void} */ (_item) => {},
-        onCalculateRequested = () => {},
+        onCalculateRequested = /** @param {Object} _item Original raster. @param {Object|null} _area Histogram scope. @param {string} _label View name. @param {string} _key View identity. @return {void} */ (_item, _area, _label, _key) => {},
         onHistogramChange = () => {},
         onSamplingAreaChange = () => {},
-        onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @return {void} */ (_item, _area) => {},
+        onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @param {string} _label View name. @return {void} */ (_item, _area, _label) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
          * Accepts no parameters; callback arguments are intentionally unused.
@@ -465,10 +467,10 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Adopt the same raster's analysis state while retaining renderer ownership.
+     * Hand the same raster's sampling state and results to another owner.
      *
-     * Controllers and Leaflet resources stay with their own wrapper. Analysis
-     * state remains authoritative when a renderer is attached or removed.
+     * The analysis object follows the active owner; controllers and Leaflet
+     * resources stay with their existing session.
      *
      * @param {Object} target New renderer or detached raster session.
      * @param {Object} source Existing session for the same raster.
@@ -1589,25 +1591,27 @@ export function initializeRasterViewer(
     /** Forward a 1D calculation intent. @param {string} key Source key. @return {void} */
     function calculateHistogram(key) {
         const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
-        if (session?.item) onCalculateRequested(session.item, getSelectedArea(key, "1d"));
+        if (session?.item) onCalculateRequested(session.item, getSelectedArea(key, "1d"),
+            mapLayers.getRecord(key)?.entry.label ?? getRasterDisplayName(session.item), key);
     }
 
     /** Forward one paired axis for single-raster calculations. @param {string} axis X/Y. @return {void} */
     function calculatePairedHistogram(axis) {
         const pair = getBivariatePairCandidates();
-        if (pair) onCalculateRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"));
+        if (pair) onCalculateRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"), pair[`${axis}Candidate`].label, pair[`${axis}Candidate`].key);
     }
 
     /** Forward the exact 1D source and area through composition. @param {string} key Histogram session. @return {void} */
     function downloadHistogram(key) {
         const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
-        if (session?.item) onDownloadRequested(session.item, getSelectedArea(key, "1d"));
+        if (session?.item) onDownloadRequested(session.item, getSelectedArea(key, "1d"),
+            mapLayers.getRecord(key)?.entry.label ?? getRasterDisplayName(session.item));
     }
 
     /** Forward the selected X/Y source with the 2D box. @param {"x"|"y"} axis Histogram axis. @return {void} */
     function downloadPairedHistogram(axis) {
         const pair = getBivariatePairCandidates();
-        if (pair) onDownloadRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"));
+        if (pair) onDownloadRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"), pair[`${axis}Candidate`].label);
     }
 
     /**
@@ -2052,6 +2056,7 @@ export function initializeRasterViewer(
             }
             if (analysisSession !== null) {
                 adoptRasterInteractionState(session, analysisSession);
+                session.analysis = { ...session.analysis };
             }
             return session;
         },
@@ -2484,6 +2489,9 @@ export function initializeRasterViewer(
             return;
         }
         selectActiveRasterSession(session);
+        if (matchingAnalysisSession(session.item) !== null) {
+            analysisRasterSession = null;
+        }
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
@@ -4594,11 +4602,10 @@ export function initializeRasterViewer(
             onVariableChange: variable => loadTemporalChoices(record, {...temporal.selection, variable}, undefined, true),
             onMonthChange: month => loadTemporalChoices(record, temporal.selection, month, true),
             onTimeChange: time => changeTemporalTime(record, time),
-            onAddView: () => showTemporal(temporal.item, temporal.selection, {appearance: rasterMapLayerAdapter.exportSavedState(record)}),
             onRetry: () => loadTemporalChoices(record, temporal.selection, temporal.selection.time.slice(0, 7), false),
         });
         const raster = temporalRaster(item, initial, false);
-        record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`,
+        record = mapLayers.addLocal({key: presentation.key ?? `local:temporal:${globalThis.crypto.randomUUID()}`, canAddView: true,
             label: raster.label, sourceName: raster.label, raster, temporal, ...presentation}, rasterMapLayerAdapter);
         await loadTemporalChoices(record, initial, selection ? initial.time.slice(0, 7) : undefined, selection === null);
         if (presentation.isCurrent?.() === false) {

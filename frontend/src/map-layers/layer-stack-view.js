@@ -42,6 +42,8 @@ import { buildLegendSymbol, buildLegendGradient, buildLegendContents } from "./l
  * @property {string|null} [sourceName] Current source name for resetting custom names; null for owner-specific editors.
  * @property {boolean} [canFilter] Owner supports filtering.
  * @property {boolean} [canInfo] Omit the details action when false.
+ * @property {boolean} [canAddView] Offer an independent view of the same source.
+ * @property {boolean} [addingView] The requested additional view is being prepared.
  * @property {boolean} [filterActive] A filter is currently applied.
  * @property {string} [filterStatus] Actionable filter result summary.
  * @property {{label:string,description:string}|null} [roleBadge] Analysis role supplied by the owner.
@@ -76,6 +78,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
  * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
  * @property {(key: string) => void} [onCalculate] Open raster summarization through composition.
+ * @property {(key: string) => void} [onAddView] Add an independent view of the same source.
  * @property {(key: string) => void} onZoom Fit the map to one retained layer.
  * @property {(key: string) => void} onInfo Open one retained layer's Catalog
  * Item details.
@@ -104,7 +107,7 @@ export class MapLayerStackView {
      * @param {Document} [documentContext=globalThis.document] Application
      * document.
      * @param {Object} [options] Layer-list presentation options.
-     * @param {boolean} [options.allowRemoval=true] Offer removal and its Undo control.
+     * @param {boolean} [options.allowRemoval=true] Offer additional views, removal and Undo.
      */
     constructor(documentContext = globalThis.document, { allowRemoval = true } = {}) {
         this.allowRemoval = allowRemoval;
@@ -584,6 +587,15 @@ export class MapLayerStackView {
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : [])
         );
+        if (this.allowRemoval && layer.canAddView) {
+            const addView = this.#button(
+                layer.addingView ? "Adding view…" : "Add another view",
+                `Add another view of ${accessibleName}`, layer.key, "add-view",
+                () => this.handlers?.onAddView(layer.key), focusTargets,
+            );
+            addView.disabled = layer.addingView === true;
+            rowActions.append(addView);
+        }
         const utilities = this.documentContext.createElement("div");
         utilities.className = "map-layer-utility-actions";
         utilities.append(

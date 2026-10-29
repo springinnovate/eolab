@@ -32,7 +32,6 @@ export class TemporalControlsView {
      * @param {(variable:string)=>void} handlers.onVariableChange Select a variable.
      * @param {(month:string)=>void} handlers.onMonthChange Browse an available month.
      * @param {(time:string)=>void} handlers.onTimeChange Show an available observation.
-     * @param {()=>void} handlers.onAddView Add an independent view of this dataset.
      * @param {()=>void} handlers.onRetry Refresh choices and retry the explicit selection.
      * @param {Document} [documentContext=globalThis.document] Owning document.
      */
@@ -65,12 +64,7 @@ export class TemporalControlsView {
         this.retry.className = "secondary-button";
         this.retry.textContent = "Refresh dates";
         this.retry.addEventListener("click", handlers.onRetry);
-        const duplicate = documentContext.createElement("button");
-        duplicate.type = "button";
-        duplicate.className = "secondary-button";
-        duplicate.textContent = "Add another view";
-        duplicate.addEventListener("click", handlers.onAddView);
-        actions.append(this.retry, duplicate);
+        actions.append(this.retry);
         this.element.append(actions);
     }
 

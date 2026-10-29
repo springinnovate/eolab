@@ -626,7 +626,7 @@ export class SavedMapViewController {
             );
             const staged = await this.catalogVisualization.stage(
                 preparedItem,
-                { visible: layer.visible, opacity: layer.opacity,
+                { key: `local:view:${globalThis.crypto.randomUUID()}`, visible: layer.visible, opacity: layer.opacity,
                     ...(layer.customName ? { customName: layer.customName } : {}) }
             );
             const record = staged.record;

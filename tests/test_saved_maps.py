@@ -43,6 +43,28 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_repeated_catalog_views_round_trip() -> None:
+    """Preserve ordered views of the same raster and vector with distinct appearance."""
+    candidate = map_request()
+    raster, vector = candidate["view"]["layers"]
+    second_raster = deepcopy(raster)
+    second_raster.update(customName="Impact comparison", opacity=0.3)
+    second_raster["style"]["continuous"]["definition"]["minimumColor"] = "#FFFFFF"
+    second_vector = deepcopy(vector)
+    second_vector.update(customName="Brazil", visible=True, legendIncluded=False)
+    second_vector["style"]["definition"]["color"] = "#123456"
+    second_vector["filter"] = {"field": "ISO3", "value": "BRA"}
+    candidate["view"]["layers"] = [raster, second_vector, second_raster, vector]
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
+    assert (
+        CreateSavedMap.model_validate_json(
+            parsed.model_dump_json(exclude_unset=True)
+        ).model_dump(mode="json", exclude_unset=True)
+        == candidate
+    )
+
+
 def test_temporal_views_preserve_explicit_selections_and_independent_appearance() -> (
     None
 ):
@@ -98,7 +120,7 @@ def test_temporal_views_preserve_explicit_selections_and_independent_appearance(
 
 
 def test_private_upload_reference_contract() -> None:
-    """Preserve upload identifiers and appearance without accepting source data or access credentials."""
+    """Preserve separate upload views without accepting source data or credentials."""
     candidate = map_request()
     candidate["view"].update(schemaVersion=3, basemap="detailed")
     candidate["view"]["layers"] = [
@@ -118,10 +140,17 @@ def test_private_upload_reference_contract() -> None:
             },
         }
     ]
+    second_view = deepcopy(candidate["view"]["layers"][0])
+    second_view.update(customName="All wetlands", visible=True, opacity=0.8)
+    second_view["style"]["definition"]["fillColor"] = "#ABCDEF"
+    del second_view["filter"]
+    candidate["view"]["layers"].append(second_view)
+    parsed = CreateSavedMap.model_validate(candidate)
+    assert parsed.model_dump(mode="json", exclude_unset=True) == candidate
     assert (
-        CreateSavedMap.model_validate(candidate).model_dump(
-            mode="json", exclude_unset=True
-        )
+        CreateSavedMap.model_validate_json(
+            parsed.model_dump_json(exclude_unset=True)
+        ).model_dump(mode="json", exclude_unset=True)
         == candidate
     )
     for field in (
@@ -136,10 +165,6 @@ def test_private_upload_reference_contract() -> None:
         invalid["view"]["layers"][0][field] = "not part of a map reference"
         with pytest.raises(ValidationError):
             CreateSavedMap.model_validate(invalid)
-    invalid = deepcopy(candidate)
-    invalid["view"]["layers"] *= 2
-    with pytest.raises(ValidationError, match="duplicate"):
-        CreateSavedMap.model_validate(invalid)
     invalid = deepcopy(candidate)
     invalid["view"]["schemaVersion"] = 2
     del invalid["view"]["basemap"]
@@ -332,11 +357,8 @@ def test_invalid_map_documents(field: str, value: Any) -> None:
 
 
 def test_layer_and_size_boundaries() -> None:
-    """Reject duplicate items, source paths, null filters, invalid numbers and huge JSON."""
+    """Reject source paths, null filters, invalid numbers and huge JSON."""
     mutations = []
-    duplicate = map_request()
-    duplicate["view"]["layers"].append(deepcopy(duplicate["view"]["layers"][0]))
-    mutations.append(duplicate)
     for key, value in [
         ("path", "/source/data.tif"),
         ("sourceRevision", None),

@@ -122,14 +122,15 @@ test("a histogram source selects an existing view without adding another statist
     const second = {...source("1"), key: "local:view:second", label: "Second view"};
     h.controller.updateAvailableRasters([first, second]);
     h.view.actions.onAutomatic(false);
-    h.controller.selectSource({collectionId: "catalog", itemId: "1", label: "Raster 1"});
+    h.controller.selectSource({collectionId: "catalog", itemId: "1", label: "Second view"}, undefined, second.key);
     await h.open(); h.view.actions.onCalculate(); await flush();
 
     assert.deepEqual(h.controller.sources.map(item => item.key), [first.key, second.key]);
-    assert.deepEqual([...h.controller.selectedKeys], [first.key]);
+    assert.deepEqual([...h.controller.selectedKeys], [second.key]);
     const submissions = h.requests.filter(([kind]) => kind === "submit");
     assert.equal(submissions.length, 1);
     assert.equal(submissions[0][1].source.itemId, "1");
+    assert.equal(submissions[0][1].source.label, "Second view");
     h.close();
 });
 

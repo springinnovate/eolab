@@ -139,6 +139,7 @@ export class MapLayerController {
         this.removalGeneration = 0;
         this.styleClipboard = null;
         this.pendingStylePastes = new Set();
+        this.pendingAdditionalViews = new Set();
         this.activationIntentSequence = 0;
         this.presentationActiveKey = null;
         this.destroyed = false;
@@ -160,6 +161,7 @@ export class MapLayerController {
             onGroupAction: id => this.onGroupAction?.(id),
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
+            onAddView: key => void this.addAnotherView(key),
             onLegendInclusion: (key, included) => this.setLegendIncluded(key, included),
             onVisibility: (key, visible) => this.setVisible(key, visible),
             onAllVisibility: (visible) => this.setAllVisible(visible),
@@ -179,7 +181,7 @@ export class MapLayerController {
      * createState, createLayer and snapshot, plus optional lifecycle callbacks.
      * Providing sourceName enables the standard name editor, preserving custom names
      * when the owner later updates its source name.
-     * @param {{key:string,label:string,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object}} source Local presentation and optional completed publication.
+     * @param {{key:string,label:string,sourceName?:string,customName?:string|null,group?:Object,visible?:boolean,opacity?:number,publication?:Object,canAddView?:boolean}} source Local presentation and optional publication; canAddView opts into independent restoration of the same source.
      * @param {Object} adapter Owner's rendering and presentation methods.
      * @return {Object} Retained record.
      * @throws {Error} If the identity is duplicated or construction fails.
@@ -189,7 +191,8 @@ export class MapLayerController {
             throw new Error("Local layer cannot be added to this stack.");
         }
         const { entry } = this.stack.addLocal(source.key, source.label, this.recordIntent());
-        const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null };
+        const record = { entry, adapter, publication: source.publication ?? null, state: null, error: null,
+            canAddView: source.canAddView === true };
         try {
             if (source.sourceName !== undefined) {
                 entry.sourceName = source.sourceName;
@@ -799,7 +802,7 @@ export class MapLayerController {
      * @return {RemovedMapLayer} Detached data including visibility, order, style and source identity.
      * @throws {Error} If the layer is missing or its owner rejects capture.
      */
-    copyLayerForUndo(key) {
+    captureLayerSnapshot(key) {
         const record = this.#requireRecord(key);
         const {entry, adapter} = record;
         return {
@@ -828,6 +831,35 @@ export class MapLayerController {
         }
     }
 
+    /** Add an independent view through the source owner's existing restoration path.
+     * Copy presentation without copying the underlying source. Removing the original
+     * view or replacing the map cancels an unfinished addition.
+     * @param {string} key Retained view whose source and appearance should be reused.
+     * @return {Promise<string|null>} New view key, or null after cancellation or a reported failure.
+     * @throws {RangeError} If the view is no longer retained.
+     */
+    async addAnotherView(key) {
+        const record = this.#requireRecord(key);
+        if ((record.entry.item === null && !record.canAddView) || this.pendingAdditionalViews.has(key)) return null;
+        const isCurrent = () => !this.destroyed && this.records.get(key) === record;
+        this.pendingAdditionalViews.add(key);
+        this.render();
+        try {
+            const snapshot = this.captureLayerSnapshot(key);
+            snapshot.key = `local:view:${globalThis.crypto.randomUUID()}`;
+            await this.restoreLayerSnapshot(snapshot, isCurrent);
+            if (!isCurrent()) return null;
+            this.view.announceStatus?.(`Added another view of ${snapshot.label}.`);
+            return snapshot.key;
+        } catch (error) {
+            if (isCurrent()) this.view.setStatus(`Could not add another view: ${error.message}`);
+            return null;
+        } finally {
+            this.pendingAdditionalViews.delete(key);
+            if (!this.destroyed) this.render();
+        }
+    }
+
     /**
      * Remove a layer at the user's request, keeping only its data for one Undo.
      * Owner capture can reject removal, for example when a polygon is being edited.
@@ -836,7 +868,7 @@ export class MapLayerController {
      */
     removeWithUndo(key) {
         try {
-            const snapshot = this.copyLayerForUndo(key);
+            const snapshot = this.captureLayerSnapshot(key);
             this.removeKey(key);
             this.removalGeneration += 1;
             this.removedLayer = snapshot;
@@ -1070,6 +1102,8 @@ export class MapLayerController {
                 ...(entry.group ? {group: entry.group} : {}),
                 sourceName: entry.item === null ? entry.sourceName ?? null : record.adapter.label(entry.item),
                 styleClipboard: this.#styleClipboardSnapshot(record),
+                canAddView: entry.item !== null || record.canAddView === true,
+                addingView: this.pendingAdditionalViews.has(entry.key),
                 error: record.error,
             };
         });

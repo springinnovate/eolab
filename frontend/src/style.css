@@ -858,7 +858,7 @@ h5 {
   min-width: 0;
 }
 .map-layer-row-actions > .secondary-button { padding: 4px; font-weight: 600; }
-.map-layer-utility-actions { display: flex; flex: 1; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.map-layer-utility-actions { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 2px; min-width: 0; }
 .raster-layer-row .map-layer-icon-button { display: grid; flex: none; min-width: 24px; place-items: center; padding: 4px 3px; }
 .map-layer-icon-button svg { width: 16px; height: 16px; }
 .map-layer-icon-button.has-active-filter { position: relative; color: var(--brand-strong); background: var(--surface-selected); }

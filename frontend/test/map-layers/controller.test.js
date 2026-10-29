@@ -621,7 +621,7 @@ test("local source names update generated labels and groups while preserving cus
     controller.renameLayer(record.entry.key, "My coverage");
     controller.updateLocalPresentation(record.entry.key, {...presentation, sourceName: "Coverage · Latest run"});
     assert.equal(record.entry.label, "My coverage");
-    assert.equal(controller.copyLayerForUndo(record.entry.key).customName, "My coverage");
+    assert.equal(controller.captureLayerSnapshot(record.entry.key).customName, "My coverage");
     assert.equal(controller.getLeafletLayer(record.entry.key), renderer);
     assert.equal(record.state, state);
     controller.renameLayer(record.entry.key, null);
@@ -742,6 +742,56 @@ function undoFixture() {
     });
     return Object.assign(fixture, { controller, view, adapter });
 }
+
+test("Add another view restores copied presentation through its owner without removing the original", async () => {
+    const {controller, adapter} = undoFixture();
+    await controller.show(catalogItem("source"), adapter);
+    const first = controller.retainedRecords[0];
+    first.state.color = "blue";
+    controller.renameLayer(first.entry.key, "Blue view");
+    controller.setVisible(first.entry.key, false);
+    controller.setOpacity(first.entry.key, 0.3);
+    controller.setLegendIncluded(first.entry.key, false);
+    const key = await controller.addAnotherView(first.entry.key);
+    const second = controller.getRecord(key);
+    assert.notEqual(key, first.entry.key);
+    assert.deepEqual(controller.snapshots().map(layer => layer.key), [key, first.entry.key]);
+    assert.equal(second.entry.label, "Blue view");
+    assert.equal(second.entry.visible, false);
+    assert.equal(second.entry.opacity, 0.3);
+    assert.equal(second.entry.legendIncluded, false);
+    assert.equal(second.state.color, "blue");
+    second.state.color = "red";
+    controller.renameLayer(key, "Red view");
+    controller.removeKey(key);
+    assert.equal(first.state.color, "blue");
+    assert.equal(first.entry.label, "Blue view");
+    assert.equal(controller.removedLayer, null, "adding a view does not replace removal Undo");
+    controller.destroy();
+});
+
+test("pending view additions cannot outlive their source view and failures can be retried", async () => {
+    const h = undoFixture();
+    await h.controller.show(catalogItem("source"), h.adapter);
+    const key = h.controller.activeKey;
+    let finish;
+    h.beforeRestore = () => new Promise(resolve => { finish = resolve; });
+    const adding = h.controller.addAnotherView(key);
+    assert.equal(h.controller.snapshots()[0].addingView, true);
+    assert.equal(await h.controller.addAnotherView(key), null);
+    h.controller.removeKey(key);
+    finish();
+    assert.equal(await adding, null);
+    assert.equal(h.controller.retainedRecords.length, 0);
+    await h.controller.show(catalogItem("source"), h.adapter);
+    h.beforeRestore = async () => { throw new Error("Publication unavailable"); };
+    assert.equal(await h.controller.addAnotherView(key), null);
+    assert.match(h.view.status, /Could not add another view.*Publication unavailable/);
+    assert.equal(h.controller.snapshots()[0].addingView, false);
+    h.beforeRestore = async () => {};
+    assert.ok(await h.controller.addAnotherView(key));
+    h.controller.destroy();
+});
 
 test("same-source views retain independent presentation and Undo restores the exact removed view", async () => {
     const { controller, adapter } = undoFixture();

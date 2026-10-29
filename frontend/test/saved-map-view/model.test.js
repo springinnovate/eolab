@@ -40,7 +40,9 @@ test("private upload references preserve appearance without accepting data or cr
   }
   const duplicate = structuredClone(candidate);
   duplicate.layers.push(structuredClone(duplicate.layers[0]));
-  assert.throws(() => parseSavedMapView(JSON.stringify(duplicate)), /cannot repeat/);
+  duplicate.layers[1].customName = "Another wetlands view";
+  duplicate.layers[1].style.definition.fillColor = "#abcdef";
+  assert.deepEqual(parseSavedMapView(JSON.stringify(duplicate)), duplicate);
   const older = structuredClone(candidate);
   older.schemaVersion = 2;
   delete older.basemap;
@@ -141,16 +143,12 @@ test("saved map model preserves more than two visible layers", () => {
   assert.ok(saved.layers.every((layer) => layer.visible));
 });
 
-test("saved map model rejects incompatible, duplicate, and unbounded input", () => {
+test("saved map model rejects incompatible and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
     () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 4 })),
     /schema 4 is not supported/,
   );
-
-  const duplicate = savedMapCandidate();
-  duplicate.layers.push(structuredClone(duplicate.layers[0]));
-  assert.throws(() => createSavedMapView(duplicate), /cannot repeat/);
 
   const extended = savedMapCandidate();
   extended.sourcePath = "file:///not-authority/data.tif";
@@ -164,6 +162,16 @@ test("saved map model rejects incompatible, duplicate, and unbounded input", () 
     () => parseSavedMapView(" ".repeat(MAX_SAVED_MAP_VIEW_BYTES + 1)),
     /512 KiB/,
   );
+});
+
+test("saved maps retain repeated Catalog sources with independent appearance and order", () => {
+  const candidate = savedMapCandidate();
+  candidate.layers.push({...structuredClone(candidate.layers[0]), customName: "Another view", opacity: 0.25});
+  const saved = createSavedMapView(candidate);
+  assert.deepEqual(parseSavedMapView(serializeSavedMapView(saved)), saved);
+  assert.deepEqual(saved.layers[0].catalogItem, saved.layers.at(-1).catalogItem);
+  assert.equal(saved.layers.at(-1).customName, "Another view");
+  assert.equal(saved.layers.at(-1).opacity, 0.25);
 });
 
 test("map legend preferences round-trip for catalog and shared layers without changing older maps", () => {

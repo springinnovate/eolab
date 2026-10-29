@@ -223,7 +223,7 @@ class MapStyledLayer(MapDocumentPart):
 
 
 class MapLayer(MapStyledLayer):
-    """Catalog identity and appearance restored through the catalog layer adapter."""
+    """One map view of a Catalog item, with its own style and filter."""
 
     catalogItem: MapCatalogItem
 
@@ -276,7 +276,7 @@ class MapTemporalLayer(MapDocumentPart):
 
 
 class MapUploadLayer(MapStyledLayer):
-    """Private upload identity and appearance, without access credentials or data.
+    """One map view of a private upload, without access credentials or data.
 
     Opening this reference still requires the browser that owns the upload.
     """
@@ -336,6 +336,8 @@ class MapLegendAppearance(MapDocumentPart):
 class SavedMapView(MapDocumentPart):
     """Portable map JSON with optional legend visibility and collapse preferences.
 
+    Catalog items, uploads and observations may appear more than once; each
+    entry preserves its place in the layer order and its own appearance.
     Version three includes a basemap provider, private uploads and temporal views.
     Older maps without mapLegend open with the legend visible and expanded.
     """
@@ -376,15 +378,15 @@ class SavedMapView(MapDocumentPart):
         )
 
     @model_validator(mode="after")
-    def validate_layer_uniqueness_and_size(self) -> Self:
-        """Reject inconsistent versions, repeated layers and oversized maps.
+    def validate_map_layers_and_size(self) -> Self:
+        """Reject inconsistent versions, repeated shared layers and oversized maps.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If fields do not match the schema version, a layer repeats,
-                or the document exceeds the size limit.
+            ValueError: If fields do not match the schema version, a shared layer
+                repeats, or the document exceeds the size limit.
         """
         if self.schemaVersion == 3:
             if self.basemap is None:
@@ -393,7 +395,7 @@ class SavedMapView(MapDocumentPart):
             raise ValueError("Basemap selection requires saved-map version three.")
         if "mapLegend" in self.model_fields_set and self.mapLegend is None:
             raise ValueError("Map legend preferences must be an object when supplied.")
-        identities = []
+        shared_layer_ids = []
         for layer in self.layers:
             if isinstance(layer, MapTemporalLayer):
                 if self.schemaVersion != 3:
@@ -403,17 +405,12 @@ class SavedMapView(MapDocumentPart):
                     raise ValueError(
                         "Shared annotations require saved-map version two."
                     )
-                identities.append(("annotation", layer.sharedAnnotation.id))
+                shared_layer_ids.append(layer.sharedAnnotation.id)
             elif isinstance(layer, MapUploadLayer):
                 if self.schemaVersion != 3:
                     raise ValueError("Uploaded layers require saved-map version three.")
-                identities.append(("upload", layer.uploadId))
-            else:
-                identities.append(
-                    ("catalog", layer.catalogItem.collection, layer.catalogItem.id)
-                )
-        if len(set(identities)) != len(identities):
-            raise ValueError("A saved map cannot contain duplicate layers.")
+        if len(set(shared_layer_ids)) != len(shared_layer_ids):
+            raise ValueError("A saved map cannot contain duplicate shared layers.")
         if (
             len(self.model_dump_json(exclude_unset=True).encode("utf-8"))
             > MAX_VIEW_BYTES
