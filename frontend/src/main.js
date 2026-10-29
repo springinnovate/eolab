@@ -903,6 +903,10 @@ async function initializeCatalog(
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         loadTemporalTimes,
         onEditArea: editProcessingArea,
+        onAreaChoice: choice => {
+            if (choice === "vector") void summarySampling.use();
+            else summarySampling.invalidate("");
+        },
         view: new RasterSeriesView(document, {
             onContextChange: context => presentSamplingContext("raster-series", context),
         }),
@@ -948,6 +952,11 @@ async function initializeCatalog(
         onSamplingAreaChange: area => {
             rasterClips.setSelection(area);
             updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
+        },
+        onSamplingMethodChange: method => {
+            if (rasterSeries.active) rasterSeries.chooseArea("selection");
+            if (method === "vector") void vectorSampling.use();
+            else vectorSampling.invalidate("");
         },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
             activate: !selectingMapClick && !["raster-series", "raster-clips", "models"].includes(mapInspection.activeTool),
@@ -1197,25 +1206,15 @@ async function initializeCatalog(
         view: new VectorSamplingView(),
         getTargets: getPolygonTargets,
         createArea: createVectorSamplingArea,
-        onEditFilter: key => vectorFilterControls.open(key, rasterSeries.active ? {
-            filter: vectorSampling.selectedFilter(key),
-            apply: candidate => vectorSampling.use({ key, filter: candidate, analysis: true }),
-            complete: area => vectorSampling.activate(area.selection, true),
-            cancel: () => vectorSampling.invalidate("Selection cancelled"),
-        } : null),
-        onSelectionState: selection => rasterSeries.setVectorSelectionState(selection),
-        /** Accept reviewed features and run configured statistics when accepting from Summarize.
+        onEditFilter: key => vectorFilterControls.open(key),
+        /** Adopt filtered features through the shared map-area calculation lifecycle.
          * @param {Object} area Authoritative vector descriptor and selection metadata.
-         * @param {boolean} calculate Explicit calculation intent from the filter action.
          * @return {void}
          */
-        onActivate: (area, calculate) => {
-            const returnToSummary = rasterSeries.active;
+        onActivate: area => {
             void vectorSamplingOverlay.load(area);
             const label = `${area.label} · ${area.matched} of ${area.total} features`;
             rasterVisualization.setVectorSelection({ ...area, label });
-            rasterSeries.setVectorSamplingArea({ selection: area.selection, label });
-            if (calculate || returnToSummary) { mapInspection.showRasterSeries(); rasterSeries.calculate(); }
         },
         onInvalidate: id => {
             vectorSamplingOverlay.clear();
@@ -1244,20 +1243,9 @@ async function initializeCatalog(
             const area = await processingApi.uploadPolygonArea(polygons);
             return { ...area, label: target.label, total: target.polygons.length, filter };
         },
-        onSourceChange: (target, filter, wasActive) => {
-            if (target?.polygons && wasActive && rasterSeries.followsVectorChanges) {
-                // The selection controller applies its normal large-area review policy again.
-                void summarySampling.use({ key: target.key, filter });
-            }
-        },
         releaseArea: area => { if (area.polygonArea) void processingApi.discardPolygonArea(area.polygonArea.id).catch(() => {}); },
-        onEditFilter: key => vectorFilterControls.open(key, {
-            filter: summarySampling.selectedFilter(key),
-            apply: filter => summarySampling.use({ key, filter, analysis: true }),
-            complete: area => summarySampling.activate(area.polygonArea ?? area.selection, true),
-            cancel: () => summarySampling.invalidate("Selection cancelled"),
-        }),
-        onSelectionState: selection => rasterSeries.setVectorSelectionState({ ...selection, analysis: true }),
+        onEditFilter: key => vectorFilterControls.open(key),
+        onSelectionState: selection => rasterSeries.setVectorSelectionState(selection),
         onActivate: area => {
             const label = `${area.label} · ${area.matched} of ${area.total} features`;
             if (area.selection) void vectorSamplingOverlay.load(area);
@@ -1265,8 +1253,6 @@ async function initializeCatalog(
             updateRasterSeriesArea(area.polygonArea ? {kind: "polygonArea", polygonArea: area.polygonArea}
                 : {kind: "catalogSelection", catalogSelection: area.selection}, label);
             rasterSeries.setVectorSamplingArea({ selection: area.selection, polygonArea: area.polygonArea, label });
-            mapInspection.showRasterSeries();
-            rasterSeries.calculate();
         },
         onInvalidate: (selection, area) => {
             rasterSeries.invalidateArea(area.polygonArea ? {kind: "polygonArea", polygonArea: area.polygonArea}

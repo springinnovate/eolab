@@ -6,6 +6,7 @@ import { MapLayerController } from "../../src/map-layers/controller.js";
 import { MapLayerStyleEditor } from "../../src/map-layers/style-editor.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 import { CatalogVisualizationCoordinator } from "../../src/catalog-visualization.js";
+import { VectorSamplingController } from "../../src/vector/sampling.js";
 import {
     initializeRasterViewer,
     RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS,
@@ -780,6 +781,149 @@ test("calculation entry points emit source identities and committed areas withou
     assert.notEqual(calculations.at(-1).item.id, calculations.at(-2).item.id);
     h.destroy();
 });
+
+for (const outcome of ["success", "read error", "no matches", "no polygon layer"]) {
+    test(`first vector sampling has no stale box or histogram after ${outcome}`, async () => {
+        let sampling;
+        const read = createDeferred(), requests = [], events = [], snapshots = [];
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area);
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        }, {}, {
+            onSamplingAreaChange: area => events.push({area}),
+            onHistogramChange: value => snapshots.push(value),
+            onSamplingMethodChange: method => {
+                events.push({method});
+                if (method === "vector") void sampling.use();
+                else sampling.invalidate("");
+            },
+        });
+        sampling = new VectorSamplingController({
+            view: {bind() {}, render() {}, unbind() {}},
+            getTargets: () => outcome === "no polygon layer" ? [] : [{key: "county-view",
+                item: {collectionId: "vectors", itemId: "counties"}, filter: CATALOG_SELECTION.filter}],
+            createArea: () => read.promise,
+            onActivate: area => h.viewer.setVectorSelection(area),
+            onInvalidate: () => h.viewer.setVectorSelection(null),
+            onEditFilter() {},
+        });
+        await h.viewer.show(createRasterItem("first-vector"));
+        h.viewer.exploreAt({lng: -100, lat: 40});
+        await flushPromises();
+        assert.ok(h.viewer.getSelectedArea());
+        assert.equal(h.controlsView.layerHistograms.length, 1);
+        const previousReads = requests.length;
+        events.length = 0;
+        h.controlsView.handlers.onUseVectorArea();
+        await flushPromises();
+        assert.deepEqual(events.slice(0, 2), [{area: null}, {method: "vector"}]);
+        h.viewer.syncVisibleLayers();
+        assert.equal(h.viewer.getSelectedArea(), null);
+        assert.equal(h.controlsView.samplingAreaMode, "vector");
+        assert.equal(h.controlsView.sampleWindowStatus, "");
+        assert.deepEqual(h.controlsView.layerHistograms, []);
+        assert.equal(h.controlsView.displayedStatistics, null);
+        assert.equal(snapshots.at(-1), null);
+        assert.equal(requests.length, previousReads);
+
+        if (outcome === "success") {
+            read.resolve({selection: CATALOG_SELECTION, label: "Counties", matched: 30, total: 3144});
+        } else if (outcome !== "no polygon layer") {
+            read.reject(new Error(outcome === "no matches" ? "No features match this filter." : "Cannot read polygons."));
+        }
+        await flushPromises();
+        if (outcome === "success") {
+            assert.deepEqual(h.viewer.getSelectedArea(), {kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
+            assert.equal(requests.at(-1).kind, "catalogSelection");
+            assert.equal(h.controlsView.layerHistograms.length, 1);
+            h.controlsView.handlers.onClearSampleWindow();
+            await flushPromises();
+            assert.equal(h.controlsView.samplingAreaMode, "wholeRaster", "releasing the accepted vector does not reopen pending selection");
+        } else {
+            assert.equal(h.viewer.getSelectedArea(), null);
+            assert.equal(h.controlsView.samplingAreaMode, "vector");
+            assert.deepEqual(h.controlsView.layerHistograms, []);
+            assert.equal(requests.length, previousReads);
+            assert.equal(sampling.state.phase, outcome === "no polygon layer" ? "idle" : "error");
+            h.controlsView.handlers.onClearSampleWindow();
+            await flushPromises();
+            assert.equal(h.controlsView.layerHistograms.length, 1);
+            assert.equal(h.controlsView.layerHistograms[0].scope, "Whole raster");
+        }
+        sampling.destroy();
+        h.destroy();
+    });
+}
+
+for (const mode of ["overlay", "bivariate"]) {
+    test(`vector sampling cancels pending ${mode} histograms and ignores their late result`, async () => {
+        const read = createDeferred();
+        let signal;
+        const h = visibleLayerFixture(async (item, area, cancellation) => {
+            if (area.kind === "selectedArea") { signal = cancellation; return read.promise; }
+            return createLayerStatistics(item);
+        }, {
+            loadPairedStatistics: async (_x, _y, area, cancellation) => {
+                if (area.kind === "selectedArea") { signal = cancellation; return read.promise; }
+                return pairedStatistics();
+            },
+        });
+        await h.viewer.show(createRasterItem("pending-vector-x"));
+        await h.viewer.show(createRasterItem("pending-vector-y"));
+        h.controlsView.handlers.onBivariateModeChange(mode);
+        await flushPromises();
+        h.viewer.exploreAt({lng: -100, lat: 40});
+        await flushPromises();
+        h.controlsView.handlers.onUseVectorArea();
+        assert.equal(signal.aborted, true);
+        read.resolve(mode === "bivariate" ? pairedStatistics() : createLayerStatistics(createRasterItem("pending-vector-x")));
+        await flushPromises();
+        assert.equal(h.viewer.getSelectedArea(), null);
+        assert.equal(h.controlsView.displayedStatistics, null);
+        assert.equal(h.controlsView.pairedStatistics, null);
+        assert.deepEqual(h.controlsView.layerHistograms, []);
+        h.destroy();
+    });
+}
+
+for (const method of ["whole", "box"]) {
+    test(`choosing ${method} cancels pending vector adoption without a late switch back`, async () => {
+        let sampling, complete, signal;
+        const choices = [];
+        const h = visibleLayerFixture(async (item, area) => createLayerStatistics(item, selectedBoundsFromArea(area)), {}, {
+            onSamplingMethodChange: choice => {
+                choices.push(choice);
+                if (choice === "vector") void sampling.use();
+                else sampling.invalidate("");
+            },
+        });
+        sampling = new VectorSamplingController({
+            view: {bind() {}, render() {}, unbind() {}},
+            getTargets: () => [{key: "county-view", item: {collectionId: "vectors", itemId: "counties"}, filter: CATALOG_SELECTION.filter}],
+            createArea: (_source, _filter, cancellation) => {
+                signal = cancellation;
+                return new Promise(resolve => { complete = resolve; });
+            },
+            onActivate: area => h.viewer.setVectorSelection(area),
+            onInvalidate: () => h.viewer.setVectorSelection(null),
+            onEditFilter() {},
+        });
+        await h.viewer.show(createRasterItem("cancel-vector"));
+        assert.deepEqual(choices, [], "loading a raster does not select an area method");
+        h.controlsView.handlers.onUseVectorArea();
+        await flushPromises();
+        if (method === "whole") h.controlsView.handlers.onClearSampleWindow();
+        else h.controlsView.handlers.onUseMapWindow();
+        const chosenArea = h.viewer.getSelectedArea();
+        assert.equal(signal.aborted, true);
+        complete({selection: CATALOG_SELECTION, label: "Washington counties", matched: 30, total: 3144});
+        await flushPromises();
+        assert.deepEqual(h.viewer.getSelectedArea(), chosenArea);
+        assert.deepEqual(choices, ["vector", method]);
+        sampling.destroy();
+        h.destroy();
+    });
+}
 
 for (const mode of ["overlay", "bivariate"]) {
     for (const retainSelection of [false, true]) {
@@ -2600,7 +2744,12 @@ test('a vector AOI drives both histogram modes and invalidation cannot fall back
     const count=areas.length+pairedAreas.length;
     h.viewer.setVectorSelection(null);await flushPromises();
     assert.equal(h.viewer.getSelectedArea(),null);
+    assert.equal(h.controlsView.samplingAreaMode,"vector");
+    assert.equal(h.controlsView.sampleWindowStatus,"");
+    assert.deepEqual(h.controlsView.layerHistograms,[]);
     assert.equal(areas.length+pairedAreas.length,count);
+    h.controlsView.handlers.onClearSampleWindow(); await flushPromises();
+    assert.equal(h.controlsView.samplingAreaMode,"wholeRaster");
     h.destroy();
 });
 
@@ -3395,7 +3544,7 @@ test("clearing analysis invalidates a pending renderer activation", async () => 
     viewer.destroy();
 });
 
-test("sampling radios stop hover boxes without changing pixel picking or pending vector inputs", async () => {
+test("sampling radios stop hover boxes and clear the previous area while vector features are pending", async () => {
     const timers = new Map(), cursorRequests = [];
     let timerId = 0;
     const h = visibleLayerFixture(undefined, {
@@ -3442,10 +3591,9 @@ test("sampling radios stop hover boxes without changing pixel picking or pending
         choose(sampling.useMapWindowButton);
         await hover(3);
         assert.equal(hasPreview(), true);
-        const acceptedArea = h.viewer.getSelectedArea();
         choose(sampling.vectorChoice);
         assert.equal(hasPreview(), false, "opening Vector layer immediately removes the preview");
-        assert.deepEqual(h.viewer.getSelectedArea(), acceptedArea, "opening the editor does not replace the accepted area");
+        assert.equal(h.viewer.getSelectedArea(), null, "the previous box is unavailable while reading vector features");
         await hover(4);
         assert.equal(hasPreview(), false);
         assert.equal(cursorRequests.length, 5, "pixel picking also stays active while choosing polygons");
