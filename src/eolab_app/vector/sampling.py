@@ -1,4 +1,4 @@
-"""Coordinate vector selection checks, summaries, and map display outlines.
+"""Authorize vector selections, count their features, and request map outlines.
 
 Source/filter preparation lives in selection_source so readers and installed Jobs
 operations use the same rules without constructing this service.
@@ -30,7 +30,7 @@ from eolab_app.vector_uploads import VectorUploadStore
 
 
 class VectorSamplingService:
-    """Authorize filtered vector features and request their measurements or outlines."""
+    """Authorize filtered vector features and request their counts or outlines."""
 
     def __init__(
         self,
@@ -45,7 +45,7 @@ class VectorSamplingService:
         ) = None,
         uploads: VectorUploadStore | None = None,
     ) -> None:
-        """Connect vector source resolution with feature-measurement and outline jobs.
+        """Connect vector source resolution with feature-count and outline jobs.
 
         Args:
             catalog: Authoritative Catalog reader.
@@ -53,7 +53,7 @@ class VectorSamplingService:
             outline_executor: Jobs adapter supplied by application composition.
                 Omit for selection-only consumers; outline() then reports
                 unavailable without starting local display work.
-            selection_executor: Jobs adapter for measuring filtered features.
+            selection_executor: Jobs adapter for counting filtered features.
                 Consumers that only reauthorize descriptors may omit it; select()
                 then reports unavailable without launching a local process.
             uploads: Original browser-owned GeoPackages and their admission metadata.
@@ -125,14 +125,15 @@ class VectorSamplingService:
         request: CatalogVectorFilterRequest | UploadedVectorFilterRequest,
         upload_owner: str | None = None,
     ) -> dict[str, Any]:
-        """Queue a filtered-feature measurement without retaining coordinates.
+        """Count filtered features and return the selection for later polygon reads.
 
         Args:
             request: Catalog or upload identity and typed predicate.
             upload_owner: Server-derived browser identity for private uploads.
 
         Returns:
-            Exact counts/bounds and path-free selection descriptor.
+            Exact matched/total counts and a path-free selection descriptor.
+            Polygon geometry is read by the calculation or optional outline.
 
         Raises:
             VectorConflictError: If unavailable, empty, over budget or queue-full.

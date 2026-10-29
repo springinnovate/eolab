@@ -64,7 +64,7 @@ OPERATIONS = {
     ),
     "vector.selection-measurement.v1": InstalledOperation(
         "vector.selection-measurement.v1",
-        "Measure counts and bounds of filtered catalog polygons for an analysis area.",
+        "Count matching features in a catalog or uploaded vector layer for an analysis area.",
         SelectionMeasurementInput,
         SelectionMeasurementResult,
         measure_selected_features,

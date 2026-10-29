@@ -1,16 +1,23 @@
 """Catalog identity, direct native reads, and independent display admission."""
 
 import asyncio
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+import fiona
 from shapely.geometry import Polygon, box, mapping, shape
 
 from catalog_selection_support import FixtureCatalog, write_selection
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.bounded_vector import polygon_features, selection_summary
+from eolab_app.bounded_vector import (
+    VectorReadLimits,
+    polygon_features,
+    selection_counts,
+    selection_summary,
+)
 from eolab_app.catalog_selection import (
     CatalogSelection,
     ResolvedCatalogSelection,
@@ -20,6 +27,8 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.models import ResolvedVectorSource, VectorFormat, VectorSourceKind
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.attribute_filter import ogr_predicate
+from eolab_app.raster.read_cancellation import RasterReadCancelled
 
 
 @pytest.mark.parametrize(
@@ -90,6 +99,134 @@ def test_complete_filtered_polygon_preserves_hole_without_snapshot(
         polygons = list(features)
     assert len(polygons) == 1 and shape(polygons[0]).area == 15
     assert "coordinates" not in source.selection.model_dump_json()
+
+
+@pytest.mark.parametrize("driver", ["GPKG", "ESRI Shapefile"])
+def test_selection_counts_read_only_filter_attributes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, driver: str
+) -> None:
+    """Count exact typed predicates without decoding geometry or unused fields.
+
+    Args:
+        tmp_path: Isolated native vector files.
+        monkeypatch: Observe the real Fiona records returned by the reader.
+        driver: Mounted format supported by vector selection.
+    """
+    path = tmp_path / ("counties.gpkg" if driver == "GPKG" else "counties.shp")
+    with fiona.open(
+        path,
+        "w",
+        driver=driver,
+        layer="counties",
+        crs="EPSG:4326",
+        schema={
+            "geometry": "Polygon",
+            "properties": {
+                "name": "str",
+                "selected": "int64",
+                "unused": "str",
+            },
+        },
+    ) as dataset:
+        for name, value in [
+            ("Washington County", 6060007000),
+            ("Washington county", 3),
+            (None, None),
+        ]:
+            dataset.write(
+                {
+                    "geometry": mapping(box(0, 0, 1, 1)),
+                    "properties": {
+                        "name": name,
+                        "selected": value,
+                        "unused": "Not requested",
+                    },
+                }
+            )
+    catalog = FixtureCatalog(
+        ResolvedVectorSource(
+            "mounted",
+            "geopackage" if driver == "GPKG" else "shapefile",
+            path,
+            "data",
+            "counties",
+        )
+    )
+    service = VectorSamplingService(catalog, catalog)
+    selection = CatalogSelection(
+        collectionId="eolab-mounted-vectors",
+        itemId="counties",
+        assetKey="data",
+        layerName="counties",
+        filter=VectorFilter(),
+    )
+    resolved = asyncio.run(service.resolve_for_sampling(selection))
+    read_filter = fiona.Collection.filter
+    expected_fields: set[str] = set()
+
+    def filtered_records(
+        collection: fiona.Collection, *args: Any, **kwargs: Any
+    ) -> Iterator[Any]:
+        """Inspect native records while preserving the collection's iterator.
+
+        Args:
+            collection: Open original source.
+            args: Native filter positional arguments.
+            kwargs: Native predicate supplied by the reader.
+
+        Yields:
+            Actual geometry-free records with only requested attributes.
+        """
+        for feature in read_filter(collection, *args, **kwargs):
+            assert feature.geometry is None
+            assert set(feature.properties) == expected_fields
+            yield feature
+
+    monkeypatch.setattr(fiona.Collection, "filter", filtered_records)
+    for rule in [
+        None,
+        {"field": "name", "operator": "eq", "value": "Washington County"},
+        {"field": "name", "operator": "missing", "value": None},
+        {"field": "selected", "operator": "eq", "value": 6060007000},
+    ]:
+        candidate = VectorFilter(rules=[] if rule is None else [rule])
+        expected_fields = set() if rule is None else {rule["field"]}
+        filtered = replace(
+            resolved,
+            selection=selection.model_copy(update={"filter": candidate}),
+            where=ogr_predicate(candidate),
+        )
+        limit = 1 if rule and rule["field"] == "selected" else 3
+        assert selection_counts(filtered, limits=VectorReadLimits(features=limit)) == {
+            "matched": 3 if rule is None else 1,
+            "total": 3,
+        }
+
+
+def test_selection_counts_preserve_empty_budget_cancellation_and_read_errors(
+    source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep selection failures while deferring coordinate work to polygon readers.
+
+    Args:
+        source: Authorized real polygon source.
+        monkeypatch: Advance the reader clock past its actual work deadline.
+    """
+    assert selection_counts(
+        source, limits=VectorReadLimits(coordinates_per_feature=0)
+    ) == {"matched": 1, "total": 2}
+    with pytest.raises(GeometryValidationError, match="No matching"):
+        selection_counts(replace(source, where='"selected" = 123'))
+    with pytest.raises(GeometryValidationError, match="feature budget"):
+        selection_counts(source, limits=VectorReadLimits(features=0))
+    with pytest.raises(RasterReadCancelled):
+        selection_counts(source, lambda: True)
+    with pytest.raises(SelectionUnavailableError):
+        selection_counts(replace(source, path=source.path.with_name("missing.gpkg")))
+    clock = iter([0, 16])
+    monkeypatch.setattr("eolab_app.bounded_vector.monotonic", lambda: next(clock))
+    with pytest.raises(GeometryValidationError, match="15-second time budget"):
+        selection_counts(source)
 
 
 def test_native_read_never_falls_back_after_zero_matches(
@@ -169,24 +306,26 @@ def test_selection_reauthorizes_after_restart_without_storage(
     )
 
     async def scenario() -> None:
-        """Reauthorize the descriptor after an injected measurement completes."""
+        """Reauthorize the descriptor after its feature count completes."""
 
-        async def measure(
+        async def count_features(
             selection: CatalogSelection, upload_owner: str | None
-        ) -> dict[str, Any]:
-            """Measure the real fixture source for the requested descriptor.
+        ) -> dict[str, int]:
+            """Count the real fixture features for the requested descriptor.
 
             Args:
                 selection: Expected descriptor passed to the execution boundary.
                 upload_owner: Unused browser identity for this catalog selection.
 
             Returns:
-                Exact fixture measurements, without simulating job scheduling.
+                Matched and total feature counts, without simulating job scheduling.
             """
             assert selection == source.selection
-            return selection_summary(source)
+            return selection_counts(source)
 
-        first = VectorSamplingService(catalog, catalog, selection_executor=measure)
+        first = VectorSamplingService(
+            catalog, catalog, selection_executor=count_features
+        )
         response = await first.select(request)
         descriptor = CatalogSelection.model_validate(response["selection"])
         assert not {"id", "expiresAt", "geometry"}.intersection(response)

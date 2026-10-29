@@ -23,7 +23,7 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
     """Create selection routes that cancel source reads when the client disconnects.
 
     Args:
-        service: Authorizes vector sources and measures their filtered polygons.
+        service: Authorizes vector sources and counts their matching features.
 
     Returns:
         Router accepting catalog or upload identity and typed filters.
@@ -40,7 +40,7 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
         request: Request,
         response: Response,
     ) -> dict[str, Any]:
-        """Measure filtered polygons and return their reusable selection descriptor.
+        """Count filtered features and return their reusable selection descriptor.
 
         Args:
             payload: Catalog or upload source and complete filter snapshot.
@@ -48,7 +48,7 @@ def create_vector_sampling_router(service: VectorSamplingService) -> APIRouter:
             response: Renews the browser cookie when selecting an uploaded layer.
 
         Returns:
-            Feature counts, geographic bounds and a descriptor containing the
+            Feature counts and a descriptor containing the
             source identity and feature filter, without file paths or credentials.
 
         Raises:

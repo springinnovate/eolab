@@ -491,7 +491,7 @@ export class ModelsController {
                 input.area = previous.area; input.vectorInfo = previous.info; return null;
             }
             input.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
-            input.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
+            input.vectorInfo = {label: source.label, matched: area.matched, total: area.total};
             if (filter !== null) void this.updateMapFilter(source, area, draft, name, abort);
             else input.mapFilterMessage = "";
             return area;
@@ -506,7 +506,7 @@ export class ModelsController {
 
     /** Share a checked selection with its vector view and report rendering separately.
      * @param {Object} source Chosen vector view and its Catalog or uploaded source identity.
-     * @param {Object} area Checked source predicate, bounds and feature counts.
+     * @param {Object} area Checked source predicate and exact feature counts.
      * @param {Object} draft Setup that requested this change.
      * @param {string} name Input whose selected filter changed.
      * @param {AbortController} request Selection request, used to ignore obsolete display feedback.

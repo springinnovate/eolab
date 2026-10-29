@@ -732,8 +732,7 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
             return httpx2.Response(204)
         if request.url.path.endswith("/result"):
             return httpx2.Response(200, json={"jobId": job_id, "value": {
-                "measurements": {"bbox": [-2, -2, 0, 2], "matched": 1,
-                    "total": 1, "coordinates": 5, "rings": 1, "exactGeometryBytes": 180},
+                "measurements": {"matched": 1, "total": 1},
                 "error": None,
             }})
         return httpx2.Response(202, json={"jobId": job_id, "status": "succeeded"})

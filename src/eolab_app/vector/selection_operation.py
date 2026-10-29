@@ -1,4 +1,4 @@
-"""Measure filtered vector polygons in a Job service execution process."""
+"""Count matching vector features in a Job service execution process."""
 
 import asyncio
 from pathlib import Path
@@ -7,7 +7,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    FiniteFloat,
     NonNegativeInt,
     model_validator,
 )
@@ -29,37 +28,31 @@ class SelectionMeasurementInput(BaseModel):
 
 
 class FeatureMeasurements(BaseModel):
-    """Counts and WGS84 bounds of matching polygons; contains no geometry."""
+    """Exact matching and total feature counts; contains no geometry."""
 
     model_config = ConfigDict(extra="forbid")
-    bbox: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat]
     matched: NonNegativeInt
     total: NonNegativeInt
-    coordinates: NonNegativeInt
-    rings: NonNegativeInt
-    exactGeometryBytes: NonNegativeInt
 
     @model_validator(mode="after")
-    def check_counts_and_bounds(self) -> "FeatureMeasurements":
-        """Reject inconsistent measurements returned across the Jobs boundary.
+    def check_counts(self) -> "FeatureMeasurements":
+        """Reject empty or inconsistent counts returned across the Jobs boundary.
 
         Returns:
-            The measured feature counts and bounds.
+            The measured feature counts.
 
         Raises:
-            ValueError: If no feature matched, counts disagree, or bounds reverse.
+            ValueError: If no feature matched or the count exceeds the total.
         """
-        if not 0 < self.matched <= self.total or (
-            self.bbox[0] > self.bbox[2] or self.bbox[1] > self.bbox[3]
-        ):
+        if not 0 < self.matched <= self.total:
             raise ValueError("Invalid selected-feature measurements")
         return self
 
 
 class SelectionMeasurementResult(BaseModel):
-    """Measurements or an expected source/geometry error safe to show the user.
+    """Feature counts or an expected selection error safe to show the user.
 
-    Invalid polygons and empty filters are completed checks with no measurements.
+    Selections with no matches and unavailable sources complete with an error.
     Unexpected exceptions still fail the job and remain private to service logs.
     """
 
@@ -85,13 +78,13 @@ class SelectionMeasurementResult(BaseModel):
 def measure_selected_features(
     inputs: SelectionMeasurementInput,
 ) -> SelectionMeasurementResult:
-    """Read matching polygons once and return their counts and bounding envelope.
+    """Count features using their attributes without reading polygon coordinates.
 
     Args:
         inputs: Source identity, immutable filter and private upload owner if needed.
 
     Returns:
-        Measurements, or a safe explanation of empty, invalid, or unreadable inputs.
+        Exact counts, or a safe explanation of empty or unreadable inputs.
 
     Raises:
         VectorFeatureError: Catalog cannot authorize the requested layer/filter.
@@ -114,26 +107,25 @@ def measure_selected_features(
 async def _measure_selected_features(
     inputs: SelectionMeasurementInput,
 ) -> SelectionMeasurementResult:
-    """Measure a vector layer's filtered polygons within the native read limits.
+    """Count matching features by their attributes within the native read limits.
 
     Args:
         inputs: Path-free source descriptor established by Vector selection.
 
     Returns:
-        Counts/bounds for the same source identified by the request.
+        Matching and total feature counts for the requested source.
 
     Raises:
         SelectionUnavailableError: The requested source identity is invalid.
         VectorUploadError: The upload is unavailable to the submitted owner.
-        GeometryValidationError: No polygons match, geometry is invalid, or a
-            polygon exceeds its read budget.
+        GeometryValidationError: No features match or the read exceeds its budget.
         VectorFeatureError: Catalog cannot authorize the requested layer/filter.
         OSError: A source file or the process memory limit cannot be inspected.
         ValueError: Native measurements do not match the result schema.
     """
     # Discovery must not import native GIS libraries into the Jobs HTTP process.
     import httpx2
-    from eolab_app.bounded_vector import _limit_memory, selection_summary
+    from eolab_app.bounded_vector import _limit_memory, selection_counts
     from eolab_app.vector.catalog import StacVectorCatalog
     from eolab_app.vector.selection_source import resolve_selection
     from eolab_app.vector.sources import MountedVectorResolver
@@ -157,6 +149,6 @@ async def _measure_selected_features(
             )
         with _limit_memory():
             measurements = FeatureMeasurements.model_validate(
-                selection_summary(resolved)
+                selection_counts(resolved)
             )
         return SelectionMeasurementResult(measurements=measurements)

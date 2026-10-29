@@ -4,7 +4,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import math
-import json
 from time import monotonic
 from typing import Any
 import sys
@@ -73,11 +72,16 @@ class VectorReadLimits:
 @contextmanager
 def _source_collection(
     resolved: ResolvedCatalogSelection,
+    *,
+    ignore_geometry: bool = False,
+    include_fields: tuple[str, ...] | None = None,
 ) -> Iterator[fiona.Collection]:
     """Open only the authorized native layer and sanitize external-driver failures.
 
     Args:
-        resolved: Current private source capability.
+        resolved: Authorized immutable source file and native layer.
+        ignore_geometry: Read attributes without decoding source geometry.
+        include_fields: Attribute names to read, or None to retain all attributes.
 
     Yields:
         Original immutable native layer, closed when the context exits.
@@ -90,6 +94,8 @@ def _source_collection(
             resolved.path,
             enabled_drivers=[resolved.driver],
             layer=resolved.selection.layerName,
+            ignore_geometry=ignore_geometry,
+            include_fields=include_fields,
         ) as dataset:
             yield dataset
     except (fiona.errors.FionaError, OSError) as error:
@@ -267,6 +273,61 @@ def polygon_records(
             yield iterate()
 
 
+def selection_counts(
+    resolved: ResolvedCatalogSelection,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+    *,
+    limits: VectorReadLimits | None = VectorReadLimits(),
+) -> dict[str, int]:
+    """Count matching features without reading or validating polygon geometry.
+
+    The native predicate narrows candidates; exact attribute comparisons retain
+    the same selection used by polygon readers. Geometry is checked when an
+    outline or calculation reads it.
+
+    Args:
+        resolved: Authorized immutable source and feature filter.
+        cancellation_requested: Optional request to stop between native records.
+        limits: Time and candidate-feature budgets, or None for supervised work.
+
+    Returns:
+        Exact matched and whole-layer feature counts.
+
+    Raises:
+        GeometryValidationError: No features match, or reading exceeds its budget.
+        AttributeFilterError: A filter does not match the source's attribute schema.
+        SelectionUnavailableError: The native source cannot be read.
+        RasterReadCancelled: The caller cancelled the selection.
+    """
+    deadline = monotonic() + limits.seconds if limits else None
+    fields = tuple(
+        dict.fromkeys(rule.field for rule in resolved.selection.filter.rules)
+    )
+    matched = 0
+    with _source_collection(
+        resolved, ignore_geometry=True, include_fields=fields
+    ) as dataset:
+        validate_filter(resolved.selection.filter, dataset.schema.get("properties", {}))
+        total = len(dataset)
+        options = {"where": resolved.where} if resolved.where else {}
+        for count, feature in enumerate(dataset.filter(**options), 1):
+            require_active_raster_read(cancellation_requested)
+            if limits is not None and count > limits.features:
+                raise GeometryValidationError(
+                    f"Vector reading exceeded its {limits.features:,}-feature budget"
+                )
+            if deadline is not None and monotonic() > deadline:
+                raise GeometryValidationError(
+                    f"Vector reading exceeded its {limits.seconds:g}-second time budget after {count - 1:,} features"
+                )
+            matched += int(
+                matches_filter(resolved.selection.filter, feature.properties)
+            )
+    if not matched:
+        raise GeometryValidationError("No matching polygon features; change the filter")
+    return {"matched": matched, "total": total}
+
+
 def selection_summary(
     resolved: ResolvedCatalogSelection,
     cancellation_requested: RasterReadCancellationCheck | None = None,
@@ -287,21 +348,12 @@ def selection_summary(
         GeometryValidationError: If no polygon matches or reading is invalid.
     """
     bounds = [math.inf, math.inf, -math.inf, -math.inf]
-    matched = coordinates = rings = exact_bytes = 0
+    matched = coordinates = rings = 0
     with polygon_features(
         resolved, cancellation_requested=cancellation_requested, limits=limits
     ) as features:
         for geometry in features:
             matched += 1
-            exact_bytes += (
-                len(
-                    json.dumps(
-                        {"type": "Feature", "properties": {}, "geometry": geometry},
-                        allow_nan=False,
-                    ).encode("utf-8")
-                )
-                + 2
-            )
             groups = _polygon_rings(geometry)
             rings += len(groups)
             for ring in groups:
@@ -321,7 +373,6 @@ def selection_summary(
         "total": total,
         "coordinates": coordinates,
         "rings": rings,
-        "exactGeometryBytes": exact_bytes + 48,
     }
 
 
