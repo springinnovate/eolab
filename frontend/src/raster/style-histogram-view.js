@@ -1,22 +1,11 @@
 /**
- * Histogram context embedded in the keyed raster style editor.
+ * Categorical ground-area preview in the raster style editor.
  *
  * This presentation adapter consumes explicit statistics and style snapshots.
  * It owns no sampling, rendering, layer-selection, or persistence decisions.
  */
-import {
-    clearRasterHistogramChart,
-    renderRasterHistogramChart,
-} from "./histogram-view.js";
 import { createCategoricalRasterHistogram } from "./categorical-histogram-view.js";
 import { requireRasterControl } from "./required-control.js";
-
-/** Ordered style stops paired with the percentile controls. */
-const STYLE_STOPS = Object.freeze([
-    ["lower", "minimum", "minimumColor"],
-    ["middle", "midpoint", "midpointColor"],
-    ["upper", "maximum", "maximumColor"],
-]);
 
 /**
  * @typedef {Object} RasterStyleHistogramHandlers
@@ -42,10 +31,6 @@ export class RasterStyleHistogramView {
         this.root = requireRasterControl(
             documentContext,
             "#raster-style-histogram"
-        );
-        this.chart = requireRasterControl(
-            documentContext,
-            "#raster-style-histogram-chart"
         );
         this.scope = requireRasterControl(
             documentContext,
@@ -90,51 +75,6 @@ export class RasterStyleHistogramView {
     }
 
     /**
-     * Render one style target's distribution with candidate range markers.
-     *
-     * @param {Object} statistics Validated raster statistics snapshot.
-     * @param {Object} style Candidate raster color and range snapshot.
-     * @param {string} scopeLabel Readable sampling scope.
-     * @param {string} [valueLabel="Raster value"] Horizontal-axis label.
-     * @param {{lower:number,middle:number,upper:number}|null}
-     * [percentiles=null] Draft percentile positions, when applicable.
-     * @param {RasterStyleHistogramFeedback} [feedback] Current request feedback alongside a retained distribution.
-     * @return {void}
-     */
-    render(
-        statistics,
-        style,
-        scopeLabel,
-        valueLabel = "Raster value",
-        percentiles = null,
-        feedback = { message: "", isBusy: false }
-    ) {
-        this.categoryHost.replaceChildren();
-        this.chart.hidden = false;
-        const markers = STYLE_STOPS.map(
-            ([percentileName, valueName, colorName]) => ({
-                label: percentiles === null
-                    ? valueName
-                    : `${percentileName} ${percentiles[percentileName]}%`,
-                value: style[valueName],
-                color: style[colorName],
-            })
-        );
-        this.root.hidden = false;
-        this.root.setAttribute("aria-busy", String(feedback.isBusy));
-        this.scope.textContent = scopeLabel;
-        this.status.textContent = feedback.message;
-        renderRasterHistogramChart(
-            this.chart,
-            statistics,
-            style,
-            this.documentContext,
-            valueLabel,
-            markers
-        );
-    }
-
-    /**
      * Render category rows for the keyed style target.
      * @param {import("./categorical-presentation.js").CategoricalAreaPresentation} presentation Category areas and appearance.
      * @param {string} scopeLabel Readable sampling scope.
@@ -142,8 +82,6 @@ export class RasterStyleHistogramView {
      * @return {void}
      */
     renderCategorical(presentation, scopeLabel, feedback = { message: "", isBusy: false }) {
-        clearRasterHistogramChart(this.chart);
-        this.chart.hidden = true;
         this.root.hidden = false;
         this.root.setAttribute("aria-busy", String(feedback.isBusy));
         this.scope.textContent = scopeLabel;
@@ -165,14 +103,11 @@ export class RasterStyleHistogramView {
         this.scope.textContent = scopeLabel;
         this.status.textContent = message;
         this.categoryHost.replaceChildren();
-        this.chart.hidden = true;
-        clearRasterHistogramChart(this.chart);
     }
 
-    /** Hide the preview and release its responsive chart observer. @return {void} */
+    /** Hide and empty the categorical preview. @return {void} */
     clear() {
         this.categoryHost.replaceChildren();
-        clearRasterHistogramChart(this.chart);
         this.root.hidden = true;
         this.root.setAttribute("aria-busy", "false");
         this.scope.textContent = "";

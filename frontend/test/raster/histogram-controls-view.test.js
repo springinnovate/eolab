@@ -747,3 +747,82 @@ test("clicked values update below their own charts without replacing axes or rep
     assert.equal(updatedCard.children.at(-2).hidden, true);
     view.unbind();
 });
+
+test("each histogram inspects percentiles immediately and keeps controls through recoloring and pending data", () => {
+    const doc = new FakeRasterControlDocument(), view = new RasterHistogramControlsView(doc);
+    const received = [];
+    view.bind({ onHistogramPercentiles: (key, settings) => received.push({ key, settings }) });
+    const settings = { lower: 5, middle: 50, upper: 95, rescale: false };
+    const first = { key: "first", label: "Temperature", canCalculate: true, scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE,
+        percentileSettings: settings, canRescale: true, percentileMessage: "" };
+    const second = { ...first, key: "second" };
+    view.renderLayerHistograms([first, second], "first");
+    const card = view.summaryCards.get("first"), other = view.summaryCards.get("second");
+    const input = card.percentileControls.inputs.lower;
+    input.focus();
+    input.value = "20";
+    input.dispatchEvent(new Event("input"));
+    assert.match(card.chart.getAttribute("aria-label"), /lower 20%/);
+    assert.deepEqual(received, [{ key: "first", settings: { ...settings, lower: 20 } }]);
+    assert.equal(other.percentileControls.inputs.lower.value, "5");
+    assert.equal(card.style, DEFAULT_RASTER_STYLE, "Inspection leaves committed colors alone");
+
+    card.percentileControls.rescaleInput.checked = true;
+    card.percentileControls.rescaleInput.dispatchEvent(new Event("change"));
+    const applied = { ...first, percentileSettings: received.at(-1).settings,
+        style: { ...DEFAULT_RASTER_STYLE, minimumColor: "#000000" } };
+    view.renderLayerHistograms([applied, second], "first");
+    assert.equal(view.summaryCards.get("first"), card);
+    assert.equal(card.percentileControls.inputs.lower, input);
+    assert.equal(doc.activeElement, input);
+    assert.equal(input.value, "20");
+    assert.equal(card.percentileControls.markers[0].color, "#000000");
+    assert.equal(view.summaryCards.get("second"), other);
+
+    const oldControls = card.percentileControls;
+    view.renderLayerHistograms([{ ...applied, state: "loading", statistics: null, counts: null,
+        canRescale: false, percentileMessage: "Updating this histogram…" }, second], "first");
+    const pending = view.summaryCards.get("first");
+    assert.equal(pending.chart, null);
+    assert.equal(pending.percentileControls.inputs.lower.disabled, true);
+    assert.equal(pending.percentileControls.rescaleInput.checked, true);
+    assert.equal(pending.percentileControls.rescaleInput.disabled, false);
+    const before = received.length;
+    oldControls.inputs.lower.dispatchEvent(new Event("input"));
+    assert.equal(received.length, before, "Replaced controls detach their listeners");
+    pending.percentileControls.rescaleInput.checked = false;
+    pending.percentileControls.rescaleInput.dispatchEvent(new Event("change"));
+    assert.deepEqual(received.at(-1), { key: "first", settings: { ...settings, lower: 20, rescale: false } });
+    view.unbind();
+});
+
+test("detached histogram percentile inspection works without a rendering target and survives redraw", () => {
+    const doc = new FakeRasterControlDocument(), view = new RasterHistogramControlsView(doc);
+    const received = [];
+    view.bind({ onHistogramPercentiles: (key, settings) => received.push({ key, settings }) });
+    const context = { key: "catalog-temperature", settings: { lower: 5, middle: 50, upper: 95, rescale: false },
+        canRescale: false, message: "Add this raster to the map to rescale its colors." };
+    view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE, "Temperature (K)", context);
+    const controls = view.detailPercentileControls, axes = view.detailAxisControls;
+    assert.equal(controls.rescaleInput.disabled, true);
+    assert.equal(controls.inputs.lower.disabled, false);
+    controls.inputs.lower.focus();
+    controls.inputs.lower.value = "15";
+    controls.inputs.lower.dispatchEvent(new Event("input"));
+    assert.equal(received[0].key, "catalog-temperature");
+    assert.equal(received[0].settings.rescale, false);
+    assert.match(doc.querySelector("#raster-histogram-chart").getAttribute("aria-label"), /lower 15%/);
+    view.renderHistogram(RASTER_STATISTICS, { ...DEFAULT_RASTER_STYLE, maximumColor: "#000000" },
+        "Temperature (K)", { ...context, settings: received[0].settings });
+    assert.equal(view.detailPercentileControls, controls);
+    assert.equal(view.detailAxisControls, axes);
+    assert.equal(doc.activeElement, controls.inputs.lower);
+    assert.equal(controls.markers[2].color, "#000000");
+    view.clearHistogram();
+    controls.inputs.lower.dispatchEvent(new Event("input"));
+    assert.equal(received.length, 1);
+    assert.equal(view.detailPercentileControls, null);
+    view.unbind();
+});

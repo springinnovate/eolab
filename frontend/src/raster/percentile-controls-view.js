@@ -1,231 +1,140 @@
-/**
- * DOM presentation adapter for raster histogram percentile controls.
- *
- * This adapter owns the percentile region, its three range inputs and value
- * outputs, ordered-input feedback, the apply action, and their direct event
- * listeners. It makes no statistics, styling, rendering, or request decisions.
- */
-import { requireRasterControl } from "./required-control.js";
+/** Inspect histogram percentiles and opt into rescaling one raster view. */
+import { estimateRasterHistogramPercentile } from "./statistics.js";
+import { formatRasterPixelValue } from "./value-format.js";
 
-/** Ordered percentile names represented by the controls. */
-const PERCENTILE_NAMES = Object.freeze(["lower", "middle", "upper"]);
+/** @typedef {{lower:number,middle:number,upper:number,rescale:boolean}} HistogramPercentileSettings */
 
-/**
- * @typedef {Object} RasterPercentileHandlers
- * @property {() => void} onPercentileInput Updates percentile estimates.
- * @property {() => void} onApplyPercentiles Applies the percentile range.
- */
+/** Percentile names and the committed colors used by their chart markers. */
+const PERCENTILE_STOPS = Object.freeze([
+    ["lower", "Lower", "minimumColor"],
+    ["middle", "Middle", "midpointColor"],
+    ["upper", "Upper", "maximumColor"],
+]);
 
-/** Own direct DOM interaction and presentation for histogram percentiles. */
+/** Own one histogram's percentile sliders, estimates and rescale choice. */
 export class RasterPercentileControlsView {
     /**
-     * Resolve the required percentile elements once at startup.
-     *
-     * @param {Document} [documentContext=globalThis.document] Document that
-     * owns the percentile controls.
-     * @throws {Error} If any required percentile element is missing.
+     * Create controls that report edits without requesting data or applying styles.
+     * @param {Document} documentContext Document owning the histogram.
+     * @param {(settings:HistogramPercentileSettings)=>void} onInput Report each slider or checkbox edit.
      */
-    constructor(documentContext = globalThis.document) {
-        this.percentileControls = requireRasterControl(
-            documentContext,
-            "#raster-percentile-controls"
-        );
-        this.percentileInputs = {
-            lower: requireRasterControl(
-                documentContext,
-                "#raster-lower-percentile"
-            ),
-            middle: requireRasterControl(
-                documentContext,
-                "#raster-middle-percentile"
-            ),
-            upper: requireRasterControl(
-                documentContext,
-                "#raster-upper-percentile"
-            ),
+    constructor(documentContext, onInput) {
+        this.root = documentContext.createElement("fieldset");
+        this.root.className = "raster-percentile-controls raster-histogram-percentiles";
+        const legend = documentContext.createElement("legend");
+        legend.textContent = "Percentiles";
+        this.root.append(legend);
+        this.inputs = {};
+        this.values = {};
+        this.onInput = onInput;
+        this.handleInput = this.#handleInput.bind(this);
+        for (const [name, labelText] of PERCENTILE_STOPS) {
+            const label = documentContext.createElement("label");
+            const nameElement = documentContext.createElement("span");
+            nameElement.textContent = labelText;
+            const input = documentContext.createElement("input");
+            input.type = "range";
+            input.min = "0";
+            input.max = "100";
+            input.step = "1";
+            input.setAttribute("aria-label", `${labelText} percentile`);
+            input.addEventListener("input", this.handleInput);
+            const output = documentContext.createElement("output");
+            label.append(nameElement, input, output);
+            this.root.append(label);
+            this.inputs[name] = input;
+            this.values[name] = output;
+        }
+        const rescaleLabel = documentContext.createElement("label");
+        rescaleLabel.className = "raster-histogram-rescale";
+        this.rescaleInput = documentContext.createElement("input");
+        this.rescaleInput.type = "checkbox";
+        this.rescaleInput.addEventListener("change", this.handleInput);
+        const rescaleText = documentContext.createElement("span");
+        rescaleText.textContent = "Rescale colors to this histogram";
+        rescaleLabel.append(this.rescaleInput, rescaleText);
+        this.status = documentContext.createElement("p");
+        this.status.className = "raster-percentile-status";
+        this.status.setAttribute("role", "status");
+        this.root.append(rescaleLabel, this.status);
+    }
+
+    /**
+     * Update estimates and availability while retaining focused inputs.
+     * @param {Object|null} statistics Current validated histogram, or null while unavailable.
+     * @param {import("./style.js").RasterStyle} style Current colors for chart markers.
+     * @param {HistogramPercentileSettings} settings This view's percentile positions and rescale choice.
+     * @param {boolean} canRescale Whether the current result can set map colors.
+     * @param {string} message Reason rescaling is unavailable, or empty text.
+     * @return {void}
+     */
+    render(statistics, style, settings, canRescale, message) {
+        this.statistics = statistics;
+        this.style = style;
+        this.settings = { ...settings };
+        this.canRescale = canRescale;
+        this.message = message;
+        for (const [name] of PERCENTILE_STOPS) {
+            const value = String(settings[name]);
+            if (this.inputs[name].value !== value) this.inputs[name].value = value;
+        }
+        this.rescaleInput.checked = settings.rescale;
+        this.#renderValues();
+    }
+
+    /**
+     * Return raw percentile estimates for the existing histogram marker renderer.
+     * Constant values remain unchanged here; style range expansion belongs to styling.
+     * @return {Array<{label:string,value:number,color:string}>} Markers, or an empty list for invalid ordering.
+     */
+    get markers() {
+        if (!this.ordered || this.statistics === null) return [];
+        return PERCENTILE_STOPS.map(([name, , colorName]) => ({
+            label: `${name} ${this.settings[name]}%`,
+            value: this.estimates[name],
+            color: this.style[colorName],
+        }));
+    }
+
+    /** Remove owned listeners when the histogram is replaced. @return {void} */
+    dispose() {
+        for (const input of Object.values(this.inputs)) input.removeEventListener("input", this.handleInput);
+        this.rescaleInput.removeEventListener("change", this.handleInput);
+    }
+
+    /** Read native controls, update estimates immediately and report the edit. @return {void} */
+    #handleInput() {
+        this.settings = {
+            lower: Number(this.inputs.lower.value),
+            middle: Number(this.inputs.middle.value),
+            upper: Number(this.inputs.upper.value),
+            rescale: this.rescaleInput.checked,
         };
-        this.percentileValues = {
-            lower: requireRasterControl(
-                documentContext,
-                "#raster-lower-percentile-value"
-            ),
-            middle: requireRasterControl(
-                documentContext,
-                "#raster-middle-percentile-value"
-            ),
-            upper: requireRasterControl(
-                documentContext,
-                "#raster-upper-percentile-value"
-            ),
-        };
-        this.percentileError = requireRasterControl(
-            documentContext,
-            "#raster-percentile-error"
-        );
-        this.applyPercentilesButton = requireRasterControl(
-            documentContext,
-            "#apply-raster-percentiles"
-        );
-        this.renderingIsAvailable = true;
-        this.statisticsAreAvailable = !this.percentileControls.hidden;
-        this.modeIsCompatible = true;
-        this.handlers = null;
-        this.boundPercentileInput = this.#handlePercentileInput.bind(this);
-        this.boundApplyPercentiles = this.#handleApplyPercentiles.bind(this);
+        this.#renderValues();
+        this.onInput({ ...this.settings });
     }
 
-    /**
-     * Attach direct percentile listeners to semantic viewer handlers.
-     *
-     * @param {RasterPercentileHandlers} handlers Percentile handlers.
-     * @return {void}
-     */
-    bind(handlers) {
-        this.handlers = handlers;
-        for (const input of Object.values(this.percentileInputs)) {
-            input.addEventListener("input", this.boundPercentileInput);
+    /** Present estimated values and keep invalid input from applying colors. @return {void} */
+    #renderValues() {
+        const { lower, middle, upper } = this.settings;
+        this.ordered = lower < middle && middle < upper;
+        this.estimates = {};
+        for (const [name] of PERCENTILE_STOPS) {
+            const value = this.statistics === null ? null
+                : estimateRasterHistogramPercentile(this.statistics, this.settings[name]);
+            this.estimates[name] = value;
+            const text = `${this.settings[name]}% ≈ ${value === null ? "—" : formatRasterPixelValue(value)}`;
+            this.values[name].textContent = text;
+            this.inputs[name].disabled = this.statistics === null;
+            this.inputs[name].setAttribute("aria-valuetext", text);
+            if (this.ordered) this.inputs[name].removeAttribute("aria-invalid");
+            else this.inputs[name].setAttribute("aria-invalid", "true");
         }
-        this.applyPercentilesButton.addEventListener(
-            "click",
-            this.boundApplyPercentiles
-        );
-    }
-
-    /** Remove every direct listener installed by {@link bind}. @return {void} */
-    unbind() {
-        for (const input of Object.values(this.percentileInputs)) {
-            input.removeEventListener("input", this.boundPercentileInput);
-        }
-        this.applyPercentilesButton.removeEventListener(
-            "click",
-            this.boundApplyPercentiles
-        );
-        this.handlers = null;
-    }
-
-    /**
-     * Read the three selected histogram positions as percentages.
-     *
-     * @return {{lower: number, middle: number, upper: number}} Percentiles.
-     */
-    readPercentiles() {
-        return {
-            lower: Number(this.percentileInputs.lower.value),
-            middle: Number(this.percentileInputs.middle.value),
-            upper: Number(this.percentileInputs.upper.value),
-        };
-    }
-
-    /**
-     * Restore percentile controls to the application defaults.
-     *
-     * @param {{lower: number, middle: number, upper: number}} defaults Default
-     * ordered histogram positions.
-     * @return {void}
-     */
-    resetPercentiles(defaults) {
-        for (const percentileName of PERCENTILE_NAMES) {
-            this.percentileInputs[percentileName].value =
-                defaults[percentileName];
-            this.percentileInputs[percentileName].removeAttribute(
-                "aria-invalid"
-            );
-        }
-        this.percentileError.textContent = "";
-        this.applyPercentilesButton.disabled = false;
-    }
-
-    /**
-     * Present approximate values and ordered-input feedback for percentiles.
-     *
-     * @param {{lower: number, middle: number, upper: number}} percentiles
-     * Selected histogram positions.
-     * @param {{lower: string, middle: string, upper: string}} values Formatted
-     * approximate raster values.
-     * @param {boolean} isOrdered Whether the positions increase strictly.
-     * @param {boolean} isApplicable Whether the current histogram applies.
-     * @return {void}
-     */
-    renderPercentileValues(percentiles, values, isOrdered, isApplicable) {
-        for (const percentileName of PERCENTILE_NAMES) {
-            const input = this.percentileInputs[percentileName];
-            if (isOrdered) {
-                input.removeAttribute("aria-invalid");
-            } else {
-                input.setAttribute("aria-invalid", "true");
-            }
-            this.percentileValues[percentileName].textContent =
-                `${percentiles[percentileName]}% ≈ ` + values[percentileName];
-        }
-        this.percentileError.textContent = isOrdered
-            ? ""
-            : "Choose lower, middle, and upper percentiles in increasing order.";
-        this.applyPercentilesButton.textContent =
-            `Apply ${percentiles.lower}/${percentiles.middle}/` +
-            `${percentiles.upper} stretch to map`;
-        this.applyPercentilesButton.disabled = !isOrdered || !isApplicable;
-    }
-
-    /**
-     * Set whether the percentile controls are available.
-     *
-     * @param {boolean} isVisible Whether the controls should be visible.
-     * @return {void}
-     */
-    setPercentileControlsVisible(isVisible) {
-        this.statisticsAreAvailable = isVisible;
-        this.#synchronizeVisibility();
-    }
-
-    /**
-     * Set whether the active analysis target has a renderer whose thresholds
-     * can receive percentile values.
-     *
-     * @param {boolean} isAvailable Whether appearance controls have a target.
-     * @return {void}
-     */
-    setRenderingAvailable(isAvailable) {
-        this.renderingIsAvailable = isAvailable;
-        this.#synchronizeVisibility();
-    }
-
-    /**
-     * Set whether the active comparison mode accepts univariate percentiles.
-     *
-     * @param {boolean} isCompatible Whether percentile editing is compatible.
-     * @return {void}
-     */
-    setModeCompatible(isCompatible) {
-        this.modeIsCompatible = isCompatible;
-        this.#synchronizeVisibility();
-    }
-
-    /**
-     * Set whether the current percentile range can be applied.
-     *
-     * @param {boolean} isEnabled Whether the apply action should be enabled.
-     * @return {void}
-     */
-    setApplyPercentilesEnabled(isEnabled) {
-        this.applyPercentilesButton.disabled = !isEnabled;
-    }
-
-    /** Forward one percentile edit to the raster viewer. @return {void} */
-    #handlePercentileInput() {
-        this.handlers.onPercentileInput();
-    }
-
-    /** Forward the apply-percentiles action. @return {void} */
-    #handleApplyPercentiles() {
-        this.handlers.onApplyPercentiles();
-    }
-
-    /** Apply independent statistics and rendering availability. @return {void} */
-    #synchronizeVisibility() {
-        this.percentileControls.hidden = !(
-            this.renderingIsAvailable &&
-            this.statisticsAreAvailable &&
-            this.modeIsCompatible
-        );
+        // A selected checkbox remains operable while its result is unavailable.
+        this.rescaleInput.disabled = !this.settings.rescale && (!this.canRescale || !this.ordered);
+        this.status.textContent = !this.ordered
+            ? "Choose lower, middle, and upper percentiles in increasing order."
+            : this.message;
+        this.status.hidden = this.status.textContent === "";
     }
 }

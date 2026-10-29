@@ -202,8 +202,6 @@ test("RasterControlsView owns style values and semantic control events", () => {
         onStyleChange: () => received.push(["commit"]),
         onPaletteChange: () => received.push(["palette"]),
         onResetStyle: () => received.push(["reset"]),
-        onPercentileInput: () => received.push(["percentile"]),
-        onApplyPercentiles: () => received.push(["apply"]),
         onRetryStatistics: () => received.push(["retry"]),
         onSampleWindowRangeInput: (value) => received.push(["range", value]),
         onSampleWindowNumberInput: (value) => received.push(["number", value]),
@@ -248,8 +246,6 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
         onStyleChange() {},
         onPaletteChange() {},
         onResetStyle() {},
-        onPercentileInput() {},
-        onApplyPercentiles() {},
         onRetryStatistics() {},
         onSampleWindowRangeInput() {},
         onSampleWindowNumberInput() {},
@@ -334,10 +330,6 @@ test("RasterControlsView clears histogram visibility through its DOM contract", 
 
     assert.equal(chart.children.length, 0);
     assert.equal(chart.getAttribute("hidden"), "");
-    assert.equal(
-        documentContext.querySelector("#raster-percentile-controls").hidden,
-        true
-    );
     assert.equal(documentContext.querySelector("#retry-raster-statistics").hidden, true);
 });
 
@@ -421,13 +413,6 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
     chart.setAttribute("hidden", "");
 
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
-    view.setPercentileControlsVisible(true);
-    view.renderPercentileValues(
-        { lower: 5, middle: 50, upper: 95 },
-        { lower: "-4.000e+0", middle: "3.000e+0", upper: "2.000e+1" },
-        true,
-        true
-    );
 
     assert.equal(chart.getAttribute("hidden"), null);
     assert.equal(
@@ -444,19 +429,7 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
     );
     assert.equal(chart.getAttribute("viewBox"), "0 0 640 190");
     assert.match(chart.getAttribute("aria-label"), /percentage of valid sampled pixels/);
-    assert.equal(
-        documentContext.querySelector("#raster-percentile-controls").hidden,
-        false
-    );
-    assert.equal(
-        documentContext.querySelector("#apply-raster-percentiles").disabled,
-        false
-    );
-    assert.equal(
-        documentContext.querySelector("#raster-middle-percentile-value")
-            .textContent,
-        "50% ≈ 3.000e+0"
-    );
+
 });
 
 test("RasterControlsView labels exact bounded histogram provenance", () => {
@@ -478,7 +451,7 @@ test("RasterControlsView rejects an incomplete application document", () => {
     );
 });
 
-test("RasterControlsView preserves the raster viewer compatibility surface", () => {
+test("RasterControlsView exposes the current raster viewer controls", () => {
     const view = new RasterControlsView(new FakeRasterDocument());
     const expectedMethods = [
         "populatePalettes",
@@ -493,17 +466,12 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setPaletteName",
         "renderStyleError",
         "renderLegend",
-        "readPercentiles",
-        "resetPercentiles",
-        "renderPercentileValues",
         "clearStatistics",
         "setStatisticsBusy",
         "setStatisticsStatus",
         "renderHistogram",
         "clearHistogram",
-        "setPercentileControlsVisible",
         "setStatisticsRetryVisible",
-        "setApplyPercentilesEnabled",
         "setSampleWindowSize",
         "setSampleWindowInvalid",
         "setSampleWindowStatus",

@@ -211,14 +211,9 @@ export class FakeRasterControlDocument extends EventTarget {
      */
     querySelector(selector) {
         if (!this.elements.has(selector)) {
-            const isPercentileInput = [
-                "#raster-lower-percentile",
-                "#raster-middle-percentile",
-                "#raster-upper-percentile",
-            ].includes(selector);
             const type = selector.endsWith("-color")
                 ? "color"
-                : isPercentileInput || selector.endsWith("-range")
+                : selector.endsWith("-range")
                     ? "range"
                     : selector.includes("minimum") ||
                         selector.includes("midpoint") ||

@@ -11,9 +11,6 @@ import { RasterAppearanceControlsView } from "./appearance-controls-view.js";
 import { BivariateRasterControlsView } from "./bivariate-controls-view.js";
 import { RasterHistogramControlsView } from "./histogram-controls-view.js";
 import {
-    RasterPercentileControlsView,
-} from "./percentile-controls-view.js";
-import {
     RasterSamplingAreaControlsView,
 } from "./sampling-area-controls-view.js";
 import { RasterStyleHistogramView } from "./style-histogram-view.js";
@@ -27,8 +24,8 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * @property {()=>void} onCategoricalStyleChange Commits a valid category draft.
  * @property {() => void} onPaletteChange Applies a selected color palette.
  * @property {() => void} onResetStyle Restores the initial raster style.
- * @property {() => void} onPercentileInput Updates percentile estimates.
- * @property {() => void} onApplyPercentiles Applies the percentile range.
+ * @property {(key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings)=>void}
+ * onHistogramPercentiles Updates percentile inspection and optional rescaling for one view.
  * @property {() => void} onOpenHistogram Opens the full raster-analysis view.
  * @property {() => void} onRetryStatistics Retries raster statistics.
  * @property {(key: string) => void} onSelectHistogram Activates one retained
@@ -62,7 +59,6 @@ export class RasterControlsView {
     #appearanceView;
     #bivariateView;
     #histogramView;
-    #percentileView;
     #samplingAreaView;
     #styleHistogramView;
 
@@ -77,9 +73,6 @@ export class RasterControlsView {
         this.#appearanceView = new RasterAppearanceControlsView(documentContext);
         this.#bivariateView = new BivariateRasterControlsView(documentContext);
         this.#histogramView = new RasterHistogramControlsView(documentContext);
-        this.#percentileView = new RasterPercentileControlsView(
-            documentContext
-        );
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
             documentContext
         );
@@ -131,7 +124,6 @@ export class RasterControlsView {
         this.#appearanceView.bind(handlers);
         this.#bivariateView.bind(handlers);
         this.#histogramView.bind(handlers);
-        this.#percentileView.bind(handlers);
         this.#samplingAreaView.bind(handlers);
         this.#styleHistogramView.bind(handlers);
     }
@@ -141,7 +133,6 @@ export class RasterControlsView {
         this.#appearanceView.unbind();
         this.#bivariateView.unbind();
         this.#histogramView.unbind();
-        this.#percentileView.unbind();
         this.#samplingAreaView.unbind();
         this.#styleHistogramView.unbind();
     }
@@ -257,15 +248,6 @@ export class RasterControlsView {
     }
 
     /**
-     * Read the three selected histogram positions as percentages.
-     *
-     * @return {{lower: number, middle: number, upper: number}} Percentiles.
-     */
-    readPercentiles() {
-        return this.#percentileView.readPercentiles();
-    }
-
-    /**
      * Read draft histogram percentiles for one 2D axis.
      * @param {"x"|"y"} axis Paired axis.
      * @return {{lower:number,middle:number,upper:number}} Percentile positions.
@@ -284,40 +266,10 @@ export class RasterControlsView {
         this.#bivariateView.renderPercentiles(axis, state);
     }
 
-    /**
-     * Restore percentile controls to the application defaults.
-     *
-     * @param {{lower: number, middle: number, upper: number}} defaults Defaults.
-     * @return {void}
-     */
-    resetPercentiles(defaults) {
-        this.#percentileView.resetPercentiles(defaults);
-    }
-
-    /**
-     * Present approximate values and ordered-input feedback for percentiles.
-     *
-     * @param {{lower: number, middle: number, upper: number}} percentiles
-     * Selected histogram positions.
-     * @param {{lower: string, middle: string, upper: string}} values Formatted
-     * approximate raster values.
-     * @param {boolean} isOrdered Whether the positions increase strictly.
-     * @param {boolean} isApplicable Whether the current histogram applies.
-     * @return {void}
-     */
-    renderPercentileValues(percentiles, values, isOrdered, isApplicable) {
-        this.#percentileView.renderPercentileValues(
-            percentiles,
-            values,
-            isOrdered,
-            isApplicable
-        );
-    }
 
     /** Remove histogram content and hide result-only controls. @return {void} */
     clearStatistics() {
         this.#histogramView.clearStatistics();
-        this.#percentileView.setPercentileControlsVisible(false);
     }
 
     /**
@@ -346,10 +298,12 @@ export class RasterControlsView {
      * @param {Object} statistics Validated raster statistics.
      * @param {Object} style Committed raster style.
      * @param {string} [valueLabel="Raster value"] Axis label with known units.
+     * @param {{key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings,
+     * canRescale:boolean,message:string}|null} [percentileContext=null] View identity and rescaling availability.
      * @return {void}
      */
-    renderHistogram(statistics, style, valueLabel = "Raster value") {
-        this.#histogramView.renderHistogram(statistics, style, valueLabel);
+    renderHistogram(statistics, style, valueLabel = "Raster value", percentileContext = null) {
+        this.#histogramView.renderHistogram(statistics, style, valueLabel, percentileContext);
     }
 
     /**
@@ -370,36 +324,6 @@ export class RasterControlsView {
      */
     renderCategoricalStyleHistogram(presentation, scopeLabel, feedback) {
         this.#styleHistogramView.renderCategorical(presentation, scopeLabel, feedback);
-    }
-
-    /**
-     * Render the keyed style target's distribution and candidate thresholds.
-     *
-     * @param {Object} statistics Validated raster statistics snapshot.
-     * @param {Object} style Candidate raster color and range snapshot.
-     * @param {string} scopeLabel Readable sampling scope.
-     * @param {string} [valueLabel="Raster value"] Horizontal-axis label.
-     * @param {{lower:number,middle:number,upper:number}|null}
-     * [percentiles=null] Draft percentile positions, when applicable.
-     * @param {import("./style-histogram-view.js").RasterStyleHistogramFeedback} [feedback] Scoped request feedback alongside the distribution.
-     * @return {void}
-     */
-    renderStyleHistogram(
-        statistics,
-        style,
-        scopeLabel,
-        valueLabel = "Raster value",
-        percentiles = null,
-        feedback
-    ) {
-        this.#styleHistogramView.render(
-            statistics,
-            style,
-            scopeLabel,
-            valueLabel,
-            percentiles,
-            feedback
-        );
     }
 
     /**
@@ -425,16 +349,6 @@ export class RasterControlsView {
     }
 
     /**
-     * Set whether the percentile controls are available.
-     *
-     * @param {boolean} isVisible Whether the controls should be visible.
-     * @return {void}
-     */
-    setPercentileControlsVisible(isVisible) {
-        this.#percentileView.setPercentileControlsVisible(isVisible);
-    }
-
-    /**
      * Set whether the statistics retry action is available.
      *
      * @param {boolean} isVisible Whether the retry action should be visible.
@@ -442,16 +356,6 @@ export class RasterControlsView {
      */
     setStatisticsRetryVisible(isVisible) {
         this.#histogramView.setStatisticsRetryVisible(isVisible);
-    }
-
-    /**
-     * Set whether the current percentile range can be applied.
-     *
-     * @param {boolean} isEnabled Whether the apply action should be enabled.
-     * @return {void}
-     */
-    setApplyPercentilesEnabled(isEnabled) {
-        this.#percentileView.setApplyPercentilesEnabled(isEnabled);
     }
 
     /**
@@ -549,7 +453,6 @@ export class RasterControlsView {
      */
     setRenderingControlsAvailable(isAvailable) {
         this.#appearanceView.setActiveRasterAvailable(isAvailable);
-        this.#percentileView.setRenderingAvailable(isAvailable);
     }
 
     /**
@@ -571,7 +474,6 @@ export class RasterControlsView {
      */
     setAppearanceEnabled(isEnabled) {
         this.#appearanceView.setEnabled(isEnabled);
-        this.#percentileView.setModeCompatible(isEnabled);
     }
 
     /**

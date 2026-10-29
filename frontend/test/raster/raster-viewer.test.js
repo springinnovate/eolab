@@ -14,11 +14,10 @@ import {
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
-import { RasterPercentileControlsView } from "../../src/raster/percentile-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
-import { buildRasterLegend, DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { buildRasterLegend, DEFAULT_RASTER_STYLE, deriveRasterStyleFromStatistics } from "../../src/raster/style.js";
 import { buildRasterStyleEnvironment } from "../../src/raster/wms.js";
 import { normalizeCategoricalRasterStyle } from "../../src/raster/categorical-style.js";
 import { createSavedMapView, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
@@ -247,10 +246,8 @@ function createFakeControlsView() {
         handlers: null,
         displayedStatistics: null,
         renderedStatistics: [],
-        percentilePresentation: null,
         styleHistogram: null,
         styleHistogramState: null,
-        applyPercentilesEnabled: true,
         statisticsStatus: "",
         appearanceStatus: "",
         populatePalettes() {},
@@ -300,24 +297,6 @@ function createFakeControlsView() {
         renderLegend(style) {
             this.legendStyle = { ...style };
         },
-        resetPercentiles() {},
-        readPercentiles() {
-            return { lower: 5, middle: 50, upper: 95 };
-        },
-        renderPercentileValues(
-            percentiles,
-            values,
-            isOrdered,
-            isApplicable
-        ) {
-            this.percentilePresentation = {
-                percentiles,
-                values,
-                isOrdered,
-                isApplicable,
-            };
-            this.applyPercentilesEnabled = isOrdered && isApplicable;
-        },
         clearStatistics() {
             this.displayedStatistics = null;
         },
@@ -325,37 +304,11 @@ function createFakeControlsView() {
         setStatisticsStatus(message) {
             this.statisticsStatus = message;
         },
-        renderHistogram(statistics, _style, valueLabel) {
+        renderHistogram(statistics, _style, valueLabel, context) {
+            this.histogramPercentileContext = context;
             this.displayedStatistics = statistics;
             this.histogramValueLabel = valueLabel;
             this.renderedStatistics.push(statistics);
-        },
-        /** Record numeric distribution and scoped request feedback.
-         * @param {Object} statistics Distribution. @param {Object} style Preview style.
-         * @param {string} scopeLabel Displayed sample scope. @param {string} valueLabel Axis label.
-         * @param {Object|null} percentiles Draft percentiles.
-         * @param {Object} [feedback] Current request feedback. @return {void}
-         */
-        renderStyleHistogram(
-            statistics,
-            style,
-            scopeLabel,
-            valueLabel,
-            percentiles,
-            feedback
-        ) {
-            this.styleHistogram = {
-                statistics,
-                style: { ...style },
-                scopeLabel,
-                valueLabel,
-                percentiles: percentiles === null
-                    ? null
-                    : { ...percentiles },
-                feedback,
-            };
-            this.categoricalStyleHistogram = null;
-            this.styleHistogramState = null;
         },
         /** Record unavailable state and remove both kinds of prior distribution.
          * @param {string} scopeLabel Current scope. @param {string} message Feedback.
@@ -384,15 +337,8 @@ function createFakeControlsView() {
             this.categoricalHistogram = null;
             this.displayedStatistics = null;
         },
-        /** @param {boolean} visible Whether range controls may show. @return {void} */
-        setPercentileControlsVisible(visible) {
-            this.percentileControlsVisible = visible;
-        },
         setStatisticsRetryVisible(isVisible) {
             this.statisticsRetryVisible = isVisible;
-        },
-        setApplyPercentilesEnabled(isEnabled) {
-            this.applyPercentilesEnabled = isEnabled;
         },
         setSampleWindowSize(sizeKm) {
             this.sampleWindowSizeKm = sizeKm;
@@ -601,6 +547,129 @@ function selectedBoundsFromArea(samplingArea) {
 function flushPromises() {
     return new Promise((resolve) => setImmediate(resolve));
 }
+
+/** Return a controllable clock for scheduled viewer updates. @return {Object} Clock, pending callbacks and one-step flush. */
+function createManualClock() {
+    const pending = new Map();
+    let nextId = 0;
+    return {
+        pending,
+        /** @param {Function} callback Scheduled work. @param {number} delay Milliseconds. @return {number} Timer ID. */
+        setTimeout(callback, delay) { pending.set(++nextId, {callback, delay}); return nextId; },
+        /** @param {number} id Timer ID. @return {void} */
+        clearTimeout(id) { pending.delete(id); },
+        /** Run the current batch; callbacks may schedule a later batch. @return {void} */
+        flush() { const batch = [...pending.values()]; pending.clear(); for (const {callback} of batch) callback(); },
+    };
+}
+
+test("histogram rescaling is opt-in, coalesced during input, and isolated to one view", async () => {
+    const clock = createManualClock();
+    const item = createRasterItem("percentile-views");
+    let catalog;
+    let reads = 0;
+    const h = visibleLayerFixture(async (item, area) => {
+        reads++; return createLayerStatistics(item, selectedBoundsFromArea(area));
+    }, {clock}, {}, {restoreRemovedLayer: (snapshot, isCurrent) =>
+        catalog.restoreRemovedLayer(snapshot, async () => item, isCurrent)});
+    catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
+    try {
+        await h.viewer.show(item); await flushPromises();
+        const first = h.mapLayers.retainedRecords[0];
+        const other = h.mapLayers.getRecord(await h.mapLayers.addAnotherView(first.entry.key));
+        await flushPromises();
+        h.viewer.openStyle(other.entry.key);
+        const original = {...first.state.rasterStyle}, otherStyle = {...other.state.rasterStyle};
+        const count = reads;
+        const settings = {lower: 10, middle: 40, upper: 90, rescale: false};
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, settings);
+        assert.equal(clock.pending.size, 0);
+        assert.deepEqual(first.state.rasterStyle, original);
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, {...settings, rescale: true});
+        const scheduled = [...clock.pending.values()][0];
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, {...settings, middle: 60, rescale: true});
+        assert.equal(clock.pending.size, 1);
+        assert.equal([...clock.pending.values()][0], scheduled, "Dragging keeps the existing deadline");
+        assert.equal(scheduled.delay, 200);
+        clock.flush();
+        const applied = deriveRasterStyleFromStatistics(original, first.state.analysis.rasterStatistics,
+            {...settings, middle: 60});
+        assert.deepEqual(first.state.rasterStyle, applied);
+        assert.deepEqual(other.state.rasterStyle, otherStyle);
+        assert.deepEqual(h.controlsView.style, otherStyle, "Another open style editor keeps its inputs");
+        assert.equal(reads, count, "Slider edits do not read statistics again");
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, {...settings, middle: 20, rescale: true});
+        assert.equal(clock.pending.size, 1, "A continued drag schedules its next update");
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, {...settings, lower: 80, rescale: true});
+        assert.equal(clock.pending.size, 0, "Invalid ordering cancels an older valid candidate");
+        assert.match(h.controlsView.layerHistograms.find(value => value.key === first.entry.key).percentileMessage, /increasing order/);
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, {...settings, rescale: true});
+        h.controlsView.handlers.onHistogramPercentiles(first.entry.key, settings);
+        clock.flush();
+        assert.deepEqual(first.state.rasterStyle, applied, "Disabling retains the last applied colors");
+    } finally { h.destroy(); }
+});
+
+test("automatic rescaling waits for accepted replacement samples and releases removed views", async () => {
+    const clock = createManualClock(), requests = [];
+    const h = visibleLayerFixture((item, area, signal) => {
+        if (area.kind === "wholeRaster") return Promise.resolve(createLayerStatistics(item));
+        const request = {...createDeferred(), item, area, signal}; requests.push(request); return request.promise;
+    }, {clock});
+    try {
+        await h.viewer.show(createRasterItem("percentile-areas")); await flushPromises();
+        const record = h.mapLayers.retainedRecords[0], original = {...record.state.rasterStyle};
+        const settings = {lower: 10, middle: 40, upper: 90, rescale: true};
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, settings);
+        h.viewer.exploreAt({lng: 14, lat: 37});
+        clock.flush();
+        assert.deepEqual(record.state.rasterStyle, original, "A queued old-area stretch is discarded");
+        const obsolete = requests.at(-1);
+        h.viewer.exploreAt({lng: 15, lat: 38});
+        assert.equal(obsolete.signal.aborted, true);
+        obsolete.resolve(createLayerStatistics(obsolete.item, obsolete.area.selectedBounds));
+        await flushPromises();
+        assert.equal(clock.pending.size, 0, "A late cancelled result cannot rescale");
+        const current = requests.at(-1), statistics = createLayerStatistics(current.item, current.area.selectedBounds);
+        current.resolve(statistics); await flushPromises();
+        assert.equal(clock.pending.size, 1, "The enabled view follows its accepted new sample");
+        clock.flush();
+        assert.deepEqual(record.state.rasterStyle, deriveRasterStyleFromStatistics(original, statistics, settings));
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, {...settings, middle: 60});
+        h.controlsView.handlers.onSampleWindowNumberInput("500");
+        const [styleTimerId, styleTimer] = [...clock.pending].find(([, timer]) => timer.delay === 200);
+        clock.pending.delete(styleTimerId); styleTimer.callback();
+        assert.equal(h.controlsView.layerHistograms[0].canRescale, false);
+        h.controlsView.handlers.onSampleWindowNumberInput("invalid");
+        assert.equal(clock.pending.size, 1, "Cancelling the resize resumes the enabled stretch for the accepted area");
+        clock.flush();
+        assert.deepEqual(record.state.rasterStyle, deriveRasterStyleFromStatistics(original, statistics, {...settings, middle: 60}));
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, settings);
+        h.mapLayers.removeKey(record.entry.key);
+        assert.equal(clock.pending.size, 0);
+    } finally { h.destroy(); assert.equal(clock.pending.size, 0); }
+});
+
+test("rescaling reports rendering failures and keeps existing constant-histogram range handling", async () => {
+    const clock = createManualClock();
+    const h = visibleLayerFixture(async item => ({...createLayerStatistics(item),
+        sampleMinimum: 5, sampleMaximum: 5, percentiles: {p05: 5, p50: 5, p95: 5},
+        suggestedRange: {minimum: 4, midpoint: 5, maximum: 6}}), {clock});
+    try {
+        await h.viewer.show(createRasterItem("constant-percentiles")); await flushPromises();
+        const record = h.mapLayers.retainedRecords[0];
+        const settings = {lower: 10, middle: 40, upper: 90, rescale: true};
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, settings);
+        clock.flush();
+        assert.ok(record.state.rasterStyle.minimum < 5 && record.state.rasterStyle.maximum > 5);
+        const previous = {...record.state.rasterStyle};
+        record.state.layer.setParams = () => {throw new Error("Map layer unavailable");};
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, {...settings, middle: 60});
+        assert.doesNotThrow(() => clock.flush());
+        assert.deepEqual(record.state.rasterStyle, previous);
+        assert.match(h.controlsView.layerHistograms[0].percentileMessage, /Could not rescale this raster: Map layer unavailable/);
+    } finally { h.destroy(); }
+});
 
 /**
  * Exercise the application's visible-layer policy and neutral controller.
@@ -1075,120 +1144,77 @@ test('histogram axis units follow each analyzed data asset', async () => {
     h.destroy();
 });
 
-test("keyed raster styling previews histogram thresholds and links both tools", async () => {
-    const styleRequests = [];
-    const h = visibleLayerFixture(undefined, {}, {
-        onStyleRequested: (key) => styleRequests.push(key),
+test("categorical style keeps a previous whole distribution separate from a failed map request", async () => {
+    const reads = [];
+    const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+        const pending = createDeferred(); reads.push({ item, area, signal, codes, pending });
+        return area.kind === "wholeRaster" ? Promise.resolve(createCategoryStatistics(item, null, codes)) : pending.promise;
     });
-    const item = { ...createRasterItem("style-histogram"), assets: { data: {
-        href: "file:///scan-source/folder/style-histogram.tif",
-        "raster:bands": [{ unit: "%" }],
-    } } };
-    await h.viewer.show(item);
-    await flushPromises();
-    const key = h.layerStackView.activeKey;
-    await h.viewer.show(createRasterItem("style-histogram-neighbor"));
-    await flushPromises();
-    assert.notEqual(h.layerStackView.activeKey, key);
-
-    assert.equal(h.viewer.openStyle(key), true);
-    assert.equal(h.controlsView.styleHistogram.statistics.itemId, item.id);
-    assert.equal(h.controlsView.styleHistogram.scopeLabel, "Whole raster");
-    assert.equal(h.controlsView.styleHistogram.valueLabel, "Raster value (%)");
-    assert.deepEqual(
-        h.controlsView.styleHistogram.percentiles,
-        { lower: 5, middle: 50, upper: 95 }
-    );
-    h.controlsView.handlers.onPercentileInput();
-    assert.deepEqual(
-        h.controlsView.styleHistogram.percentiles,
-        { lower: 5, middle: 50, upper: 95 }
-    );
-
-    h.controlsView.handlers.onOpenHistogram();
-    assert.equal(h.controlsView.histogramWidgetOpenCount, 1);
-    h.controlsView.handlers.onStyleHistogram(key);
-    assert.deepEqual(styleRequests, [key]);
-
-    h.viewer.closeStyle();
-    assert.equal(h.controlsView.styleHistogram, null);
+    const item = createRasterItem("style-scope-categorical");
+    await h.viewer.show(item); await flushPromises();
+    const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
+    editCategoricalAppearance(h, key); await flushPromises();
+    const whole = record.state.analysis.wholeRasterStatistics;
+    await h.viewer.show(createRasterItem("style-scope-neighbor")); await flushPromises();
+    h.viewer.openStyle(key);
+    const preview = () => h.controlsView.categoricalStyleHistogram;
+    assert.equal(preview().scopeLabel, "Whole raster");
+    h.viewer.closeStyle(); h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
+    h.viewer.openStyle(key);
+    assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
+    assert.match(preview().feedback.message, /map sample: Calculating/i);
+    assert.equal(preview().feedback.isBusy, true);
+    const selectedRead = reads.find(read => read.item === item && read.area.kind === "selectedArea");
+    selectedRead.pending.reject(new Error("The selected area does not overlap the raster")); await flushPromises();
+    h.viewer.closeStyle(); h.viewer.openStyle(key);
+    assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
+    assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
+    assert.equal(preview().feedback.isBusy, false);
+    assert.equal(record.state.analysis.wholeRasterStatistics, whole, "Retained whole data remains available");
+    assert.equal(record.state.analysis.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
+    h.controlsView.handlers.onClearSampleWindow(); await flushPromises(); h.viewer.openStyle(key);
+    assert.equal(preview().scopeLabel, "Whole raster"); assert.equal(preview().feedback.message, "");
+    assert.equal(record.state.analysis.wholeRasterStatistics.itemId, item.id);
     h.destroy();
 });
 
-for (const mode of ["continuous", "categorical"]) {
-    test(`${mode} style keeps a previous whole distribution separate from a failed map request`, async () => {
-        const reads = [];
-        const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
-            const pending = createDeferred(); reads.push({ item, area, signal, codes, pending });
-            return area.kind === "wholeRaster" ? Promise.resolve(createCategoryStatistics(item, null, codes)) : pending.promise;
-        });
-        const item = createRasterItem(`style-scope-${mode}`);
-        await h.viewer.show(item); await flushPromises();
-        const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
-        if (mode === "categorical") { editCategoricalAppearance(h, key); await flushPromises(); }
-        const whole = record.state.analysis.wholeRasterStatistics;
-        await h.viewer.show(createRasterItem("style-scope-neighbor")); await flushPromises();
-        h.viewer.openStyle(key);
-        const preview = () => mode === "categorical" ? h.controlsView.categoricalStyleHistogram : h.controlsView.styleHistogram;
-        assert.equal(preview().scopeLabel, "Whole raster");
-        h.viewer.closeStyle(); h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
-        h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
-        assert.match(preview().feedback.message, /map sample: Calculating/i);
-        assert.equal(preview().feedback.isBusy, true);
-        const selectedRead = reads.find(read => read.item === item && read.area.kind === "selectedArea");
-        selectedRead.pending.reject(new Error("The selected area does not overlap the raster")); await flushPromises();
-        h.viewer.closeStyle(); h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
-        assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
-        assert.equal(preview().feedback.isBusy, false);
-        assert.equal(record.state.analysis.wholeRasterStatistics, whole, "Retained whole data remains available");
-        assert.equal(record.state.analysis.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
-        if (mode === "continuous") assert.equal(preview().statistics, whole);
-        h.controlsView.handlers.onClearSampleWindow(); await flushPromises(); h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Whole raster"); assert.equal(preview().feedback.message, "");
-        assert.equal(record.state.analysis.wholeRasterStatistics.itemId, item.id);
-        h.destroy();
+test("categorical style scopes successful polygons and labels a cancelled replacement as previous", async () => {
+    const reads = [];
+    const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
+        if (area.kind === "wholeRaster") return Promise.resolve(createCategoryStatistics(item, null, codes));
+        const pending = createDeferred(); reads.push({ item, area, signal, codes, pending }); return pending.promise;
     });
-
-    test(`${mode} style scopes successful polygons and labels a cancelled replacement as previous`, async () => {
-        const reads = [];
-        const h = visibleLayerFixture((item, area, signal, _fetch, codes) => {
-            if (area.kind === "wholeRaster") return Promise.resolve(createCategoryStatistics(item, null, codes));
-            const pending = createDeferred(); reads.push({ item, area, signal, codes, pending }); return pending.promise;
-        });
-        const item = createRasterItem(`style-polygon-${mode}`);
-        await h.viewer.show(item); await flushPromises();
-        const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
-        if (mode === "categorical") { editCategoricalAppearance(h, key); await flushPromises(); }
-        const selection = { selection: CATALOG_SELECTION, label: "Countries.gpkg" };
-        h.viewer.setVectorSelection(selection); await flushPromises();
-        const polygonRead = reads.at(-1);
-        polygonRead.pending.resolve({ ...createCategoryStatistics(item, null, polygonRead.codes),
-            scope: "catalogSelection", catalogSelection: CATALOG_SELECTION }); await flushPromises();
-        h.viewer.openStyle(key);
-        const preview = () => mode === "categorical" ? h.controlsView.categoricalStyleHistogram : h.controlsView.styleHistogram;
-        assert.equal(preview().scopeLabel, "Vector selection · Countries.gpkg");
-        assert.equal(preview().feedback.message, "");
-        h.controlsView.handlers.onUseMapWindow(); await flushPromises(); h.viewer.openStyle(key);
-        assert.equal(preview().scopeLabel, "Previous histogram · Vector selection · countries");
-        const mapRead = reads.at(-1);
-        mapRead.pending.resolve(createCategoryStatistics(item, mapRead.area.selectedBounds, mapRead.codes)); await flushPromises();
-        assert.match(preview().scopeLabel, /map sample$/i);
-        assert.equal(preview().feedback.message, ""); assert.equal(preview().feedback.isBusy, false);
-        h.viewer.exploreAt({ lng: 15, lat: 38 }); await flushPromises();
-        const replacement = reads.at(-1);
-        assert.notEqual(replacement, mapRead);
-        h.layerStackView.handlers.onAllVisibility(false); h.viewer.openStyle(key);
-        assert.equal(replacement.signal.aborted, true);
-        assert.equal(preview().feedback.isBusy, false);
-        assert.equal(preview().scopeLabel, "Previous histogram · Map sample");
-        assert.match(preview().feedback.message, /map sample:/i);
-        replacement.pending.resolve(createCategoryStatistics(item, replacement.area.selectedBounds, replacement.codes)); await flushPromises();
-        assert.equal(preview().scopeLabel, "Previous histogram · Map sample", "Late cancelled reply cannot relabel the preview");
-        h.destroy();
-    });
-}
+    const item = createRasterItem("style-polygon-categorical");
+    await h.viewer.show(item); await flushPromises();
+    const record = h.mapLayers.retainedRecords[0], key = record.entry.key;
+    editCategoricalAppearance(h, key); await flushPromises();
+    const selection = { selection: CATALOG_SELECTION, label: "Countries.gpkg" };
+    h.viewer.setVectorSelection(selection); await flushPromises();
+    const polygonRead = reads.at(-1);
+    polygonRead.pending.resolve({ ...createCategoryStatistics(item, null, polygonRead.codes),
+        scope: "catalogSelection", catalogSelection: CATALOG_SELECTION }); await flushPromises();
+    h.viewer.openStyle(key);
+    const preview = () => h.controlsView.categoricalStyleHistogram;
+    assert.equal(preview().scopeLabel, "Vector selection · Countries.gpkg");
+    assert.equal(preview().feedback.message, "");
+    h.controlsView.handlers.onUseMapWindow(); await flushPromises(); h.viewer.openStyle(key);
+    assert.equal(preview().scopeLabel, "Previous histogram · Vector selection · countries");
+    const mapRead = reads.at(-1);
+    mapRead.pending.resolve(createCategoryStatistics(item, mapRead.area.selectedBounds, mapRead.codes)); await flushPromises();
+    assert.match(preview().scopeLabel, /map sample$/i);
+    assert.equal(preview().feedback.message, ""); assert.equal(preview().feedback.isBusy, false);
+    h.viewer.exploreAt({ lng: 15, lat: 38 }); await flushPromises();
+    const replacement = reads.at(-1);
+    assert.notEqual(replacement, mapRead);
+    h.layerStackView.handlers.onAllVisibility(false); h.viewer.openStyle(key);
+    assert.equal(replacement.signal.aborted, true);
+    assert.equal(preview().feedback.isBusy, false);
+    assert.equal(preview().scopeLabel, "Previous histogram · Map sample");
+    assert.match(preview().feedback.message, /map sample:/i);
+    replacement.pending.resolve(createCategoryStatistics(item, replacement.area.selectedBounds, replacement.codes)); await flushPromises();
+    assert.equal(preview().scopeLabel, "Previous histogram · Map sample", "Late cancelled reply cannot relabel the preview");
+    h.destroy();
+});
 
 test("style category changes preserve map scope and never display unmatched cached codes", async () => {
     const reads = [];
@@ -1611,7 +1637,7 @@ test("late active and inactive whole-raster statistics cannot replace categorica
     }
     assert.equal(h.controlsView.displayedStatistics, null);
     assert.equal(h.controlsView.styleHistogram, null);
-    assert.equal(h.controlsView.percentileControlsVisible, false);
+    assert.equal(h.controlsView.layerHistograms[0].percentileSettings, undefined);
     assert.ok(h.controlsView.layerHistograms.every((summary) =>
         summary.state === "ready" && summary.counts === null &&
         summary.statistics === null && summary.categorical?.rows.length === 4
@@ -1728,14 +1754,9 @@ test("Reverse colors commits only the editing view and survives percentile edits
     catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
     const document = new FakeRasterControlDocument();
     const appearance = new RasterAppearanceControlsView(document);
-    const percentiles = new RasterPercentileControlsView(document);
     appearance.bind(h.controlsView.handlers);
-    percentiles.bind(h.controlsView.handlers);
     for (const method of ["readStyle", "setStyle", "getPaletteName", "setPaletteName", "renderLegend"]) {
         h.controlsView[method] = appearance[method].bind(appearance);
-    }
-    for (const method of ["readPercentiles", "resetPercentiles", "renderPercentileValues"]) {
-        h.controlsView[method] = percentiles[method].bind(percentiles);
     }
     try {
         await h.viewer.show(item);
@@ -1754,7 +1775,7 @@ test("Reverse colors commits only the editing view and survives percentile edits
         h.controlsView.handlers.onStyleChange();
         h.mapLayers.setOpacity(key, 0.4);
         const selectedPercentiles = { lower: 25, middle: 60, upper: 100 };
-        percentiles.resetPercentiles(selectedPercentiles);
+        h.controlsView.handlers.onHistogramPercentiles(key, {...selectedPercentiles, rescale: false});
         const reversed = { ...before, minimumColor: before.maximumColor, maximumColor: before.minimumColor };
         appearance.reverseColorsButton.dispatchEvent(new Event("click"));
         assert.deepEqual(appearance.readStyle(), reversed);
@@ -1762,18 +1783,12 @@ test("Reverse colors commits only the editing view and survives percentile edits
         assert.deepEqual(edited.state.rasterStyle, reversed);
         assert.equal(edited.state.layer.wmsParams.env, buildRasterStyleEnvironment(reversed));
         assert.equal(appearance.legend.getAttribute("aria-label"), buildRasterLegend(reversed).description);
-        assert.deepEqual(percentiles.readPercentiles(), selectedPercentiles);
+        assert.deepEqual(edited.state.histogramPercentiles, {...selectedPercentiles, rescale: false});
         assert.equal(edited.entry.opacity, 0.4);
         assert.deepEqual(original.adapter.exportSavedState(original), originalState);
         appearance.reverseColorsButton.dispatchEvent(new Event("click"));
         assert.deepEqual(edited.state.rasterStyle, before);
         appearance.reverseColorsButton.dispatchEvent(new Event("click"));
-        percentiles.applyPercentilesButton.dispatchEvent(new Event("click"));
-        assert.notEqual(edited.state.rasterStyle.minimum, before.minimum);
-        assert.deepEqual(edited.state.rasterStyle, {
-            ...reversed, minimum: 0, midpoint: 14, maximum: 30,
-        });
-        assert.deepEqual(percentiles.readPercentiles(), selectedPercentiles);
         const savedAppearance = edited.adapter.exportSavedState(edited);
         const saved = createSavedMapView({
             viewer: { version: "test", origin: "https://example.test" }, createdAt: "2026-10-06T00:00:00Z",
@@ -1794,7 +1809,6 @@ test("Reverse colors commits only the editing view and survives percentile edits
         assert.equal(appearance.getPaletteName(), "blue-yellow-red");
     } finally {
         appearance.unbind();
-        percentiles.unbind();
         h.destroy();
     }
 });
@@ -3346,9 +3360,11 @@ test("renderer-independent analysis supports exact windows without publication",
     controlsView.handlers.onPaletteChange();
     assert.equal(controlsView.legendStyle.minimumColor, "#440154");
     assert.equal(controlsView.appearanceStatus, "Applied the Viridis palette.");
-    controlsView.handlers.onApplyPercentiles();
-    assert.match(controlsView.appearanceStatus, /histogram percentile range/);
-    assert.match(controlsView.appearanceStatus, /histogram percentile range/);
+    const context = controlsView.histogramPercentileContext;
+    assert.equal(context.canRescale, false);
+    controlsView.handlers.onHistogramPercentiles(context.key, {lower: 10, middle: 40, upper: 90, rescale: false});
+    assert.equal(controlsView.histogramPercentileContext.settings.middle, 40);
+    assert.equal(publicationCalls, 0);
     controlsView.handlers.onResetStyle();
     assert.match(controlsView.statisticsStatus, /exact bounded histogram/);
     assert.equal(
@@ -3475,7 +3491,7 @@ test("WMS handoff keeps the selected area and rejects an obsolete detached resul
         detachedRead.pending.resolve(obsolete);
         await flushPromises();
         assert.equal(controlsView.renderedStatistics.includes(obsolete), false);
-        assert.equal(controlsView.applyPercentilesEnabled, false);
+        assert.equal(controlsView.histogramPercentileContext.canRescale, false);
 
         const current = createLayerStatistics(item, area.selectedBounds);
         retainedRead.pending.resolve(current);
@@ -3803,76 +3819,6 @@ for (const wholeState of ["ready", "error"]) {
         h.destroy();
     });
 }
-
-test("selected statistics remain draft-only until the user applies them", async () => {
-    const leafletMap = createFakeMap();
-    const { leaflet, wmsLayers } = createFakeLeaflet();
-    const controlsView = createFakeControlsView();
-    const wholeStatistics = createDeferred();
-    const selectedRequests = [];
-    const viewer = initializeRasterViewer(
-        {
-            wmsUrl: "/geoserver/eolab/wms",
-            leafletMap,
-            leaflet,
-            onTileError() {},
-        },
-        {
-            controlsView,
-            layerStackView: createFakeLayerStackView(),
-            publishRaster: async () => ({
-                layerName: "eolab:test-raster",
-                bbox: [-180, -90, 180, 90],
-            }),
-            loadStatistics: (item, samplingArea) => {
-                const selectedBounds = selectedBoundsFromArea(samplingArea);
-                if (selectedBounds === null) {
-                    return wholeStatistics.promise;
-                }
-                const request = createDeferred();
-                selectedRequests.push({ request, selectedBounds });
-                return request.promise;
-            },
-            samplePixel: async () => ({ inBounds: true, value: 1 }),
-            viewport: { innerWidth: 1280, innerHeight: 720 },
-        }
-    );
-    await viewer.show(MOUNTED_GEOTIFF_ITEM);
-    wholeStatistics.resolve(RASTER_STATISTICS);
-    await flushPromises();
-    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
-    assert.equal(wmsLayers[0].parameterUpdates.length, 1);
-
-    viewer.exploreAt({ lng: -74, lat: 41 });
-    assert.equal(selectedRequests.length, 1);
-    assert.equal(controlsView.applyPercentilesEnabled, false);
-    const selectedStatistics = {
-        ...RASTER_STATISTICS,
-        scope: "selectedArea",
-        selectedBounds: selectedRequests[0].selectedBounds,
-    };
-    selectedRequests[0].request.resolve(selectedStatistics);
-    await flushPromises();
-
-    assert.equal(controlsView.displayedStatistics, selectedStatistics);
-    assert.equal(controlsView.percentilePresentation.isApplicable, true);
-    assert.equal(wmsLayers[0].parameterUpdates.length, 1);
-    controlsView.handlers.onApplyPercentiles();
-    assert.equal(wmsLayers[0].parameterUpdates.length, 2);
-
-    viewer.exploreAt({ lng: -73, lat: 42 });
-    assert.equal(selectedRequests.length, 2);
-    selectedRequests[1].request.reject(new Error("selected sample failed"));
-    await flushPromises();
-    assert.equal(controlsView.displayedStatistics, selectedStatistics);
-    assert.equal(controlsView.applyPercentilesEnabled, false);
-    assert.match(controlsView.statisticsStatus, /reference/);
-
-    controlsView.handlers.onClearSampleWindow();
-    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
-    assert.equal(controlsView.percentilePresentation.isApplicable, true);
-    viewer.destroy();
-});
 
 test("manual style edits prevent late whole-raster automatic rescaling", async () => {
     const leafletMap = createFakeMap();
@@ -4758,6 +4704,12 @@ test("late histogram results stay scoped to the old area during a resize", async
     await flushPromises();
     assert.deepEqual(h.controlsView.displayedStatistics.selectedBounds, h.viewer.getSelectedArea().selectedBounds);
     assert.equal(presentations.at(-1).state, "ready");
+    assert.equal(h.controlsView.layerHistograms[0].canRescale, true);
+    h.controlsView.handlers.onSampleWindowNumberInput("100");
+    assert.equal(h.controlsView.layerHistograms[0].canRescale, false);
+    assert.match(h.controlsView.layerHistograms[0].percentileMessage, /Waiting/);
+    h.controlsView.handlers.onSampleWindowNumberInput("75");
+    assert.equal(h.controlsView.layerHistograms[0].canRescale, true);
     h.destroy();
 });
 
@@ -5398,7 +5350,7 @@ test("private sources use the same style, histogram, percentile, pixel and paire
     assert.ok(reads.some(read => read.codes?.includes(0)));
     assert.equal(h.mapLayers.snapshots()[0].legend.kind, "categories");
     h.controlsView.handlers.onAppearanceModeChange("continuous"); await flushPromises();
-    h.controlsView.handlers.onApplyPercentiles();
+    h.controlsView.handlers.onHistogramPercentiles(record.entry.key, {lower: 10, middle: 50, upper: 90, rescale: false});
     assert.ok(record.state.layer.wmsParams.env);
     assert.equal(record.state.layer.wmsParams.raster_style, undefined);
     const continuousEnvironment = record.state.layer.wmsParams.env;
@@ -5501,6 +5453,32 @@ function temporalFixture(dependencies = {}) {
         {get: async () => temporalItem()}, fixture.viewer, fixture.mapLayers);
     return {...fixture, temporalViews};
 }
+
+test("automatic percentile rescaling drops a queued old timestamp and follows the new sample", async () => {
+    const clock = createManualClock(), requests = [];
+    const h = temporalFixture({clock, loadStatistics: (item, area, signal) => {
+        if (item.source.time === "2020-01-01T00:00:00Z") return Promise.resolve(createLayerStatistics(item));
+        const request = {...createDeferred(), item, area, signal}; requests.push(request); return request.promise;
+    }});
+    try {
+        const record = await h.viewer.showTemporal(temporalItem()); await flushPromises();
+        const original = {...record.state.rasterStyle};
+        const settings = {lower: 10, middle: 40, upper: 90, rescale: true};
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, settings);
+        assert.equal(clock.pending.size, 1);
+        await h.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
+        clock.flush();
+        assert.deepEqual(record.state.rasterStyle, original);
+        assert.equal(h.controlsView.layerHistograms[0].canRescale, false);
+        const current = requests.at(-1), statistics = createLayerStatistics(current.item);
+        current.resolve(statistics); await flushPromises();
+        assert.equal(clock.pending.size, 1);
+        clock.flush();
+        assert.deepEqual(record.state.rasterStyle, deriveRasterStyleFromStatistics(original, statistics, settings));
+        h.controlsView.handlers.onHistogramPercentiles(record.entry.key, {...settings, middle: 60});
+        assert.equal(clock.pending.size, 1);
+    } finally { h.destroy(); assert.equal(clock.pending.size, 0); }
+});
 
 test("temporal time changes retain the row and style while late publication cannot replace the new frame", async () => {
     const requests = [];

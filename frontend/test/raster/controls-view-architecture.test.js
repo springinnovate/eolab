@@ -11,13 +11,13 @@ const FOCUSED_VIEW_IMPORTS = {
         "./categorical-histogram-view.js",
         "./histogram-axis-controls.js",
         "./histogram-view.js",
+        "./percentile-controls-view.js",
         "./required-control.js",
         "./value-format.js",
     ],
-    "percentile-controls-view.js": ["./required-control.js"],
+    "percentile-controls-view.js": ["./statistics.js", "./value-format.js"],
     "style-histogram-view.js": [
         "./categorical-histogram-view.js",
-        "./histogram-view.js",
         "./required-control.js",
     ],
     "bivariate-controls-view.js": [
@@ -30,7 +30,7 @@ const FOCUSED_VIEW_IMPORTS = {
     ],
 };
 
-test("focused raster-control views depend only on DOM presentation providers", async () => {
+test("focused raster-control views depend only on presentation and explicit result helpers", async () => {
     for (const [moduleName, expectedImports] of Object.entries(
         FOCUSED_VIEW_IMPORTS
     )) {
@@ -57,6 +57,7 @@ test("RasterControlsView delegates DOM ownership to focused views", async () => 
     );
 
     for (const moduleName of Object.keys(FOCUSED_VIEW_IMPORTS)) {
+        if (moduleName === "percentile-controls-view.js") continue;
         assert.match(source, new RegExp(`from ["']\\./${moduleName}["']`));
     }
     assert.doesNotMatch(source, /requireRasterControl/);
@@ -116,7 +117,7 @@ test("focused raster views validate only their semantic subgroup roots", async (
     assert.match(histogramSource, /"#raster-histogram"/);
     assert.doesNotMatch(histogramSource, /"#raster-percentile/);
     assert.doesNotMatch(histogramSource, /"#apply-raster-percentiles"/);
-    assert.match(percentileSource, /"#raster-percentile-controls"/);
+    assert.doesNotMatch(percentileSource, /requireRasterControl|fetch\(|GeoServer/);
     assert.doesNotMatch(percentileSource, /"#raster-histogram"/);
     assert.match(styleHistogramSource, /"#raster-style-histogram"/);
     assert.doesNotMatch(styleHistogramSource, /"#raster-percentile-controls"/);
