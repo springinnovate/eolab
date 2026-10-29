@@ -430,6 +430,9 @@ export class RasterHistogramControlsView {
         this.histogram.setAttribute("data-sampling-area", mode);
         this.histogramScope.textContent = label || labels[mode];
         this.mapScope.textContent = label || labels[mode];
+        this.histogramEmpty.textContent = mode === "vector" && this.summaryCards.size === 0
+            ? "No vector sampling area is available."
+            : "No visible raster layers. Show a raster layer to see its histogram.";
     }
 
     /** Enable statistics retry for an active raster. @return {void} */

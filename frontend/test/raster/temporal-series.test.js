@@ -6,6 +6,7 @@ import { RasterSeriesCalculations } from "../../src/processing/raster-series-cal
 import { CalculationRequests } from "../../src/processing/calculation-requests.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
+import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 
 const DATASET = {key: '["eolab-temporal-datasets","weather"]', collectionId: "eolab-temporal-datasets", itemId: "weather", label: "Weather"};
 const AREA = {kind: "selectedArea", selectedBounds: {west: -64, south: -5, east: -62, north: -3}};
@@ -68,6 +69,24 @@ function fixture({server = new Map(), saved = new Map()} = {}) {
     const close = () => { calculations.destroy(); requests.destroy(); jobs.destroy(); };
     return {controller, view, calculations, api, submitted, cancelled, downloads, discovery, server, saved, tick, finish, close};
 }
+
+test("accepting a vector area for a temporal period waits for Calculate", async () => {
+    const h = fixture();
+    try {
+        h.view.actions.onSourceMode("temporal");
+        await h.controller.chooseTemporalDataset(DATASET.key);
+        h.view.actions.onUseTemporalMonth();
+        h.view.actions.onArea("vector");
+        h.controller.updateSamplingForPanelVisibility(true);
+        h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
+        await h.tick();
+        assert.equal(h.submitted.length, 0);
+        assert.equal(h.calculations.manual, false);
+        h.view.actions.onCalculate(); await flush();
+        assert.equal(h.submitted.length, 1);
+        assert.deepEqual(h.submitted[0].area, {kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
+    } finally { h.close(); }
+});
 
 test("a temporal request restores its period, formulas and result after reload without resubmitting", async () => {
     const h = fixture();

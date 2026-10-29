@@ -8,6 +8,7 @@ import { CalculationSessionStorage } from "../../src/processing/calculation-sess
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingApiClient, ProcessingRequestError } from "../../src/processing/api.js";
+import { VectorSamplingController } from "../../src/vector/sampling.js";
 
 /** @param {number} west Longitude. @return {Object} Valid sampling box. */
 const box = west => ({kind:"selectedArea",selectedBounds:{west,south:0,east:west+1,north:1}});
@@ -21,9 +22,10 @@ const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{re
 /** Exercise independent calculation requests and their shared observer against a controlled Processing API.
  * @param {Object} [overrides={}] API fault injection.
  * @param {Map} [data=new Map()] Saved recovery record.
+ * @param {(choice:string)=>void} [onAreaChoice] Composed response to a user's area choice.
  * @return {Object} Controllers, captured requests and explicit clock/job completion.
  */
-function fixture(overrides = {}, data = new Map()) {
+function fixture(overrides = {}, data = new Map(), onAreaChoice = () => {}) {
     const requests=[],plans=new Map(),server=new Map(),timers=new Map();let serial=0,time=0;
     const clock={setTimeout(fn,delay){const id=++serial;timers.set(id,{fn,delay,at:time+delay});return id;},clearTimeout(id){timers.delete(id);}};
     const grid={nativeBlocks:1,width:10,height:10,crs:"EPSG:4326"};
@@ -55,7 +57,7 @@ function fixture(overrides = {}, data = new Map()) {
     const calculationRequests=new CalculationRequests({api,jobs,storage,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
     const area=new RasterSeriesCalculations({requests:calculationRequests,clock});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
-    const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){}});
+    const controller=new RasterSeriesController({view,areaStatistics:area,onClose(){},onEditArea(){},onAreaChoice});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
     const tick=async(delay=0)=>{for(const[id,t]of [...timers])if(t.delay===delay){timers.delete(id);t.fn();}await flush();};
     /** Advance the browser clock and execute only callbacks whose deadlines passed.
@@ -134,12 +136,13 @@ test("a histogram source selects an existing view without adding another statist
     h.close();
 });
 
-test("reviewed catalog, upload and drawing polygons use the same calculations and invalidate hidden work", async () => {
+test("catalog, upload and drawing selections preserve captured background work when invalidated", async () => {
     for (const info of [{selection: CATALOG_SELECTION},
         {selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter}},
         {polygonArea: {id: "a".repeat(32), sha256: "b".repeat(64)}}]) {
         const h = fixture(); h.view.actions.onAutomatic(false); await h.open();
-        h.controller.setVectorSelectionState({analysis: true, phase: "reading"});
+        h.view.actions.onArea("vector");
+        h.controller.setVectorSelectionState({phase: "reading"});
         assert.equal(h.view.state.area.area, null);
         h.controller.setVectorSamplingArea({...info, label: "Reviewed polygons"});
         h.view.actions.onCalculate(); await flush();
@@ -147,12 +150,122 @@ test("reviewed catalog, upload and drawing polygons use the same calculations an
             : {kind: "catalogSelection", catalogSelection: info.selection};
         assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, request]) => request.area), [expected, expected]);
         h.controller.updateSamplingForPanelVisibility(false);
+        h.controller.setVectorSelectionState({phase: "reading"});
+        assert.deepEqual(h.area.area, expected, "passive selection progress preserves hidden explicit inputs");
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
         h.controller.invalidateArea(expected); await flush();
-        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
         await h.finish(); await h.finish();
-        assert.equal(h.area.results.size, 0, "late obsolete polygon results are discarded");
+        assert.equal(h.area.results.size, 2, "results retain the polygons captured when Calculate was chosen");
         h.close();
     }
+});
+
+test("invalidating the active automatic vector area cancels its work and ignores late results", async () => {
+    const h = fixture();
+    h.view.actions.onArea("vector");
+    h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected countries"});
+    await h.open();
+    h.controller.invalidateArea({kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
+    await flush();
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2);
+    await h.finish(); await h.finish();
+    assert.equal(h.area.results.size, 0);
+    h.close();
+});
+
+test("accepting polygon features follows the automatic setting without making an explicit calculation", async () => {
+    for (const automatic of [true, false]) {
+        const choices = [];
+        const h = fixture({}, new Map(), choice => choices.push(choice));
+        h.view.actions.onAutomatic(automatic);
+        h.view.actions.onArea("vector");
+        await h.open();
+        assert.equal(h.requests.length, 0, "choosing Vector waits for its selected features");
+        h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
+        await h.tick();
+        assert.equal(h.requests.filter(([kind]) => kind === "submit").length, automatic ? 2 : 0);
+        assert.equal(h.area.manual, false, "accepting features does not make the work a background calculation");
+        if (!automatic) { h.view.actions.onCalculate(); await flush(); }
+        assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
+        h.view.actions.onArea("vector");
+        assert.equal(h.view.state.area.area, null, "retrying Vector clears the previous selected features");
+        assert.deepEqual(choices, ["vector", "vector"]);
+        h.close();
+    }
+});
+
+test("changing area mode cancels polygon selection and ignores its late reply", async () => {
+    const read = deferred();
+    let sampling, signal;
+    const h = fixture({}, new Map(), choice => {
+        if (choice === "vector") void sampling.use();
+        else sampling.invalidate("Selection cancelled");
+    });
+    sampling = new VectorSamplingController({
+        view: {bind() {}, render() {}, unbind() {}},
+        getTargets: () => [{key: "counties", label: "Counties", item: CATALOG_SELECTION, filter: CATALOG_SELECTION.filter}],
+        createArea: async (_item, _filter, requestedSignal) => { signal = requestedSignal; return read.promise; },
+        onActivate: area => h.controller.setVectorSamplingArea({selection: area.selection, label: area.label}),
+        onInvalidate: selection => h.controller.invalidateArea({kind: "catalogSelection", catalogSelection: selection}),
+        onEditFilter() {},
+    });
+    h.view.actions.onArea("vector"); await h.open();
+    h.view.actions.onArea("whole"); await h.tick();
+    assert.equal(signal.aborted, true);
+    read.resolve({selection: CATALOG_SELECTION, label: "Counties", matched: 2, total: 10,
+        bbox: [-120, 30, -70, 50], filter: CATALOG_SELECTION.filter});
+    await flush(); await h.tick();
+    assert.equal(h.view.state.area.areaChoice, "whole");
+    const submissions = h.requests.filter(([kind]) => kind === "submit");
+    assert.equal(submissions.length, 2);
+    assert.ok(submissions.every(([, request]) => request.area.kind === "wholeRaster"));
+    sampling.destroy(); h.close();
+});
+
+test("reopening preserves captured polygon work and Calculate uses the latest committed filter", async () => {
+    const h = fixture();
+    h.view.actions.onAutomatic(false); await h.open();
+    let target = {key: "countries", label: "Countries", item: CATALOG_SELECTION, filter: CATALOG_SELECTION.filter};
+    const prepared = [];
+    const replacement = deferred();
+    const sampling = new VectorSamplingController({
+        view: {bind() {}, render() {}, unbind() {}},
+        getTargets: () => [target],
+        createArea: async (_item, filter) => {
+            const selection = {...CATALOG_SELECTION, filter}; prepared.push(selection);
+            return prepared.length === 1 ? {selection, label: target.label, matched: 1, total: 200} : replacement.promise;
+        },
+        onActivate: area => h.controller.setVectorSamplingArea({selection: area.selection, label: area.label}),
+        onInvalidate: selection => h.controller.invalidateArea({kind: "catalogSelection", catalogSelection: selection}),
+        onSelectionState: state => h.controller.setVectorSelectionState(state),
+        onEditFilter() {},
+    });
+    try {
+        h.view.actions.onArea("vector"); await sampling.use();
+        h.view.actions.onCalculate(); await flush();
+        h.controller.updateSamplingForPanelVisibility(false);
+        target = {...target, filter: {...target.filter, rules: [{field: "iso3", operator: "eq", value: "CAN"}]}};
+        sampling.refresh(); await flush();
+        assert.equal(prepared.length, 2, "the selected vector follows the committed filter");
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
+        assert.deepEqual(h.area.area, {kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
+        assert.equal(h.area.manual, true);
+        h.controller.updateSamplingForPanelVisibility(true); await h.tick();
+        replacement.resolve({selection: prepared[1], label: target.label, matched: 1, total: 200});
+        await flush();
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0, "reopening does not replace running work");
+        assert.equal(h.view.state.area.pendingArea, true);
+        assert.deepEqual(h.view.state.area.area.catalogSelection, prepared[1]);
+        assert.match(h.view.state.message, /Results use the previous selection\. Calculate to update\./);
+        await h.finish(); await h.finish();
+        assert.equal(h.area.results.size, 2, "the captured calculation still accepts its results");
+        h.view.actions.onCalculate(); await flush();
+        const submissions = h.requests.filter(([kind]) => kind === "submit");
+        assert.equal(submissions.length, 4);
+        assert.ok(submissions.slice(2).every(([, request]) => request.area.catalogSelection.filter.rules[0].value === "CAN"));
+        assert.equal(h.view.state.area.pendingArea, false);
+    } finally { sampling.destroy(); h.close(); }
 });
 
 test("standard deviation submits the population formula per raster and retains results in series CSV", async () => {
@@ -179,6 +292,8 @@ test("explicit calculations keep their sources, point and area while hidden and 
     await h.finish("ready", false, "1");
     h.controller.updateSamplingForPanelVisibility(false);
     h.controller.setArea(box(10), "Another map box");
+    h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "A different polygon area"});
+    h.controller.setVectorSelectionState({phase: "reading"});
     h.controller.setPosition({longitude: 10.5, latitude: 0.5});
     h.controller.updateAvailableRasters([source("3")]);
     await flush();

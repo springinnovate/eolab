@@ -70,12 +70,11 @@ test("obsolete polygon uploads are released, and presentation edits retain activ
     const controller = new VectorSamplingController({ view, getTargets: () => targets,
         createArea: () => new Promise(done => { resolve = done; }), onEditFilter() {},
         onActivate: item => activated.push(item), onInvalidate: (_, item) => invalidated.push(item), releaseArea: item => released.push(item) });
-    const first = controller.use({ analysis: true });
+    const first = controller.use();
     await Promise.resolve();
     controller.invalidate("Cancelled"); resolve(area); await first;
     assert.deepEqual(released, [area]); assert.equal(activated.length, 0);
-    const second = controller.use({ analysis: true }); await Promise.resolve(); resolve(area); await second;
-    controller.activate(area.polygonArea, true);
+    const second = controller.use(); await Promise.resolve(); resolve(area); await second;
     assert.equal(activated.length, 1);
     value.name = "Renamed"; value.polygons[0].note = "Other note";
     targets = [annotationSummaryTarget("layer", value)]; controller.refresh();
@@ -83,4 +82,11 @@ test("obsolete polygon uploads are released, and presentation edits retain activ
     value.polygons[0].vertices[0] = [-1, 0]; targets = [annotationSummaryTarget("layer", value)]; controller.refresh();
     assert.deepEqual(invalidated, [area]); assert.equal(released.length, 2);
     assert.equal(controller.state.area, null);
+    await Promise.resolve();
+    const replacement = {...area, polygonArea: {...area.polygonArea, id: "c".repeat(32)}};
+    resolve(replacement);
+    await controller.reading;
+    await Promise.resolve();
+    assert.deepEqual(activated, [area, replacement], "committed drawing edits adopt their replacement automatically");
+    controller.destroy();
 });

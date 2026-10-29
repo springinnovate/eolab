@@ -12,6 +12,19 @@ import {
     FakeRasterControlElement,
 } from "../../test-support/raster/fake-controls-document.js";
 
+test("an empty vector histogram describes the missing area instead of missing rasters", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(doc);
+    view.renderLayerHistograms([], null);
+    view.setSamplingAreaMode("vector");
+    const empty = doc.querySelector("#raster-histogram-empty");
+    assert.equal(empty.hidden, false);
+    assert.equal(empty.textContent, "No vector sampling area is available.");
+    view.setSamplingAreaMode("wholeRaster");
+    assert.match(empty.textContent, /No visible raster layers/);
+    view.unbind();
+});
+
 test("histogram adapter owns status, chart, retry, and direct presentation", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);

@@ -197,6 +197,8 @@ function canRetryRasterStatistics(error) {
  * that an explicit analysis action should reveal its presentation workspace.
  * @property {(snapshot:{state:string,message:string,source:string,scope:string}|null)=>void} [onHistogramChange]
  * Receives current histogram participation, owned source/area labels and status without exposing analysis state.
+ * @property {(method:"box"|"whole"|"vector")=>void} [onSamplingMethodChange]
+ * Notify composition when the user chooses an area method, so obsolete vector reads can be cancelled.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
  * @property {(item:Object,area:Readonly<Object>|null,label:string)=>void} [onDownloadRequested]
@@ -266,6 +268,7 @@ export function initializeRasterViewer(
         onCalculateRequested = /** @param {Object} _item Original raster. @param {Object|null} _area Histogram scope. @param {string} _label View name. @param {string} _key View identity. @return {void} */ (_item, _area, _label, _key) => {},
         onHistogramChange = () => {},
         onSamplingAreaChange = () => {},
+        onSamplingMethodChange = () => {},
         onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @param {string} _label View name. @return {void} */ (_item, _area, _label) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
@@ -370,6 +373,7 @@ export function initializeRasterViewer(
     let bivariateCatalogSelection = null;
     let vectorSelection = null;
     let invalidVectorSamplingId = null;
+    let pendingVectorSelection = false;
     let bivariateSelectedCenter = null;
     let bivariateSelectedWindowSizeKm = null;
 
@@ -1226,7 +1230,7 @@ export function initializeRasterViewer(
                 controlsView.clearStatistics();
             }
         }
-        if (!bivariateMode.active) {
+        if (!bivariateMode.active && !pendingVectorSelection) {
             for (const { entry, state } of records.slice(1)) {
                 if (getLayerHistogramPresentation(state).state === "idle") {
                     const area = currentRasterSamplingArea();
@@ -1249,6 +1253,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderLayerHistogramSummaries() {
+        if (pendingVectorSelection) {
+            controlsView.renderLayerHistograms([], null);
+            onHistogramChange(null);
+            return;
+        }
         const summaries = (followsVisibleLayers
             ? visibleRasterRecords() : mapLayers.retainedRecords)
             .filter(
@@ -1286,6 +1295,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function publishHistogramPresentation() {
+        if (pendingVectorSelection) { onHistogramChange(null); return; }
         const detached = activeDetachedRasterSession();
         const sessions = detached ? [detached] : followsVisibleLayers
             ? visibleRasterRecords().map(record => record.state)
@@ -1519,6 +1529,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function refreshRetainedLayerHistograms(samplingArea, onlyMissing = false) {
+        if (pendingVectorSelection) return;
         refreshActiveSessionPresentation();
         const analyzedKeys = followsVisibleLayers
             ? new Set(visibleRasterRecords().map(({ entry }) => entry.key))
@@ -1570,6 +1581,7 @@ export function initializeRasterViewer(
      * @return {Readonly<Object>|null} Frozen box/polygon selection selection or no explicit area.
      */
     function getSelectedArea(key = null, mode = "presented") {
+        if (pendingVectorSelection) return null;
         if (invalidVectorSamplingId && (bivariateMode.active ? bivariateCatalogSelection : rasterAnalysis.selectedCatalogSelection)?.id === invalidVectorSamplingId) return null;
         if (mode === "2d" || (mode === "presented" && bivariateMode.active)) {
             if (bivariateCatalogSelection) return normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection: bivariateCatalogSelection.selection });
@@ -1658,6 +1670,7 @@ export function initializeRasterViewer(
      * and original WGS 84 click coordinates.
      */
     function getPresentedSampleWindow() {
+        if (pendingVectorSelection) return [null, null, null];
         return bivariateMode.active
             ? [bivariateSelectedBounds, bivariateSelectedWindowSizeKm, bivariateSelectedCenter]
             : [rasterAnalysis.selectedRasterBounds, rasterAnalysis.selectedRasterWindowSizeKm, rasterAnalysis.selectedRasterCenter];
@@ -1672,6 +1685,11 @@ export function initializeRasterViewer(
     /** Synchronize histogram-area choices with lifecycle state. @return {void} */
     function renderRasterSamplingAreaControls() {
         onSamplingAreaChange(getSelectedArea());
+        if (pendingVectorSelection) {
+            controlsView.setSamplingAreaMode("vector", "Vector layer");
+            renderRasterSampleWindowGuidance("");
+            return;
+        }
         const samplingMode = getRasterSamplingAreaMode();
         const [presentedBounds, presentedWindowSizeKm] =
             getPresentedSampleWindow();
@@ -1900,7 +1918,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function requestBivariateStatistics() {
-        if (!bivariateMode.active) return;
+        if (!bivariateMode.active || pendingVectorSelection) return;
         const presentation = getBivariatePresentation();
         bivariateStatistics = null;
         controlsView.clearPairedStatistics?.();
@@ -1994,7 +2012,7 @@ export function initializeRasterViewer(
         controlsView.setUnivariateHistogramVisible?.(true);
         renderRasterSamplingAreaControls();
         rasterSampleWindowController.clearSelection();
-        if (rasterAnalysis.selectedRasterBounds !== null) {
+        if (!pendingVectorSelection && rasterAnalysis.selectedRasterBounds !== null) {
             rasterSampleWindowController.restoreSelection(
                 rasterAnalysis.selectedRasterBounds
             );
@@ -2441,6 +2459,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreActiveLayerStatistics() {
+        if (pendingVectorSelection) { clearRasterStatisticsPresentation(); return; }
         const codes = sessionCategoryValues(mapLayers.getRecord(activeLayerKey)?.state);
         if (hasSelectedRasterSamplingArea()) {
             if (rasterAnalysis.selectedRasterStatisticsState === "ready" && !rasterStatisticsMatchCategories(rasterAnalysis.selectedRasterStatistics, codes)) {
@@ -2860,7 +2879,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function refreshSessionStatisticsForAppearance(session) {
-        if (!mapLayers.getRecord(session.key)) return;
+        if (pendingVectorSelection || !mapLayers.getRecord(session.key)) return;
         if (session.key === activeLayerKey) refreshActiveSessionPresentation();
         const codes = sessionCategoryValues(session);
         const presentation = getLayerHistogramPresentation(session);
@@ -3531,7 +3550,9 @@ export function initializeRasterViewer(
         const [presentedBounds, presentedWindowSizeKm] =
             getPresentedSampleWindow();
         let nextStatus;
-        if (guidance) {
+        if (pendingVectorSelection) {
+            nextStatus = "";
+        } else if (guidance) {
             nextStatus = guidance;
         } else if (presentedBounds !== null) {
             const { west, south, east, north } = presentedBounds;
@@ -3570,6 +3591,8 @@ export function initializeRasterViewer(
         if (!canUseRasterMapInteractions()) {
             return;
         }
+        onSamplingMethodChange("box");
+        pendingVectorSelection = false;
         cancelRasterSampleWindowResize();
         if (bivariateMode.active) {
             bivariateCatalogSelection = null;
@@ -4243,6 +4266,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleClearSampleWindow() {
+        onSamplingMethodChange("whole");
+        pendingVectorSelection = false;
         cancelRasterSampleWindowResize();
         restoreWholeRasterStatistics();
         if (!bivariateMode.active) {
@@ -4334,6 +4359,7 @@ export function initializeRasterViewer(
      */
     function clear() {
         clearing = true;
+        pendingVectorSelection = false;
         controlsView.cancelCategoricalImport?.();
         editingLayerKey = null;
         cancelRasterSampleWindowResize();
@@ -4744,12 +4770,14 @@ export function initializeRasterViewer(
         const previous = vectorSelection;
         vectorSelection = validateCatalogSelectionSamplingSnapshot(selection);
         if (selection) {
+            pendingVectorSelection = false;
             useCatalogSelectionForRasterStatistics(vectorSelection);
             return;
         }
         if (!previous) return;
+        pendingVectorSelection = true;
         invalidVectorSamplingId = previous.id;
-        const message = "Vector selection changed. Use these features again, or choose another sampling area.";
+        const message = "Vector selection changed. Waiting for the updated features.";
         for (const record of mapLayers.retainedRecords) {
             if (record.state.analysis?.selectedCatalogSelection?.id === previous.id) {
                 cancelLayerHistogramRequest(record.state);
@@ -4765,7 +4793,6 @@ export function initializeRasterViewer(
             rasterAnalysis.selectedRasterStatisticsError = new Error(message);
             resetPendingRasterStatisticsState();
             controlsView.clearStatistics();
-            controlsView.setStatisticsStatus(message);
         }
         if (bivariateCatalogSelection?.id === previous.id) {
             pairedStatisticsController.clear();
@@ -4775,6 +4802,29 @@ export function initializeRasterViewer(
         }
         renderLayerHistogramSummaries();
         renderRasterSamplingAreaControls();
+    }
+
+    /**
+     * Wait for selected vector features without displaying the previous area.
+     * Keep completed histogram caches for a later box or whole-raster choice.
+     * @return {void}
+     */
+    function selectVectorSampling() {
+        pendingVectorSelection = true;
+        cancelRasterSampleWindowResize();
+        rasterSampleWindowController.clear();
+        rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
+        for (const record of mapLayers.retainedRecords) {
+            if (record.adapter === rasterMapLayerAdapter) cancelLayerHistogramRequest(record.state);
+        }
+        pairedStatisticsController.clear();
+        bivariateStatistics = null;
+        controlsView.clearPairedStatistics?.();
+        clearRasterStatisticsPresentation();
+        renderLayerHistogramSummaries();
+        renderRasterSamplingAreaControls();
+        onSamplingMethodChange("vector");
     }
 
     /** @param {Object} item Catalog Item. @return {boolean} Whether it is retained. */
@@ -4849,7 +4899,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onClearSampleWindow: handleClearSampleWindow,
         onUseMapWindow: useMapCenterForRasterStatistics,
-        onUseVectorArea: () => rasterSampleWindowController.clearPreview(),
+        onUseVectorArea: selectVectorSampling,
         onBivariateModeChange: handleBivariateModeChange,
         onBivariatePaletteChange: handleBivariatePaletteChange,
         onBivariateSwapAxes: handleBivariateSwapAxes,

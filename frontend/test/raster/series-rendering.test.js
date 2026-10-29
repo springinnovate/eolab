@@ -43,7 +43,7 @@ function controlsFixture() {
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
-            complete: false, recoverable: false, automatic: true } };
+            complete: false, pendingArea: false, recoverable: false, automatic: true } };
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
@@ -144,6 +144,21 @@ test("changed controls remain current without overwriting a focused formula edit
     assert.equal(h.document.querySelector("#raster-series-recover").hidden, false);
     h.document.activeElement = null; h.draw();
     assert.equal(expression.value, "mean(a)", "unfocused inputs reflect the supplied state");
+});
+
+test("completed results leave Calculate available for a newer selected area", () => {
+    const h = controlsFixture();
+    h.state.busy = false;
+    h.state.area.complete = true;
+    h.draw();
+    const calculate = h.document.querySelector("#raster-series-calculate");
+    assert.equal(calculate.hidden, true);
+    h.state.area.pendingArea = true;
+    h.draw();
+    assert.equal(calculate.hidden, false);
+    assert.equal(calculate.disabled, false);
+    h.state.busy = true; h.draw();
+    assert.equal(calculate.disabled, true, "the current calculation still owns execution until it finishes or is cancelled");
 });
 
 test("one raster opens the existing values table for every statistic instead of drawing a chart", () => {

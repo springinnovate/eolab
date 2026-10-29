@@ -46,13 +46,15 @@ export class RasterSeriesController {
      * @param {import("../processing/raster-series-calculations.js").RasterSeriesCalculations} options.areaStatistics Area formulas and Processing client.
      * @param {()=>void} options.onEditArea Open existing sampling controls.
      * @param {()=>void} options.onClose Request that composition close this tool.
+     * @param {(choice:"selection"|"vector"|"whole")=>void} [options.onAreaChoice] Start or cancel polygon selection after an explicit area choice.
      * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
      * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} options.loadTemporalTimes Read available observations for guidance.
      */
-    constructor({ view, onClose, areaStatistics, onEditArea, getTemporalItem, loadTemporalTimes }) {
+    constructor({ view, onClose, areaStatistics, onEditArea, onAreaChoice = () => {}, getTemporalItem, loadTemporalTimes }) {
         this.view = view;
         Object.assign(this, {getTemporalItem, loadTemporalTimes});
         this.areaStatistics = areaStatistics;
+        this.onAreaChoice = onAreaChoice;
         this.areaStatistics.setProgressListener(() => this.render());
         this.formulas = [{ id: 1, ...SERIES_STATISTICS.mean }];
         this.formulaSerial = 1;
@@ -152,6 +154,7 @@ export class RasterSeriesController {
      */
     calculate() {
         this.selectionOverrides = new Map(this.sources.map(source => [source.key, this.selectedKeys.has(source.key)]));
+        this.updateAreaInputs();
         this.areaStatistics.calculateRemainingRasters();
     }
 
@@ -178,40 +181,41 @@ export class RasterSeriesController {
         this.updateAreaInputs();
     }
 
-    /** Whether committed polygon edits should update this active calculation.
-     * @return {boolean} True only for automatic calculations using polygon controls.
-     */
-    get followsVectorChanges() { return this.active && this.areaStatistics.automatic && this.areaChoice === "vector"; }
-
-    /** Accept reviewed polygon features from the existing selection workflow.
+    /** Accept polygon features without replacing a hidden explicit calculation.
      * @param {Object} info Catalog selection or owned polygon-area reference and display label.
      * @return {void}
      */
     setVectorSamplingArea(info) {
+        const keepCalculation = this.areaStatistics.manual && (!this.active || this.hasPendingArea);
         this.vectorArea = info.polygonArea ? {kind: "polygonArea", polygonArea: info.polygonArea}
             : {kind: "catalogSelection", catalogSelection: info.selection};
         this.vectorAreaLabel = info.label;
         this.areaChoice = "vector";
-        this.updateAreaInputs();
+        if (keepCalculation) this.render();
+        else this.updateAreaInputs();
     }
 
-    /** Clear the previous polygon input while a new analysis selection awaits review.
-     * @param {{analysis:boolean,phase:string}} selection Public selection progress.
+    /** Clear stale polygon inputs while the chosen Vector area is being read.
+     * Hidden explicit calculations retain their captured inputs.
+     * @param {{phase:string}} selection Public selection progress.
      * @return {void}
      */
     setVectorSelectionState(selection) {
-        if (selection.analysis && ["reading", "selected"].includes(selection.phase)) {
+        if (this.areaChoice === "vector" && selection.phase === "reading") {
+            const keepCalculation = this.areaStatistics.manual && (!this.active || this.hasPendingArea);
             this.vectorArea = null;
-            this.areaChoice = "vector";
-            this.updateAreaInputs();
+            if (keepCalculation) this.render();
+            else this.updateAreaInputs();
         }
     }
 
-    /** Release a changed or removed polygon selection and cancel calculations that use it.
+    /** Release changed polygon inputs, preserving captured work in a hidden panel.
+     * Active calculations using the invalidated area are cancelled.
      * @param {Object} area Catalog-selection or polygon-area descriptor being invalidated.
      * @return {void}
      */
     invalidateArea(area) {
+        const keepCalculation = this.areaStatistics.manual && (!this.active || this.hasPendingArea);
         /** Compare the invalidated vector input with a captured calculation area.
          * @param {Object|null} candidate Captured area. @return {boolean} Same selection identity.
          */
@@ -219,7 +223,8 @@ export class RasterSeriesController {
             : vectorSelectionsEqual(candidate?.catalogSelection, area.catalogSelection);
         if (matches(this.vectorArea)) this.vectorArea = null;
         if (matches(this.selectedArea)) this.selectedArea = null;
-        this.updateAreaInputs();
+        if (keepCalculation) this.render();
+        else this.updateAreaInputs();
     }
 
     /**
@@ -372,14 +377,30 @@ export class RasterSeriesController {
      * @param {string} [label="Current sampling area"] Area description. @return {void}
      */
     setArea(area, label = "Current sampling area") {
-        if (!this.active && this.areaStatistics.manual) return;
-        this.selectedArea = area; this.selectedAreaLabel = label; this.updateAreaInputs();
+        const keepCalculation = this.areaStatistics.manual && (!this.active || this.hasPendingArea);
+        this.selectedArea = area; this.selectedAreaLabel = label;
+        if (keepCalculation) this.render();
+        else this.updateAreaInputs();
+    }
+
+    /** Read the latest area selected for the next calculation.
+     * @return {Object|null} Whole raster, polygon selection, map area, or no selection.
+     */
+    getSelectedArea() {
+        return this.areaChoice === "whole" ? {kind: "wholeRaster"}
+            : this.areaChoice === "vector" ? this.vectorArea : this.selectedArea;
+    }
+
+    /** Whether a background calculation uses an earlier area than the controls.
+     * @return {boolean} Calculate must apply the latest selection before running.
+     */
+    get hasPendingArea() {
+        return this.areaStatistics.manual && JSON.stringify(this.getSelectedArea()) !== JSON.stringify(this.areaStatistics.area);
     }
 
     /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
     updateAreaInputs() {
-        const area = this.areaChoice === "whole" ? {kind: "wholeRaster"}
-            : this.areaChoice === "vector" ? this.vectorArea : this.selectedArea;
+        const area = this.getSelectedArea();
         const label = this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel;
         if (this.sourceMode === "temporal") {
             const temporal = this.temporal;
@@ -392,12 +413,14 @@ export class RasterSeriesController {
             area, label, this.formulas, this.position);
     }
 
-    /** Choose the map sampling area, reviewed polygons or each raster's full extent.
+    /** Choose an area source and ask composition to start or cancel polygon selection.
+     * Choosing Vector again retries selection without reusing the previous polygons.
      * @param {"selection"|"vector"|"whole"} choice Area source. @return {void}
      */
     chooseArea(choice) {
-        if (this.areaChoice === choice) return;
         this.areaChoice = choice;
+        if (choice === "vector") this.vectorArea = null;
+        this.onAreaChoice(choice);
         this.updateAreaInputs();
     }
 
@@ -501,12 +524,14 @@ export class RasterSeriesController {
         for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
-                area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
+                area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
+                results: area.results, complete: area.complete, pendingArea: this.hasPendingArea,
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors, automatic: area.automatic }, statistics, plots: this.plots,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType,
-            message: area.results.size + " of " + sources.length + " rasters complete. " + area.message,
+            message: area.results.size + " of " + sources.length + " rasters complete. " + area.message +
+                (this.hasPendingArea ? " Results use the previous selection. Calculate to update." : ""),
             canDownload: area.results.size > 0 && !area.busy,
         });
     }
@@ -526,11 +551,13 @@ export class RasterSeriesController {
                     value: row.value === null ? null : Number(row.value), rawValue: row.value, unit: row.unit ?? ""};
             })}));
         this.view.render({active: this.active, temporal: {...this.temporal, selectionError: this.temporalSelectionError()},
-            area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: area.area, areaLabel: area.areaLabel,
+            area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
+                areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel, pendingArea: this.hasPendingArea,
                 results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors, automatic: area.automatic},
             statistics, plots: this.plots, sources: [], rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: null, showingPrevious: false, busy: area.busy, chartType: this.chartType,
-            message: this.temporalSelectionError() || area.message,
+            message: (this.temporalSelectionError() || area.message) +
+                (this.hasPendingArea ? " Results use the previous selection. Calculate to update." : ""),
             canDownload: !!result && !area.busy});
     }
 
