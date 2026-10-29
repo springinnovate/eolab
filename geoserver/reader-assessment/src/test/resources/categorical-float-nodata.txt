@@ -1,0 +1,20 @@
+Synthetic GeoTIFF fixture for CategoricalRasterFunctionTest.
+
+The 8 x 8 float32 source repeats these columns on every row:
+0, 0, 101551.296875, 101551.296875, NaN, NaN, 1, 1.
+It has WGS84 bounds (-1, -1, 1, 1), one band, declared NaN NoData,
+DEFLATE compression, 16 x 16 tiles, and nearest overviews at factors 2 and 4.
+The native rendering test gives 0 an opaque color, 1 a transparent color,
+and unmatched fractional values an opaque fallback.
+
+Generated with the existing project Rasterio dependency:
+
+values = numpy.tile(numpy.array(
+    [0, 0, 101551.296875, 101551.296875, numpy.nan, numpy.nan, 1, 1],
+    dtype=numpy.float32), (8, 1))
+with rasterio.open(path, "w", driver="GTiff", width=8, height=8, count=1,
+        dtype="float32", nodata=float("nan"), crs="EPSG:4326",
+        transform=rasterio.transform.from_bounds(-1, -1, 1, 1, 8, 8),
+        compress="deflate", tiled=True, blockxsize=16, blockysize=16) as dataset:
+    dataset.write(values, 1)
+    dataset.build_overviews([2, 4], rasterio.enums.Resampling.nearest)
