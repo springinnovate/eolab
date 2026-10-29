@@ -52,7 +52,6 @@ export class VectorFilterControls {
         this.key = null;
         this.timer = null;
         this.generation = 0;
-        this.drafts = new Map();
         this.listeners = [];
         this.#listen(this.enabled, "change", () => { this.draft.enabled = this.enabled.checked; this.#changed(); });
         this.#listen(this.match, "change", () => { this.draft.match = this.match.value; this.#changed(); });
@@ -84,7 +83,7 @@ export class VectorFilterControls {
     }
 
     /**
-     * Open the chosen vector's retained filter draft.
+     * Edit the chosen vector's current filter, discarding unapplied edits from a closed editor.
      * @param {string} key Layer or composed analysis-target identity.
      * @param {Object|null} [action=null] Explicit analysis action supplied by composition.
      * @param {Function} action.apply Apply a complete predicate and return success or null.
@@ -102,7 +101,6 @@ export class VectorFilterControls {
         if (!target) return;
         if (this.key !== null) {
             this.action?.onClose?.();
-            this.#saveDraft();
             if (this.timer !== null) void this.#apply();
         }
         this.#cancelTimer();
@@ -115,7 +113,7 @@ export class VectorFilterControls {
             ? "Use every matching polygon as the sampling area and calculate configured statistics. The sampling filter is independent of map styling and visibility."
             : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.");
         this.opener = this.document.activeElement;
-        this.draft = structuredClone(this.drafts.get(key) ?? action?.filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
+        this.draft = structuredClone(action?.filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
         this.title.textContent = target.label;
         this.#renderDraft();
         this.refresh();
@@ -139,11 +137,10 @@ export class VectorFilterControls {
         this.add.disabled = target.fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
     }
 
-    /** Save edits, release optional action preparation, hide the panel and restore focus. @return {void} */
+    /** Apply pending map edits, release action preparation, hide the panel and restore focus. @return {void} */
     close() {
         if (this.key === null) return;
         this.#clearValuePickers();
-        this.#saveDraft();
         if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
         this.action?.onClose?.();
         this.key = null;
@@ -175,12 +172,6 @@ export class VectorFilterControls {
         this.listeners.push([element, type, listener]);
     }
 
-    /** Save the current bounded per-layer draft. @return {void} */
-    #saveDraft() {
-        if (this.key !== null) this.drafts.set(this.key, structuredClone(this.draft));
-        while (this.drafts.size > 50) this.drafts.delete(this.drafts.keys().next().value);
-    }
-
     /** Cancel scheduled edits without changing the applied filter. @return {void} */
     #cancelTimer() {
         if (this.timer !== null) this.clearTimer(this.timer);
@@ -195,7 +186,7 @@ export class VectorFilterControls {
     #changed(immediate = false) {
         this.generation++;
         if (!this.action) this.getTarget(this.key)?.cancelPending();
-        this.#cancelTimer(); this.#saveDraft();
+        this.#cancelTimer();
         if (!this.#validate()) return;
         if (this.action) { this.refresh(); return; }
         this.status.textContent = "Changes will apply automatically…";

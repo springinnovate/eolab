@@ -72,6 +72,25 @@ test("renaming an open filter keeps its draft and updates its panel and tab name
     controls.destroy();
 });
 
+test("reopening a filter uses changes accepted elsewhere instead of closed-editor drafts", () => {
+    const doc = new FakeRasterControlDocument();
+    const target = { fields, filter: filter(), label: "Earthquakes", status: "", cancelPending() {} };
+    const controls = new VectorFilterControls({ documentContext: doc,
+        getTarget: () => target,
+        inspection: { showFilter() {}, hideFilter() {}, updateLayerEditorName() {} },
+    });
+    controls.open("quakes");
+    const input = controls.rules.children[0].children[2];
+    input.value = ""; input.dispatchEvent(new Event("input"));
+    controls.close();
+    target.filter = filter(2024);
+    controls.open("quakes");
+    assert.equal(String(controls.rules.children[0].children[2].value), "2024");
+    assert.match(controls.applied.textContent, /2024/);
+    assert.equal(controls.applyButton.disabled, false);
+    controls.destroy();
+});
+
 test("filter enable toggle preserves rules and closing applies pending valid edits", async () => {
     const doc = new FakeRasterControlDocument();
     let current = filter();

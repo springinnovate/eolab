@@ -22,7 +22,7 @@ export class ModelsController {
      * @param {(source:Object,signal:AbortSignal)=>Promise<Object>} dependencies.prepareVector Read a captured vector predicate and counts.
      * @param {(request:{key:string,host:HTMLElement,source:Object,filter:Object,isCurrent:()=>boolean,apply:(filter:Object)=>Promise<Object|null>,complete:()=>void,cancel:()=>void,close:()=>void})=>Promise<void>|void} dependencies.editVectorFilter Open the composed filter editor inside model setup.
      * @param {()=>void} dependencies.closeVectorFilter Close the composed inline editor.
-     * @param {(source:Object,filter:Object)=>Promise<Object|null>} dependencies.applyMapFilter Apply the selected rules to the map layer; failure must not block analysis.
+     * @param {(source:Object,area:Object)=>Promise<Object|null>} dependencies.applyMapFilter Commit checked features to their vector view before updating its rendering; display failure must not block analysis.
      * @param {Storage|null} [dependencies.storage=null] Per-tab submission recovery storage.
      * @param {()=>void} dependencies.onOpen Open the composed Analysis panel.
      * @param {()=>void} dependencies.onClose Hide the panel without cancelling jobs.
@@ -135,7 +135,7 @@ export class ModelsController {
      */
     navigate(page) { if (page !== "setup") this.closeVectorFilter(); this.revision += 1; this.state.page = page; this.state.error = ""; if (page === "setup") this.refreshMapArea(); this.render(); if (page === "runs") void this.loadRuns(); }
 
-    /** Create a draft, load model-specific choices and prepare selected map vectors.
+    /** Create a draft with the supplied area and load model-specific choices.
      * @param {Object} model Installed recipe chosen by the user.
      * @return {void}
      */
@@ -148,16 +148,8 @@ export class ModelsController {
         this.state.page = "setup"; this.state.error = ""; this.state.yaml = null; this.render(); this.view.focusHeading();
         const draft = this.state.draft;
         if (draft.temporal?.datasets.length === 1) void this.chooseTemporalDataset(modelSourceKey(draft.temporal.datasets[0]));
-        for (const [name, input] of Object.entries(draft.inputs)) {
+        for (const name of Object.keys(draft.inputs)) {
             if (draft.model.inputs[name].type === "habitat_stack") void this.loadHabitatOptions(draft, name);
-            if (input.area?.kind !== "catalogSelection") continue;
-            const source = input.vectors.find(value => modelSourceKey(value) === modelSourceKey(input.area.selection));
-            input.areaMode = "vector";
-            if (source) {
-                source.filter = structuredClone(input.area.selection.filter);
-                void this.chooseVector(name, source.key);
-            }
-            else { input.area = null; input.selectionError = "Choose a vector layer from Map layers."; this.render(); }
         }
     }
 
@@ -431,7 +423,7 @@ export class ModelsController {
 
     /** Refresh a map-linked setup from composition's latest area and viewport.
      * Called after map changes and immediately before Run. Pending submissions,
-     * duplicated fixed areas and model-specific vector filters remain unchanged.
+     * duplicated fixed areas and explicitly selected vector views remain unchanged.
      * @return {void}
      */
     refreshMapArea() {
@@ -458,7 +450,7 @@ export class ModelsController {
         this.render();
     }
 
-    /** Select a vector's draft filter and show any feature-selection failure in setup.
+    /** Read a vector view's current filter and show any feature-selection failure in setup.
      * @param {string} name Input name declared by the recipe.
      * @param {string} key Choice-list identity, or empty to clear the choice.
      * @return {Promise<void>}
@@ -469,10 +461,11 @@ export class ModelsController {
     }
 
     /** Read matching features and commit their predicate only after a successful selection.
-     * Failed filter edits preserve the previous selection for the same vector.
+     * Failed candidate edits preserve the previous selection. A changed view filter
+     * invalidates the old selection until its replacement has been read successfully.
      * @param {string} name Input name declared by the recipe.
      * @param {string} key Map view identity from the vector choice list.
-     * @param {Object|null} [filter=null] Explicit edited filter, otherwise this draft's saved filter.
+     * @param {Object|null} [filter=null] Candidate edited filter, otherwise the view's current filter.
      * @return {Promise<Object|null>} Reviewed selection, or null for a cleared or superseded request.
      * @throws {Error} If reading or validating the selected features fails.
      */
@@ -483,7 +476,9 @@ export class ModelsController {
         const source = input.vectors.find(value => value.key === key);
         if (input.vectorKey !== key) { if (input.filterEditing) this.closeVectorFilter(); input.mapFilterMessage = ""; }
         this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
-        const previous = input.vectorKey === key ? {area: input.area, info: input.vectorInfo} : {area: null, info: null};
+        const previous = input.vectorKey === key && (filter !== null ||
+            JSON.stringify(input.area?.selection?.filter) === JSON.stringify(source?.filter))
+            ? {area: input.area, info: input.vectorInfo} : {area: null, info: null};
         input.vectorKey = source ? key : ""; input.area = source ? previous.area : null; input.vectorInfo = source ? previous.info : null; input.selectionError = "";
         if (!source) { input.selecting = false; this.render(); return null; }
         const abort = new AbortController(); this.vectorSelectionRequests.set(name, abort);
@@ -497,8 +492,7 @@ export class ModelsController {
             }
             input.area = modelAreaInput({kind: "catalogSelection", catalogSelection: area.selection});
             input.vectorInfo = {label: source.label, matched: area.matched, total: area.total, bbox: area.bbox};
-            input.vectors = input.vectors.map(value => value.key === key ? {...value, filter: structuredClone(area.selection.filter)} : value);
-            if (filter !== null) void this.updateMapFilter(source, area.selection.filter, draft, name, abort);
+            if (filter !== null) void this.updateMapFilter(source, area, draft, name, abort);
             else input.mapFilterMessage = "";
             return area;
         } catch (error) {
@@ -510,20 +504,21 @@ export class ModelsController {
         } finally { if (isCurrent()) { input.selecting = false; this.render(); } }
     }
 
-    /** Apply a reviewed model filter to its map layer without gating analysis on rendering.
-     * @param {Object} source Catalog identity of the chosen map layer.
-     * @param {Object} filter Successfully checked attribute rules.
+    /** Share a checked selection with its vector view and report rendering separately.
+     * @param {Object} source Chosen vector view and its Catalog or uploaded source identity.
+     * @param {Object} area Checked source predicate, bounds and feature counts.
      * @param {Object} draft Setup that requested this change.
      * @param {string} name Input whose selected filter changed.
      * @param {AbortController} request Selection request, used to ignore obsolete display feedback.
      * @return {Promise<void>}
      */
-    async updateMapFilter(source, filter, draft, name, request) {
+    async updateMapFilter(source, area, draft, name, request) {
         const input = draft.inputs[name];
         input.mapFilterMessage = "Updating the map filter…"; this.render();
         let message;
         try {
-            const applied = await this.applyMapFilter(structuredClone(source), structuredClone(filter));
+            const applied = await this.applyMapFilter(structuredClone(source), structuredClone(area));
+            if (!applied) this.refreshMapLayers();
             message = applied ? "Filter applied to the map layer." : "The map filter changed before this update finished.";
         } catch (error) { message = `Features selected for this model. Could not update the map filter: ${error.message}`; }
         if (this.state.draft === draft && this.vectorSelectionRequests.get(name) === request) {
@@ -583,8 +578,9 @@ export class ModelsController {
         return {...context, rasters: [...new Map(choices.map(source => [modelSourceKey(source), source])).values()]};
     }
 
-    /** Refresh map and result choices without changing accepted runs or chosen filters.
-     * Removed inputs must be added to the map again or replaced before a new run.
+    /** Refresh map choices and recheck live vector inputs when their view filter changes.
+     * Captured run areas and accepted submissions retain their original predicates.
+     * Removed live inputs must be added to the map again or replaced before a new run.
      * @return {void}
      */
     refreshMapLayers() {
@@ -618,14 +614,18 @@ export class ModelsController {
                 continue;
             }
             if (["habitat_stack", "raster_preparation"].includes(type)) continue;
-            const previous = new Map(input.vectors.map(source => [source.key, source]));
-            input.vectors = (context.vectors ?? []).map(source => ({...structuredClone(source),
-                filter: structuredClone(previous.get(source.key)?.filter ?? source.filter)}));
-            if (input.vectorKey && !input.vectors.some(source => source.key === input.vectorKey)) {
+            const previous = input.vectors.find(source => source.key === input.vectorKey);
+            input.vectors = structuredClone(context.vectors ?? []);
+            const selected = input.vectors.find(source => source.key === input.vectorKey);
+            if (input.vectorKey && !selected) {
                 if (input.filterEditing) this.closeVectorFilter();
                 this.vectorSelectionRequests.get(name)?.abort(); this.vectorSelectionRequests.delete(name);
                 input.vectorKey = ""; input.area = null; input.vectorInfo = null; input.selecting = false;
                 input.selectionError = "Add the vector layer to Map layers, or choose another layer.";
+            } else if (input.areaMode === "vector" && selected &&
+                JSON.stringify(previous?.filter) !== JSON.stringify(selected.filter) &&
+                JSON.stringify(input.area?.selection?.filter) !== JSON.stringify(selected.filter)) {
+                void this.chooseVector(name, selected.key);
             }
         }
         this.refreshRasterPreparation(); this.render();
@@ -899,8 +899,9 @@ export class ModelsController {
         finally { notice.busy = false; this.scheduleDeletions(); this.render(); }
     }
 
-    /** Copy a run into a new draft using its saved filter and available map-layer choices.
-     * The exact model recipe must be available in setup; absent sources need a new choice.
+    /** Copy a run into a new draft, retaining its exact area and filter.
+     * The exact recipe must be available. Choosing a vector view explicitly switches
+     * a captured area to that view's current filter.
      * @return {Promise<void>}
      */
     async duplicateRun() {
@@ -947,18 +948,6 @@ export class ModelsController {
                 input.area = definition.type === "habitat_references" ? {kind: "catalogSelection", selection: structuredClone(saved.inputs[name].selection)} : structuredClone(saved.inputs[name]);
                 input.capturedArea = structuredClone(input.area); input.areaMode = input.area.kind === "wholeRaster" ? "whole" : "captured"; input.areaOrigin = "run";
                 input.areaDescription = "Exact area and filter copied from the original run.";
-                if (input.area.kind === "catalogSelection") {
-                    const selection = input.area.selection;
-                    const source = input.vectors.find(value => modelSourceKey(value) === modelSourceKey(selection));
-                    input.areaMode = "vector";
-                    if (source) {
-                        input.vectorKey = source.key;
-                        source.filter = structuredClone(selection.filter);
-                    } else {
-                        input.vectorKey = ""; input.area = null;
-                        input.selectionError = "Add the original vector layer to Map layers, or choose another layer.";
-                    }
-                }
             }
         }
         const preparationName = Object.keys(model.inputs).find(name => model.inputs[name].type === "raster_preparation");

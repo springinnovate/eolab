@@ -26,7 +26,11 @@ function fixture(overrides = {}) {
     let id = 0;
     const controller = new ModelsController({api, jobs, view, getContext: () => context,
         prepareVector: async source => ({selection: {...selection, itemId: source.itemId, filter: source.filter}, matched: 1, total: 3}),
-        editVectorFilter: request => { filters.push(request); }, closeVectorFilter: () => {}, applyMapFilter: async (_source, filter) => filter,
+        editVectorFilter: request => { filters.push(request); }, closeVectorFilter: () => {},
+        applyMapFilter: async (source, area) => {
+            context.vectors.find(value => value.key === source.key).filter = area.selection.filter;
+            controller.refreshMapLayers(); return area.selection.filter;
+        },
         onOpen: () => {}, onClose: () => {}, storage: {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key)},
         newId: () => String(++id).padStart(32, "0")});
     controller.state.library = [downstreamModel]; controller.setActive(true); controller.chooseModel(downstreamModel);
@@ -122,6 +126,8 @@ test("duplicate preserves mask, values and formula without a hydrology check or 
         assert.deepEqual(captureModelSubmission(draft, "c".repeat(32)).inputs, h.requests[0].inputs);
         assert.equal(h.requests[0].inputs.start.selection.uploadId, h.context.vectors[0].uploadId);
         assert.equal(h.requests.length, 1);
+        assert.equal(h.view.setup.inputs.start.areaMode.value, "captured");
+        assert.match(h.view.setup.inputs.start.areaDescription.textContent, /BASIN equals/);
         assert.equal(h.view.setup.run.disabled, false);
         assert.equal(h.controller.state.error, "");
     }
