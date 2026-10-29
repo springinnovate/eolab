@@ -273,7 +273,7 @@ def polygon_records(
             yield iterate()
 
 
-def selection_counts(
+def count_selected_features(
     resolved: ResolvedCatalogSelection,
     cancellation_requested: RasterReadCancellationCheck | None = None,
     *,

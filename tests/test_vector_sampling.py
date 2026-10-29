@@ -15,7 +15,7 @@ from eolab_app.bounded_geometry import GeometryValidationError
 from eolab_app.bounded_vector import (
     VectorReadLimits,
     polygon_features,
-    selection_counts,
+    count_selected_features,
     selection_summary,
 )
 from eolab_app.catalog_selection import (
@@ -102,7 +102,7 @@ def test_complete_filtered_polygon_preserves_hole_without_snapshot(
 
 
 @pytest.mark.parametrize("driver", ["GPKG", "ESRI Shapefile"])
-def test_selection_counts_read_only_filter_attributes(
+def test_count_selected_features_read_only_filter_attributes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, driver: str
 ) -> None:
     """Count exact typed predicates without decoding geometry or unused fields.
@@ -197,13 +197,15 @@ def test_selection_counts_read_only_filter_attributes(
             where=ogr_predicate(candidate),
         )
         limit = 1 if rule and rule["field"] == "selected" else 3
-        assert selection_counts(filtered, limits=VectorReadLimits(features=limit)) == {
+        assert count_selected_features(
+            filtered, limits=VectorReadLimits(features=limit)
+        ) == {
             "matched": 3 if rule is None else 1,
             "total": 3,
         }
 
 
-def test_selection_counts_preserve_empty_budget_cancellation_and_read_errors(
+def test_count_selected_features_preserve_empty_budget_cancellation_and_read_errors(
     source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Keep selection failures while deferring coordinate work to polygon readers.
@@ -212,21 +214,23 @@ def test_selection_counts_preserve_empty_budget_cancellation_and_read_errors(
         source: Authorized real polygon source.
         monkeypatch: Advance the reader clock past its actual work deadline.
     """
-    assert selection_counts(
+    assert count_selected_features(
         source, limits=VectorReadLimits(coordinates_per_feature=0)
     ) == {"matched": 1, "total": 2}
     with pytest.raises(GeometryValidationError, match="No matching"):
-        selection_counts(replace(source, where='"selected" = 123'))
+        count_selected_features(replace(source, where='"selected" = 123'))
     with pytest.raises(GeometryValidationError, match="feature budget"):
-        selection_counts(source, limits=VectorReadLimits(features=0))
+        count_selected_features(source, limits=VectorReadLimits(features=0))
     with pytest.raises(RasterReadCancelled):
-        selection_counts(source, lambda: True)
+        count_selected_features(source, lambda: True)
     with pytest.raises(SelectionUnavailableError):
-        selection_counts(replace(source, path=source.path.with_name("missing.gpkg")))
+        count_selected_features(
+            replace(source, path=source.path.with_name("missing.gpkg"))
+        )
     clock = iter([0, 16])
     monkeypatch.setattr("eolab_app.bounded_vector.monotonic", lambda: next(clock))
     with pytest.raises(GeometryValidationError, match="15-second time budget"):
-        selection_counts(source)
+        count_selected_features(source)
 
 
 def test_native_read_never_falls_back_after_zero_matches(
@@ -321,7 +325,7 @@ def test_selection_reauthorizes_after_restart_without_storage(
                 Matched and total feature counts, without simulating job scheduling.
             """
             assert selection == source.selection
-            return selection_counts(source)
+            return count_selected_features(source)
 
         first = VectorSamplingService(
             catalog, catalog, selection_executor=count_features

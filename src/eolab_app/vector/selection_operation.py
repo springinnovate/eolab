@@ -125,7 +125,7 @@ async def _measure_selected_features(
     """
     # Discovery must not import native GIS libraries into the Jobs HTTP process.
     import httpx2
-    from eolab_app.bounded_vector import _limit_memory, selection_counts
+    from eolab_app.bounded_vector import _limit_memory, count_selected_features
     from eolab_app.vector.catalog import StacVectorCatalog
     from eolab_app.vector.selection_source import resolve_selection
     from eolab_app.vector.sources import MountedVectorResolver
@@ -149,6 +149,6 @@ async def _measure_selected_features(
             )
         with _limit_memory():
             measurements = FeatureMeasurements.model_validate(
-                selection_counts(resolved)
+                count_selected_features(resolved)
             )
         return SelectionMeasurementResult(measurements=measurements)
