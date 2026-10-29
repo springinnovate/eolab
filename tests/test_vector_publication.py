@@ -1,6 +1,7 @@
 """Test stable service and convergent GeoServer vector publication."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -300,12 +301,13 @@ def test_shapefile_flows_from_handler_assessment_to_publication(
 def test_geoserver_vector_publisher_converges_clean_and_complete_states(
     tmp_path: Path,
 ) -> None:
-    """Create once, verify native identity, and reuse complete resources.
+    """Publish a filename with spaces as a path, then reuse the exact layer.
 
     Args:
-        tmp_path: Isolated path representable as a local file URI.
+        tmp_path: Isolated directory containing the mounted source path.
     """
     resource_name = "geopackage-0123456789abcdef01234567"
+    source_path = tmp_path / "catalog data" / "Selected areas 100%.gpkg"
     scenario = VectorGeoServerScenario(resource_name)
     geoserver_client = httpx2.AsyncClient(
         transport=httpx2.MockTransport(scenario)
@@ -318,14 +320,14 @@ def test_geoserver_vector_publisher_converges_clean_and_complete_states(
     first_style = asyncio.run(publisher.publish(
         resource_name,
         "geopackage",
-        tmp_path / "vectors.gpkg",
+        source_path,
         "selected",
         "polygon",
     ))
     second_style = asyncio.run(publisher.publish(
         resource_name,
         "geopackage",
-        tmp_path / "vectors.gpkg",
+        source_path,
         "selected",
         "polygon",
     ))
@@ -333,10 +335,20 @@ def test_geoserver_vector_publisher_converges_clean_and_complete_states(
 
     assert first_style == second_style == "vector-polygon"
     assert scenario.datastore and scenario.feature_type and scenario.layer
-    assert sum(
-        request.method == "POST" and request.url.path.endswith("/datastores")
-        for request in scenario.requests
-    ) == 1
+    datastore_requests = [
+        request for request in scenario.requests
+        if request.method == "POST" and request.url.path.endswith("/datastores")
+    ]
+    assert len(datastore_requests) == 1
+    parameters = json.loads(datastore_requests[0].content)["dataStore"][
+        "connectionParameters"
+    ]["entry"]
+    assert {entry["@key"]: entry["$"] for entry in parameters} == {
+        "dbtype": "geopkg",
+        "database": str(source_path),
+        "read_only": "true",
+        "immutable": "true",
+    }
     assert scenario.native_name == "selected"
 
 

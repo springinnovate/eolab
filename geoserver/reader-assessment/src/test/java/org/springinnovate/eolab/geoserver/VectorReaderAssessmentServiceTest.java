@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
@@ -118,16 +119,23 @@ final class VectorReaderAssessmentServiceTest {
         assertNull(assessment.reasonCode());
     }
 
-    /** Select one exact native layer from a real multi-layer GeoPackage. */
+    /**
+     * Read an exact GeoPackage layer when directory and file names need URI escaping.
+     *
+     * @throws IOException if the temporary GeoPackage cannot be copied
+     */
     @Test
-    void assessesExactGeoPackageLayerThroughDeployedDataStore() {
-        Path sourcePath = Path.of(
+    void assessesExactGeoPackageLayerThroughDeployedDataStore() throws IOException {
+        Path fixturePath = Path.of(
                 "..",
                 "..",
                 "tests",
                 "fixtures",
                 "vectors",
                 "multi-layer.gpkg");
+        Path sourceDirectory = Files.createDirectory(temporaryDirectory.resolve("vector sources"));
+        Path sourcePath = Files.copy(
+                fixturePath, sourceDirectory.resolve("Strongholds 100% é.gpkg"));
 
         VectorReaderAssessmentService service = new VectorReaderAssessmentService();
         VectorReaderAssessment assessment = service.assess(

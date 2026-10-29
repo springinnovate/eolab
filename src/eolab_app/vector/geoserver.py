@@ -562,7 +562,7 @@ class GeoServerVectorPublisher:
         elif source_format == "geopackage":
             parameters = {
                 "dbtype": "geopkg",
-                "database": source_path.as_uri(),
+                "database": str(source_path),
                 "read_only": "true",
                 "immutable": "true",
             }
