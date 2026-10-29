@@ -3014,7 +3014,10 @@ export function initializeRasterViewer(
             if (session.appearanceMode === "categorical") {
                 presentCategoricalHistogram();
             } else if (rasterAnalysis.rasterStatistics !== null) {
-                renderRasterStatistics(rasterAnalysis.rasterStatistics, false, rasterAnalysis.rasterStatisticsIsApplicable);
+                controlsView.renderHistogram(
+                    rasterAnalysis.rasterStatistics, rasterStyle,
+                    getHistogramValueLabel(activeRasterItem)
+                );
             } else {
                 controlsView.setStatisticsStatus("");
             }

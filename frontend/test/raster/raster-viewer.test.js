@@ -14,10 +14,11 @@ import {
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { RasterAppearanceControlsView } from "../../src/raster/appearance-controls-view.js";
+import { RasterPercentileControlsView } from "../../src/raster/percentile-controls-view.js";
 import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
-import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { buildRasterLegend, DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import { buildRasterStyleEnvironment } from "../../src/raster/wms.js";
 import { normalizeCategoricalRasterStyle } from "../../src/raster/categorical-style.js";
 import { createSavedMapView, parseSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
@@ -1717,6 +1718,85 @@ test("another Catalog raster view copies appearance and keeps histogram actions 
         assert.equal(h.mapLayers.findLayerKey(item), copiedKey);
         assert.equal(h.mapLayers.getRecord(copiedKey), copied);
     } finally { h.destroy(); }
+});
+
+test("Reverse colors commits only the editing view and survives percentile edits, duplication and saved maps", async () => {
+    const item = createRasterItem("reverse-colors");
+    let catalog;
+    const h = visibleLayerFixture(undefined, {}, {}, { restoreRemovedLayer: (snapshot, isCurrent) =>
+        catalog.restoreRemovedLayer(snapshot, async () => item, isCurrent) });
+    catalog = new CatalogVisualizationCoordinator(h.viewer, h.mapLayers, {});
+    const document = new FakeRasterControlDocument();
+    const appearance = new RasterAppearanceControlsView(document);
+    const percentiles = new RasterPercentileControlsView(document);
+    appearance.bind(h.controlsView.handlers);
+    percentiles.bind(h.controlsView.handlers);
+    for (const method of ["readStyle", "setStyle", "getPaletteName", "setPaletteName", "renderLegend"]) {
+        h.controlsView[method] = appearance[method].bind(appearance);
+    }
+    for (const method of ["readPercentiles", "resetPercentiles", "renderPercentileValues"]) {
+        h.controlsView[method] = percentiles[method].bind(percentiles);
+    }
+    try {
+        await h.viewer.show(item);
+        await flushPromises();
+        const original = h.mapLayers.retainedRecords[0];
+        const originalState = original.adapter.exportSavedState(original);
+        const key = await h.mapLayers.addAnotherView(original.entry.key);
+        const edited = h.mapLayers.getRecord(key);
+        h.mapLayers.activate(key);
+        h.controlsView.handlers.onClearSampleWindow();
+        await flushPromises();
+        h.viewer.openStyle(key);
+        const before = { ...appearance.readStyle(), minimumOpacity: 0.25, midpointOpacity: 0.5, maximumOpacity: 0.75 };
+        appearance.setStyle(before, "blue-yellow-red");
+        h.controlsView.handlers.onStyleInput(false);
+        h.controlsView.handlers.onStyleChange();
+        h.mapLayers.setOpacity(key, 0.4);
+        const selectedPercentiles = { lower: 25, middle: 60, upper: 100 };
+        percentiles.resetPercentiles(selectedPercentiles);
+        const reversed = { ...before, minimumColor: before.maximumColor, maximumColor: before.minimumColor };
+        appearance.reverseColorsButton.dispatchEvent(new Event("click"));
+        assert.deepEqual(appearance.readStyle(), reversed);
+        assert.equal(appearance.getPaletteName(), "custom");
+        assert.deepEqual(edited.state.rasterStyle, reversed);
+        assert.equal(edited.state.layer.wmsParams.env, buildRasterStyleEnvironment(reversed));
+        assert.equal(appearance.legend.getAttribute("aria-label"), buildRasterLegend(reversed).description);
+        assert.deepEqual(percentiles.readPercentiles(), selectedPercentiles);
+        assert.equal(edited.entry.opacity, 0.4);
+        assert.deepEqual(original.adapter.exportSavedState(original), originalState);
+        appearance.reverseColorsButton.dispatchEvent(new Event("click"));
+        assert.deepEqual(edited.state.rasterStyle, before);
+        appearance.reverseColorsButton.dispatchEvent(new Event("click"));
+        percentiles.applyPercentilesButton.dispatchEvent(new Event("click"));
+        assert.notEqual(edited.state.rasterStyle.minimum, before.minimum);
+        assert.deepEqual(edited.state.rasterStyle, {
+            ...reversed, minimum: 0, midpoint: 14, maximum: 30,
+        });
+        assert.deepEqual(percentiles.readPercentiles(), selectedPercentiles);
+        const savedAppearance = edited.adapter.exportSavedState(edited);
+        const saved = createSavedMapView({
+            viewer: { version: "test", origin: "https://example.test" }, createdAt: "2026-10-06T00:00:00Z",
+            viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
+            layers: [{ catalogItem: { collection: item.collection, id: item.id },
+                visible: true, opacity: 0.4, style: savedAppearance }],
+        });
+        assert.deepEqual(parseSavedMapView(serializeSavedMapView(saved)).layers[0].style, savedAppearance);
+        const copied = h.mapLayers.getRecord(await h.mapLayers.addAnotherView(key));
+        assert.deepEqual(copied.adapter.exportSavedState(copied), savedAppearance);
+        h.viewer.openStyle(key);
+        appearance.palette.value = "blue-yellow-red";
+        appearance.palette.dispatchEvent(new Event("change"));
+        assert.deepEqual(edited.state.rasterStyle, {
+            ...savedAppearance.continuous.definition,
+            minimumColor: before.minimumColor, maximumColor: before.maximumColor,
+        });
+        assert.equal(appearance.getPaletteName(), "blue-yellow-red");
+    } finally {
+        appearance.unbind();
+        percentiles.unbind();
+        h.destroy();
+    }
 });
 
 test("CSV preview commits through the category editor and persists through the existing appearance contract", async () => {

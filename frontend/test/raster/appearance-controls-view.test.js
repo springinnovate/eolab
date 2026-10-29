@@ -54,6 +54,18 @@ test("appearance adapter owns style reads, direct presentation, and listeners", 
         ["palette"],
         ["reset"],
     ]);
+    view.reverseColorsButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(view.readStyle(), {
+        ...DEFAULT_RASTER_STYLE,
+        minimumColor: DEFAULT_RASTER_STYLE.maximumColor,
+        maximumColor: DEFAULT_RASTER_STYLE.minimumColor,
+    });
+    view.reverseColorsButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(received.slice(4), [["input", true], ["change"], ["input", true], ["change"]]);
+    view.setEnabled(false);
+    assert.equal(view.reverseColorsButton.disabled, true);
+    view.setEnabled(true);
+    assert.equal(view.reverseColorsButton.disabled, false);
 
     view.setActiveRasterAvailable(false);
     assert.equal(
@@ -99,7 +111,9 @@ test("appearance adapter owns style reads, direct presentation, and listeners", 
     view.unbind();
     documentContext.querySelector("#reset-raster-style")
         .dispatchEvent(new Event("click"));
-    assert.equal(received.length, 4);
+    view.reverseColorsButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(view.readStyle(), DEFAULT_RASTER_STYLE);
+    assert.equal(received.length, 8);
 });
 
 test("appearance adapter requires its semantic subgroup root", () => {
