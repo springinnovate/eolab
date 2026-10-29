@@ -3475,6 +3475,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreWholeRasterStatistics() {
+        rasterSampleWindowController.clearPreview();
         if (bivariateMode.active) {
             bivariateCatalogSelection = null;
             bivariateSelectedBounds = null;
@@ -4252,7 +4253,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Preview the histogram sample window for one Leaflet map position.
+     * Preview a selected sampling box and request pixel values at the pointer.
      *
      * @param {Object} mapEvent Leaflet mousemove event in the single map world.
      * @return {void}
@@ -4269,7 +4270,7 @@ export function initializeRasterViewer(
             cursorSamplesController.clear();
             return;
         }
-        if (canUseRasterMapInteractions()) {
+        if (canUseRasterMapInteractions() && controlsView.isSamplingBoxSelected()) {
             rasterSampleWindowController.previewAt(mapEvent.latlng);
         } else {
             rasterSampleWindowController.clearPreview();
@@ -4848,6 +4849,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onClearSampleWindow: handleClearSampleWindow,
         onUseMapWindow: useMapCenterForRasterStatistics,
+        onUseVectorArea: () => rasterSampleWindowController.clearPreview(),
         onBivariateModeChange: handleBivariateModeChange,
         onBivariatePaletteChange: handleBivariatePaletteChange,
         onBivariateSwapAxes: handleBivariateSwapAxes,

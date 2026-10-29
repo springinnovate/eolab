@@ -19,6 +19,7 @@ const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
+ * @property {() => void} onUseVectorArea Stops box preview while choosing polygons.
  */
 
 /** Present sampling controls without changing the selected area on show or hide. */
@@ -92,6 +93,7 @@ export class RasterSamplingAreaControlsView {
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
         this.boundUseMapWindow = this.#handleUseMapWindow.bind(this);
+        this.boundUseVectorArea = this.#handleUseVectorArea.bind(this);
         this.boundVisibilityChange = this.#renderSelectedControls.bind(this);
     }
 
@@ -126,6 +128,7 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundUseMapWindow
         );
+        this.vectorChoice.addEventListener("change", this.boundUseVectorArea);
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -153,6 +156,7 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundUseMapWindow
         );
+        this.vectorChoice.removeEventListener("change", this.boundUseVectorArea);
         this.handlers = null;
     }
 
@@ -197,6 +201,13 @@ export class RasterSamplingAreaControlsView {
     setActiveRasterAvailable(available) {
         this.useMapWindowButton.disabled = !available;
         this.clearSampleWindowButton.disabled = !available;
+    }
+
+    /** Return whether Sampling box is selected for pointer preview.
+     * @return {boolean} Whether the Sampling box radio is checked.
+     */
+    isSamplingBoxSelected() {
+        return this.useMapWindowButton.checked;
     }
 
     /** Open the existing area choices while leaving the current results visible.
@@ -346,6 +357,13 @@ export class RasterSamplingAreaControlsView {
     #handleUseMapWindow() {
         if (this.useMapWindowButton.checked) {
             this.handlers.onUseMapWindow();
+        }
+    }
+
+    /** Forward the choice to edit a vector sampling area. @return {void} */
+    #handleUseVectorArea() {
+        if (this.vectorChoice.checked) {
+            this.handlers.onUseVectorArea();
         }
     }
 

@@ -256,11 +256,13 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
         onSampleWindowNumberChange() {},
         onClearSampleWindow: () => received.push("whole"),
         onUseMapWindow: () => received.push("box"),
+        onUseVectorArea: () => received.push("vector"),
     });
     view.setSamplingAreaMode(
         "catalogSelection",
         "AOI · area.gpkg · boundary"
     );
+    assert.equal(view.isSamplingBoxSelected(), false);
     assert.equal(
         documentContext.querySelector("#raster-histogram")
             .getAttribute("data-sampling-area"),
@@ -272,12 +274,19 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     const mapBoxChoice = documentContext.querySelector(
         "#use-map-window-for-raster"
     );
+    const vectorChoice = documentContext.querySelector("#use-vector-for-raster");
+    vectorChoice.checked = false;
     wholeChoice.checked = true;
     wholeChoice.dispatchEvent(new Event("change"));
+    wholeChoice.checked = false;
     mapBoxChoice.checked = true;
     mapBoxChoice.dispatchEvent(new Event("change"));
+    assert.equal(view.isSamplingBoxSelected(), true);
+    mapBoxChoice.checked = false;
+    vectorChoice.checked = true;
+    vectorChoice.dispatchEvent(new Event("change"));
 
-    assert.deepEqual(received, ["whole", "box"]);
+    assert.deepEqual(received, ["whole", "box", "vector"]);
     assert.equal(
         documentContext.querySelector("#raster-sampling-area-summary").textContent,
         "Sampling area · AOI · area.gpkg · boundary"

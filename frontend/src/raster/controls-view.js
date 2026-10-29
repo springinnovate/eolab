@@ -43,6 +43,7 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
+ * @property {() => void} onUseVectorArea Stops box preview while choosing polygons.
  * @property {(mode: string) => void} onBivariateModeChange Changes explicit
  * overlay/bivariate mode.
  * @property {(paletteName: string) => void} onBivariatePaletteChange Changes
@@ -506,6 +507,13 @@ export class RasterControlsView {
     setSamplingAreaMode(mode, label = "") {
         this.#samplingAreaView.setSamplingAreaMode(mode, label);
         this.#histogramView.setSamplingAreaMode(mode, label);
+    }
+
+    /** Return whether Sampling box is selected for pointer preview.
+     * @return {boolean} Whether the Sampling box radio is checked.
+     */
+    isSamplingBoxSelected() {
+        return this.#samplingAreaView.isSamplingBoxSelected();
     }
 
     /** Present shared sampling controls for the foreground workflow.

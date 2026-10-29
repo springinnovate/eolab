@@ -406,6 +406,10 @@ function createFakeControlsView() {
             this.samplingAreaMode = mode;
             this.samplingAreaLabel = label;
         },
+        /** @return {boolean} Whether the presented area is a sampling box. */
+        isSamplingBoxSelected() {
+            return this.samplingAreaMode === "selectedArea";
+        },
         showHistogramWidget() {
             this.histogramWidgetOpenCount =
                 (this.histogramWidgetOpenCount ?? 0) + 1;
@@ -3391,6 +3395,67 @@ test("clearing analysis invalidates a pending renderer activation", async () => 
     viewer.destroy();
 });
 
+test("sampling radios stop hover boxes without changing pixel picking or pending vector inputs", async () => {
+    const timers = new Map(), cursorRequests = [];
+    let timerId = 0;
+    const h = visibleLayerFixture(undefined, {
+        clock: {
+            setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
+            clearTimeout(id) { timers.delete(id); },
+        },
+        sampleCursorPixel: async (_item, point) => {
+            cursorRequests.push(point);
+            return {inBounds: true, value: 7};
+        },
+    });
+    const sampling = new RasterSamplingAreaControlsView(new FakeRasterControlDocument());
+    sampling.bind(h.controlsView.handlers);
+    h.controlsView.setSamplingAreaMode = (mode, label) => sampling.setSamplingAreaMode(mode, label);
+    h.controlsView.isSamplingBoxSelected = () => sampling.isSamplingBoxSelected();
+    /** Simulate native radio exclusivity before dispatching its change. @param {Object} choice Radio to select. @return {void} */
+    const choose = choice => {
+        for (const radio of [sampling.useMapWindowButton, sampling.clearSampleWindowButton, sampling.vectorChoice]) radio.checked = radio === choice;
+        choice.dispatchEvent(new Event("change"));
+    };
+    /** Move the pointer and complete its existing pixel dwell. @param {number} lng Longitude. @return {Promise<void>} Settled pixel reads. */
+    const hover = async lng => {
+        h.leafletMap.emit("mousemove", {latlng: {lng, lat: 0}});
+        for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+        await flushPromises();
+    };
+    /** @return {boolean} Whether a pointer-preview rectangle is on the map. */
+    const hasPreview = () => [...h.leafletMap.layers].some(layer => layer.kind === "preview");
+    try {
+        await h.viewer.show(createRasterItem("preview-area"));
+        await flushPromises();
+        await hover(0);
+        assert.equal(hasPreview(), false, "Whole raster starts without a box preview");
+        assert.equal(cursorRequests.length, 1);
+        choose(sampling.useMapWindowButton);
+        await hover(1);
+        assert.equal(hasPreview(), true);
+        choose(sampling.clearSampleWindowButton);
+        assert.equal(hasPreview(), false, "Whole raster removes an existing preview immediately");
+        await hover(2);
+        assert.equal(hasPreview(), false);
+        assert.equal(cursorRequests.length, 3, "whole-raster pixel picking stays active");
+        choose(sampling.useMapWindowButton);
+        await hover(3);
+        assert.equal(hasPreview(), true);
+        const acceptedArea = h.viewer.getSelectedArea();
+        choose(sampling.vectorChoice);
+        assert.equal(hasPreview(), false, "opening Vector layer immediately removes the preview");
+        assert.deepEqual(h.viewer.getSelectedArea(), acceptedArea, "opening the editor does not replace the accepted area");
+        await hover(4);
+        assert.equal(hasPreview(), false);
+        assert.equal(cursorRequests.length, 5, "pixel picking also stays active while choosing polygons");
+        h.viewer.setVectorSelection({selection: CATALOG_SELECTION, label: "Countries"});
+        await hover(5);
+        assert.equal(hasPreview(), false, "accepted polygons also have no box preview");
+        assert.equal(cursorRequests.length, 6);
+    } finally { sampling.unbind(); h.destroy(); }
+});
+
 test("raster viewer samples click values only inside the single map world", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
@@ -3430,7 +3495,7 @@ test("raster viewer samples click values only inside the single map world", asyn
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
     assert.deepEqual(pixelRequests, []);
-    assert.equal(rectangleLayers.length, 1);
+    assert.equal(rectangleLayers.length, 0, "Whole raster does not preview a box");
     viewer.exploreAt({ lng: -122, lat: 48 });
     await flushPromises();
     assert.deepEqual(pixelRequests, [{
