@@ -111,7 +111,7 @@ public final class VectorReaderAssessmentService {
         }
         if ("geopackage".equals(sourceFormat)) {
             parameters.put("dbtype", "geopkg");
-            parameters.put("database", sourcePath.toUri().toString());
+            parameters.put("database", sourcePath.toFile());
             parameters.put("read_only", true);
             parameters.put("immutable", true);
             return parameters;
