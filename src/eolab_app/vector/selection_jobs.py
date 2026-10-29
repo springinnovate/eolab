@@ -1,4 +1,4 @@
-"""Measure filtered vector features through the Jobs service."""
+"""Count filtered vector features through the Jobs service."""
 
 from typing import Any
 
@@ -11,7 +11,7 @@ from eolab_app.vector.selection_operation import SelectionMeasurementResult
 
 
 class SelectionJobs:
-    """Submit feature-count and bounds jobs with deadlines and readable errors."""
+    """Submit feature-count jobs with deadlines and readable errors."""
 
     def __init__(self, jobs: JobsClient) -> None:
         """Use the application's authenticated Jobs connection.
@@ -24,17 +24,17 @@ class SelectionJobs:
     async def __call__(
         self, selection: VectorSelection, upload_owner: str | None = None
     ) -> dict[str, Any]:
-        """Queue a feature measurement and return counts/bounds when it finishes.
+        """Queue an attribute read and return exact feature counts when it finishes.
 
         Args:
             selection: Catalog or upload source and filter, with no private path.
             upload_owner: Server-derived browser identity, kept inside Jobs.
 
         Returns:
-            Feature count, vertex count and WGS 84 bounds of the selected polygons.
+            Matching and total feature counts.
 
         Raises:
-            VectorConflictError: For invalid features, Jobs failure or overload.
+            VectorConflictError: For empty selections, read failures or Jobs overload.
             asyncio.CancelledError: After Jobs cancels and cleans up abandoned work.
         """
         try:
@@ -60,7 +60,7 @@ class SelectionJobs:
                 "cancelled": "Vector selection was canceled; select the features again.",
             }.get(
                 error.snapshot.status,
-                "The selected vector features could not be measured; try again.",
+                "The selected vector features could not be counted; try again.",
             )
             raise VectorConflictError(message) from error
         except httpx2.HTTPStatusError as error:

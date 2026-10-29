@@ -215,12 +215,8 @@ def test_uploaded_selection_uses_original_polygons_and_owned_jobs(
     result = response.json()
     descriptor = result["selection"]
     assert descriptor == {**request, "layerName": "areas"}
-    assert (
-        result["matched"],
-        result["total"],
-        result["rings"],
-        result["coordinates"],
-    ) == (1, 2, 3, 15)
+    assert (result["matched"], result["total"]) == (1, 2)
+    assert set(result) == {"matched", "total", "selection", "filter", "label"}
     assert result["label"] == "areas"
     assert response.headers["Cache-Control"] == "private, no-store"
     browser_hash = hashlib.sha256(owner.cookies[COOKIE].encode()).hexdigest()

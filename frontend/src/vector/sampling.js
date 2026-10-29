@@ -137,7 +137,7 @@ export class VectorSamplingController {
  * @param {{collectionId:string,itemId:string}|{uploadId:string}} source Public source identity, optionally with UI metadata.
  * @param {Object} filter Applied filter.
  * @param {AbortSignal} signal Native read cancellation.
- * @return {Promise<Object>} Immutable selection descriptor, bounds and feature counts.
+ * @return {Promise<Object>} Immutable selection descriptor and exact feature counts.
  * @throws {Error} If selection fails or the response violates the selection contract.
  */
 export async function createVectorSamplingArea(source, filter, signal) {
@@ -149,8 +149,7 @@ export async function createVectorSamplingArea(source, filter, signal) {
     const value = await response.json();
     if (!response.ok) throw new Error(value.detail ?? "Could not select these features");
     value.selection = validateVectorSelection(value.selection);
-    if (!Array.isArray(value.bbox) || value.bbox.length !== 4 || !value.bbox.every(Number.isFinite) ||
-        !Number.isSafeInteger(value.matched) || value.matched < 1 || !Number.isSafeInteger(value.total) || value.total < value.matched)
+    if (!Number.isSafeInteger(value.matched) || value.matched < 1 || !Number.isSafeInteger(value.total) || value.total < value.matched)
         throw new Error("Invalid vector sampling response");
     return value;
 }

@@ -1,4 +1,4 @@
-"""Verify vector measurements across Catalog, Jobs, and browser HTTP boundaries."""
+"""Verify exact feature counts across Catalog, Jobs, and browser HTTP boundaries."""
 
 import asyncio
 import hashlib
@@ -38,22 +38,18 @@ from test_outline_jobs import outline_case
 
 TOKEN = "test-outline-" + "a" * 40
 MEASUREMENTS = {
-    "bbox": [0, 0, 4, 4],
     "matched": 1,
     "total": 2,
-    "coordinates": 10,
-    "rings": 2,
-    "exactGeometryBytes": 259,
 }
 
 
 @pytest.mark.parametrize("case", ["valid", "empty", "wrong-layer"])
-def test_registered_measurement_reads_original_filtered_polygons(
+def test_registered_measurement_counts_original_filtered_features(
     outline_case: tuple,
     tmp_path: Path,
     case: str,
 ) -> None:
-    """Execute the actual registered operation in the actual Jobs native runner.
+    """Count source attributes through the registered operation's native runner.
 
     Args:
         outline_case: HTTP Catalog and mounted polygons used by outline tests too.
@@ -104,12 +100,7 @@ def test_registered_measurement_reads_original_filtered_polygons(
     else:
         measured = SelectionMeasurementResult.model_validate(reply["value"])
         assert measured.error is None
-        assert measured.measurements.bbox == (0, 0, 4, 4)
-        assert measured.measurements.matched == 1
-        assert measured.measurements.total == 2
-        assert measured.measurements.coordinates == 10
-        assert measured.measurements.rings == 2
-        assert measured.measurements.exactGeometryBytes > 0
+        assert measured.measurements.model_dump() == MEASUREMENTS
         assert "geometry" not in reply["value"]
 
 
@@ -129,8 +120,7 @@ def test_measurement_contract_rejects_paths_and_inconsistent_results(
         {},
         {"measurements": MEASUREMENTS, "error": "bad"},
         {"measurements": {**MEASUREMENTS, "matched": 3}},
-        {"measurements": {**MEASUREMENTS, "bbox": [4, 0, 0, 4]}},
-        {"measurements": {**MEASUREMENTS, "rings": -1}},
+        {"measurements": {**MEASUREMENTS, "matched": 0}},
     ):
         with pytest.raises(ValueError):
             SelectionMeasurementResult.model_validate(result)
@@ -241,7 +231,7 @@ def test_application_selects_only_through_jobs(
             "restart": "unavailable",
             "expired": "waited too long",
             "timed_out": "time budget",
-            "failed": "could not be measured",
+            "failed": "could not be counted",
         }[outcome]
         assert expected in response.text
 

@@ -1158,7 +1158,7 @@ async function initializeCatalog(
         /** Read selected features without requiring a display layer.
          * @param {Object} source Catalog or uploaded source and captured filter.
          * @param {AbortSignal} signal Cancellation of an obsolete setup selection.
-         * @return {Promise<Object>} Selection descriptor, bounds and matched feature count.
+         * @return {Promise<Object>} Selection descriptor and matched/total feature counts.
          */
         prepareVector: (source, signal) => createVectorSamplingArea(
             source, source.filter ?? EMPTY_VECTOR_FILTER, signal),
@@ -1181,7 +1181,7 @@ async function initializeCatalog(
         /** Store a checked selection's filter on its map view, then update rendering.
          * Models receives the shared filter immediately and reports display failures separately.
          * @param {Object} source Vector choice with its Map layers key.
-         * @param {Object} area Checked source/predicate, matched count, total count and bounds.
+         * @param {Object} area Checked source/predicate and matched/total feature counts.
          * @return {Promise<Object|null>} Applied filter, or null when superseded.
          * @throws {Error} If the layer was removed or its map filter cannot be applied.
          */
@@ -1232,7 +1232,7 @@ async function initializeCatalog(
          * @param {Object} filter Applied field conditions.
          * @param {AbortSignal} signal Cancellation of a superseded vector selection.
          * @param {Object} target Committed layer snapshot supplied above.
-         * @return {Promise<Object>} Area reference, bounds and feature counts.
+         * @return {Promise<Object>} Area reference and feature counts.
          * @throws {Error} If no polygons match, annotation upload fails or source selection fails.
          */
         createArea: async (item, filter, signal, target) => {

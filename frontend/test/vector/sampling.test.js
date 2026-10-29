@@ -4,8 +4,7 @@ import assert from "node:assert/strict";
 import { VectorSamplingController, createVectorSamplingArea } from "../../src/vector/sampling.js";
 
 const filter = { enabled: true, match: "all", rules: [{field:"iso3",operator:"eq",value:"PER"}] };
-const ready = { selection:CATALOG_SELECTION, filter, label:"Countries",
-    bbox:[-81,-19,-68,0], matched:1, total:200 };
+const ready = { selection:CATALOG_SELECTION, filter, label:"Countries", matched:1, total:200 };
 const otherFilter = { ...filter, rules: [{field:"iso3",operator:"eq",value:"CAN"}] };
 /** Settle selection promise continuations. @return {Promise<void>} Settled continuations. */
 const flush = async () => { for (let i=0;i<12;i++) await Promise.resolve(); };
@@ -59,14 +58,14 @@ test("two map views of one source follow only the chosen view's committed filter
     assert.equal(h.view.state.key,second.key);
 });
 
-test("dispersed and near-global polygons adopt directly without size confirmations",async()=>{
+test("unfiltered selections adopt directly and open the layer's filter",async()=>{
     const unfiltered={...filter,rules:[]};
-    const world={...ready,bbox:[-180,-85,180,85],matched:200,filter:unfiltered,
+    const area={...ready,matched:200,filter:unfiltered,
         selection:{...CATALOG_SELECTION,filter:unfiltered}};
-    const h=fixture(async()=>world);h.change([{...h.view.state.targets[0],filter:unfiltered}]);
+    const h=fixture(async()=>area);h.change([{...h.view.state.targets[0],filter:unfiltered}]);
     await h.controller.use();
     assert.equal(h.view.state.phase,"active");
-    assert.deepEqual(h.events,[["activate",world.selection]]);
+    assert.deepEqual(h.events,[["activate",area.selection]]);
     h.view.handlers.onFilter();assert.deepEqual(h.events.at(-1),["filter","countries"]);
 });
 
@@ -131,7 +130,7 @@ test("clearing accepted owned polygons releases them and leaves an empty source 
     assert.deepEqual(h.events.map(event=>event[0]),["activate","invalidate"]);
 });
 
-test("catalog and uploaded selections use original source identifiers and the accepted filter",async t=>{
+test("catalog and uploaded count-only responses activate the accepted source and filter",async t=>{
     for(const source of [{collectionId:CATALOG_SELECTION.collectionId,itemId:CATALOG_SELECTION.itemId},
         {uploadId:"75bdc2b7-dcc1-420a-b9b1-ed9db35e789d"}]) {
         const selection=source.uploadId?{...source,layerName:"areas",filter}:{...CATALOG_SELECTION,filter};

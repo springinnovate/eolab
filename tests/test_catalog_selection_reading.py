@@ -124,7 +124,6 @@ def _check_large_selection_numeric_consumers(tmp_path: Path) -> None:
     resolved = write_selection(tmp_path / "large.gpkg", geometries)
     summary = selection_summary(resolved)
     assert summary["matched"] == summary["total"] == 850
-    assert summary["exactGeometryBytes"] > 7 * 1024**2
     print(f"large selection: {summary}")
     assert len(resolved.selection.model_dump_json()) < 1024
     values = np.arange(68 * 50, dtype="int16").reshape(50, 68)

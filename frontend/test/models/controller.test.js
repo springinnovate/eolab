@@ -33,7 +33,7 @@ function fixture(overrides = {}, viewOverride = null) {
     const controller = new ModelsController({api, jobs, view, storage, clock, getContext: () => context,
         getTemporalItem: source => api.getTemporalItem(source),
         loadTemporalTimes: (...args) => api.loadTemporalTimes(...args),
-        prepareVector: async source => ({selection: {...selection, filter: source.filter}, matched: 3, total: 8, bbox: [0, 0, 1, 1]}), editVectorFilter: async request => { filterRequests.push(request); },
+        prepareVector: async source => ({selection: {...selection, filter: source.filter}, matched: 3, total: 8}), editVectorFilter: async request => { filterRequests.push(request); },
         closeVectorFilter: () => filterRequests.at(-1)?.close(),
         applyMapFilter: async (source, checkedArea) => {
             const filter = checkedArea.selection.filter;
