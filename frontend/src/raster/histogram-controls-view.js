@@ -12,6 +12,7 @@ import {
 } from "./histogram-view.js";
 import { createCategoricalRasterHistogram } from "./categorical-histogram-view.js";
 import { HistogramAxisControls } from "./histogram-axis-controls.js";
+import { RasterPercentileControlsView } from "./percentile-controls-view.js";
 import { requireRasterControl } from "./required-control.js";
 import { formatRasterPixelValue } from "./value-format.js";
 
@@ -36,6 +37,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {(key:string)=>void} [onDownloadHistogram] Review a clip of this source and selection.
  * @property {(key:string)=>void} [onCalculateHistogram] Open statistics for this raster and area.
  * @property {(key:string)=>void} [onRetryHistogram] Retry this raster's histogram.
+ * @property {(key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings)=>void}
+ * onHistogramPercentiles Update this view's percentile inspection and rescale choice.
  */
 
 /**
@@ -55,6 +58,9 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {Object} [style] Committed continuous raster style.
  * @property {boolean} [canRetry] Offer retry after a recoverable failure.
  * @property {boolean} canCalculate Offer Processing statistics and download actions for this source.
+ * @property {import("./percentile-controls-view.js").HistogramPercentileSettings} [percentileSettings] Continuous histogram inspection settings.
+ * @property {boolean} canRescale Whether this result may set this view's colors.
+ * @property {string} percentileMessage Reason rescaling is unavailable, or empty text.
  */
 
 /**
@@ -66,6 +72,7 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {HTMLElement} pointValue Exact clicked value shown below the chart.
  * @property {SVGSVGElement|null} chart Continuous chart with a resize observer.
  * @property {HistogramAxisControls|null} axisControls Continuous chart's axis editor.
+ * @property {RasterPercentileControlsView|null} percentileControls Continuous histogram's percentile controls.
  * @property {import("./style.js").RasterStyle|undefined} style Current continuous colors and thresholds.
  * @property {(()=>void)|null} redraw Redraw the chart without replacing its controls.
  * @property {Array<{button:HTMLButtonElement,handleClick:()=>void}>} listeners Owned action listeners.
@@ -130,6 +137,8 @@ export class RasterHistogramControlsView {
         this.axisStates = new Map();
         this.categoryExpansions = new Map();
         this.detailAxisControls = null;
+        this.detailPercentileControls = null;
+        this.detailPresentation = null;
         this.detailAxesHost = documentContext.createElement("div");
         this.histogram.append(this.detailAxesHost);
         this.categoryHost = documentContext.createElement("div");
@@ -209,9 +218,13 @@ export class RasterHistogramControlsView {
             if (!card) {
                 card = this.#createSummaryCard(summary, signatures.get(summary.key));
                 this.summaryCards.set(summary.key, card);
-            } else if (JSON.stringify(card.style) !== JSON.stringify(summary.style)) {
+            } else {
+                const redraw = JSON.stringify(card.style) !== JSON.stringify(summary.style) ||
+                    JSON.stringify(card.percentileControls?.settings) !== JSON.stringify(summary.percentileSettings);
                 card.style = summary.style;
-                card.redraw?.();
+                card.percentileControls?.render(summary.statistics, summary.style,
+                    summary.percentileSettings, summary.canRescale, summary.percentileMessage);
+                if (redraw) card.redraw?.();
             }
             const current = this.histogramList.children[index] ?? null;
             if (current !== card.root) this.histogramList.insertBefore(card.root, current);
@@ -480,16 +493,40 @@ export class RasterHistogramControlsView {
      * @param {Object} statistics Validated raster statistics.
      * @param {Object} style Committed raster style.
      * @param {string} [valueLabel="Raster value"] Axis label with known units.
+     * @param {{key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings,
+     * canRescale:boolean,message:string}|null} [percentileContext=null] View identity and optional color-rescaling controls.
      * @return {void}
      */
-    renderHistogram(statistics, style, valueLabel = "Raster value") {
+    renderHistogram(statistics, style, valueLabel = "Raster value", percentileContext = null) {
         this.categoryHost.replaceChildren();
         this.histogramChart.hidden = false;
+        const key = percentileContext?.key ?? JSON.stringify([statistics.collectionId, statistics.itemId]);
+        const previous = this.detailPresentation;
+        if (previous?.key === key && previous.statistics === statistics && previous.valueLabel === valueLabel &&
+            Boolean(this.detailPercentileControls) === (percentileContext !== null)) {
+            previous.style = style;
+            this.detailPercentileControls?.render(statistics, style, percentileContext.settings,
+                percentileContext.canRescale, percentileContext.message);
+            previous.redraw();
+            return;
+        }
         this.detailAxisControls?.dispose();
-        const key = JSON.stringify([statistics.collectionId, statistics.itemId]);
-        const { controls } = this.#createAxisControls(key, this.histogramChart, statistics, () => style, valueLabel);
+        this.detailPercentileControls?.dispose();
+        const presentation = { key, statistics, style, valueLabel, redraw: null };
+        this.detailPresentation = presentation;
+        this.detailPercentileControls = percentileContext === null ? null
+            : new RasterPercentileControlsView(this.documentContext, settings => {
+                presentation.redraw();
+                this.handlers?.onHistogramPercentiles(key, settings);
+            });
+        this.detailPercentileControls?.render(statistics, style, percentileContext.settings,
+            percentileContext.canRescale, percentileContext.message);
+        const { controls, redraw } = this.#createAxisControls(key, this.histogramChart, statistics,
+            () => presentation.style, valueLabel, () => this.detailPercentileControls?.markers ?? []);
         this.detailAxisControls = controls;
-        this.detailAxesHost.replaceChildren(this.detailAxisControls.root);
+        presentation.redraw = redraw;
+        this.detailAxesHost.replaceChildren(
+            ...(this.detailPercentileControls ? [this.detailPercentileControls.root] : []), controls.root);
     }
 
     /**
@@ -507,6 +544,9 @@ export class RasterHistogramControlsView {
     clearHistogram() {
         this.detailAxisControls?.dispose();
         this.detailAxisControls = null;
+        this.detailPercentileControls?.dispose();
+        this.detailPercentileControls = null;
+        this.detailPresentation = null;
         this.detailAxesHost.replaceChildren();
         this.categoryHost.replaceChildren();
         this.histogramChart.hidden = true;
@@ -564,6 +604,7 @@ export class RasterHistogramControlsView {
             summary.errorMessage ?? "", summary.unavailableMessage,
             summary.valueLabel ?? "Raster value", summary.categorical,
             Boolean(summary.automatic), summary.statistics,
+            Boolean(summary.percentileSettings),
             Boolean(summary.canRetry), summary.canCalculate,
         ]);
     }
@@ -584,7 +625,7 @@ export class RasterHistogramControlsView {
         pointValue.hidden = true;
         pointValue.setAttribute("role", "status");
         const card = { key: summary.key, signature, root: container, pointValue,
-            button: null, chart: null, axisControls: null, listeners: [],
+            button: null, chart: null, axisControls: null, percentileControls: null, listeners: [],
             style: summary.style, redraw: null };
         const content = summary.automatic
             ? container
@@ -624,6 +665,14 @@ export class RasterHistogramControlsView {
         }[summary.state];
         status.hidden = !presentationUnavailable && summary.state === "ready";
         content.append(name, status);
+        if (summary.automatic && summary.percentileSettings) {
+            card.percentileControls = new RasterPercentileControlsView(this.documentContext, settings => {
+                card.redraw?.();
+                this.handlers?.onHistogramPercentiles(card.key, settings);
+            });
+            card.percentileControls.render(summary.statistics, summary.style,
+                summary.percentileSettings, summary.canRescale, summary.percentileMessage);
+        }
         if (summary.categorical && summary.state === "ready") {
             const chart = createCategoricalRasterHistogram(summary.categorical, this.documentContext, {
                 expanded: this.categoryExpansions.get(summary.key) ?? false,
@@ -637,15 +686,19 @@ export class RasterHistogramControlsView {
             );
             chart.classList.add("raster-histogram-chart");
             const { controls, redraw } = this.#createAxisControls(
-                summary.key, chart, summary.statistics, () => card.style, summary.valueLabel
+                summary.key, chart, summary.statistics, () => card.style, summary.valueLabel,
+                () => card.percentileControls?.markers ?? []
             );
             card.axisControls = controls;
             card.chart = chart;
             card.redraw = redraw;
-            content.append(chart, controls.root);
+            content.append(chart);
+            if (card.percentileControls) content.append(card.percentileControls.root);
+            content.append(controls.root);
         } else if (!presentationUnavailable && summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             content.append(this.#createSummaryPreview(summary));
         }
+        if (card.percentileControls && card.chart === null) content.append(card.percentileControls.root);
         content.append(scope);
         container.append(pointValue);
         const actions = this.documentContext.createElement("div");
@@ -742,17 +795,18 @@ export class RasterHistogramControlsView {
      * @param {Object} statistics Validated sample.
      * @param {()=>import("./style.js").RasterStyle} getStyle Return the current committed raster style.
      * @param {string} valueLabel Value-axis units.
+     * @param {()=>Array<{label:string,value:number,color:string}>} [getMarkers] Current percentile inspection markers.
      * @return {{controls:HistogramAxisControls,redraw:()=>void}} Axis editor and
      * local redraw using its accepted display settings.
      */
-    #createAxisControls(key, chart, statistics, getStyle, valueLabel = "Raster value") {
+    #createAxisControls(key, chart, statistics, getStyle, valueLabel = "Raster value", getMarkers = () => []) {
         if (!this.axisStates.has(key)) this.axisStates.set(key, {});
         const distribution = { ...statistics.histogram, total: statistics.validSampleCount };
         /** Redraw the sample with current colors and supplied axes.
          * @param {Object} axes Accepted axis settings. @return {void}
          */
         const draw = axes => renderRasterHistogramChart(
-            chart, statistics, getStyle(), this.documentContext, valueLabel, [], axes,
+            chart, statistics, getStyle(), this.documentContext, valueLabel, getMarkers(), axes,
         );
         const controls = new HistogramAxisControls(this.documentContext, [
             { ...distribution, key: "x", label: valueLabel },
@@ -783,6 +837,7 @@ export class RasterHistogramControlsView {
      */
     #disposeSummaryCard(card) {
         card.axisControls?.dispose();
+        card.percentileControls?.dispose();
         if (card.chart) clearRasterHistogramChart(card.chart);
         for (const { button, handleClick } of card.listeners) {
             button.removeEventListener("click", handleClick);

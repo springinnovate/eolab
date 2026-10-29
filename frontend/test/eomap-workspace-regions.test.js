@@ -241,7 +241,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         );
     }
     for (const id of [
-        "layer-style-opacity", "raster-appearance-controls", "raster-percentile-controls",
+        "layer-style-opacity", "raster-appearance-controls",
     ]) {
         assert.match(editor.source, new RegExp(`id="${id}"`));
         assert.doesNotMatch(rendering.source, new RegExp(`id="${id}"`));
@@ -722,7 +722,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-layer-stack",
         "raster-appearance-controls",
         "raster-appearance-layer",
-        "raster-percentile-controls",
         "raster-sampling-disclosure",
         "raster-sampling-disclosure-body",
         "raster-sampling-area-summary",

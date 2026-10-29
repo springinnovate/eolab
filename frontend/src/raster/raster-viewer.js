@@ -45,7 +45,6 @@ import {
 import { RasterSampleWindowController } from "./sample-window-controller.js";
 import {
     DEFAULT_RASTER_PERCENTILES,
-    estimateRasterHistogramPercentile,
     normalizeRasterSamplingArea,
     rasterStatisticsMatchesSelection,
     WHOLE_RASTER_SAMPLING_AREA,
@@ -361,6 +360,7 @@ export function initializeRasterViewer(
     let rasterCursorPosition = null;
     let latestPointSampleSnapshot = null;
     let rasterStyleCommitTimeout = null;
+    const histogramStyleTimers = new Map();
     let rasterSampleWindowResizeTimeout = null;
     let rasterStyleWasEdited = false;
     let activeRasterItem = null;
@@ -441,6 +441,8 @@ export function initializeRasterViewer(
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
+            histogramPercentiles: { ...DEFAULT_RASTER_PERCENTILES, rescale: false },
+            histogramPercentileError: "",
             analysis: createRasterAnalysisState(initialPolygonSamplingArea()),
             layerHistogramController: null,
             layer: null,
@@ -466,6 +468,8 @@ export function initializeRasterViewer(
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
+            histogramPercentiles: { ...DEFAULT_RASTER_PERCENTILES, rescale: false },
+            histogramPercentileError: "",
             analysis: createRasterAnalysisState(initialPolygonSamplingArea()),
         };
     }
@@ -485,6 +489,7 @@ export function initializeRasterViewer(
         target.rasterStyle = { ...source.rasterStyle };
         target.paletteName = source.paletteName;
         target.rasterStyleWasEdited = source.rasterStyleWasEdited;
+        target.histogramPercentiles = { ...source.histogramPercentiles, rescale: false };
     }
 
     /**
@@ -679,6 +684,10 @@ export function initializeRasterViewer(
         session.rasterStyleWasEdited = rasterStyleWasEdited;
         syncBivariateCandidate(session);
         refreshStyle();
+        if (session.analysis.rasterStatistics && session.appearanceMode !== "categorical") {
+            controlsView.renderHistogram(session.analysis.rasterStatistics, session.rasterStyle,
+                getHistogramValueLabel(session.item), getHistogramPercentileContext(session));
+        }
         publishHistogramPresentation();
     }
 
@@ -919,6 +928,102 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Describe percentile inspection and whether this view can rescale now.
+     * Pending samples retain their style but cannot recolor from older results.
+     * @param {Object} session Raster session owning the sample and style.
+     * @return {{key:string,settings:import("./percentile-controls-view.js").HistogramPercentileSettings,canRescale:boolean,message:string}} Histogram controls context.
+     */
+    function getHistogramPercentileContext(session) {
+        const presentation = getLayerHistogramPresentation(session);
+        let message = "";
+        if (session.appearanceMode === "categorical" || bivariateMode.contains(session.key)) {
+            message = "Color rescaling is available for continuous raster colors.";
+        } else if (rasterSampleWindowResizeTimeout !== null || pendingVectorSelection ||
+            presentation.state !== "ready" || !session.analysis.rasterStatisticsIsApplicable) {
+            message = "Waiting for a usable histogram for this area. Current colors are unchanged.";
+        } else {
+            try {
+                deriveRasterStyleFromStatistics(session.rasterStyle, presentation.statistics, session.histogramPercentiles);
+            } catch (error) {
+                message = error.message;
+            }
+        }
+        if (!message && !session.layer) message = "Add this raster to the map to rescale its colors.";
+        if (!message) message = session.histogramPercentileError;
+        return { key: session.key, settings: session.histogramPercentiles, canRescale: !message, message };
+    }
+
+    /**
+     * Cancel a queued color update for one view without changing its last style.
+     * @param {string} key View identity.
+     * @return {void}
+     */
+    function cancelHistogramStyleUpdate(key) {
+        const pending = histogramStyleTimers.get(key);
+        if (!pending) return;
+        clock.clearTimeout(pending.timer);
+        histogramStyleTimers.delete(key);
+    }
+
+    /**
+     * Coalesce one view's percentile edits while continuing to update during dragging.
+     * The timer keeps its original deadline and reads the latest settings and colors.
+     * Replacement samples and removed views cannot receive an older queued update.
+     * @param {Object} session Raster view owning the accepted histogram.
+     * @return {void}
+     */
+    function scheduleHistogramStyleUpdate(session) {
+        if (!session.histogramPercentiles.rescale || !getHistogramPercentileContext(session).canRescale) {
+            cancelHistogramStyleUpdate(session.key);
+            return;
+        }
+        const statistics = getLayerHistogramPresentation(session).statistics;
+        const pending = histogramStyleTimers.get(session.key);
+        if (pending) {
+            pending.statistics = statistics;
+            return;
+        }
+        const update = { statistics, timer: null };
+        update.timer = clock.setTimeout(() => {
+            histogramStyleTimers.delete(session.key);
+            if (mapLayers.getRecord(session.key)?.state !== session ||
+                !session.histogramPercentiles.rescale || !getHistogramPercentileContext(session).canRescale ||
+                getLayerHistogramPresentation(session).statistics !== update.statistics) return;
+            const style = deriveRasterStyleFromStatistics(
+                session.rasterStyle, update.statistics, session.histogramPercentiles
+            );
+            try {
+                applySessionStyle(session, style, session.paletteName, true);
+                if (editingLayerKey === session.key) controlsView.setStyle(style, session.paletteName);
+            } catch (error) {
+                session.histogramPercentileError = `Could not rescale this raster: ${error.message}`;
+            }
+            renderLayerStack();
+        }, RASTER_STYLE_DEBOUNCE_MILLISECONDS);
+        histogramStyleTimers.set(session.key, update);
+    }
+
+    /**
+     * Keep one histogram's percentile choices and optionally update its map colors.
+     * Inspection never selects the global style editor or starts a statistics read.
+     * @param {string} key Retained or detached histogram identity.
+     * @param {{lower:number,middle:number,upper:number,rescale:boolean}} settings User choices.
+     * @return {void}
+     */
+    function handleHistogramPercentiles(key, settings) {
+        const session = key === analysisRasterSession?.key
+            ? analysisRasterSession : mapLayers.getRecord(key)?.state;
+        if (!session) return;
+        session.histogramPercentileError = "";
+        session.histogramPercentiles = { ...settings };
+        scheduleHistogramStyleUpdate(session);
+        if (session.key === activeLayerKey && session.analysis.rasterStatistics) {
+            refreshActiveSessionPresentation();
+        }
+        renderLayerHistogramSummaries();
+    }
+
+    /**
      * Build one presentation-ready histogram summary for a retained raster.
      *
      * @param {Object} session Raster-owned retained interaction state.
@@ -930,6 +1035,7 @@ export function initializeRasterViewer(
      */
     function buildLayerHistogramSummary(session) {
         const presentation = getLayerHistogramPresentation(session);
+        const percentiles = getHistogramPercentileContext(session);
         const categorical = session.appearanceMode === "categorical";
         const counts = presentation.statistics?.histogram?.counts;
         const error = session.analysis.selectedCatalogSelection !== null || session.analysis.selectedRasterBounds !== null
@@ -951,6 +1057,9 @@ export function initializeRasterViewer(
                 !rasterStatisticsMatchCategories(presentation.statistics, sessionCategoryValues(session))
                 ? { unavailableMessage: CATEGORICAL_HISTOGRAM_MESSAGE } : {}),
             style: session.rasterStyle,
+            ...(!categorical ? { percentileSettings: percentiles.settings } : {}),
+            canRescale: percentiles.canRescale,
+            percentileMessage: percentiles.message,
             errorMessage: presentation.state === "error" ? error?.message ?? "" : "",
             canRetry: presentation.state === "error" && canRetryRasterStatistics(error),
             canCalculate: session.item.capabilities?.calculations !== false,
@@ -1424,6 +1533,7 @@ export function initializeRasterViewer(
         storeRasterStatisticsResult(session.analysis, statistics, samplingArea.kind);
         session.analysis.rasterStatistics = statistics;
         session.analysis.rasterStatisticsIsApplicable = true;
+        session.histogramPercentileError = "";
         if (samplingArea.kind === "wholeRaster" && session.appearanceMode !== "categorical") {
             const style = deriveInitialRasterStyleFromStatistics(
                 session.rasterStyle, statistics, session.rasterStyleWasEdited || session.temporal?.preserveRange === true
@@ -1435,6 +1545,7 @@ export function initializeRasterViewer(
                 }
             }
         }
+        scheduleHistogramStyleUpdate(session);
         renderLayerStack();
         if (editingLayerKey === session.key) refreshStyle();
     }
@@ -2285,6 +2396,7 @@ export function initializeRasterViewer(
          * preserves detached analysis; undefined keeps normal inactive removal.
          */
         beforeRemove(record, { wasActive }) {
+            cancelHistogramStyleUpdate(record.entry.key);
             if (editingLayerKey === record.entry.key) closeStyle();
             if (record.state.temporal) {
                 record.state.temporal.request?.abort();
@@ -2519,7 +2631,6 @@ export function initializeRasterViewer(
         presentActiveRenderingAvailability(true);
         controlsView.setActiveLayer(entry.label);
         presentActiveStyle(rasterStyle, session.paletteName);
-        resetRasterPercentileControls();
 
         if (!bivariateMode.active) {
             rasterSampleWindowController.setWindowSize(
@@ -2579,7 +2690,6 @@ export function initializeRasterViewer(
         presentActiveRenderingAvailability(false);
         controlsView.setActiveLayer(session.label);
         presentActiveStyle(rasterStyle, session.paletteName);
-        resetRasterPercentileControls();
         if (!bivariateMode.active) {
             rasterSampleWindowController.setWindowSize(
                 rasterAnalysis.selectedRasterWindowSizeKm ??
@@ -2736,53 +2846,38 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Render the keyed style target's sample with scope-specific lifecycle feedback.
+     * Render the categorical style target's sample with scope-specific lifecycle feedback.
      * Current ready distributions take precedence. Compatible previous distributions
      * remain available for reference, labeled separately from the current request.
      *
-     * @param {Object|null} [style=null] Candidate style preview. The session's
-     * committed style is used when omitted.
-     * @param {{lower:number,middle:number,upper:number}|null}
-     * [percentiles=null] Draft percentile positions, when applicable.
      * @return {void}
      */
-    function renderEditingStyleHistogram(style = null, percentiles = null) {
+    function renderEditingStyleHistogram() {
         const session = editingSession();
         if (editingLayerKey === null || session === null ||
-            bivariateMode.contains(session.key)) {
+            bivariateMode.contains(session.key) || editingAppearanceMode !== "categorical") {
             controlsView.clearStyleHistogram?.();
             return;
         }
         const presentation = getLayerHistogramPresentation(session);
-        const categorical = editingAppearanceMode === "categorical";
         const candidate = presentation.state === "ready" ? presentation.statistics : session.analysis.rasterStatistics;
-        const statistics = categorical && (session.appearanceMode !== "categorical" ||
+        const statistics = (session.appearanceMode !== "categorical" ||
             !rasterStatisticsMatchCategories(candidate, sessionCategoryValues(session))) ? null : candidate;
         let message = "";
         if (presentation.state === "loading") {
-            message = categorical ? "Calculating categorical ground areas…" : "Calculating this raster's histogram…";
+            message = "Calculating categorical ground areas…";
         } else if (presentation.state === "error") {
             message = `Histogram unavailable: ${presentation.error?.message ?? "Unknown error"}`;
         } else if (presentation.state !== "ready" || statistics === null) {
-            message = categorical ? CATEGORICAL_HISTOGRAM_MESSAGE
-                : "Histogram not available yet. Choose Open histograms to calculate it.";
+            message = CATEGORICAL_HISTOGRAM_MESSAGE;
         }
         const feedback = { message: message ? `${presentation.scope}: ${message}` : "", isBusy: presentation.state === "loading" };
         if (statistics === null) {
             controlsView.renderStyleHistogramState?.(presentation.scope, feedback.message, feedback.isBusy);
-        } else if (categorical) {
+        } else {
             controlsView.renderCategoricalStyleHistogram?.(
                 presentCategoricalRasterDistribution(statistics, session.categoricalStyle),
                 styleHistogramScopeLabel(statistics, presentation), feedback);
-        } else {
-            controlsView.renderStyleHistogram?.(
-                statistics,
-                style ?? session.rasterStyle,
-                styleHistogramScopeLabel(statistics, presentation),
-                getHistogramValueLabel(session.item),
-                percentiles,
-                feedback
-            );
         }
     }
 
@@ -2851,8 +2946,6 @@ export function initializeRasterViewer(
      */
     function presentCategoricalHistogram() {
         controlsView.clearHistogram();
-        controlsView.setPercentileControlsVisible(false);
-        controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsBusy(false);
         const session = mapLayers.getRecord(activeLayerKey)?.state;
         if (rasterAnalysis.rasterStatisticsIsApplicable &&
@@ -2918,7 +3011,6 @@ export function initializeRasterViewer(
         refreshActiveSessionPresentation();
         editingLayerKey = key;
         presentSessionAppearance(session);
-        controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
         refreshStyle();
         return true;
     }
@@ -2953,7 +3045,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Refresh style availability and percentile feedback for the editing target.
+     * Refresh style availability and categorical feedback for the editing target.
      * Cancels pending edits/imports and clears the target if its session was removed;
      * otherwise preserves input values while applying current 2D restrictions.
      *
@@ -2973,18 +3065,7 @@ export function initializeRasterViewer(
         }
         controlsView.setRenderingControlsAvailable(true);
         controlsView.setAppearanceEnabled(!bivariateMode.contains(editingLayerKey));
-        controlsView.setPercentileControlsVisible(
-            editingAppearanceMode !== "categorical" && session.analysis.rasterStatistics !== null
-        );
-        if (editingAppearanceMode === "categorical") {
-            controlsView.setApplyPercentilesEnabled(false);
-            renderEditingStyleHistogram();
-            return;
-        }
-        updateRasterPercentileValues();
-        if (session.analysis.rasterStatistics === null) {
-            renderEditingStyleHistogram(session.rasterStyle);
-        }
+        renderEditingStyleHistogram();
     }
 
     /**
@@ -3013,12 +3094,7 @@ export function initializeRasterViewer(
             rasterStyleWasEdited = wasEdited;
             if (session.appearanceMode === "categorical") {
                 presentCategoricalHistogram();
-            } else if (rasterAnalysis.rasterStatistics !== null) {
-                controlsView.renderHistogram(
-                    rasterAnalysis.rasterStatistics, rasterStyle,
-                    getHistogramValueLabel(activeRasterItem)
-                );
-            } else {
+            } else if (rasterAnalysis.rasterStatistics === null) {
                 controlsView.setStatisticsStatus("");
             }
             refreshActiveSessionPresentation();
@@ -3075,7 +3151,7 @@ export function initializeRasterViewer(
             return;
         }
         controlsView.renderLegend(candidate.style);
-        renderEditingStyleHistogram(candidate.style);
+        renderEditingStyleHistogram();
         renderLayerStack();
     }
 
@@ -3088,7 +3164,7 @@ export function initializeRasterViewer(
         const candidate = editingAppearanceMode === "categorical"
             ? null : validateRasterStyleControls();
         if (candidate !== null) {
-            renderEditingStyleHistogram(candidate.style);
+            renderEditingStyleHistogram();
         }
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
@@ -3129,77 +3205,6 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Restore percentile selectors to defaults unless another layer is being edited.
-     *
-     * @return {void}
-     */
-    function resetRasterPercentileControls() {
-        if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
-            controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
-        }
-    }
-
-    /**
-     * Update percentile values and applicability for the editing session, or
-     * the active analysis session when no explicit style target is set.
-     *
-     * @return {{lower: number, middle: number, upper: number}|null} Ordered
-     * percentiles, null for invalid ordering or absent statistics.
-     */
-    function updateRasterPercentileValues() {
-        const session = editingSession();
-        if ((editingLayerKey !== null && editingAppearanceMode === "categorical") ||
-            (editingLayerKey === null && activeAppearanceIsCategorical())) {
-            controlsView.setPercentileControlsVisible(false);
-            controlsView.setApplyPercentilesEnabled(false);
-            renderEditingStyleHistogram();
-            return null;
-        }
-        const statistics = editingLayerKey === null
-            ? rasterAnalysis.rasterStatistics : session?.analysis.rasterStatistics ?? null;
-        const applicable = rasterSampleWindowResizeTimeout === null && (editingLayerKey === null
-            ? rasterAnalysis.rasterStatisticsIsApplicable
-            : session?.analysis.rasterStatisticsIsApplicable === true);
-        if (statistics === null) {
-            return null;
-        }
-        const percentiles = controlsView.readPercentiles();
-        const isOrdered =
-            percentiles.lower < percentiles.middle &&
-            percentiles.middle < percentiles.upper;
-        const approximateValues = {};
-        for (const percentileName of ["lower", "middle", "upper"]) {
-            approximateValues[percentileName] = formatRasterPixelValue(
-                estimateRasterHistogramPercentile(
-                    statistics,
-                    percentiles[percentileName]
-                )
-            );
-        }
-        controlsView.renderPercentileValues(
-            percentiles,
-            approximateValues,
-            isOrdered,
-            applicable
-        );
-        if (editingLayerKey !== null && session !== null) {
-            let previewStyle = session.rasterStyle;
-            if (isOrdered) {
-                previewStyle = deriveRasterStyleFromStatistics(
-                    controlsView.readStyle(),
-                    statistics,
-                    percentiles
-                );
-            }
-            renderEditingStyleHistogram(
-                previewStyle,
-                isOrdered ? percentiles : null
-            );
-        }
-        return isOrdered ? percentiles : null;
-    }
-
-    /**
      * Remove histogram data and controls belonging to a previous layer.
      *
      * @return {void}
@@ -3208,7 +3213,6 @@ export function initializeRasterViewer(
         rasterAnalysis.rasterStatistics = null;
         rasterAnalysis.rasterStatisticsIsApplicable = false;
         controlsView.clearStatistics();
-        resetRasterPercentileControls();
         refreshActiveSessionPresentation();
     }
 
@@ -3290,10 +3294,9 @@ export function initializeRasterViewer(
             refreshActiveSessionPresentation();
             return;
         }
-        controlsView.renderHistogram(statistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
-        controlsView.setPercentileControlsVisible(true);
-        resetRasterPercentileControls();
-        updateRasterPercentileValues();
+        const session = activeDetachedRasterSession() ?? mapLayers.getRecord(activeLayerKey)?.state;
+        if (session) session.histogramPercentileError = "";
+        if (session) scheduleHistogramStyleUpdate(session);
 
         const excludedCount =
             statistics.sampledPixelCount - statistics.validSampleCount;
@@ -3352,7 +3355,6 @@ export function initializeRasterViewer(
         rasterAnalysis.rasterStatisticsIsApplicable = false;
         controlsView.setStatisticsBusy(false);
         controlsView.clearHistogram();
-        controlsView.setPercentileControlsVisible(false);
         controlsView.setStatisticsRetryVisible(
             canRetryRasterStatistics(error)
         );
@@ -3419,7 +3421,6 @@ export function initializeRasterViewer(
         controlsView.setStatisticsBusy(true);
         if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
         controlsView.setStatisticsRetryVisible(false);
-        controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsStatus(
             activeAppearanceIsCategorical()
                 ? "Calculating categorical ground areas for the selected area…"
@@ -3475,7 +3476,6 @@ export function initializeRasterViewer(
         controlsView.setStatisticsRetryVisible(
             canRetryRasterStatistics(error)
         );
-        controlsView.setApplyPercentilesEnabled(false);
         if (activeAppearanceIsCategorical()) controlsView.clearHistogram();
         const areaName = rasterAnalysis.selectedCatalogSelection === null
             ? "Selected-area"
@@ -3731,9 +3731,12 @@ export function initializeRasterViewer(
         rasterSampleWindowController.setWindowSize(size);
         controlsView.setSampleWindowSize(size, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
         renderRasterSampleWindowGuidance("");
-        updateRasterPercentileValues();
         if (bivariateMode.active) updateBivariatePercentileValues();
         refreshActiveSessionPresentation();
+        renderLayerHistogramSummaries();
+        for (const record of mapLayers.retainedRecords) {
+            if (record.adapter === rasterMapLayerAdapter) scheduleHistogramStyleUpdate(record.state);
+        }
     }
 
     /** Select a box at the current map center from the sampling-area control. */
@@ -3755,6 +3758,7 @@ export function initializeRasterViewer(
      * @return {boolean} Whether the candidate satisfied the size contract.
      */
     function setRasterSampleWindowSize(value) {
+        const wasResizing = rasterSampleWindowResizeTimeout !== null;
         const sideLengthKm = Number(value);
         try {
             rasterSampleWindowController.setWindowSize(sideLengthKm);
@@ -3791,9 +3795,14 @@ export function initializeRasterViewer(
             if (presentedBounds !== null) rasterSampleWindowController.restoreSelection(presentedBounds);
             renderRasterSampleWindowGuidance("");
         }
-        updateRasterPercentileValues();
         if (bivariateMode.active) updateBivariatePercentileValues();
         refreshActiveSessionPresentation();
+        renderLayerHistogramSummaries();
+        if (wasResizing && rasterSampleWindowResizeTimeout === null) {
+            for (const record of mapLayers.retainedRecords) {
+                if (record.adapter === rasterMapLayerAdapter) scheduleHistogramStyleUpdate(record.state);
+            }
+        }
         return true;
     }
 
@@ -4125,8 +4134,6 @@ export function initializeRasterViewer(
         resetRasterStyle();
         commitRasterStyle();
         controlsView.setAppearanceStatus("Restored the initial colors and range.");
-        resetRasterPercentileControls();
-        updateRasterPercentileValues();
     }
 
     /**
@@ -4237,29 +4244,6 @@ export function initializeRasterViewer(
         bivariateMode.setRange(bivariateMode[`${axis}Key`], range);
         applyBivariatePresentation();
         renderLayerStack();
-    }
-
-    /**
-     * Apply the editing session's ordered histogram-estimated percentile range.
-     * Requires applicable statistics and an ordinary, non-paired style target.
-     *
-     * @return {void}
-     */
-    function handleApplyPercentiles() {
-        if (rasterSampleWindowResizeTimeout !== null) return;
-        const session = editingSession();
-        const percentiles = updateRasterPercentileValues();
-        if (session === null || percentiles === null ||
-            !session.analysis.rasterStatisticsIsApplicable ||
-            bivariateMode.contains(session.key)) return;
-        session.rasterStyleWasEdited = true;
-        if (session.key === activeLayerKey) rasterStyleWasEdited = true;
-        const style = deriveRasterStyleFromStatistics(
-            session.rasterStyle, session.analysis.rasterStatistics, percentiles
-        );
-        controlsView.setStyle(style, session.paletteName);
-        commitRasterStyle();
-        controlsView.setAppearanceStatus("Applied the histogram percentile range.");
     }
 
     /**
@@ -4397,6 +4381,7 @@ export function initializeRasterViewer(
      */
     function clear() {
         clearing = true;
+        for (const key of histogramStyleTimers.keys()) cancelHistogramStyleUpdate(key);
         pendingVectorSelection = false;
         controlsView.cancelCategoricalImport?.();
         editingLayerKey = null;
@@ -4521,6 +4506,7 @@ export function initializeRasterViewer(
      */
     function selectTemporalObservation(record, selection, available) {
         const session = record.state, temporal = session.temporal;
+        cancelHistogramStyleUpdate(session.key);
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
         if (activeLayerKey === session.key) deactivateActiveLayer();
         cancelLayerHistogramRequest(session);
@@ -4901,8 +4887,7 @@ export function initializeRasterViewer(
         onCategoricalStyleChange: commitRasterStyle,
         onPaletteChange: handlePaletteChange,
         onResetStyle: handleResetStyle,
-        onPercentileInput: updateRasterPercentileValues,
-        onApplyPercentiles: handleApplyPercentiles,
+        onHistogramPercentiles: handleHistogramPercentiles,
         onOpenHistogram: showHistogramWorkspace,
         onRetryStatistics: handleRetryStatistics,
         /**

@@ -1427,12 +1427,6 @@
                               <h4 id="raster-style-histogram-heading">Histogram</h4>
                               <span id="raster-style-histogram-scope"></span>
                             </div>
-                            <svg
-                              class="raster-histogram-chart"
-                              id="raster-style-histogram-chart"
-                              role="img"
-                              hidden
-                            ></svg>
                             <p
                               class="raster-histogram-status"
                               id="raster-style-histogram-status"
@@ -1448,66 +1442,6 @@
                               <select id="raster-palette"></select>
                             </label>
                             <button id="reverse-raster-colors" class="secondary-button" type="button">Reverse colors</button>
-                          </div>
-                          <div
-                            class="raster-percentile-controls"
-                            id="raster-percentile-controls"
-                            role="group"
-                            aria-labelledby="raster-percentile-heading"
-                            hidden
-                          >
-                            <strong id="raster-percentile-heading">Set the color range from the histogram</strong>
-                            <label for="raster-lower-percentile">
-                              <span>Lower</span>
-                              <input
-                                id="raster-lower-percentile"
-                                type="range"
-                                min="0"
-                                max="100"
-                                step="1"
-                                value="5"
-                                aria-describedby="raster-lower-percentile-value raster-percentile-error"
-                              />
-                              <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
-                            </label>
-                            <label for="raster-middle-percentile">
-                              <span>Middle</span>
-                              <input
-                                id="raster-middle-percentile"
-                                type="range"
-                                min="0"
-                                max="100"
-                                step="1"
-                                value="50"
-                                aria-describedby="raster-middle-percentile-value raster-percentile-error"
-                              />
-                              <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
-                            </label>
-                            <label for="raster-upper-percentile">
-                              <span>Upper</span>
-                              <input
-                                id="raster-upper-percentile"
-                                type="range"
-                                min="0"
-                                max="100"
-                                step="1"
-                                value="95"
-                                aria-describedby="raster-upper-percentile-value raster-percentile-error"
-                              />
-                              <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
-                            </label>
-                            <p
-                              class="raster-style-error"
-                              id="raster-percentile-error"
-                              role="status"
-                            ></p>
-                            <button
-                              class="secondary-button"
-                              id="apply-raster-percentiles"
-                              type="button"
-                            >
-                              Apply 5/50/95 stretch to map
-                            </button>
                           </div>
                           <details class="raster-style-exact-controls">
                             <summary>Exact values, colors and opacity</summary>

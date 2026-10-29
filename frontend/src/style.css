@@ -1519,11 +1519,7 @@ h5 {
   margin-top: 12px;
 }
 
-.raster-percentile-controls > strong {
-  font-size: 0.73rem;
-}
-
-.raster-percentile-controls > p:not(.raster-style-error) {
+.raster-percentile-controls > p {
   margin: -3px 0 1px;
   color: var(--text-3);
   font-size: 0.68rem;
@@ -3089,6 +3085,28 @@ h5 {
   padding: 10px;
 }
 
+.raster-histogram-percentiles {
+  min-inline-size: 0;
+  margin: 8px 0;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.raster-histogram-percentiles > legend {
+  padding: 0;
+  color: var(--text-2);
+  font-size: 0.68rem;
+}
+.raster-histogram-percentiles .raster-histogram-rescale {
+  display: flex;
+  gap: 6px;
+  font-weight: 400;
+}
+.raster-histogram-percentiles .raster-percentile-status {
+  margin: 0;
+  font-size: 0.68rem;
+}
+
 .raster-histogram-overview {
   order: 1;
   background: var(--surface-3);
@@ -4565,19 +4583,11 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--text-3);
   font-size: 0.68rem;
 }
-.raster-style-histogram .raster-histogram-chart { height: 180px; }
-.raster-style-histogram[aria-busy="true"] .raster-histogram-chart { opacity: 0.58; }
 .raster-style-histogram .raster-histogram-status {
   min-height: 1.2em;
   margin: 0;
   color: var(--text-2);
   font-size: 0.72rem;
-}
-#layer-style-editor .raster-percentile-controls {
-  margin: 0;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
-  padding: 10px;
 }
 .raster-style-exact-controls {
   border-top: 1px solid var(--border-2);

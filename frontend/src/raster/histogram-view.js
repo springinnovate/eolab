@@ -163,7 +163,7 @@ function drawRasterHistogramChart(
         : "Exact bounded";
     const markerDescription = markers.length === 0
         ? ""
-        : " Style thresholds: " + markers.map((marker) =>
+        : " Markers: " + markers.map((marker) =>
             `${marker.label} at ${formatRasterPixelValue(marker.value)}`
         ).join(", ") + ".";
     title.textContent =
