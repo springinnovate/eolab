@@ -1173,7 +1173,7 @@ export function initializeRasterViewer(
             (!primaryIsRetained || mapLayers.activeKey === primaryKey)) {
             renderLayerHistogramSummaries();
             pointSamplesController.synchronize(rasterPointSampleParticipants());
-            if (records[0]) controlsView.setActiveLayer(records[0].entry.label, records[0].entry.visible);
+            if (records[0]) controlsView.setActiveLayer(records[0].entry.label);
             refreshStyle();
             return;
         }
@@ -2315,7 +2315,7 @@ export function initializeRasterViewer(
                 return;
             }
             refreshActiveSessionPresentation();
-            controlsView.setActiveLayer(record.entry.label, visible);
+            controlsView.setActiveLayer(record.entry.label);
             renderRasterSampleWindowGuidance("");
             refreshActiveSessionPresentation();
             renderBivariateAvailability();
@@ -2494,7 +2494,7 @@ export function initializeRasterViewer(
         }
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(true);
-        controlsView.setActiveLayer(entry.label, entry.visible);
+        controlsView.setActiveLayer(entry.label);
         presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
 
@@ -2554,7 +2554,7 @@ export function initializeRasterViewer(
         selectActiveRasterSession(session);
         controlsView.setControlsVisible(true);
         presentActiveRenderingAvailability(false);
-        controlsView.setActiveLayer(session.label, true);
+        controlsView.setActiveLayer(session.label);
         presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
         if (!bivariateMode.active) {

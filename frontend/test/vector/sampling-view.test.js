@@ -7,7 +7,7 @@ import { FakeRasterControlDocument } from "../../test-support/raster/fake-contro
 test("Explore and summary vector controls share selection, review, filter actions, and removal", async()=>{
     const document=new FakeRasterControlDocument();
     const explore=new VectorSamplingView(document);
-    const summary=new VectorSamplingView(document,{root:"#calculations-vector-area",choice:null,disclosure:null});
+    const summary=new VectorSamplingView(document,{root:"#calculations-vector-area"});
     const filter={enabled:true,match:"all",rules:[{field:"iso3",operator:"eq",value:"PER"}]};
     const targets=[{key:"countries",label:"Countries",item:{collection:"vectors",id:"countries"},filter}];
     const area={id:"A".repeat(32),filter,bbox:[-180,-85,180,85],matched:1,total:253,
@@ -47,7 +47,7 @@ test("Explore and summary vector controls share selection, review, filter action
 
 test("summary vector controls explain missing polygon layers without offering an invalid selection",()=>{
     const document=new FakeRasterControlDocument();
-    const view=new VectorSamplingView(document,{root:"#calculations-vector-area",choice:null,disclosure:null});
+    const view=new VectorSamplingView(document,{root:"#calculations-vector-area"});
     const controller=new VectorSamplingController({view,getTargets:()=>[]});
     assert.match(view.elements.status.textContent,/Add a polygon layer/);
     assert.equal(view.elements.use.disabled,true);

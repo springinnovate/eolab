@@ -462,8 +462,8 @@ function createFakeControlsView() {
         highlightPairedStatistics(xValue, yValue) {
             this.pairedHighlight = { xValue, yValue };
         },
-        setActiveLayer(label, visible) {
-            this.activeLayer = { label, visible };
+        setActiveLayer(label) {
+            this.activeLayer = { label };
         },
         renderPointSamples(snapshot) {
             this.pointSamples = snapshot;
@@ -2543,6 +2543,33 @@ test('color opacity stays per-layer, survives 2D, and resets with the style', as
     h.destroy();
 });
 
+test('accepting a vector area without a raster keeps its editor available without calculating', () => {
+    const requests = [];
+    const h = visibleLayerFixture((...args) => { requests.push(args); return RASTER_STATISTICS; });
+    const document = new FakeRasterControlDocument();
+    const sampling = new RasterSamplingAreaControlsView(document);
+    sampling.bind(h.controlsView.handlers);
+    h.controlsView.setSamplingAreaMode = (mode, label) => sampling.setSamplingAreaMode(mode, label);
+    sampling.setActiveRasterAvailable(false);
+    sampling.vectorChoice.checked = true;
+    document.querySelector('#raster-sampling-area-controls').dispatchEvent(new Event('change'));
+    sampling.openAreaEditor();
+
+    h.viewer.setVectorSelection({ selection: CATALOG_SELECTION, label: 'Countries' });
+
+    assert.equal(sampling.vectorChoice.checked, true);
+    assert.equal(sampling.vectorControls.hidden, false, 'accepted status and Clear selection stay accessible');
+    assert.equal(sampling.useMapWindowButton.disabled, true);
+    assert.equal(sampling.clearSampleWindowButton.disabled, true);
+    assert.equal(h.viewer.getSelectedArea(), null, 'editor visibility does not authorize a histogram');
+    assert.deepEqual(requests, []);
+    sampling.disclosure.open = false;
+    sampling.disclosure.dispatchEvent(new Event('toggle'));
+    assert.equal(sampling.samplingAreaSummary.textContent, 'Sampling area · Vector layer');
+    sampling.unbind();
+    h.destroy();
+});
+
 test('a vector AOI drives both histogram modes and invalidation cannot fall back to the whole raster', async () => {
     const areas = [], pairedAreas = [];
     const h = visibleLayerFixture(async (_item, area) => {
@@ -3140,7 +3167,6 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     assert.equal(wmsLayers.length, 1);
     assert.equal(viewer.isDisplayed, true);
     assert.equal(controlsView.renderingControlsAvailable, true);
-    assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     viewer.exploreAt({lng: 0, lat: 0});
     const selectedArea = viewer.getSelectedArea();
@@ -3620,7 +3646,6 @@ test("raster viewer renders every retained layer", async () => {
     );
     assert.deepEqual(controlsView.activeLayer, {
         label: "third.tif",
-        visible: true,
     });
 
     const thirdKey = layerStackView.layers[0].key;
@@ -4115,7 +4140,6 @@ test("manual activation outranks an earlier deferred publication", async () => {
     assert.equal(layerStackView.activeKey, retainedKey);
     assert.deepEqual(controlsView.activeLayer, {
         label: "manual-activation-retained.tif",
-        visible: true,
     });
     assert.equal(controlsView.displayedStatistics.itemId, retained.id);
     assert.equal(
@@ -4191,7 +4215,6 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     assert.equal(wholeThirdRequest.signal.aborted, false);
     assert.deepEqual(controlsView.activeLayer, {
         label: "hidden-work-third.tif",
-        visible: false,
     });
 
     viewer.exploreAt({ lng: -74, lat: 41 });

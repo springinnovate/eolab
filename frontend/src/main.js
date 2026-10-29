@@ -1226,7 +1226,7 @@ async function initializeCatalog(
         },
     });
     summarySampling = new VectorSamplingController({
-        view: new VectorSamplingView(document, { root: "#raster-series-vector-area", choice: null, disclosure: null }),
+        view: new VectorSamplingView(document, { root: "#raster-series-vector-area" }),
         getTargets: () => [...getPolygonTargets(), ...(annotations?.summaryTargets() ?? [])],
         /** Select source features or prepare the exact matched annotation polygons.
          * @param {Object|null} item Catalog or uploaded source identity; null for browser annotations.

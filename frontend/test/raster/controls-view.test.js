@@ -332,29 +332,6 @@ test("RasterControlsView clears histogram visibility through its DOM contract", 
     assert.equal(documentContext.querySelector("#retry-raster-statistics").hidden, true);
 });
 
-test("RasterControlsView reports renderer visibility without gating analysis", () => {
-    const documentContext = new FakeRasterDocument();
-    const view = new RasterControlsView(documentContext);
-
-    view.setActiveLayer("global-temperature.tif", false);
-
-    assert.match(
-        documentContext.querySelector("#raster-active-layer-label").textContent,
-        /global-temperature\.tif — not visible on the map/
-    );
-    assert.equal(
-        documentContext.querySelector("#retry-raster-statistics").disabled,
-        false
-    );
-
-    view.setActiveLayer("global-temperature.tif", true);
-
-    assert.equal(
-        documentContext.querySelector("#retry-raster-statistics").disabled,
-        false
-    );
-});
-
 test("RasterControlsView delegates retained histogram summaries", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterControlsView(documentContext);
@@ -369,7 +346,7 @@ test("RasterControlsView delegates retained histogram summaries", () => {
             counts: [1, 3, 2],
         },
     ], "retained-raster");
-    view.setActiveLayer("retained-raster.tif", true);
+    view.setActiveLayer("retained-raster.tif");
 
     assert.equal(
         documentContext.querySelector("#raster-histogram-list").children.length,
@@ -384,12 +361,14 @@ test("RasterControlsView delegates retained histogram summaries", () => {
         documentContext.querySelector("#raster-appearance-layer").textContent,
         ""
     );
+    assert.equal(documentContext.querySelector("#retry-raster-statistics").disabled, false);
 });
 
-test("RasterControlsView owns composite visibility without clearing subgroup state", () => {
+test("RasterControlsView updates histogram availability without hiding vector-area editing", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
-    const root = documentContext.querySelector("#raster-style-controls");
+    const box = documentContext.querySelector("#use-map-window-for-raster");
+    const vector = documentContext.querySelector("#use-vector-for-raster");
     const histogram = documentContext.querySelector("#raster-histogram");
     const samplingStatus = documentContext.querySelector(
         "#raster-sample-window-status"
@@ -403,7 +382,8 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     view.setSampleWindowStatus("Selected geographic map window.");
     view.setControlsVisible(false);
 
-    assert.equal(root.hidden, true);
+    assert.equal(box.disabled, true);
+    assert.equal(vector.disabled, false);
     assert.equal(histogram.hidden, true);
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(
@@ -414,7 +394,7 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     assert.equal(appearance.hidden, false);
 
     view.setControlsVisible(true);
-    assert.equal(root.hidden, false);
+    assert.equal(box.disabled, false);
     assert.equal(histogram.hidden, false);
     assert.equal(appearance.hidden, false);
     view.setRenderingControlsAvailable(true);
@@ -485,7 +465,7 @@ test("RasterControlsView labels exact bounded histogram provenance", () => {
 test("RasterControlsView rejects an incomplete application document", () => {
     assert.throws(
         () => new RasterControlsView({ querySelector: () => null }),
-        /Required raster control is missing: #raster-style-controls/
+        /Required raster control is missing: #raster-appearance-controls/
     );
 });
 
