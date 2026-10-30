@@ -42,7 +42,6 @@ export class RasterSeriesCalculations {
         this.area = null;
         this.areaLabel = "";
         this.active = false;
-        this.automatic = true;
         this.manual = false;
         this.version = 0;
         this.results = new Map();
@@ -95,7 +94,6 @@ export class RasterSeriesCalculations {
             this.temporalSource = this.temporalMode ? intent.source : undefined;
             this.inputKey = calculationInputKey(this.sources, this.area, this.formulas, this.pixelPoint, this.temporalSource);
             this.manual = true;
-            this.automatic = false;
             this.temporalModel = intent.model;
             for (const [index, client] of manual) {
                 const saved = client.snapshot.unfinishedCalculation;
@@ -106,17 +104,6 @@ export class RasterSeriesCalculations {
         }
         for (const [, client] of clients) if (!manual.some(([, current]) => current === client)) client.stop();
         await Promise.all(clients.map(([, client]) => client.start()));
-    }
-
-    /** Choose whether future ordinary-input edits calculate automatically.
-     * Turning this off cancels only automatic work; explicit requests keep running.
-     * @param {boolean} automatic User's automatic-update choice.
-     * @return {void}
-     */
-    setAutomatic(automatic) {
-        this.automatic = automatic;
-        if (!automatic && !this.manual) this.cancelRemainingRasters();
-        this.onChange();
     }
 
     /** Get the executor for a raster request position, creating it on first use.
@@ -198,7 +185,7 @@ export class RasterSeriesCalculations {
         if (this.active === visible) return;
         this.active = visible;
         if (!visible && !this.manual && (this.busy || this.pending.size)) this.cancelRemainingRasters();
-        else if (visible && !this.complete && !this.temporalMode && this.automatic && !this.manual) this.scheduleRemainingCalculations();
+        else if (visible && !this.complete && !this.temporalMode && !this.manual) this.scheduleRemainingCalculations();
     }
 
     /** Clear changed inputs' results and schedule only ordinary raster replacements.
@@ -213,7 +200,7 @@ export class RasterSeriesCalculations {
         this.cancelRemainingRasters();
         this.results = new Map();
         this.complete = false;
-        if (this.active && !this.temporalMode && this.automatic) this.scheduleRemainingCalculations(debounce);
+        if (this.active && !this.temporalMode) this.scheduleRemainingCalculations(debounce);
         else { this.message = this.temporalMode ? "Choose Calculate to sample this period." : this.message; this.onChange(); }
     }
 

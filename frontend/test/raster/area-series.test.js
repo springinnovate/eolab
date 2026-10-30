@@ -104,10 +104,10 @@ test("normal stack openers preserve a deliberate whole-raster choice through bac
 });
 
 test("layer and histogram actions select one hidden source and preserve the requested area", async () => {
-    const h = fixture(); h.view.actions.onAutomatic(false);
+    const h = fixture();
     const selected = {collectionId: "catalog", itemId: "hidden", label: "Hidden raster"};
     h.controller.chooseArea("whole");
-    h.controller.selectSource(selected); await h.open(); h.view.actions.onCalculate(); await flush();
+    h.controller.selectSource(selected); h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onCalculate(); await flush();
     const first = h.requests.find(([kind]) => kind === "submit")[1];
     assert.deepEqual(first.source, selected); assert.deepEqual(first.area, {kind: "wholeRaster"});
     h.controller.selectSource(selected, box(10)); await flush();
@@ -123,9 +123,9 @@ test("a histogram source selects an existing view without adding another statist
     const first = {...source("1"), key: "local:view:first", label: "First view"};
     const second = {...source("1"), key: "local:view:second", label: "Second view"};
     h.controller.updateAvailableRasters([first, second]);
-    h.view.actions.onAutomatic(false);
+
     h.controller.selectSource({collectionId: "catalog", itemId: "1", label: "Second view"}, undefined, second.key);
-    await h.open(); h.view.actions.onCalculate(); await flush();
+    h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onCalculate(); await flush();
 
     assert.deepEqual(h.controller.sources.map(item => item.key), [first.key, second.key]);
     assert.deepEqual([...h.controller.selectedKeys], [second.key]);
@@ -140,7 +140,7 @@ test("catalog, upload and drawing selections preserve captured background work w
     for (const info of [{selection: CATALOG_SELECTION},
         {selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter}},
         {polygonArea: {id: "a".repeat(32), sha256: "b".repeat(64)}}]) {
-        const h = fixture(); h.view.actions.onAutomatic(false); await h.open();
+        const h = fixture(); h.controller.updateSamplingForPanelVisibility(true);
         h.view.actions.onArea("vector");
         h.controller.setVectorSelectionState({phase: "reading"});
         assert.equal(h.view.state.area.area, null);
@@ -174,25 +174,20 @@ test("invalidating the active automatic vector area cancels its work and ignores
     h.close();
 });
 
-test("accepting polygon features follows the automatic setting without making an explicit calculation", async () => {
-    for (const automatic of [true, false]) {
-        const choices = [];
-        const h = fixture({}, new Map(), choice => choices.push(choice));
-        h.view.actions.onAutomatic(automatic);
-        h.view.actions.onArea("vector");
-        await h.open();
-        assert.equal(h.requests.length, 0, "choosing Vector waits for its selected features");
-        h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
-        await h.tick();
-        assert.equal(h.requests.filter(([kind]) => kind === "submit").length, automatic ? 2 : 0);
-        assert.equal(h.area.manual, false, "accepting features does not make the work a background calculation");
-        if (!automatic) { h.view.actions.onCalculate(); await flush(); }
-        assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
-        h.view.actions.onArea("vector");
-        assert.equal(h.view.state.area.area, null, "retrying Vector clears the previous selected features");
-        assert.deepEqual(choices, ["vector", "vector"]);
-        h.close();
-    }
+test("accepting polygon features calculates automatically without making a background calculation", async () => {
+    const choices = [];
+    const h = fixture({}, new Map(), choice => choices.push(choice));
+    h.view.actions.onArea("vector");
+    await h.open();
+    assert.equal(h.requests.length, 0, "choosing Vector waits for its selected features");
+    h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
+    await h.tick();
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
+    assert.equal(h.area.manual, false, "accepting features does not make the work a background calculation");
+    h.view.actions.onArea("vector");
+    assert.equal(h.view.state.area.area, null, "retrying Vector clears the previous selected features");
+    assert.deepEqual(choices, ["vector", "vector"]);
+    h.close();
 });
 
 test("changing area mode cancels polygon selection and ignores its late reply", async () => {
@@ -225,7 +220,7 @@ test("changing area mode cancels polygon selection and ignores its late reply", 
 
 test("reopening preserves captured polygon work and Calculate uses the latest committed filter", async () => {
     const h = fixture();
-    h.view.actions.onAutomatic(false); await h.open();
+    h.controller.updateSamplingForPanelVisibility(true);
     let target = {key: "countries", label: "Countries", item: CATALOG_SELECTION, filter: CATALOG_SELECTION.filter};
     const prepared = [];
     const replacement = deferred();
@@ -283,11 +278,13 @@ test("standard deviation submits the population formula per raster and retains r
 
 test("explicit calculations keep their sources, point and area while hidden and recover finished peers after reload", async () => {
     const h = fixture();
-    h.view.actions.onAutomatic(false);
+
     h.controller.addFormula("pixel");
     h.controller.setPosition({longitude: 0.5, latitude: 0.5});
     await h.open();
-    assert.equal(h.requests.length, 0);
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
+    h.view.actions.onCancel(); await flush();
+    await h.finish("cancelled"); await h.finish("cancelled");
     h.view.actions.onCalculate(); await flush();
     await h.finish("ready", false, "1");
     h.controller.updateSamplingForPanelVisibility(false);
@@ -297,7 +294,7 @@ test("explicit calculations keep their sources, point and area while hidden and 
     h.controller.setPosition({longitude: 10.5, latitude: 0.5});
     h.controller.updateAvailableRasters([source("3")]);
     await flush();
-    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 2, "only the earlier automatic jobs were cancelled");
     assert.deepEqual(h.area.area, box(0));
     assert.deepEqual(h.area.sources.map(source => source.key), ["1", "2"]);
     assert.equal(h.data.size, 2, "finished and unfinished requests are retained together");
@@ -308,18 +305,21 @@ test("explicit calculations keep their sources, point and area while hidden and 
     assert.deepEqual(restored.area.pixelPoint, {longitude: 0.5, latitude: 0.5});
     assert.equal(restored.area.results.size, 1);
     assert.equal(restored.area.pending.size, 1);
-    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2, "reload observes existing jobs");
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 4, "reload observes existing jobs");
     await h.finish("ready", false, "2");
     await restored.jobs.refresh(); await flush();
     assert.equal(restored.area.complete, true);
     assert.equal(restored.view.state.rows.filter(row => row.state === "value").length, 4);
     restored.view.actions.onCancel(); await flush();
     assert.equal(h.data.size, 0);
+    await restored.open();
+    restored.controller.setArea(box(20), "New area after recovery"); await restored.tick();
+    assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 6, "new edits calculate automatically after recovery");
     restored.close();
 });
 
 test("retrying a failed raster keeps the successful peer's saved result", async () => {
-    const h = fixture(); h.view.actions.onAutomatic(false); await h.open();
+    const h = fixture(); h.controller.updateSamplingForPanelVisibility(true);
     h.view.actions.onCalculate(); await flush();
     await h.finish("ready", false, "1"); await h.finish("failed", false, "2");
     h.view.actions.onCalculate(); await flush();
