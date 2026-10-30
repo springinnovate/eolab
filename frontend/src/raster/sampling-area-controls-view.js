@@ -287,7 +287,7 @@ export class RasterSamplingAreaControlsView {
             (mode === "none" && this.vectorChoice.checked);
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
-        this.areaLabel = mode === "none" && this.vectorChoice.checked ? "Vector layer" :
+        this.areaLabel = mode === "none" && this.vectorChoice.checked ? "Polygon layer" :
             label || (mode === "none" ? "No raster selected" : "Whole raster");
         this.#renderSelectedControls();
     }
@@ -296,9 +296,9 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     #renderAreaSummary() {
-        this.samplingAreaSummary.textContent = this.disclosure.open ? "Sampling area" : this.useMapWindowButton.checked
+        this.samplingAreaSummary.textContent = this.disclosure.open ? "Sample area" : this.useMapWindowButton.checked
             ? `Sampling box · ${this.dimensions.textContent}`
-            : `Sampling area · ${this.areaLabel}`;
+            : `Sample area · ${this.areaLabel}`;
     }
 
     /** Convert a logarithmic slider edit to integer kilometers. @return {void} */

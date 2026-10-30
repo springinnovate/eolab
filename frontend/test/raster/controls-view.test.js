@@ -280,7 +280,7 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     assert.deepEqual(received, ["whole", "box", "vector"]);
     assert.equal(
         documentContext.querySelector("#raster-sampling-area-summary").textContent,
-        "Sampling area · AOI · area.gpkg · boundary"
+        "Sample area · AOI · area.gpkg · boundary"
     );
     view.setClearSampleWindowLabel("Clear selected histogram");
     view.setSamplingAreaMode("none");

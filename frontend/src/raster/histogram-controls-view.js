@@ -296,7 +296,7 @@ export class RasterHistogramControlsView {
      */
     setSamplingAreaMode(mode) {
         this.histogramEmpty.textContent = mode === "vector" && this.summaryCards.size === 0
-            ? "No vector sampling area is available."
+            ? "No polygon sample area is available."
             : "No visible raster layers. Show a raster layer to see its histogram.";
     }
 

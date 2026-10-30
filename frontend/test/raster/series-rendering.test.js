@@ -71,7 +71,7 @@ test("series publishes selected raster and owned area context while inactive wit
     const h = controlsFixture(), contexts = [];
     const view = new RasterSeriesView(h.document, { onContextChange: context => contexts.push(context) });
     view.render({ ...h.state, active: false });
-    assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole extent of each raster", usesSamplingBox: false });
+    assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole raster", usesSamplingBox: false });
     assert.equal(h.frames.size, 0);
     view.render({ ...h.state, active: false, sources: [...h.state.sources, { label: "Raster B", selected: true }],
         area: { ...h.state.area, areaChoice: "selection", areaLabel: "Selected watershed polygons" } });
@@ -171,7 +171,7 @@ test("one raster opens the existing values table for every statistic instead of 
     assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
         ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5000000000000001 K","Value"]]);
-    assert.equal(h.view.context.textContent,"Whole extent of each raster · 1 raster");
+    assert.equal(h.view.context.textContent,"Whole raster · 1 raster");
     assert.equal(h.view.valueCaption.textContent,"Raster A");
 });
 
@@ -286,6 +286,12 @@ test("scope and collapsed data settings describe the active source count and dis
     h.draw();
     assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
     assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Scatter");
+    for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
+        [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
+        h.state.area.area = area; h.draw();
+        assert.equal(h.document.querySelector("#raster-series-selected-area").textContent, label);
+        assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters", "provided area names remain useful context");
+    }
 });
 
 test("temporal controls reuse the period editor and preserve focused input while availability changes", () => {

@@ -136,11 +136,12 @@ test("catalog and uploaded count-only responses activate the accepted source and
         const selection=source.uploadId?{...source,layerName:"areas",filter}:{...CATALOG_SELECTION,filter};
         let request;
         t.mock.method(globalThis,"fetch",async(url,options)=>{
-            request={url,options};return new Response(JSON.stringify({...ready,selection}));
+            request={url,options};return new Response(JSON.stringify({...ready,label:source.uploadId ?? source.itemId,selection}));
         });
         const h=fixture(createVectorSamplingArea);
-        h.change([{key:"polygons",label:"Selected polygons",item:{...source,fields:[{name:"iso3",type:"str"}]},filter}]);
-        await h.controller.use();
+        h.change([{key:"polygons",label:"Reference sites",item:{...source,fields:[{name:"iso3",type:"str"}]},filter}]);
+        const area = await h.controller.use();
+        assert.equal(area.label, "Reference sites", "the chosen view supplies the display name instead of the API identifier");
         assert.deepEqual(JSON.parse(request.options.body),{...source,filter});
         assert.equal(request.url,"/api/vector-sampling/areas");
         assert.equal(request.options.headers["X-EOLab-Uploads"],source.uploadId?"1":undefined);

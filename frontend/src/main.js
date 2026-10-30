@@ -957,7 +957,7 @@ async function initializeCatalog(
         },
         onSamplingAreaChange: area => {
             rasterClips.setSelection(area);
-            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
+            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : area?.kind === "selectedArea" ? "Sampling box" : "Sample area");
         },
         onSamplingMethodChange: method => {
             if (rasterSeries.active) rasterSeries.chooseArea("selection");
@@ -1524,7 +1524,7 @@ async function initializeCatalog(
         try {
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
                 onSelected: area => {
-                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Sampling area");
+                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : area?.kind === "selectedArea" ? "Sampling box" : "Sample area");
                 },
             });
             if (!rasterClickSelected) {
