@@ -65,7 +65,11 @@ test("application map is bounded to one strict WGS 84 world", () => {
     zoom: 2,
   });
   assert.deepEqual(calls.zoomControl, {
-    options: { position: "bottomleft" },
+    options: {
+      position: "bottomleft",
+      zoomInTitle: "Zoom in (hold Shift for smaller steps)",
+      zoomOutTitle: "Zoom out (hold Shift for smaller steps)",
+    },
     map: leafletMap,
   });
 });
@@ -120,4 +124,84 @@ test("map position text never presents coordinates outside one world", () => {
     formatSingleWorldPosition({ lat: 20, lng: 180.001 }),
     "Outside map bounds",
   );
+});
+
+/** Build the application map through its public initialization boundary.
+ * @return {Object} Leaflet test double with fine handlers installed.
+ */
+function fineZoomMap() {
+  const result = createLeafletDouble();
+  createSingleWorldMap(result.leaflet, {
+    basemap: {url: "https://tiles.example/{z}/{x}/{y}.png", attribution: "Example"},
+    initialView: {latitude: 20, longitude: -25, zoom: 2},
+  });
+  return result;
+}
+
+test("wheel modifiers use separate native batches and restore ordinary sensitivity", () => {
+  const {leafletMap: map, calls} = fineZoomMap();
+  const normal = {shiftKey: false}, fine = {shiftKey: true};
+  map.scrollWheelZoom._onWheelScroll(normal);
+  map._animatingZoom = true;
+  map.scrollWheelZoom._onWheelScroll(fine);
+  assert.equal(calls.zoomTransitionsFinished, 1);
+  assert.equal(map._animatingZoom, false);
+  assert.deepEqual(calls.wheelBatches.map(({zoomSnap, wheelPxPerZoomLevel}) =>
+    [zoomSnap, wheelPxPerZoomLevel]), [[1, 60]]);
+  map.scrollWheelZoom._onWheelScroll(normal);
+  assert.deepEqual(calls.wheelBatches.map(({zoomSnap, wheelPxPerZoomLevel}) =>
+    [zoomSnap, wheelPxPerZoomLevel]), [[1, 60], [0.1, 600]]);
+  map.scrollWheelZoom._performZoom();
+  assert.equal(calls.wheelBatches[2].zoomSnap, 1);
+  assert.equal(calls.wheelEvent, normal);
+  assert.equal(map.options.zoomSnap, 0.1);
+  assert.equal(map.options.wheelPxPerZoomLevel, 60);
+});
+
+test("fine controls and focused-map keys use tenths without replacing ordinary actions", () => {
+  const {leafletMap: map, calls} = fineZoomMap();
+  const fine = {shiftKey: true}, normal = {shiftKey: false};
+  map._animatingZoom = true;
+  map.zoomControl._zoomIn(fine);
+  map.zoomControl._zoomOut(fine);
+  assert.equal(calls.zoomTransitionsFinished, 1);
+  assert.deepEqual(calls.zoomIn, {delta: 0.1, options: {animate: false}});
+  assert.deepEqual(calls.zoomOut, {delta: 0.1, options: {animate: false}});
+  map.zoomControl._zoomIn(normal);
+  map.zoomControl._zoomOut(normal);
+  assert.equal(calls.nativeZoomIn, normal);
+  assert.equal(calls.nativeZoomOut, normal);
+  map.zoomControl._disabled = true;
+  calls.zoomIn = null;
+  map.zoomControl._zoomIn(fine);
+  assert.equal(calls.zoomIn, null);
+
+  const key = {shiftKey: true, keyCode: 187};
+  map._animatingZoom = true;
+  map.keyboard._onKeyDown(key);
+  assert.equal(calls.zoomTransitionsFinished, 2);
+  assert.deepEqual(calls.setZoom, {zoom: 2.1, options: {animate: false}});
+  assert.equal(calls.stoppedEvent, key);
+  for (const event of [{shiftKey: false, keyCode: 187},
+    {shiftKey: true, keyCode: 37}, {shiftKey: true, ctrlKey: true, keyCode: 187}]) {
+    map.keyboard._onKeyDown(event);
+    assert.equal(calls.nativeKey, event);
+  }
+});
+
+test("fit bounds retain whole-level snapping and disabling wheel discards queued work", context => {
+  const {leafletMap: map, calls} = fineZoomMap();
+  const bounds = [[10, 20], [30, 40]], padding = [12, 24];
+  assert.equal(map.getBoundsZoom(bounds, true, padding), 3);
+  assert.deepEqual(calls.fit, {bounds, inside: true, padding, snap: 1});
+  assert.equal(map.options.zoomSnap, 0.1);
+  context.mock.timers.enable({apis: ["setTimeout"]});
+  map.scrollWheelZoom._timer = setTimeout(() => assert.fail("removed map zoomed"), 120);
+  map.scrollWheelZoom._delta = 40;
+  map.scrollWheelZoom._startTime = 1;
+  map.scrollWheelZoom.disable();
+  context.mock.timers.runAll();
+  assert.equal(map.scrollWheelZoom._delta, 0);
+  assert.equal(map.scrollWheelZoom._startTime, null);
+  assert.equal(calls.wheelDetached, true);
 });
