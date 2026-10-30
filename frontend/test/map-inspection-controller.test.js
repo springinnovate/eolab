@@ -625,6 +625,32 @@ test("toolbar reflow reports its height without losing retained tools", () => {
     assert.equal(h.layouts.at(-1).open, false);
 });
 
+test("Raster statistics omits retained Style context without closing its editor", () => {
+    const h = fixture();
+    const label = "Long raster name with assessment year and administrative region.tif";
+    h.controller.showStyle(label);
+    h.controller.showRasterSeries();
+    assert.equal(h.styleTab.hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection-tabs").hidden, true);
+    assert.equal(h.dockTitle.hidden, true);
+    assert.equal(h.doc.querySelector("#map-inspection-context").hidden, true);
+    assert.equal(h.style.hidden, false, "the editor remains available without its inactive tab");
+
+    const renamed = `${label} renamed`;
+    h.controller.updateLayerEditorName("style", renamed);
+    assert.equal(h.styleTab.hidden, true);
+    assert.equal(h.controller.activeTool, "raster-series");
+    h.controller.hideRasterSeries();
+    assert.equal(h.controller.activeTool, "style");
+    assert.equal(h.styleTab.hidden, false);
+    assert.equal(h.styleTab.textContent, `Style · ${renamed}`);
+    h.controller.showRasterSeries();
+    h.controller.showStyle(renamed);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.doc.querySelector("#map-inspection-context").textContent, renamed);
+    h.controller.destroy();
+});
+
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
     h.controller.showStyle("Coastal resistance.tif");
