@@ -92,16 +92,24 @@ function editExactTime(controls, boundary, value, event = "input") {
     controls.period[`${boundary}Time`].dispatchEvent(new Event(event));
 }
 
-test("calendar controls capture whole months and inclusive days as the existing UTC interval", async () => {
+test("calendar controls capture whole years, months and inclusive days as the existing UTC interval", async () => {
     const view = new ModelsView(new SummaryControlDocument());
     const h = await periodFixture({}, view), controls = view.setup.temporal, draft = h.controller.state.draft;
     await h.controller.chooseTemporalVariable("temperature");
     assert.equal(controls.period.periodMode.value, "month");
+    controls.period.periodMode.value = "year"; controls.period.periodMode.dispatchEvent(new Event("change"));
+    controls.period.selectedYear.value = "2000"; controls.period.selectedYear.dispatchEvent(new Event("input"));
+    assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.weather,
+        {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "temperature",
+            startTime: "2000-01-01T00:00:00.000Z", endTime: "2001-01-01T00:00:00.000Z"});
+    assert.match(controls.period.periodSummary.textContent, /2000 · whole year · UTC/);
+    controls.period.periodMode.value = "month"; controls.period.periodMode.dispatchEvent(new Event("change"));
     for (const [month, start, end] of [
         ["2000-02", "2000-02-01T00:00:00.000Z", "2000-03-01T00:00:00.000Z"],
         ["2000-12", "2000-12-01T00:00:00.000Z", "2001-01-01T00:00:00.000Z"],
     ]) {
-        controls.period.selectedMonth.value = month; controls.period.selectedMonth.dispatchEvent(new Event("input"));
+        controls.period.selectedYear.value = month.slice(0, 4); controls.period.selectedMonth.value = month.slice(5);
+        controls.period.selectedMonth.dispatchEvent(new Event("input"));
         const request = captureModelSubmission(draft, "e".repeat(32), -420);
         assert.deepEqual(request.inputs.weather, {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
             variable: "temperature", startTime: start, endTime: end});
@@ -132,6 +140,42 @@ test("calendar controls capture whole months and inclusive days as the existing 
     assert.equal(h.submitted.length, 0);
     await h.controller.submit();
     assert.deepEqual(h.submitted[0].inputs, expected);
+    h.controller.destroy();
+});
+
+test("typed years and ISO dates keep partial edits and reject invalid calendar days before submission", async () => {
+    const view = new ModelsView(new SummaryControlDocument());
+    const h = await periodFixture({}, view), period = view.setup.temporal.period, draft = h.controller.state.draft;
+    await h.controller.chooseTemporalVariable("temperature");
+    period.periodMode.value = "year"; period.periodMode.dispatchEvent(new Event("change"));
+    period.selectedYear.focus(); period.selectedYear.value = "20"; period.selectedYear.dispatchEvent(new Event("input"));
+    view.render(h.controller.state);
+    assert.equal(period.selectedYear.value, "20"); assert.equal(draft.temporal.startTime, "");
+    assert.match(period.selectedYear.validationMessage, /four-digit year/); assert.equal(view.setup.run.disabled, true);
+    period.selectedYear.value = "2000"; period.selectedYear.dispatchEvent(new Event("input"));
+    assert.equal(period.selectedYear.validationMessage, ""); assert.equal(view.setup.run.disabled, false);
+    period.periodMode.value = "days"; period.periodMode.dispatchEvent(new Event("change"));
+    period.firstDay.focus();
+    for (const value of ["2000-0", "2000-02-31", "1900-02-29", "01/02/2000"]) {
+        period.firstDay.value = value; period.firstDay.dispatchEvent(new Event("input"));
+        view.render(h.controller.state);
+        assert.equal(period.firstDay.value, value); assert.equal(view.document.activeElement, period.firstDay);
+        assert.equal(draft.temporal.startTime, ""); assert.equal(view.setup.run.disabled, true);
+        assert.match(period.firstDay.validationMessage, /valid date as YYYY-MM-DD/);
+    }
+    period.firstDay.value = "2000-02-29"; period.firstDay.dispatchEvent(new Event("input"));
+    assert.equal(draft.temporal.startTime, "2000-02-29T00:00"); assert.equal(period.firstDay.validationMessage, "");
+    assert.equal(view.setup.run.disabled, false);
+    period.lastDayPicker.value = "2000-03-01"; period.lastDayPicker.dispatchEvent(new Event("change"));
+    assert.equal(period.lastDay.value, "2000-03-01"); assert.equal(draft.temporal.endTime, "2000-03-02T00:00");
+    assert.equal(period.lastDayPicker.getAttribute("aria-label"), "Choose last day (included) from calendar");
+    period.periodMode.value = "times"; period.periodMode.dispatchEvent(new Event("change"));
+    period.endDate.focus(); period.endDate.value = "2000-02-31"; period.endDate.dispatchEvent(new Event("input"));
+    assert.equal(draft.temporal.endTime, ""); assert.equal(period.endDate.value, "2000-02-31");
+    assert.equal(view.setup.run.disabled, true);
+    period.endDatePicker.value = "2000-03-31"; period.endDatePicker.dispatchEvent(new Event("change"));
+    assert.equal(draft.temporal.endTime, "2000-03-31T00:00"); assert.equal(view.setup.run.disabled, false);
+    assert.equal(h.submitted.length, 0);
     h.controller.destroy();
 });
 

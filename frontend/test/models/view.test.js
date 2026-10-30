@@ -538,12 +538,14 @@ test("temporal recipes show UTC period fields and reuse area choices without an 
     assert.deepEqual(h.view.setup.inputs.region.areaMode.children.map(option => option.textContent),
         ["Entire raster", "Visible map area", "Sampling area", "Vector layer"]);
     assert.match(h.view.setup.inputs.region.mapHelp.textContent, /Run analysis/);
-    assert.equal(controls.period.startDate.type, "date"); assert.equal(controls.period.endDate.type, "date");
+    assert.equal(controls.period.startDate.type, "text"); assert.equal(controls.period.endDate.type, "text");
+    assert.equal(controls.period.startDate.placeholder, "YYYY-MM-DD");
+    assert.equal(controls.period.startDatePicker.type, "date");
     assert.equal(controls.period.startTime.type, "time"); assert.equal(controls.period.startTime.step, "any");
     assert.equal(controls.period.endTime.type, "time"); assert.equal(controls.period.endTime.step, "any");
     assert.equal(controls.period.startTime.parentNode.textContent, "Start time (UTC)");
     assert.equal(controls.period.endTime.parentNode.textContent, "End time (excluded, UTC)");
-    assert.deepEqual(controls.period.periodMode.children.map(option => option.textContent), ["Whole month", "Date range", "Exact times"]);
+    assert.deepEqual(controls.period.periodMode.children.map(option => option.textContent), ["Whole year", "Whole month", "Date range", "Exact times"]);
     assert.equal(controls.statistic.parentNode.textContent, "Period statistic");
     assert.equal(controls.dataset.children[1].textContent, "Vegetation observations");
     assert.equal(controls.variable.children[1].textContent, "Vegetation index (1)");
@@ -560,19 +562,22 @@ test("time entry modes expose only their own required fields and describe the ca
     const h = temporalFixture(), controls = h.controls;
     const groups = {month: [controls.period.selectedMonth], days: [controls.period.firstDay, controls.period.lastDay],
         times: [controls.period.startDate, controls.period.startTime, controls.period.endDate, controls.period.endTime]};
-    for (const mode of ["month", "days", "times"]) {
+    for (const mode of ["year", "month", "days", "times"]) {
         h.draft.temporal.periodMode = mode; h.view.render(h.state);
         assert.equal(controls.period.periodMode.value, mode);
         for (const [name, inputs] of Object.entries(groups)) {
             for (const input of inputs) assert.equal(input.disabled, name !== mode);
         }
+        assert.equal(controls.period.selectedYear.disabled, !["year", "month"].includes(mode));
+        assert.equal(controls.period.firstDayPicker.disabled, mode !== "days");
+        assert.equal(controls.period.startDatePicker.disabled, mode !== "times");
         assert.match(controls.period.periodSummary.textContent, /UTC/);
     }
-    assert.equal(controls.period.selectedMonth.type, "month");
-    assert.equal(controls.period.selectedMonth.value, "2020-01");
-    assert.equal(controls.period.firstDay.type, "date"); assert.equal(controls.period.lastDay.type, "date");
+    assert.equal(controls.period.selectedMonth.value, "01"); assert.equal(controls.period.selectedYear.value, "2020");
+    assert.equal(controls.period.selectedMonth.children.length, 12);
+    assert.equal(controls.period.firstDay.type, "text"); assert.equal(controls.period.lastDay.type, "text");
     assert.equal(controls.period.firstDay.value, "2020-01-01"); assert.equal(controls.period.lastDay.value, "2020-01-31");
-    assert.equal(controls.period.lastDay.parentNode.textContent, "Last day (included)");
+    assert.equal(controls.period.lastDay.parentNode.parentNode.children[0].textContent, "Last day (included) (YYYY-MM-DD)");
     assert.match(controls.period.periodSummary.textContent, /end excluded/);
     assert.equal(h.actions.length, 0);
 });

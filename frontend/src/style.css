@@ -5104,5 +5104,10 @@ summary:hover > .raster-disclosure-chevron {
 /* Calendar period controls shared by temporal calculations. */
 .temporal-period, .temporal-period-fields { display: grid; gap: 8px; min-width: 0; }
 .temporal-period-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 10px; }
+.temporal-date-field { display: grid; gap: 4px; min-width: 0; }
+.temporal-date-entry { display: grid; grid-template-columns: minmax(0, 1fr) 2.75rem; gap: 4px; }
+.temporal-date-entry .temporal-calendar-picker { width: 100%; min-width: 0; padding: 4px; }
+.temporal-calendar-picker::-webkit-datetime-edit { display: none; }
+.temporal-calendar-picker::-webkit-calendar-picker-indicator { width: 1.4rem; height: 1.4rem; margin: 0 auto; }
 .temporal-period-summary { margin: 4px 0; padding: 10px; background: var(--surface-selected); border-radius: var(--radius); font-size: 0.8rem; overflow-wrap: anywhere; }
 .temporal-period[hidden], .temporal-period [hidden] { display: none; }
