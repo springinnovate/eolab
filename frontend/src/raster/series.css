@@ -11,7 +11,7 @@
 .raster-series-source-mode { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
 #raster-series-data-inputs { margin-bottom: 0.5rem; }
 #raster-series-temporal { font-size: 0.78rem; }
-#raster-series-temporal label { display: grid; gap: 0.25rem; min-width: 0; }
+#raster-series-temporal label:not([hidden]) { display: grid; gap: 0.25rem; min-width: 0; }
 #raster-series-temporal input, #raster-series-temporal select { max-width: 100%; min-width: 0; }
 #raster-series-area-controls .raster-series-controls label { display: flex; align-items: center; }
 .raster-series-run-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.65rem; }
