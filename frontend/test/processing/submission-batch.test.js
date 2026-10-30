@@ -98,6 +98,21 @@ test("one batch carries exact pixel points only for formulas that use them",asyn
     assert.equal(bodies[0].wholeRaster,true);
 });
 
+test("ordinary batches preserve a snapshot's variable and timestamp beside file inputs", async () => {
+    let bodies;
+    const api = new ProcessingApiClient(async (path, options) => {
+        if (path.endsWith("/jobs")) return Response.json({jobs: []});
+        bodies = JSON.parse(options.body).items;
+        return Response.json({items: bodies.map((_, index) => ({index, job: job(index)}))});
+    });
+    const snapshot = {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature",
+        time: "2000-01-01T01:00:00Z", label: "Temperature at 01:00"};
+    await Promise.all([api.submitCalculation({...submission(0), source: snapshot}), api.submitCalculation(submission(1))]);
+    assert.deepEqual(bodies[0].sources.a, {collectionId: snapshot.collectionId, itemId: snapshot.itemId,
+        variable: snapshot.variable, time: snapshot.time});
+    assert.deepEqual(bodies[1].sources.a, {collectionId: "rasters", itemId: "r1"});
+});
+
 test("partial acceptance separates job, validation and capacity outcomes", async () => {
     const api = new ProcessingApiClient(async path => Response.json(path.endsWith("/jobs") ? {jobs: []} : {items: [
         {index: 2, error: {status: 429, code: "queue_full", message: "Busy", retryAfterSeconds: 5}},

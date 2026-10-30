@@ -371,6 +371,16 @@ export class RasterSeriesController {
         return sources;
     }
 
+    /** Keep submitted observations attached to their values while live views change.
+     * @return {Object[]} Result sources in the selected display order.
+     */
+    orderedResultSources() {
+        return this.orderedSources().map(source => {
+            const captured = this.areaStatistics.manual && this.areaStatistics.sources.find(item => item.key === source.key);
+            return captured && rasterSourceKey(captured) !== rasterSourceKey(source) ? captured : source;
+        });
+    }
+
     /** Accept an exact area from composition; optional outlines never determine availability.
      * @param {Object|null} area Processing sampling descriptor.
      * @param {string} [label="Current sampling area"] Area description. @return {void}
@@ -395,6 +405,17 @@ export class RasterSeriesController {
      */
     get hasPendingArea() {
         return this.areaStatistics.manual && JSON.stringify(this.getSelectedArea()) !== JSON.stringify(this.areaStatistics.area);
+    }
+
+    /** Whether Calculate would use a different area or observation than the submitted job.
+     * @return {boolean} The controls differ from the captured calculation inputs.
+     */
+    get hasPendingInputs() {
+        if (this.hasPendingArea) return true;
+        if (this.sourceMode !== "layers" || !this.areaStatistics.manual) return false;
+        const identities = [this.orderedSources(), this.areaStatistics.sources]
+            .map(sources => sources.map(source => [source.key, rasterSourceKey(source)]).sort());
+        return JSON.stringify(identities[0]) !== JSON.stringify(identities[1]);
     }
 
     /** Supply the area calculator with chosen original sources, independent of chart order. @return {void} */
@@ -502,7 +523,7 @@ export class RasterSeriesController {
     render() {
         const area = this.areaStatistics;
         if (this.sourceMode === "temporal") { this.renderTemporalResults(); return; }
-        const sources = this.orderedSources();
+        const sources = this.orderedResultSources();
         /** Join one result set to plot order without mixing current and previous areas.
          * @param {Map<string,Object>} results Per-source calculation outcomes.
          * @param {{id:number,label:string,expression:string}} formula Statistic to match.
@@ -524,13 +545,13 @@ export class RasterSeriesController {
         this.view.render({
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
-                results: area.results, complete: area.complete, pendingArea: this.hasPendingArea,
+                results: area.results, complete: area.complete, pendingInputs: this.hasPendingInputs,
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType,
             message: area.results.size + " of " + sources.length + " rasters complete. " + area.message +
-                (this.hasPendingArea ? " Results use the previous selection. Calculate to update." : ""),
+                (this.hasPendingInputs ? " Results use the previous inputs. Calculate to update." : ""),
             canDownload: area.results.size > 0 && !area.busy,
         });
     }
@@ -551,7 +572,7 @@ export class RasterSeriesController {
             })}));
         this.view.render({active: this.active, temporal: {...this.temporal, selectionError: this.temporalSelectionError()},
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
-                areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel, pendingArea: this.hasPendingArea,
+                areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel, pendingInputs: this.hasPendingInputs,
                 results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
             statistics, plots: this.plots, sources: [], rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: null, showingPrevious: false, busy: area.busy, chartType: this.chartType,
@@ -574,7 +595,7 @@ export class RasterSeriesController {
         }
         if (area.busy || !area.results.size) return "";
         const lines = [["raster", "collection_id", "item_id", "statistic", "formula", "value", "unit", "status", "error", "area", "job_id", "cached", "pixel_point", "source"]];
-        for (const source of this.orderedSources()) {
+        for (const source of this.orderedResultSources()) {
             const result = area.results.get(source.key);
             const reference = rasterSourceReference(source);
             for (const formula of this.formulas) {

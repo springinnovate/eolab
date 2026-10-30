@@ -26,12 +26,106 @@ from tests.test_catalog_temporal import (
     PRECIPITATION,
     TEMPERATURE,
     era5_archive,
+    scan,
 )
 from tests.test_temporal_processing_postgres import (
     BOUNDS,
     TemporalBoundary,
     temporal_boundary,
 )
+
+
+def test_snapshot_calculations_use_original_observations_and_refresh_without_scalar_cache(
+    temporal_boundary: TemporalBoundary,
+) -> None:
+    """Run ordinary snapshot jobs with exact selections and no GeoServer dependency.
+
+    Args:
+        temporal_boundary: Real Catalog, HTTP, PostgreSQL and native worker boundaries.
+    """
+    from tests.test_temporal_source_access import populate_month
+
+    client, worker, _, archive, scanner = temporal_boundary
+    endpoint = "/api/processing/raster-calculations"
+    snapshot = {
+        "collectionId": ITEM_KEY[0],
+        "itemId": ITEM_KEY[1],
+        "variable": TEMPERATURE,
+        "time": "2000-02-01T00:00:00Z",
+    }
+    request = {
+        "sources": {"a": snapshot},
+        "selectedBounds": BOUNDS,
+        "calculations": [
+            {"label": "Mean", "expression": "mean(a)"},
+            {"label": "Pixel", "expression": "pixelValue(a)"},
+        ],
+        "pixelPoint": {"longitude": 0, "latitude": 0},
+    }
+    first = client.post(
+        endpoint, json={**request, "requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert first.status_code == 202, first.text
+    first_id = first.json()["jobId"]
+    peer = client.post(
+        endpoint, json={**request, "requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert peer.status_code == 202, peer.text
+    assert client.portal.call(worker.run_once)
+    assert not client.portal.call(
+        worker.run_once
+    ), "identical in-flight work remains shared"
+    first_ready = client.get(f"/api/processing/jobs/{first_id}").json()
+    assert first_ready["status"] == "ready", first_ready
+    assert [float(row["value"]) for row in first_ready["result"]["rows"]] == [11, 10]
+    assert (
+        client.get(f"/api/processing/jobs/{peer.json()['jobId']}").json()["status"]
+        == "ready"
+    )
+    provenance = client.get(first_ready["result"]["provenanceUrl"]).json()
+    assert provenance["sources"]["a"] == {**snapshot, "time": "2000-02-01T00:00:00Z"}
+    foreign = TestClient(client.app, base_url="https://testserver")
+    assert foreign.get(first_ready["result"]["url"]).status_code == 404
+
+    later = {**request, "sources": {"a": {**snapshot, "time": "2000-02-01T02:00:00Z"}}}
+    other = client.post(
+        endpoint, json={**later, "requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert other.status_code == 202, other.text
+    assert client.portal.call(worker.run_once)
+    other_ready = client.get(f"/api/processing/jobs/{other.json()['jobId']}").json()
+    assert [float(row["value"]) for row in other_ready["result"]["rows"]] == [31, 30]
+
+    # The operating contract allows replacement between calculations, followed by refresh.
+    populate_month(archive, TEMPERATURE, (100, 200, 300))
+    assert client.portal.call(scan, scanner)["errors"] == []
+    refreshed = client.post(
+        endpoint, json={**request, "requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert refreshed.status_code == 202, refreshed.text
+    assert client.portal.call(worker.run_once)
+    ready = client.get(f"/api/processing/jobs/{refreshed.json()['jobId']}").json()
+    assert [float(row["value"]) for row in ready["result"]["rows"]] == [
+        100 + 2 / 3,
+        100,
+    ]
+    assert not ready["result"]["cacheHit"]
+    assert (
+        client.get(f"/api/processing/jobs/{first_id}").json()["result"]["rows"]
+        == first_ready["result"]["rows"]
+    )
+
+    unavailable = {
+        **request,
+        "sources": {"a": {**snapshot, "time": "2000-02-01T03:00:00Z"}},
+    }
+    rejected = client.post(
+        endpoint, json={**unavailable, "requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert rejected.status_code == 202, rejected.text
+    assert client.portal.call(worker.run_once)
+    failure = client.get(f"/api/processing/jobs/{rejected.json()['jobId']}").json()
+    assert failure["status"] == "failed"
 
 
 def series_request(client: TestClient, variable: str = TEMPERATURE) -> dict[str, Any]:

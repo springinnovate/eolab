@@ -17,6 +17,18 @@ from eolab_app.raster.pixel import read_raster_pixel
 from eolab_app.raster.statistics import read_raster_statistics
 from eolab_app.raster.temporal import TemporalObservation, TemporalRasterDataset
 from eolab_app.raster.source_contract import source_work_for_blocks
+from eolab_app.processing.aggregate_models import (
+    AggregateArea,
+    AggregatePlanRequest,
+    AggregateSpec,
+    NamedCalculation,
+    PixelPoint,
+    RasterAggregateLimits,
+)
+from eolab_app.processing.raster_aggregate import (
+    plan_aggregate,
+    calculate_raster_statistics_for_area,
+)
 from eolab_app.raster.bounded_window import (
     selected_raster_area_for_wgs84_bounds,
     project_wgs84_polygons,
@@ -26,6 +38,55 @@ from eolab_app.sampling_area import (
     SelectedBoundsSamplingArea,
     WholeRasterSamplingArea,
 )
+
+
+def test_snapshot_uses_ordinary_calculations_on_the_admitted_grid(
+    cyclic_observation: TemporalObservation, tmp_path: Path
+) -> None:
+    """Calculate native values from a cyclic observation through ordinary plans.
+
+    Args:
+        cyclic_observation: Admitted grid whose native columns were rearranged.
+        tmp_path: Private calculation output directory.
+    """
+    request = AggregatePlanRequest(
+        sources={
+            "a": {
+                "collectionId": "eolab-temporal-datasets",
+                "itemId": "weather",
+                "variable": "temperature",
+                "time": "2000-01-01T00:00:00Z",
+            }
+        },
+        calculations=(
+            NamedCalculation(label="Mean", expression="mean(a)"),
+            NamedCalculation(label="Pixel", expression="pixelValue(a)"),
+        ),
+        wholeRaster=True,
+        pixelPoint=PixelPoint(longitude=0, latitude=0),
+    )
+    area = AggregateArea(kind="wholeRaster")
+    limits = RasterAggregateLimits()
+    grid = plan_aggregate(
+        cyclic_observation,
+        area,
+        request.calculations,
+        "a",
+        limits,
+        pixel_point=request.pixelPoint,
+    )
+    spec = AggregateSpec(
+        sources=request.sources,
+        calculations=request.calculations,
+        area=area,
+        grid=grid,
+        pixelPoint=request.pixelPoint,
+    )
+    result = calculate_raster_statistics_for_area(
+        cyclic_observation, spec, tmp_path, limits
+    )
+    assert [float(row["value"]) for row in result.rows] == [11.5, 8]
+    assert result.rows[0]["aggregates"][0]["validPixels"] == 24
 
 
 @pytest.fixture

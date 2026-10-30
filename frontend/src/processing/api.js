@@ -6,13 +6,14 @@ import { calculationPixelPoint, chunkPixels, validateModelIdentity } from "./cal
 import { csvParse } from "d3";
 
 /** Serialize one raster identity without carrying display state or file paths.
- * @param {Object} source Catalog item or owned run-file source.
+ * @param {Object} source Catalog item, exact temporal observation or owned run-file source.
  * @return {Object} Path-free source accepted by Processing operations.
  * @throws {Error} If a private source has invalid opaque identifiers.
  */
 function processingRasterReference(source) {
     return source.kind === "runArtifact" ? {kind: "runArtifact", jobId: validateProcessingId(source.jobId), artifactId: validateProcessingId(source.artifactId)} :
-        {collectionId: source.collectionId, itemId: source.itemId};
+        {collectionId: source.collectionId, itemId: source.itemId,
+            ...(source.variable === undefined ? {} : {variable: source.variable, time: source.time})};
 }
 
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */

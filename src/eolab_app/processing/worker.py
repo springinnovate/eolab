@@ -24,11 +24,12 @@ from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.aggregate_models import RasterAggregateLimits
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import (
-    RasterSourceReference,
+    RasterAnalysisSourceReference,
+    TemporalRasterSelection,
     RunArtifactReference,
     TemporalIntervalSelection,
 )
-from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_inputs import RetainedVectorSelectionReader
@@ -139,13 +140,16 @@ class ProcessingWorker:
     async def _resolve_source(
         self,
         row: dict[str, Any],
-        source: RasterSourceReference | TemporalIntervalSelection,
-    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval, str | None]:
+        source: RasterAnalysisSourceReference | TemporalIntervalSelection,
+    ) -> tuple[
+        AuthorizedRaster | TemporalObservation | ResolvedTemporalInterval, str | None
+    ]:
         """Resolve catalog raster observations or a file retained by this accepted job.
 
         Args:
             row: Claimed computation with its current attempt token.
-            source: Operation-owned catalog raster, temporal interval or published-file reference.
+            source: Operation-owned catalog raster, temporal observation/interval
+                or published-file reference.
 
         Returns:
             Confined raster input or temporal observations, and a checksum only for
@@ -157,6 +161,9 @@ class ProcessingWorker:
         """
         if isinstance(source, TemporalIntervalSelection):
             return await self.authorizer.get_temporal_interval(source), None
+        if isinstance(source, TemporalRasterSelection):
+            (observation,) = await self.authorizer.get_observations(source)
+            return observation, None
         if not isinstance(source, RunArtifactReference):
             return await self.authorizer.authorize(source), None
         parent_attempt, file = await asyncio.to_thread(
@@ -213,7 +220,10 @@ class ProcessingWorker:
         row: dict[str, Any],
         calculation: BaseModel,
         model: ModelRunSpec | None,
-    ) -> tuple[AuthorizedRaster | ResolvedTemporalInterval | None, str | None]:
+    ) -> tuple[
+        AuthorizedRaster | TemporalObservation | ResolvedTemporalInterval | None,
+        str | None,
+    ]:
         """Prepare the operation's inputs while the worker holds the job's execution lease.
 
         Args:

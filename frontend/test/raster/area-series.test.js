@@ -136,6 +136,53 @@ test("a histogram source selects an existing view without adding another statist
     h.close();
 });
 
+test("snapshot edits keep background results and CSV attached to the submitted observation", async () => {
+    const h = fixture();
+    const original = {key: "weather-view", visible: true, label: "Temperature at 00:00",
+        source: {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature", time: "2000-01-01T00:00:00Z"}};
+    const replacement = {...original, label: "Rain at 01:00", source: {...original.source, variable: "rain", time: "2000-01-01T01:00:00Z"}};
+    try {
+        h.controller.updateAvailableRasters([original, source("1")]);
+        h.controller.updateSamplingForPanelVisibility(true);
+        h.view.actions.onCalculate(); await flush();
+        h.controller.updateSamplingForPanelVisibility(false);
+        h.controller.updateAvailableRasters([replacement, source("1")]);
+        h.controller.updateSamplingForPanelVisibility(true); await h.tick();
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
+        assert.equal(h.view.state.area.pendingInputs, true);
+        assert.equal(h.view.state.statistics[0].rows[0].label, original.label);
+        assert.equal(h.view.state.sources[0].label, replacement.label, "the next input remains the live map view");
+        await h.finish(); await h.finish();
+        assert.match(h.controller.exportCsv(), /Temperature at 00:00/);
+        assert.doesNotMatch(h.controller.exportCsv(), /Rain at 01:00/);
+        assert.match(h.controller.exportCsv(), /2000-01-01T00:00:00Z/);
+        h.view.actions.onCalculate(); await flush();
+        const submissions = h.requests.filter(([kind]) => kind === "submit");
+        assert.equal(submissions.length, 4);
+        assert.equal(submissions[2][1].source.variable, "rain");
+        assert.equal(submissions[2][1].source.time, replacement.source.time);
+        assert.equal(h.view.state.area.pendingInputs, false);
+    } finally { h.close(); }
+});
+
+test("changing a live snapshot replaces automatic work under its retained view key", async () => {
+    const h = fixture();
+    const snapshot = {key: "weather-view", visible: true, label: "Temperature at 00:00",
+        source: {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature", time: "2000-01-01T00:00:00Z"}};
+    try {
+        h.controller.updateAvailableRasters([snapshot]); await h.open();
+        h.controller.updateAvailableRasters([{...snapshot, label: "Temperature at 01:00",
+            source: {...snapshot.source, time: "2000-01-01T01:00:00Z"}}]);
+        await h.tick();
+        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 1);
+        await h.finish("cancelled"); await h.tick(); await flush();
+        const submissions = h.requests.filter(([kind]) => kind === "submit");
+        assert.equal(submissions.length, 2);
+        assert.equal(submissions[1][1].source.time, "2000-01-01T01:00:00Z");
+        assert.deepEqual([...h.controller.selectedKeys], [snapshot.key]);
+    } finally { h.close(); }
+});
+
 test("catalog, upload and drawing selections preserve captured background work when invalidated", async () => {
     for (const info of [{selection: CATALOG_SELECTION},
         {selection: {uploadId: "75bdc2b7-dcc1-420a-b9b1-ed9db35e789d", layerName: "basins", filter: CATALOG_SELECTION.filter}},
@@ -250,16 +297,16 @@ test("reopening preserves captured polygon work and Calculate uses the latest co
         replacement.resolve({selection: prepared[1], label: target.label, matched: 1, total: 200});
         await flush();
         assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0, "reopening does not replace running work");
-        assert.equal(h.view.state.area.pendingArea, true);
+        assert.equal(h.view.state.area.pendingInputs, true);
         assert.deepEqual(h.view.state.area.area.catalogSelection, prepared[1]);
-        assert.match(h.view.state.message, /Results use the previous selection\. Calculate to update\./);
+        assert.match(h.view.state.message, /Results use the previous inputs\. Calculate to update\./);
         await h.finish(); await h.finish();
         assert.equal(h.area.results.size, 2, "the captured calculation still accepts its results");
         h.view.actions.onCalculate(); await flush();
         const submissions = h.requests.filter(([kind]) => kind === "submit");
         assert.equal(submissions.length, 4);
         assert.ok(submissions.slice(2).every(([, request]) => request.area.catalogSelection.filter.rules[0].value === "CAN"));
-        assert.equal(h.view.state.area.pendingArea, false);
+        assert.equal(h.view.state.area.pendingInputs, false);
     } finally { sampling.destroy(); h.close(); }
 });
 

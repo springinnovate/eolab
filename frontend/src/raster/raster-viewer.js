@@ -4459,7 +4459,7 @@ export function initializeRasterViewer(
             label: `${item.properties.title ?? item.id} · ${variable?.description ?? selection.variable} · ${timeLabel} UTC`,
             bbox: item.bbox,
             assets: {data: {"raster:bands": [{unit: variable?.unit}]}},
-            capabilities: {pixels: available, statistics: available, calculations: false, modelInput: false},
+            capabilities: {pixels: available, statistics: available, calculations: available, modelInput: false},
         };
     }
 

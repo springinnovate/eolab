@@ -6,12 +6,15 @@ from eolab_app.bounded_vector import (
 )
 from eolab_app.catalog_selection import ResolvedCatalogSelection
 import math
-from pathlib import Path
 from typing import Any
 from rasterio.io import DatasetReader
 
 from eolab_app.processing.models import ProcessingError
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.source_models import (
+    RasterAnalysisSourceReference,
+    RunArtifactReference,
+)
+from eolab_app.raster.reader import RasterData
 from eolab_app.raster.bounded_window import (
     NoRasterBoundsOverlapError,
     selected_raster_area_for_wgs84_bounds,
@@ -25,7 +28,7 @@ from eolab_app.raster.source_contract import (
 )
 
 
-def raster_source_filename_prefix(source: RasterSourceReference) -> str:
+def raster_source_filename_prefix(source: RasterAnalysisSourceReference) -> str:
     """Name a derived file using its catalog item or published artifact identity.
 
     Args:
@@ -41,18 +44,18 @@ def raster_source_filename_prefix(source: RasterSourceReference) -> str:
     )
 
 
-def validate_supported_raster(dataset: Any, path: Path) -> None:
+def validate_supported_raster(dataset: Any, raster_data: RasterData) -> None:
     """Validate that an opened raster is supported for calculations and clipping.
 
     Args:
         dataset: Open catalog-authorized dataset.
-        path: Catalog-authorized source path.
+        raster_data: Confined source path or admitted temporal observation.
 
     Raises:
         ProcessingError: For unsupported input structure or unsigned dependencies.
     """
     try:
-        require_signed_raster_dependencies(dataset, path)
+        require_signed_raster_dependencies(dataset, raster_data)
         require_raster_analysis_georeferencing(dataset)
         require_bounded_source_structure(dataset, maximum_block_bytes=None)
         if dataset.driver != "GTiff":

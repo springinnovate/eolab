@@ -24,8 +24,11 @@ from eolab_app.processing.models import (
     ProcessingError,
 )
 from eolab_app.processing.raster_expression import FUNCTIONS, compile_expression, walk
-from eolab_app.raster.models import Wgs84Bounds
-from eolab_app.raster.source_models import RasterSourceReference, RunArtifactReference
+from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
+from eolab_app.raster.source_models import (
+    RasterAnalysisSourceReference,
+    RunArtifactReference,
+)
 
 from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 
@@ -101,14 +104,14 @@ class PixelPoint(BaseModel):
 
 
 class AggregatePlanRequest(BaseModel):
-    """One raster, bounded expressions, and an explicit box or polygon selection.
+    """One raster or exact observation, formulas, and an explicit sampling area.
 
     Vector selections may reference catalog layers or private uploaded GeoPackages.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     sources: Annotated[
-        dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
+        dict[Alias, RasterAnalysisSourceReference], Field(min_length=1, max_length=1)
     ]
     calculations: Annotated[
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
@@ -408,7 +411,8 @@ class AggregateSpec(BaseModel):
     by plan_aggregate(), saves it on the job, then passes it to
     calculate_raster_statistics_for_area().
 
-    sources maps the formula alias (such as a) to a catalog or private raster.
+    sources maps the formula alias (such as a) to a catalog raster, exact
+    temporal observation or private raster.
     calculations contains the named formulas. area describes the map box,
     uploaded polygons, filtered vector layer or whole-raster selection.
     pixelPoint supplies the independent clicked location for pixelValue formulas.
@@ -423,7 +427,7 @@ class AggregateSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation: Literal["raster.aggregate.v1"] = OPERATION_VERSION
     sources: Annotated[
-        dict[Alias, RasterSourceReference], Field(min_length=1, max_length=1)
+        dict[Alias, RasterAnalysisSourceReference], Field(min_length=1, max_length=1)
     ]
     sourceSignature: tuple[int, int, int, int] | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -450,10 +454,13 @@ class AggregateSpec(BaseModel):
         Raises:
             ValueError: If source identity is incomplete, a pixel location is missing or cached rows differ.
         """
-        private = isinstance(next(iter(self.sources.values())), RunArtifactReference)
+        source = next(iter(self.sources.values()))
+        private = isinstance(source, RunArtifactReference)
         if private != (self.sourceChecksum is not None):
             raise ValueError("Private raster plans require their published checksum")
-        if private != (self.sourceSignature is None):
+        if isinstance(source, CatalogRasterRequest) != (
+            self.sourceSignature is not None
+        ):
             raise ValueError("Only catalog raster plans require a source signature")
         if self.pixelPoint is None and any(
             node.op == "pixelValue"
@@ -495,7 +502,7 @@ class AggregateJobResponse(JobResponse):
     """Calculation-specific details layered on the existing job lifecycle."""
 
     operation: Literal["raster.aggregate.v1"]
-    sources: dict[str, RasterSourceReference] | None
+    sources: dict[str, RasterAnalysisSourceReference] | None
     calculations: tuple[NamedCalculation, ...] | None
     area: dict[str, object] | None
     grid: AggregateGrid | None

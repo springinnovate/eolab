@@ -44,7 +44,13 @@ from eolab_app.processing.calculation_cache import (
 )
 from eolab_app.processing.polygon_areas import PolygonAreaReference
 from eolab_app.raster.models import AuthorizedRaster, CatalogRasterRequest
-from eolab_app.raster.source_models import RasterSourceReference
+from eolab_app.raster.source_models import (
+    RasterSourceReference,
+    RasterAnalysisSourceReference,
+    TemporalRasterSelection,
+)
+from eolab_app.raster.reader import RasterData
+from eolab_app.raster.temporal import TemporalObservation
 from eolab_app.processing.operation_context import OperationContext
 
 # Plain stage descriptions supplied by the registered raster operations.
@@ -67,17 +73,17 @@ CLIP_PROGRESS_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
 async def prepare_raster_execution(
     context: OperationContext,
     spec: AggregateSpec | ClipSpec,
-    authorized: AuthorizedRaster,
-) -> tuple[Path, AggregateSpec | ClipSpec]:
+    authorized: AuthorizedRaster | TemporalObservation,
+) -> tuple[RasterData, AggregateSpec | ClipSpec]:
     """Resolve the exact analysis area before running a summary or clip.
 
     Args:
         context: Worker source, selection and lifecycle capabilities.
         spec: Stored summary or clip plan.
-        authorized: Raster authorized for this attempt.
+        authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
-        Native source path and plan with an ephemeral resolved vector selection.
+        Native raster data and plan with an ephemeral resolved vector selection.
 
     Raises:
         ProcessingError: If the catalog selection is unavailable.
@@ -91,7 +97,12 @@ async def prepare_raster_execution(
         spec = spec.model_copy(
             update={"area": spec.area.model_copy(update={"resolved": resolved})}
         )
-    return authorized.source_path, spec
+    raster_data = (
+        authorized
+        if isinstance(authorized, TemporalObservation)
+        else authorized.source_path
+    )
+    return raster_data, spec
 
 
 class SummaryNumericalPolicy(BaseModel):
@@ -135,14 +146,14 @@ class ClipNumericalPolicy(BaseModel):
 async def prepare_summary(
     context: OperationContext,
     queued: UnpreparedCalculation,
-    authorized: AuthorizedRaster,
+    authorized: AuthorizedRaster | TemporalObservation,
 ) -> PreparedJobPlan:
     """Measure summary work using its existing cache, polygon and native-grid rules.
 
     Args:
         context: Worker capabilities and resource limits for this attempt.
         queued: Validated summary inputs, including any owned polygon copy.
-        authorized: Source already authorized by the worker.
+        authorized: Confined raster file or exact admitted temporal observation.
 
     Returns:
         Prepared summary plan and its disk reservation.
@@ -154,7 +165,8 @@ async def prepare_summary(
     alias = next(iter(request.sources))
     signature = (
         tuple(authorized.source_signature.to_catalog())
-        if authorized.source_signature is not None
+        if not isinstance(authorized, TemporalObservation)
+        and authorized.source_signature is not None
         else None
     )
     resolved = None
@@ -167,7 +179,9 @@ async def prepare_summary(
             )
         resolved = await context.areas.resolve_for_sampling(request.catalogSelection)
     spec = None
-    if context.reuse_results:
+    if context.reuse_results and not isinstance(
+        request.sources[alias], TemporalRasterSelection
+    ):
         cached_results = await asyncio.to_thread(
             context.jobs.get_cached_calculation_results,
             calculation_result_cache_keys(request, signature, context.source_checksum),
@@ -208,7 +222,11 @@ async def prepare_summary(
             (
                 "plan",
                 (
-                    authorized.source_path,
+                    (
+                        authorized
+                        if isinstance(authorized, TemporalObservation)
+                        else authorized.source_path
+                    ),
                     area,
                     request.calculations,
                     alias,
@@ -373,14 +391,14 @@ def bind_area_arguments(area: dict[str, Any]) -> dict[str, Any]:
 
 def get_summary_source(
     value: AggregateJobRequest | UnpreparedCalculation | AggregateSpec,
-) -> RasterSourceReference:
+) -> RasterAnalysisSourceReference:
     """Return the source from a validated summary request or execution plan.
 
     Args:
         value: Summary request, queued inputs or prepared specification.
 
     Returns:
-        The operation's catalog or owned published-raster reference.
+        The operation's catalog raster, temporal observation or published-raster reference.
     """
     return next(
         iter(
@@ -462,7 +480,7 @@ def build_summary_submission(
         area = {"kind": "wholeRaster", "bounds": None}
     summary = {
         "sources": {
-            alias: source.model_dump(by_alias=True)
+            alias: source.model_dump(mode="json", by_alias=True)
             for alias, source in request.sources.items()
         },
         "calculations": [item.model_dump() for item in request.calculations],
@@ -663,7 +681,11 @@ async def restore_summary_result(
 
     Returns:
         Completed CSV artifact, or None when native execution is required.
+        Temporal observations do not use the completed-value cache because
+        explicit temporal refresh does not invalidate that cache.
     """
+    if isinstance(get_summary_source(spec), TemporalRasterSelection):
+        return None
     if spec.cachedRows is not None:
         rows = [row.model_dump(mode="json") for row in spec.cachedRows]
     else:
@@ -690,10 +712,12 @@ def collect_summary_cache_values(
         artifact: Summary artifact containing rows and its cache-hit flag.
 
     Returns:
-        Cache entries, or None if the result itself came from the cache.
+        Cache entries, or None for cached results or temporal observations.
+        Explicit temporal refresh does not invalidate this completed-value cache.
     """
     return (
         None
         if artifact.cache_hit
+        or isinstance(get_summary_source(spec), TemporalRasterSelection)
         else prepare_calculation_values_for_cache(spec, artifact.rows)
     )
