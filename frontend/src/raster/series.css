@@ -85,6 +85,4 @@
 .summary-vector-area label { display: grid; gap: 4px; min-width: 0; }
 .summary-vector-area p { margin: 0; color: var(--text-2); }
 .summary-vector-area [data-vector-sampling="predicate"] { overflow-wrap: anywhere; }
-.raster-series-automatic { display: flex; align-items: center; gap: 6px; }
-.raster-series-automatic input { width: auto; margin: 0; }
-@media (pointer: coarse) { .summary-text-button, .raster-series-automatic { min-height: 44px; } .summary-text-button { min-width: 44px; } }
+@media (pointer: coarse) { .summary-text-button { min-height: 44px; min-width: 44px; } }

@@ -620,9 +620,8 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
     );
 });
 
-test("workspace overflow shares one native action list and keeps statistics settings with their owner", () => {
+test("workspace overflow shares one native action list", () => {
     const actions = requireElementRange("workspace-tool-actions");
-    const summary = requireElementRange("raster-series");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
     for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
@@ -632,8 +631,6 @@ test("workspace overflow shares one native action list and keeps statistics sett
     for (const id of ["map-tools-more-summary"]) {
         assert.match(requireElementRange(id).source, /<button[\s\S]*popovertarget="workspace-tool-actions"[\s\S]*>Tools <span aria-hidden="true">▾<\/span><\/button>/);
     }
-    assert.match(summary.source, /id="raster-series-automatic"/);
-    assert.doesNotMatch(actions.source, /id="raster-series-automatic"/);
     assert.doesNotMatch(MARKUP, /id="(?:map-tools-more|map-inspection-more|open-raster-clips-dock)"/);
 });
 
