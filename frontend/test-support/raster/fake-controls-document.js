@@ -146,6 +146,12 @@ export class FakeRasterControlElement extends EventTarget {
         this.attributes.set(name, value);
     }
 
+    /** Retain the native control's custom validation message.
+     * @param {string} message Validation error, or empty when valid.
+     * @return {void}
+     */
+    setCustomValidity(message) { this.validationMessage = message; }
+
     /**
      * Remove one element attribute.
      *
