@@ -753,8 +753,8 @@ test("inspection summaries describe bounded raster participation and asynchronou
     assert.equal(snapshots.at(-1).state, "ready");
     assert.match(snapshots.at(-1).message, /Top 16 of 17 visible rasters/);
     assert.equal(snapshots.at(-1).source, "Top 16 of 17 visible rasters");
-    assert.match(snapshots.at(-1).scope, /map sample/);
-    assert.match(snapshots.at(-1).message, /map sample/);
+    assert.match(snapshots.at(-1).scope, /Sampling box/);
+    assert.match(snapshots.at(-1).message, /Sampling box/);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
     assert.equal(snapshots.at(-1).state, "ready");
@@ -1157,13 +1157,13 @@ test("categorical style keeps a previous whole distribution separate from a fail
     h.viewer.closeStyle(); h.viewer.exploreAt({ lng: 14, lat: 37.5 }); await flushPromises();
     h.viewer.openStyle(key);
     assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
-    assert.match(preview().feedback.message, /map sample: Calculating/i);
+    assert.match(preview().feedback.message, /Sampling box\b.*: Calculating/i);
     assert.equal(preview().feedback.isBusy, true);
     const selectedRead = reads.find(read => read.item === item && read.area.kind === "selectedArea");
     selectedRead.pending.reject(new Error("The selected area does not overlap the raster")); await flushPromises();
     h.viewer.closeStyle(); h.viewer.openStyle(key);
     assert.equal(preview().scopeLabel, "Previous histogram · Whole raster");
-    assert.match(preview().feedback.message, /map sample: Histogram unavailable: The selected area does not overlap/i);
+    assert.match(preview().feedback.message, /Sampling box\b.*: Histogram unavailable: The selected area does not overlap/i);
     assert.equal(preview().feedback.isBusy, false);
     assert.equal(record.state.analysis.wholeRasterStatistics, whole, "Retained whole data remains available");
     assert.equal(record.state.analysis.rasterStatistics.itemId, item.id, "Preview retains its keyed raster source");
@@ -1190,13 +1190,13 @@ test("categorical style scopes successful polygons and labels a cancelled replac
         scope: "catalogSelection", catalogSelection: CATALOG_SELECTION }); await flushPromises();
     h.viewer.openStyle(key);
     const preview = () => h.controlsView.categoricalStyleHistogram;
-    assert.equal(preview().scopeLabel, "Vector selection · Countries.gpkg");
+    assert.equal(preview().scopeLabel, "Selected polygons · Countries.gpkg");
     assert.equal(preview().feedback.message, "");
     h.controlsView.handlers.onUseMapWindow(); await flushPromises(); h.viewer.openStyle(key);
-    assert.equal(preview().scopeLabel, "Previous histogram · Vector selection · countries");
+    assert.equal(preview().scopeLabel, "Previous histogram · Selected polygons · countries");
     const mapRead = reads.at(-1);
     mapRead.pending.resolve(createCategoryStatistics(item, mapRead.area.selectedBounds, mapRead.codes)); await flushPromises();
-    assert.match(preview().scopeLabel, /map sample$/i);
+    assert.match(preview().scopeLabel, /^Sampling box\b/i);
     assert.equal(preview().feedback.message, ""); assert.equal(preview().feedback.isBusy, false);
     h.viewer.exploreAt({ lng: 15, lat: 38 }); await flushPromises();
     const replacement = reads.at(-1);
@@ -1204,10 +1204,10 @@ test("categorical style scopes successful polygons and labels a cancelled replac
     h.layerStackView.handlers.onAllVisibility(false); h.viewer.openStyle(key);
     assert.equal(replacement.signal.aborted, true);
     assert.equal(preview().feedback.isBusy, false);
-    assert.equal(preview().scopeLabel, "Previous histogram · Map sample");
-    assert.match(preview().feedback.message, /map sample:/i);
+    assert.equal(preview().scopeLabel, "Previous histogram · Sampling box");
+    assert.match(preview().feedback.message, /Sampling box\b.*:/i);
     replacement.pending.resolve(createCategoryStatistics(item, replacement.area.selectedBounds, replacement.codes)); await flushPromises();
-    assert.equal(preview().scopeLabel, "Previous histogram · Map sample", "Late cancelled reply cannot relabel the preview");
+    assert.equal(preview().scopeLabel, "Previous histogram · Sampling box", "Late cancelled reply cannot relabel the preview");
     h.destroy();
 });
 
@@ -1227,7 +1227,7 @@ test("style category changes preserve map scope and never display unmatched cach
     const changed = categoricalAppearance(); changed.categories[0].value = 42;
     editCategoricalAppearance(h, key, changed);
     assert.equal(h.controlsView.categoricalStyleHistogram, null);
-    assert.match(h.controlsView.styleHistogramState.scopeLabel, /map sample$/i);
+    assert.match(h.controlsView.styleHistogramState.scopeLabel, /^Sampling box\b/i);
     assert.equal(h.controlsView.styleHistogramState.isBusy, true);
     const read = reads.at(-1);
     read.pending.resolve(createCategoryStatistics(item, read.area.selectedBounds, read.codes)); await flushPromises();
@@ -1236,7 +1236,7 @@ test("style category changes preserve map scope and never display unmatched cach
     editCategoricalAppearance(h, key, changed); await flushPromises();
     const preview = h.controlsView.categoricalStyleHistogram;
     assert.equal(reads.length, count, "Presentation-only changes reuse the sample");
-    assert.match(preview.scopeLabel, /map sample$/i); assert.equal(preview.feedback.message, "");
+    assert.match(preview.scopeLabel, /^Sampling box\b/i); assert.equal(preview.feedback.message, "");
     assert.deepEqual(preview.presentation.rows.find(row => row.code === 42), {
         code: 42, label: "Renamed forest", color: "#112233", opacity: 0.2, hectares: 10, percentage: 100 * 10 / 35,
     });
@@ -2768,7 +2768,7 @@ test('accepting a vector area without a raster keeps its editor available withou
     assert.deepEqual(requests, []);
     sampling.disclosure.open = false;
     sampling.disclosure.dispatchEvent(new Event('toggle'));
-    assert.equal(sampling.samplingAreaSummary.textContent, 'Sampling area · Vector layer');
+    assert.equal(sampling.samplingAreaSummary.textContent, 'Sample area · Polygon layer');
     sampling.unbind();
     h.destroy();
 });
@@ -3187,7 +3187,7 @@ test("2D range application rejects stale samples, failed reads, invalid drafts, 
     assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
     assert.match(h.controlsView.bivariateRanges.x.message, /same value/);
     assert.equal(h.controlsView.bivariateRanges.y.applicable, true);
-    assert.match(h.controlsView.bivariateRanges.y.message, /map sample/);
+    assert.match(h.controlsView.bivariateRanges.y.message, /sample area/);
     assert.deepEqual(updates(), before);
     h.destroy();
 });
@@ -4534,7 +4534,7 @@ test("map box resizes immediately while committing only the final debounced area
         (centeredRequest.selectedBounds.south + centeredRequest.selectedBounds.north) / 2,
         0
     );
-    assert.match(controlsView.samplingAreaLabel, /200 km × 200 km map box/);
+    assert.match(controlsView.samplingAreaLabel, /Sampling box · 200 × 200 km/);
 
     const rectangle = rectangleLayers.find(layer => layer.kind === "selection");
     const oldGeometry = rectangle.boundsHistory.at(-1);
@@ -4569,7 +4569,7 @@ test("map box resizes immediately while committing only the final debounced area
 
     const resizedRequest = statisticsRequests.at(-1);
     assert.notDeepEqual(resizedRequest.selectedBounds, centeredRequest.selectedBounds);
-    assert.match(controlsView.samplingAreaLabel, /90 km × 90 km map box/);
+    assert.match(controlsView.samplingAreaLabel, /Sampling box · 90 × 90 km/);
     viewer.destroy();
 });
 

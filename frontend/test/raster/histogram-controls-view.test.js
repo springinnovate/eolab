@@ -19,7 +19,7 @@ test("an empty vector histogram describes the missing area instead of missing ra
     view.setSamplingAreaMode("vector");
     const empty = doc.querySelector("#raster-histogram-empty");
     assert.equal(empty.hidden, false);
-    assert.equal(empty.textContent, "No vector sampling area is available.");
+    assert.equal(empty.textContent, "No polygon sample area is available.");
     view.setSamplingAreaMode("wholeRaster");
     assert.match(empty.textContent, /No visible raster layers/);
     view.unbind();

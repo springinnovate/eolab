@@ -391,7 +391,7 @@ test("one collapsed sampling control stays outside the toolbar and results colum
     assert.doesNotMatch(disclosure.source, /^\s*<details[^>]*\bopen\b/);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
-    assert.match(sampling.source, /role="radiogroup" aria-label="Sampling area"/);
+    assert.match(sampling.source, /role="radiogroup" aria-label="Sample area"/);
     assert.equal((disclosure.source.match(/<details\b/g) ?? []).length, 1);
     assert.doesNotMatch(disclosure.source, /raster-active|raster-style-controls|Sample by vector layer|<small>Use all/);
     for (const choice of [
@@ -409,7 +409,7 @@ test("one collapsed sampling control stays outside the toolbar and results colum
     const vector = requireElementRange("vector-sampling");
     assert.ok(requireMarkupPosition("use-vector-for-raster") < vector.start);
     assert.ok(vector.end < sampling.end);
-    assert.match(vector.source, /aria-label="Vector sampling area" hidden/);
+    assert.match(vector.source, /aria-label="Polygon sample area" hidden/);
     assert.match(box.source, /id="raster-map-box-controls"[^>]*hidden/);
     assert.match(exploration.source, /1D – visible rasters/);
     assert.match(exploration.source, /2D – compare rasters/);

@@ -63,9 +63,9 @@ test("showing, editing and minimizing sampling controls never changes the chosen
     assert.equal(view.mapBoxControls.hidden, true, "whole-raster workflows do not show box sizing");
     view.openAreaEditor();
     assert.equal(view.mapBoxControls.hidden, false, "an explicit edit exposes the retained box");
-    assert.equal(view.samplingAreaSummary.textContent, "Sampling area", "expanded controls show dimensions only beside the slider");
+    assert.equal(view.samplingAreaSummary.textContent, "Sample area", "expanded controls show dimensions only beside the slider");
     view.setSampleWindowSize(80, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
-    assert.equal(view.samplingAreaSummary.textContent, "Sampling area");
+    assert.equal(view.samplingAreaSummary.textContent, "Sample area");
     assert.equal(view.dimensions.textContent, "80 × 80 km");
     assert.equal(document.activeElement, view.disclosureSummary);
     view.disclosure.open = false;

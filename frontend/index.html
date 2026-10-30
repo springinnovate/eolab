@@ -678,14 +678,14 @@
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <div id="raster-series-area-controls">
-              <p id="raster-series-context">No sampling area selected</p>
+              <p id="raster-series-context">No sample area selected</p>
               <div class="raster-series-controls">
-                <label>Area <select id="raster-series-area"><option id="raster-series-selected-area" value="selection">Map sampling area</option><option value="vector">Polygon layer</option><option value="whole">Whole raster</option></select></label>
+                <label>Sample area <select id="raster-series-area"><option id="raster-series-selected-area" value="selection">No area selected</option><option value="vector">Polygon layer</option><option value="whole">Whole raster</option></select></label>
                 <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
               </div>
             </div>
-            <section id="raster-series-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
-              <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+            <section id="raster-series-vector-area" class="vector-selection-card summary-vector-area" aria-label="Polygon sample area for raster statistics" hidden>
+              <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sample polygon layer"></select></label>
               <small data-vector-sampling="predicate"></small>
               <div class="downloads-actions">
                 <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
@@ -739,7 +739,7 @@
                   <button id="raster-series-refresh-dates" class="secondary-button" type="button">Refresh dates</button>
                   <p>Browsing months does not change your period. Use this month selects the whole UTC month.</p>
                 </details>
-                <p>Pixel value uses the clicked point. If no sampling area is selected, choose Whole raster; pixel values still use only that point.</p>
+                <p>Pixel value uses the clicked point. If no sample area is selected, choose Whole raster; pixel values still use only that point.</p>
               </div>
               <div id="raster-series-sources"></div>
               <div class="raster-series-controls">
@@ -1534,7 +1534,7 @@
       </div>
     </section>
         </div>
-        <section id="raster-sampling-tool" aria-label="Raster sampling controls" hidden>
+        <section id="raster-sampling-tool" aria-label="Sample area controls" hidden>
             <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span id="raster-sampling-area-summary">No raster selected</span>
@@ -1543,7 +1543,7 @@
               <div class="raster-sampling-disclosure-body"
                 id="raster-sampling-disclosure-body">
                 <div class="raster-sampling-area-options" id="raster-sampling-area-controls"
-                  role="radiogroup" aria-label="Sampling area">
+                  role="radiogroup" aria-label="Sample area">
                   <label class="raster-sampling-area-option" for="use-map-window-for-raster">
                     <input id="use-map-window-for-raster" type="radio"
                       name="raster-sampling-area" value="selectedArea" disabled />
@@ -1573,10 +1573,10 @@
                   </label>
                   <label class="raster-sampling-area-option" for="use-vector-for-raster">
                     <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
-                    <span>Vector layer</span>
+                    <span>Polygon layer</span>
                   </label>
-                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area" hidden>
-                    <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+                  <section class="vector-selection-card" id="vector-sampling" aria-label="Polygon sample area" hidden>
+                    <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sample polygon layer"></select></label>
                     <small data-vector-sampling="predicate"></small>
                     <div class="downloads-actions">
                       <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
@@ -1591,7 +1591,7 @@
                     <p class="raster-sample-window-status visually-hidden"
                       id="raster-sample-window-status" role="status"
                       aria-live="polite" aria-atomic="true">
-                      Select a raster to choose its sampling area.
+                      Select a raster to choose its sample area.
                     </p>
         </section>
       </aside>

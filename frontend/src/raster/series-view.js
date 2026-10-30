@@ -161,7 +161,7 @@ export class RasterSeriesView {
     render(state) {
         const sources = state.sources.filter(source => source.selected);
         this.onContextChange({ source: state.temporal ? state.temporal.item?.properties.title || "Temporal dataset" : sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
-            scope: state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected",
+            scope: state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected",
             usesSamplingBox: state.area.areaChoice !== "whole" && state.area.area?.kind === "selectedArea" });
         this.pendingState = state;
         if (!state.active) {
@@ -197,7 +197,7 @@ export class RasterSeriesView {
         if (this.valueCaption.textContent !== valueCaption) this.valueCaption.textContent = valueCaption;
         this.renderAreaControls(state);
         this.renderTemporalControls(state.temporal);
-        const scope = state.area.areaChoice === "whole" ? "Whole extent of each raster" : state.area.areaLabel || "No sampling area selected";
+        const scope = state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected";
         const selectedCount = state.sources.filter(source => source.selected).length;
         const context = state.temporal ? `${scope} · ${state.temporal.item?.properties.title || "Temporal dataset"} · ${state.temporal.variable || "Choose a variable"} · ${describeTemporalPeriod(state.temporal)}` :
             `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
@@ -370,8 +370,8 @@ export class RasterSeriesView {
         const areaChoice = this.document.querySelector("#raster-series-area");
         if (areaChoice.value !== area.areaChoice) areaChoice.value = area.areaChoice;
         const selectedArea = this.document.querySelector("#raster-series-selected-area");
-        const selectedAreaLabel = area.area?.kind === "catalogSelection" ? "Selected vector features"
-            : area.area?.kind === "polygonArea" ? "Selected polygons" : "Map sampling area";
+        const selectedAreaLabel = area.area?.kind === "selectedArea" ? "Sampling box"
+            : area.area?.kind === "catalogSelection" || area.area?.kind === "polygonArea" ? "Selected polygons" : "No area selected";
         if (selectedArea.textContent !== selectedAreaLabel) selectedArea.textContent = selectedAreaLabel;
         const vector = this.document.querySelector("#raster-series-vector-area");
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";

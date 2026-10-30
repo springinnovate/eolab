@@ -18,7 +18,7 @@ export class VectorSamplingController {
      * @param {Object} dependencies Views, targets, selection transport and composed callbacks.
      * @param {(area:Object)=>void} [dependencies.releaseArea] Release obsolete uploaded inputs.
      * @param {Object|Object[]} dependencies.view One or more synchronized selection views.
-     * @param {()=>Object[]} dependencies.getTargets Committed, independent layer snapshots.
+     * @param {()=>Object[]} dependencies.getTargets Committed, independent layer snapshots with their display labels.
      * @param {(item:Object|null,filter:Object,signal:AbortSignal,target:Object)=>Promise<Object>} dependencies.createArea Prepare exact polygons from the source and accepted filter.
      * @param {(area:Object)=>void} dependencies.onActivate Adopt prepared polygons using the consumer's calculation policy.
      * @param {(selection:Object|undefined,area:Object)=>void} dependencies.onInvalidate Cancel work using an obsolete area.
@@ -70,8 +70,8 @@ export class VectorSamplingController {
      * A newer selection cancels the older request and discards its response.
      * @param {Object} [options={}] Explicit source choice.
      * @param {string} [options.key=this.state.key] Retained polygon-layer key.
-     * @return {Promise<Object|null>} Adopted polygon area, or null if no source,
-     * failed or superseded. Actual read failures remain visible in the controls.
+     * @return {Promise<Object|null>} Adopted polygon area with the chosen layer's display label,
+     * or null if no source, failed or superseded. Actual read failures remain visible in the controls.
      */
     async use({ key = this.state.key } = {}) {
         const target = this.state.targets.find(value => value.key === key);
@@ -97,6 +97,7 @@ export class VectorSamplingController {
             this.reading = read.catch(() => {});
             const area = await read;
             if (sequence !== this.sequence) { this.releaseArea(area); return null; }
+            area.label = target.label;
             this.state.area = area;
             this.state.phase = "active";
             this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features.`;
