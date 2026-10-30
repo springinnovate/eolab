@@ -92,8 +92,7 @@ export class RasterSeriesController {
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
-            onSourceMode: mode => { this.sourceMode = mode; this.updateAreaInputs(); },
-            onTemporalDataset: key => void this.chooseTemporalDataset(key),
+            onTimeRange: key => void this.chooseTimeRange(key),
             onTemporalVariable: variable => {
                 this.temporal.variable = variable; this.updateAreaInputs(); void this.loadTemporalDates();
             },
@@ -241,7 +240,6 @@ export class RasterSeriesController {
             datasets = [...datasets, ...this.temporal.datasets.filter(dataset => dataset.key === this.temporal.datasetKey && !datasets.some(item => item.key === dataset.key))];
             for (const source of sources) this.selectionOverrides.set(source.key, this.selectedKeys.has(source.key));
         }
-        if (!this.sources.length && !this.temporal.datasets.length && !sources.length && datasets.length) this.sourceMode = "temporal";
         this.temporal.datasets = datasets;
         if (this.temporal.datasetKey && !datasets.some(dataset => dataset.key === this.temporal.datasetKey)) {
             this.temporalAbort?.abort();
@@ -256,15 +254,48 @@ export class RasterSeriesController {
         else this.updateAreaInputs();
     }
 
-    /** Select one dataset without inheriting the observation displayed on the map.
-     * @param {string} key Retained Catalog dataset key, or an empty selection.
+    /** Select a named source's time range, initially using its displayed variable.
+     * Reopening the same view preserves analysis edits; explicitly choosing
+     * another view uses that view's variable while preserving the period.
+     * Map updates never change these choices or start a range calculation.
+     * @param {string} key Retained raster view or dataset key.
      * @return {Promise<void>} Metadata and availability guidance have finished loading.
      */
-    async chooseTemporalDataset(key) {
+    async chooseTimeRange(key) {
+        const snapshot = this.sources.find(source => source.key === key);
+        const reference = snapshot ? rasterSourceReference(snapshot) : null;
+        const dataset = reference ? this.temporal.datasets.find(source =>
+            source.collectionId === reference.collectionId && source.itemId === reference.itemId) :
+            this.temporal.datasets.find(source => source.key === key);
+        const sameDataset = this.temporal.datasetKey === dataset.key;
+        const sameView = this.temporal.viewKey === key;
+        this.sourceMode = "temporal";
+        this.temporal.viewKey = key;
+        if (sameDataset && sameView) { this.updateAreaInputs(); return; }
         this.temporalAbort?.abort();
-        Object.assign(this.temporal, {datasetKey: key, item: null, variable: "", choices: null, loading: false, error: "", datesError: ""});
+        Object.assign(this.temporal, {datasetKey: dataset.key, item: sameDataset ? this.temporal.item : null,
+            variable: reference?.variable ?? (sameDataset ? this.temporal.variable : ""),
+            choices: null, loading: false, error: "", datesError: ""});
         this.updateAreaInputs();
-        if (key) await this.loadTemporalDates(undefined, true);
+        await this.loadTemporalDates(undefined, !sameDataset || !this.temporal.item);
+    }
+
+    /** Describe named snapshot and time-range choices without changing their selections.
+     * Retained datasets remain usable even when no displayed observation is available.
+     * @return {import("./series-view.js").SeriesPresentation["sources"]} Named snapshot and dataset rows with their active intent.
+     */
+    sourceChoices() {
+        const represented = new Set();
+        const choices = this.sources.map(source => {
+            const reference = rasterSourceReference(source);
+            const dataset = this.temporal.datasets.find(item => item.collectionId === reference.collectionId && item.itemId === reference.itemId);
+            if (dataset) represented.add(dataset.key);
+            return {...source, selected: this.sourceMode === "layers" && this.selectedKeys.has(source.key),
+                temporalDatasetKey: dataset?.key, rangeSelected: this.sourceMode === "temporal" && this.temporal.viewKey === source.key};
+        });
+        return [...choices, ...this.temporal.datasets.filter(dataset => !represented.has(dataset.key)).map(dataset =>
+            ({...dataset, hasSnapshot: false, selected: false, temporalDatasetKey: dataset.key,
+                rangeSelected: this.sourceMode === "temporal" && this.temporal.datasetKey === dataset.key}))];
     }
 
     /** Read Catalog guidance while leaving the requested period unchanged.
@@ -348,12 +379,14 @@ export class RasterSeriesController {
     /**
      * Include or exclude one raster explicitly and refresh calculations.
      * The choice overrides the map-visibility default while this source is retained.
+     * Selecting a snapshot returns from a time range to the retained raster checklist.
      * @param {string} key Available raster identity.
      * @param {boolean} selected Whether to include this raster.
      * @return {void}
      */
     selectRaster(key, selected) {
         if (!this.sources.some(source => source.key === key)) return;
+        this.sourceMode = "layers";
         this.selectionOverrides.set(key, selected);
         if (selected) this.selectedKeys.add(key);
         else this.selectedKeys.delete(key);
@@ -547,7 +580,7 @@ export class RasterSeriesController {
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
                 results: area.results, complete: area.complete, pendingInputs: this.hasPendingInputs,
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
-            sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
+            sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType,
             message: area.results.size + " of " + sources.length + " rasters complete. " + area.message +
@@ -574,7 +607,7 @@ export class RasterSeriesController {
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
                 areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel, pendingInputs: this.hasPendingInputs,
                 results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
-            statistics, plots: this.plots, sources: [], rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
+            statistics, plots: this.plots, sources: this.sourceChoices(), rows: observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: null, showingPrevious: false, busy: area.busy, chartType: this.chartType,
             message: (this.temporalSelectionError() || area.message) +
                 (this.hasPendingArea ? " Results use the previous selection. Calculate to update." : ""),

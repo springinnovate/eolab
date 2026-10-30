@@ -56,12 +56,36 @@ test("raster statistics places visible inputs before execution and results", asy
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
     const disclosures = [...panel.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map(match => match[0]);
-    for (const id of ["source-mode", "temporal-dataset", "temporal-variable", "period", "sources",
+    assert.ok(!panel.includes("raster-series-source-mode"));
+    assert.ok(!panel.includes("raster-series-temporal-dataset"));
+    for (const id of ["temporal-variable", "period", "sources",
         "context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
         const attribute = `id="raster-series-${id}"`;
         assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
         assert.ok(disclosures.every(disclosure => !disclosure.includes(attribute)), `${id} stays outside secondary settings`);
     }
+});
+
+test("named sources offer snapshot checkboxes and direct time ranges without a category or dataset choice", () => {
+    const h = controlsFixture(), events = [];
+    h.view.actions = {onSelect: (...args) => events.push(["snapshot", ...args]), onTimeRange: key => events.push(["range", key])};
+    h.state.sources = [h.state.sources[0], {key: "pressure-view", label: "Weather · Pressure", selected: true,
+        temporalDatasetKey: "weather", rangeSelected: false},
+    {key: "other-dataset", label: "Other weather", hasSnapshot: false, temporalDatasetKey: "other-dataset", rangeSelected: false}];
+    h.draw();
+    const row = h.view.sources.children[1], checkbox = row.querySelector("input"), range = row.querySelector("button");
+    assert.equal(row.querySelector("small").textContent, "Displayed timestamp");
+    assert.equal(range.getAttribute("aria-label"), "Time range for Weather · Pressure");
+    assert.equal(range.getAttribute("aria-pressed"), "false");
+    checkbox.checked = false; checkbox.dispatchEvent(new Event("change"));
+    range.focus(); range.dispatchEvent(new Event("click"));
+    h.state.sources[1].rangeSelected = true; h.draw();
+    assert.equal(h.document.activeElement, h.view.sources.children[1].querySelector("button"));
+    assert.equal(h.document.activeElement.getAttribute("aria-pressed"), "true");
+    const dataset = h.view.sources.children[2];
+    assert.equal(dataset.querySelector("input"), null, "a retained dataset needs no published snapshot");
+    dataset.querySelector("button").dispatchEvent(new Event("click"));
+    assert.deepEqual(events, [["snapshot", "pressure-view", false], ["range", "pressure-view"], ["range", "other-dataset"]]);
 });
 
 test("series publishes selected raster and owned area context while inactive without drawing", () => {
@@ -133,7 +157,7 @@ test("changed controls remain current without overwriting a focused formula edit
     assert.equal(inputs[0].getAttribute("aria-label"), "Show Average on plot");
     assert.equal(row.querySelector("select").value, "2");
     assert.equal(row.querySelector("select").getAttribute("aria-label"), "Plot for Average");
-    assert.equal(h.view.sources.children[0].children[1].textContent, "Renamed raster");
+    assert.equal(h.view.sources.children[0].children[0].children[1].textContent, "Renamed raster");
     assert.equal(h.view.root.getAttribute("aria-busy"), "false");
     assert.equal(h.view.download.disabled, false);
     assert.equal(h.document.querySelector("#raster-series-calculate").hidden, true);
@@ -325,7 +349,7 @@ test("temporal controls reuse the period editor and preserve focused input while
     const h = controlsFixture();
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
-        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onSourceMode", "onTemporalDataset",
+        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onTimeRange",
         "onTemporalVariable", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
     actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
     h.view.bind(actions);

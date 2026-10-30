@@ -678,10 +678,10 @@
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
             <div id="raster-series-data-inputs">
-              <label class="raster-series-source-mode">Data source <select id="raster-series-source-mode"><option value="layers">Raster layers</option><option value="temporal">Temporal dataset</option></select></label>
+              <div id="raster-series-sources" aria-label="Raster sources"></div>
               <div id="raster-series-temporal" class="temporal-period" hidden>
+                <p id="raster-series-temporal-title"></p>
                 <div class="raster-series-controls">
-                  <label>Dataset <select id="raster-series-temporal-dataset"></select></label>
                   <label>Variable <select id="raster-series-temporal-variable"></select></label>
                 </div>
                 <div id="raster-series-period"></div>
@@ -696,7 +696,6 @@
                   <p>Pixel value uses the clicked point. If no sample area is selected, choose Whole raster; pixel values still use only that point.</p>
                 </details>
               </div>
-              <div id="raster-series-sources"></div>
             </div>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sample area selected</p>

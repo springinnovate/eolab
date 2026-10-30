@@ -34,7 +34,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
 /**
  * @typedef {Object} SeriesPresentation
  * @property {boolean} active Whether the panel is open.
- * @property {{key:string,label:string,selected:boolean}[]} sources Available catalog rasters.
+ * @property {{key:string,label:string,selected:boolean,hasSnapshot?:boolean,temporalDatasetKey?:string,rangeSelected?:boolean}[]} sources Named snapshot choices and temporal-range actions.
  * @property {SeriesValueRow[]} rows Current ordered values for the table.
  * @property {SeriesValueRow[]|null} previousRows Retained values for pending replacements.
  * @property {string} message Progress, guidance or result summary.
@@ -101,8 +101,7 @@ export class RasterSeriesView {
      * @param {()=>void} actions.onCalculate Calculate remaining sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
-     * @param {(mode:string)=>void} actions.onSourceMode Choose raster layers or a temporal dataset.
-     * @param {(key:string)=>void} actions.onTemporalDataset Choose a retained dataset.
+     * @param {(key:string)=>void} actions.onTimeRange Choose a named view or dataset's time range.
      * @param {(variable:string)=>void} actions.onTemporalVariable Choose its variable.
      * @param {(change:Object)=>void} actions.onTemporalEdit Edit UTC period boundaries.
      * @param {(month:string)=>void} actions.onTemporalMonth Browse observation availability.
@@ -113,8 +112,7 @@ export class RasterSeriesView {
     bind(actions) {
         this.actions = actions;
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
-        this.document.querySelector("#raster-series-source-mode").addEventListener("change", event => actions.onSourceMode(event.target.value));
-        for (const [id, handler] of [["dataset", actions.onTemporalDataset], ["variable", actions.onTemporalVariable], ["month", actions.onTemporalMonth]]) {
+        for (const [id, handler] of [["variable", actions.onTemporalVariable], ["month", actions.onTemporalMonth]]) {
             this.document.querySelector("#raster-series-temporal-" + id).addEventListener("change", event => handler(event.target.value));
         }
         this.document.querySelector("#raster-series-use-month").addEventListener("click", actions.onUseTemporalMonth);
@@ -217,22 +215,39 @@ export class RasterSeriesView {
         const dataSummary = state.temporal ? `Chart · ${chartType}` :
             `Order and chart · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
-        const signature = JSON.stringify(state.sources.map(({ key, label, selected }) => [key, label, selected]));
+        const signature = JSON.stringify(state.sources.map(({ key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected }) =>
+            [key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected]));
         if (signature !== this.sourceSignature) {
             this.sourceSignature = signature;
             const focusedKey = this.document.activeElement?.dataset?.rasterKey;
+            const focusedAction = this.document.activeElement?.tagName;
             this.sources.replaceChildren(...state.sources.map(source => {
-                const label = this.document.createElement("label");
-                const checkbox = this.document.createElement("input");
-                checkbox.type = "checkbox"; checkbox.checked = source.selected;
-                checkbox.dataset.rasterKey = source.key;
-                checkbox.addEventListener("change", () => this.actions.onSelect(source.key, checkbox.checked));
+                const row = this.document.createElement("div"); row.className = "raster-series-source";
+                const label = this.document.createElement(source.hasSnapshot === false ? "span" : "label");
+                label.className = "raster-series-source-name";
                 const name = this.document.createElement("span"); name.textContent = source.label;
-                label.append(checkbox, name);
-                return label;
+                if (source.hasSnapshot !== false) {
+                    const checkbox = this.document.createElement("input");
+                    checkbox.type = "checkbox"; checkbox.checked = source.selected;
+                    checkbox.dataset.rasterKey = source.key;
+                    checkbox.addEventListener("change", () => this.actions.onSelect(source.key, checkbox.checked));
+                    label.append(checkbox);
+                    if (source.temporalDatasetKey) {
+                        const intent = this.document.createElement("small"); intent.textContent = "Displayed timestamp"; name.append(intent);
+                    }
+                }
+                label.append(name); row.append(label);
+                if (source.temporalDatasetKey) {
+                    const range = this.document.createElement("button"); range.type = "button";
+                    range.className = "summary-text-button"; range.textContent = "Time range"; range.dataset.rasterKey = source.key;
+                    range.setAttribute("aria-label", `Time range for ${source.label}`);
+                    range.setAttribute("aria-pressed", String(!!source.rangeSelected));
+                    range.addEventListener("click", () => this.actions.onTimeRange(source.key)); row.append(range);
+                }
+                return row;
             }));
             if (focusedKey) {
-                for (const input of this.sources.querySelectorAll("input")) {
+                for (const input of this.sources.querySelectorAll(focusedAction)) {
                     if (input.dataset.rasterKey === focusedKey) input.focus({ preventScroll: true });
                 }
             }
@@ -285,17 +300,13 @@ export class RasterSeriesView {
         if (select.value !== value) select.value = value;
     }
 
-    /** Show independent temporal source and period choices beside the ordinary layer checklist.
+    /** Show the chosen dataset's variable and period below its direct source action.
      * @param {Object|null|undefined} temporal Current temporal draft, or ordinary-layer mode.
      * @return {void}
      */
     renderTemporalControls(temporal) {
-        const mode = temporal ? "temporal" : "layers";
-        const sourceMode = this.document.querySelector("#raster-series-source-mode");
-        if (sourceMode.value !== mode) sourceMode.value = mode;
         const controls = this.document.querySelector("#raster-series-temporal");
         if (controls.hidden !== !temporal) controls.hidden = !temporal;
-        if (this.sources.hidden !== !!temporal) this.sources.hidden = !!temporal;
         for (const id of ["order", "direction"]) {
             const label = this.document.querySelector("#raster-series-" + id).parentElement;
             if (label.hidden !== !!temporal) label.hidden = !!temporal;
@@ -303,9 +314,8 @@ export class RasterSeriesView {
         const heading = this.document.querySelector("#raster-series-value-source"), caption = temporal ? "Time (UTC)" : "Raster";
         if (heading.textContent !== caption) heading.textContent = caption;
         if (!temporal) return;
-        const dataset = this.document.querySelector("#raster-series-temporal-dataset");
-        this.setOptions(dataset, [{value: "", label: "Choose a temporal dataset…"}, ...temporal.datasets.map(source =>
-            ({value: source.key, label: source.key === temporal.datasetKey && temporal.item ? temporal.item.properties.title : source.label}))], temporal.datasetKey);
+        this.document.querySelector("#raster-series-temporal-title").textContent = `Time range · ${
+            temporal.item?.properties.title ?? temporal.datasets.find(source => source.key === temporal.datasetKey)?.label ?? ""}`;
         const variable = this.document.querySelector("#raster-series-temporal-variable");
         this.setOptions(variable, [{value: "", label: "Choose a variable…"}, ...Object.entries(temporal.item?.properties["cube:variables"] ?? {})
             .map(([value, metadata]) => ({value, label: `${metadata.description} (${metadata.unit})`}))], temporal.variable);

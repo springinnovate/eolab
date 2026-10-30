@@ -730,8 +730,8 @@ async function initializeCatalog(
      * @return {Object[]} Path-free dataset choices for analysis controls.
      */
     const temporalDatasets = layers => [...new Map(layers.filter(layer => layer.source?.collectionId === TEMPORAL_COLLECTION_ID)
-        .map(({source}) => [source.itemId, {key: getCatalogItemKey({collection: source.collectionId, id: source.itemId}),
-            collectionId: source.collectionId, itemId: source.itemId, label: source.itemId}])).values()];
+        .map(({source, sourceName, label}) => [source.itemId, {key: getCatalogItemKey({collection: source.collectionId, id: source.itemId}),
+            collectionId: source.collectionId, itemId: source.itemId, label: sourceName ?? label}])).values()];
     let models = null;
     let modelArea = null;
     let modelAreaDescription = "";
