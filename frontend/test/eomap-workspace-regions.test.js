@@ -472,8 +472,6 @@ test("histogram charts precede optional help, point details and mode controls", 
     assert.match(STYLESHEET, /\.raster-disclosure-chevron\s*\{[^}]*border:\s*1px solid var\(--border-1\)[^}]*border-radius:\s*50%/s);
     assert.match(STYLESHEET, /details\[open\] > summary > \.raster-disclosure-chevron::before\s*\{[^}]*rotate\(45deg\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
-    assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
-    assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Inspect map center<\/button>/);
     assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);
 });
 
@@ -627,7 +625,7 @@ test("workspace overflow shares one native action list and keeps statistics sett
     const summary = requireElementRange("raster-series");
     assert.match(actions.source, /popover="auto"/);
     assert.doesNotMatch(actions.source, /role="menu(?:item)?"/);
-    for (const id of ["open-analysis-tools", "open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
+    for (const id of ["open-raster-series", "open-raster-clips", "toggle-map-legend"]) {
         assert.match(actions.source, new RegExp(`id="${id}"`));
         assert.equal(countMarkupId(id), 1);
     }
@@ -642,7 +640,6 @@ test("workspace overflow shares one native action list and keeps statistics sett
 test("one persistent toolbar owns Tools, minimize and active filters outside retained panels", () => {
     const toolbar = requireElementRange("map-tools-toolbar");
     const dock = requireElementRange("map-inspection");
-    const actions = requireElementRange("workspace-tool-actions");
     assert.ok(toolbar.end < dock.start);
     for (const id of ["map-tools-more-summary", "toggle-map-inspection-dock", "map-filter-indicators"]) {
         const control = requireElementRange(id);
@@ -651,12 +648,6 @@ test("one persistent toolbar owns Tools, minimize and active filters outside ret
     }
     assert.equal(countMarkupId("map-inspection-more-summary"), 0);
     assert.equal(countMarkupId("map-inspection-filter-indicators"), 0);
-    for (const id of ["open-analysis-tools"]) {
-        const command = requireElementRange(id);
-        assert.ok(command.start > actions.start && command.end < actions.end);
-    }
-    assert.match(requireElementRange("open-analysis-tools").source,
-        /aria-label="Inspect visible data at the map center">Inspect map center<\/button>/);
     assert.doesNotMatch(COMPOSITION_SOURCE, /\.append\(document\.querySelector\("\.map-tool-openers"\)\)/);
 });
 
@@ -746,7 +737,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection-tab-style",
         "toggle-map-inspection-dock",
         "map-histogram-panel",
-        "open-analysis-tools",
         "close-map-histogram",
         "layer-style-editor",
     ];

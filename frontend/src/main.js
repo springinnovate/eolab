@@ -1528,18 +1528,6 @@ async function initializeCatalog(
             selectingMapClick = false;
         }
     }
-    /**
-     * Open analysis tools at the map center through the pointer-click path.
-     *
-     * @return {void}
-     */
-    function openAnalysisToolsAtMapCenter() {
-        const latlng = leafletMap.getCenter();
-        exploreMap({
-            latlng,
-            containerPoint: leafletMap.latLngToContainerPoint(latlng),
-        });
-    }
     {
         const annotationPanel = new AnnotationPanelView({ document,
             onOpen: () => mapInspection.showAnnotations(),
@@ -1600,10 +1588,6 @@ async function initializeCatalog(
     });
     leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);
-    document.querySelector("#open-analysis-tools").addEventListener(
-        "click",
-        openAnalysisToolsAtMapCenter
-    );
     onRasterViewerReady(rasterVisualization, rasterClips);
     /**
      * Render the selected Item's current map-action state in the inspector.
