@@ -100,8 +100,7 @@ changes affect only the current map; they never edit the source data.
 ### Explore what is under the pointer
 
 A normal click explores the visible data at that location. Dragging still pans
-the map. **Tools → Inspect map center** performs the same action at the center of the map,
-which is useful for keyboard and touch interaction.
+the map.
 
 For visible vectors, EOLab highlights the features under the click and opens
 their attributes in **Feature inspector**. Use **Previous** and **Next** when
