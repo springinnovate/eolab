@@ -705,13 +705,8 @@
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
-            <nav class="raster-series-section-links" aria-label="Raster statistics sections">
-              <button id="raster-series-show-results" class="summary-text-button" type="button" aria-controls="raster-series-results">Results</button>
-              <button id="raster-series-edit-statistics" class="summary-text-button" type="button" aria-controls="raster-series-statistics">Statistics</button>
-              <button id="raster-series-edit-data" class="summary-text-button" type="button" aria-controls="raster-series-data-settings">Data and order</button>
+            <div id="raster-series-results" role="region" aria-label="Statistic results">
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
-            </nav>
-            <div id="raster-series-results" tabindex="-1" role="region" aria-label="Statistic results">
               <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
               <details id="raster-series-values" class="raster-series-settings">
                 <summary>Values &amp; download</summary>
@@ -725,7 +720,7 @@
             </div>
             <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
               <div class="raster-series-statistics-header">
-                <h3 id="raster-series-statistics-title" tabindex="-1">Statistics</h3>
+                <h3 id="raster-series-statistics-title">Statistics</h3>
                 <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom formula</option></select></label>
               </div>
               <div id="raster-series-formulas"></div>

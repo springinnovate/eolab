@@ -146,15 +146,6 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
-        for (const [id, target] of [["show-results", "results"], ["edit-statistics", "statistics-title"],
-            ["edit-data", "source-summary"]]) {
-            this.document.querySelector("#raster-series-" + id).addEventListener("click", () => {
-                if (id === "edit-data") this.document.querySelector("#raster-series-data-settings").open = true;
-                const section = this.document.querySelector("#raster-series-" + target);
-                section.focus({ preventScroll: true });
-                section.scrollIntoView({ block: "start", inline: "nearest" });
-            });
-        }
         for (const [id, action] of [["edit-area", actions.onEditArea], ["calculate", actions.onCalculate],
             ["cancel", actions.onCancel], ["recover", actions.onRecover]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", action);
@@ -222,9 +213,6 @@ export class RasterSeriesView {
         const dataSummary = state.temporal ? `Data and period · Temporal dataset · ${chartType}` :
             `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
-        const statisticsLink = this.document.querySelector("#raster-series-edit-statistics");
-        const statisticCount = `Statistics (${state.statistics.length})`;
-        if (statisticsLink.textContent !== statisticCount) statisticsLink.textContent = statisticCount;
         const signature = JSON.stringify(state.sources.map(({ key, label, selected }) => [key, label, selected]));
         if (signature !== this.sourceSignature) {
             this.sourceSignature = signature;
@@ -301,8 +289,6 @@ export class RasterSeriesView {
         }
         const heading = this.document.querySelector("#raster-series-value-source"), caption = temporal ? "Time (UTC)" : "Raster";
         if (heading.textContent !== caption) heading.textContent = caption;
-        const shortcut = this.document.querySelector("#raster-series-edit-data"), shortcutText = temporal ? "Data and period" : "Data and order";
-        if (shortcut.textContent !== shortcutText) shortcut.textContent = shortcutText;
         if (this.sourceMode !== mode && temporal) this.document.querySelector("#raster-series-data-settings").open = true;
         this.sourceMode = mode;
         if (!temporal) return;
