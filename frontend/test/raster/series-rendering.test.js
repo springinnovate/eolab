@@ -66,25 +66,30 @@ test("raster statistics places visible inputs before execution and results", asy
     }
 });
 
-test("named sources offer snapshot checkboxes and direct time ranges without a category or dataset choice", () => {
+test("named sources align individual raster and time-range checkboxes without repeating timestamps", () => {
     const h = controlsFixture(), events = [];
     h.view.actions = {onSelect: (...args) => events.push(["snapshot", ...args]), onTimeRange: key => events.push(["range", key])};
     h.state.sources = [h.state.sources[0], {key: "pressure-view", label: "Weather · Pressure", selected: true,
         temporalDatasetKey: "weather", rangeSelected: false},
     {key: "other-dataset", label: "Other weather", hasSnapshot: false, temporalDatasetKey: "other-dataset", rangeSelected: false}];
     h.draw();
-    const row = h.view.sources.children[1], checkbox = row.querySelector("input"), range = row.querySelector("button");
-    assert.equal(row.querySelector("small").textContent, "Displayed timestamp");
-    assert.equal(range.getAttribute("aria-label"), "Time range for Weather · Pressure");
-    assert.equal(range.getAttribute("aria-pressed"), "false");
+    /** @return {Object[]} Current named source rows, excluding headings and guidance. */
+    const rows = () => [...h.view.sources.children].filter(node => node.className === "raster-series-source");
+    const row = rows()[1];
+    const [checkbox, range] = row.querySelectorAll("input");
+    assert.deepEqual([...h.view.sources.children[0].children].map(node => node.textContent),
+        ["Include in raster statistics", "Analyze a time range"]);
+    assert.equal(row.querySelector("small"), null);
+    assert.equal(range.getAttribute("aria-label"), "Analyze a time range for Weather · Pressure");
+    assert.equal(range.checked, false);
     checkbox.checked = false; checkbox.dispatchEvent(new Event("change"));
-    range.focus(); range.dispatchEvent(new Event("click"));
+    range.focus(); range.checked = true; range.dispatchEvent(new Event("change"));
     h.state.sources[1].rangeSelected = true; h.draw();
-    assert.equal(h.document.activeElement, h.view.sources.children[1].querySelector("button"));
-    assert.equal(h.document.activeElement.getAttribute("aria-pressed"), "true");
-    const dataset = h.view.sources.children[2];
-    assert.equal(dataset.querySelector("input"), null, "a retained dataset needs no published snapshot");
-    dataset.querySelector("button").dispatchEvent(new Event("click"));
+    assert.equal(h.document.activeElement.dataset.sourceChoice, "range");
+    assert.equal(h.document.activeElement.checked, true);
+    const dataset = rows()[2];
+    assert.equal(dataset.querySelectorAll("input").length, 1, "a retained dataset needs no published snapshot");
+    dataset.querySelector("input").checked = true; dataset.querySelector("input").dispatchEvent(new Event("change"));
     assert.deepEqual(events, [["snapshot", "pressure-view", false], ["range", "pressure-view"], ["range", "other-dataset"]]);
 });
 
@@ -352,6 +357,10 @@ test("temporal controls reuse the period editor and preserve focused input while
         "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onTimeRange",
         "onTemporalVariable", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
     actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
+    actions.onTimeRange = key => {
+        assert.equal(key, null);
+        h.state.temporal = null; h.state.sources[1].rangeSelected = false; h.draw();
+    };
     h.view.bind(actions);
     h.view.plotsView = {renderPlots() {}};
     h.state.busy = false;
@@ -362,7 +371,18 @@ test("temporal controls reuse the period editor and preserve focused input while
         variable: "temperature", periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00",
         choices: {months: ["2000-01"], month: "2000-01", times: ["2000-01-01T00:00:00Z"]},
         loading: false, datesError: "", selectionError: ""};
+    h.state.sources = [h.state.sources[0], {key: "weather-view", label: "Weather · Jan 1, 2000 00:00 UTC",
+        selected: true, temporalDatasetKey: "observations", rangeSelected: true}];
     h.draw();
+    /** @return {Object[]} Current individual-raster and time-range controls. */
+    const inputs = () => h.view.sources.querySelectorAll("input");
+    assert.equal(inputs()[0].disabled, true, "ordinary rasters are disabled during time-range analysis");
+    assert.equal(inputs()[1].disabled, true, "temporal snapshots are disabled too");
+    assert.equal(inputs()[1].checked, true, "the ordinary checklist retains its selections");
+    assert.equal(inputs()[2].disabled, false);
+    assert.equal(inputs()[1].parentElement.title, "Turn off time-range analysis to select individual rasters.");
+    assert.equal(inputs()[1].getAttribute("aria-describedby"), "raster-series-source-help");
+    assert.match([...h.view.sources.children].find(node => node.id === "raster-series-source-help").textContent, /Turn off time-range analysis/);
     const field = id => h.document.querySelector("#raster-series-" + id);
     assert.notEqual(field("data-settings").open, true, "choosing a temporal source does not open optional chart settings");
     assert.equal(field("order").parentElement.hidden, true);
@@ -382,7 +402,11 @@ test("temporal controls reuse the period editor and preserve focused input while
     assert.equal(h.view.period.startTime.step, "any");
     assert.equal(field("refresh-dates").disabled, true);
     assert.match(field("temporal-help").textContent, /Choose Calculate/);
-    h.state.temporal = null; h.draw();
+    inputs()[2].focus(); inputs()[2].checked = false; inputs()[2].dispatchEvent(new Event("change"));
+    assert.equal(inputs()[0].disabled, false);
+    assert.equal(inputs()[1].disabled, false);
+    assert.equal(inputs()[1].checked, true);
+    assert.equal(h.document.activeElement, inputs()[2], "focus stays on the range toggle when it is turned off");
     assert.equal(field("temporal").hidden, true);
     assert.equal(field("order").parentElement.hidden, false);
     assert.equal(field("sources").hidden, false);

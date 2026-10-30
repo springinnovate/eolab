@@ -28,9 +28,11 @@
 #raster-series-sources { max-height: 8rem; overflow: auto; margin-top: 0.3rem; }
 #raster-series-sources .raster-series-source { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; }
 #raster-series-sources .raster-series-source-name { display: flex; align-items: start; gap: 0.5rem; flex: 1; min-width: 0; }
-#raster-series-sources small { display: block; }
-#raster-series-sources button { flex: none; font-size: inherit; }
-#raster-series-sources button[aria-pressed="true"] { background: var(--surface-selected); font-weight: 600; }
+#raster-series-sources.raster-series-source-columns .raster-series-source,
+#raster-series-sources .raster-series-source-headings { display: grid; grid-template-columns: minmax(0, 1fr) 7rem; gap: 0.5rem; }
+#raster-series-sources .raster-series-source-headings { font-weight: 600; padding-bottom: 0.25rem; }
+#raster-series-sources .raster-series-source-headings span:last-child { text-align: center; }
+#raster-series-sources .raster-series-range-choice { display: flex; align-items: center; justify-content: center; min-height: 24px; cursor: pointer; }
 #raster-series-sources span { overflow-wrap: anywhere; min-width: 0; }
 .raster-series-table-scroll { overflow-x: auto; }
 #raster-series table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }

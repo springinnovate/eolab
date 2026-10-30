@@ -101,7 +101,7 @@ export class RasterSeriesView {
      * @param {()=>void} actions.onCalculate Calculate remaining sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
-     * @param {(key:string)=>void} actions.onTimeRange Choose a named view or dataset's time range.
+     * @param {(key:string|null)=>void} actions.onTimeRange Choose a named view or dataset's time range; null restores individual raster choices.
      * @param {(variable:string)=>void} actions.onTemporalVariable Choose its variable.
      * @param {(change:Object)=>void} actions.onTemporalEdit Edit UTC period boundaries.
      * @param {(month:string)=>void} actions.onTemporalMonth Browse observation availability.
@@ -187,6 +187,7 @@ export class RasterSeriesView {
      * chart. Pending inputs show only setup/progress guidance; completed failures
      * and NoData remain available in the values table without an empty chart.
      * Previous-area values remain plotted while replacements are calculated.
+     * Source columns keep individual checkmarks visible but disabled during time-range analysis.
      * @param {SeriesPresentation} state Latest presentation supplied to render().
      * @return {void}
      */
@@ -215,40 +216,60 @@ export class RasterSeriesView {
         const dataSummary = state.temporal ? `Chart · ${chartType}` :
             `Order and chart · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
-        const signature = JSON.stringify(state.sources.map(({ key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected }) =>
-            [key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected]));
+        const timeRange = Boolean(state.temporal);
+        const signature = JSON.stringify([timeRange, state.sources.map(({ key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected }) =>
+            [key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected])]);
         if (signature !== this.sourceSignature) {
             this.sourceSignature = signature;
             const focusedKey = this.document.activeElement?.dataset?.rasterKey;
-            const focusedAction = this.document.activeElement?.tagName;
-            this.sources.replaceChildren(...state.sources.map(source => {
+            const focusedChoice = this.document.activeElement?.dataset?.sourceChoice;
+            const hasTemporal = state.sources.some(source => source.temporalDatasetKey);
+            const explanation = "Turn off time-range analysis to select individual rasters.";
+            this.sources.classList.toggle("raster-series-source-columns", hasTemporal);
+            this.sources.replaceChildren();
+            if (hasTemporal) {
+                const headings = this.document.createElement("div"); headings.className = "raster-series-source-headings";
+                for (const caption of ["Include in raster statistics", "Analyze a time range"]) {
+                    const heading = this.document.createElement("span"); heading.textContent = caption; headings.append(heading);
+                }
+                headings.children[0].setAttribute("aria-disabled", String(timeRange));
+                headings.children[0].title = timeRange ? explanation : "";
+                this.sources.append(headings);
+            }
+            this.sources.append(...state.sources.map(source => {
                 const row = this.document.createElement("div"); row.className = "raster-series-source";
                 const label = this.document.createElement(source.hasSnapshot === false ? "span" : "label");
                 label.className = "raster-series-source-name";
+                label.setAttribute("aria-disabled", String(timeRange)); label.title = timeRange ? explanation : "";
                 const name = this.document.createElement("span"); name.textContent = source.label;
                 if (source.hasSnapshot !== false) {
                     const checkbox = this.document.createElement("input");
-                    checkbox.type = "checkbox"; checkbox.checked = source.selected;
-                    checkbox.dataset.rasterKey = source.key;
+                    checkbox.type = "checkbox"; checkbox.checked = source.selected; checkbox.disabled = timeRange;
+                    checkbox.dataset.rasterKey = source.key; checkbox.dataset.sourceChoice = "raster";
+                    checkbox.setAttribute("aria-label", `Include ${source.label} in raster statistics`);
+                    if (timeRange) checkbox.setAttribute("aria-describedby", "raster-series-source-help");
                     checkbox.addEventListener("change", () => this.actions.onSelect(source.key, checkbox.checked));
                     label.append(checkbox);
-                    if (source.temporalDatasetKey) {
-                        const intent = this.document.createElement("small"); intent.textContent = "Displayed timestamp"; name.append(intent);
-                    }
                 }
                 label.append(name); row.append(label);
                 if (source.temporalDatasetKey) {
-                    const range = this.document.createElement("button"); range.type = "button";
-                    range.className = "summary-text-button"; range.textContent = "Time range"; range.dataset.rasterKey = source.key;
-                    range.setAttribute("aria-label", `Time range for ${source.label}`);
-                    range.setAttribute("aria-pressed", String(!!source.rangeSelected));
-                    range.addEventListener("click", () => this.actions.onTimeRange(source.key)); row.append(range);
+                    const choice = this.document.createElement("label"); choice.className = "raster-series-range-choice";
+                    const range = this.document.createElement("input"); range.type = "checkbox"; range.checked = source.rangeSelected;
+                    range.dataset.rasterKey = source.key; range.dataset.sourceChoice = "range";
+                    range.setAttribute("aria-label", `Analyze a time range for ${source.label}`);
+                    if (timeRange) range.setAttribute("aria-describedby", "raster-series-source-help");
+                    range.addEventListener("change", () => this.actions.onTimeRange(range.checked ? source.key : null));
+                    choice.append(range); row.append(choice);
                 }
                 return row;
             }));
+            if (timeRange) {
+                const help = this.document.createElement("p"); help.id = "raster-series-source-help";
+                help.className = "visually-hidden"; help.textContent = explanation; this.sources.append(help);
+            }
             if (focusedKey) {
-                for (const input of this.sources.querySelectorAll(focusedAction)) {
-                    if (input.dataset.rasterKey === focusedKey) input.focus({ preventScroll: true });
+                for (const input of this.sources.querySelectorAll("input")) {
+                    if (input.dataset.rasterKey === focusedKey && input.dataset.sourceChoice === focusedChoice) input.focus({ preventScroll: true });
                 }
             }
         }

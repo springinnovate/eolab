@@ -112,6 +112,14 @@ test("a temporal request restores its period, formulas and result after reload w
     await restored.finish(job.jobId, "ready", {observations, csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,298.5"});
     assert.equal(restored.view.state.rows[0].value, 298.5);
     assert.equal(restored.view.state.area.pendingInputs, false, "retained raster-layer choices do not change a captured interval");
+    const snapshot = {key: "restored-weather-view", label: "Weather snapshot", visible: true,
+        source: {...DATASET, variable: "temperature", time: "2000-01-01T00:00:00Z"}};
+    restored.controller.updateAvailableRasters([ORDINARY, snapshot, {...snapshot, key: "another-weather-view"}], [DATASET]);
+    assert.deepEqual(restored.view.state.sources.filter(source => source.rangeSelected).map(source => source.key),
+        [snapshot.key], "a recovered dataset identifies one switchable range even without a saved map-view key");
+    await restored.controller.chooseTimeRange(null);
+    assert.equal(restored.view.state.temporal, undefined);
+    assert.equal(restored.submitted.length, 0, "turning off the recovered range does not start another temporal job");
     restored.close();
 });
 
@@ -241,7 +249,7 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
         assert.deepEqual(h.cancelled, [first.jobId]);
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
         assert.equal(h.submitted.length, 2);
-        h.view.actions.onSelect(ORDINARY.key, true); await h.tick();
+        await h.controller.chooseTimeRange(null); await h.tick();
         assert.deepEqual(h.cancelled, [first.jobId, second.jobId]);
         await h.finish(second.jobId, "cancelled");
         assert.equal(h.submitted.length, 3, "ordinary raster selection retains automatic calculation");
@@ -268,7 +276,8 @@ test("named temporal views seed range variables once and retain ordinary multi-r
         assert.equal(h.view.state.temporal.datasetKey, DATASET.key);
         assert.equal(h.view.state.temporal.variable, "pressure", "the named view supplies the initial variable despite multiple variables");
         assert.equal(h.view.state.temporal.startTime, "", "choosing the source does not choose a large period");
-        assert.deepEqual(h.view.state.sources.map(source => source.selected), [false, false, false]);
+        assert.deepEqual(h.view.state.sources.map(source => source.selected), [true, true, true],
+            "range mode preserves the ordinary checklist choices while the view disables them");
         assert.equal(h.view.state.sources.find(source => source.key === snapshot.key).rangeSelected, true);
         assert.equal(h.view.state.sources.find(source => source.key === independent.key).rangeSelected, false);
         h.view.actions.onTemporalVariable("temperature");
@@ -280,7 +289,7 @@ test("named temporal views seed range variables once and retain ordinary multi-r
         assert.equal(h.view.state.temporal.startTime, "2000-01-03T01:00");
         await h.tick();
         assert.equal(h.submitted.length, 0, "range intent and map changes wait for Calculate");
-        h.view.actions.onSelect(snapshot.key, true);
+        await h.controller.chooseTimeRange(null);
         assert.equal(h.view.state.temporal, undefined);
         assert.deepEqual(h.view.state.sources.filter(source => source.selected).map(source => source.key),
             [ORDINARY.key, snapshot.key, independent.key], "the ordinary mixed-view checklist survives the range intent");
@@ -308,6 +317,8 @@ test("a named retained dataset offers a range without a displayed or published s
         assert.equal(h.view.state.temporal.startTime, "");
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
         assert.equal(h.submitted.length, 0);
+        h.controller.updateAvailableRasters([], []);
+        assert.equal(h.view.state.temporal, undefined, "removing the active dataset returns to individual raster selection");
     } finally { h.close(); }
 });
 

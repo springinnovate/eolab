@@ -244,6 +244,7 @@ export class RasterSeriesController {
         if (this.temporal.datasetKey && !datasets.some(dataset => dataset.key === this.temporal.datasetKey)) {
             this.temporalAbort?.abort();
             Object.assign(this.temporal, {datasetKey: "", item: null, variable: "", choices: null, loading: false, error: ""});
+            this.sourceMode = "layers";
         }
         const newKeys = new Set(sources.map(source => source.key));
         this.selectionOverrides = new Map([...this.selectionOverrides].filter(([key]) => newKeys.has(key)));
@@ -258,10 +259,12 @@ export class RasterSeriesController {
      * Reopening the same view preserves analysis edits; explicitly choosing
      * another view uses that view's variable while preserving the period.
      * Map updates never change these choices or start a range calculation.
-     * @param {string} key Retained raster view or dataset key.
+     * Turning the range off restores the remembered individual raster choices.
+     * @param {string|null} key Retained raster view or dataset key; null returns to the individual raster choices.
      * @return {Promise<void>} Metadata and availability guidance have finished loading.
      */
     async chooseTimeRange(key) {
+        if (key === null) { this.sourceMode = "layers"; this.updateAreaInputs(); return; }
         const snapshot = this.sources.find(source => source.key === key);
         const reference = snapshot ? rasterSourceReference(snapshot) : null;
         const dataset = reference ? this.temporal.datasets.find(source =>
@@ -282,6 +285,8 @@ export class RasterSeriesController {
 
     /** Describe named snapshot and time-range choices without changing their selections.
      * Retained datasets remain usable even when no displayed observation is available.
+     * Individual checkmarks remain selected while disabled. A recovered range
+     * marks the first matching view when the job has no map-view identity.
      * @return {import("./series-view.js").SeriesPresentation["sources"]} Named snapshot and dataset rows with their active intent.
      */
     sourceChoices() {
@@ -290,12 +295,18 @@ export class RasterSeriesController {
             const reference = rasterSourceReference(source);
             const dataset = this.temporal.datasets.find(item => item.collectionId === reference.collectionId && item.itemId === reference.itemId);
             if (dataset) represented.add(dataset.key);
-            return {...source, selected: this.sourceMode === "layers" && this.selectedKeys.has(source.key),
-                temporalDatasetKey: dataset?.key, rangeSelected: this.sourceMode === "temporal" && this.temporal.viewKey === source.key};
+            return {...source, selected: this.selectedKeys.has(source.key),
+                temporalDatasetKey: dataset?.key, rangeSelected: false};
         });
-        return [...choices, ...this.temporal.datasets.filter(dataset => !represented.has(dataset.key)).map(dataset =>
+        choices.push(...this.temporal.datasets.filter(dataset => !represented.has(dataset.key)).map(dataset =>
             ({...dataset, hasSnapshot: false, selected: false, temporalDatasetKey: dataset.key,
-                rangeSelected: this.sourceMode === "temporal" && this.temporal.datasetKey === dataset.key}))];
+                rangeSelected: false})));
+        if (this.sourceMode === "temporal") {
+            const selected = choices.find(source => source.key === this.temporal.viewKey) ??
+                choices.find(source => source.temporalDatasetKey === this.temporal.datasetKey);
+            if (selected) selected.rangeSelected = true;
+        }
+        return choices;
     }
 
     /** Read Catalog guidance while leaving the requested period unchanged.
