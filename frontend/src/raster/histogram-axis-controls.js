@@ -27,7 +27,7 @@ export class HistogramAxisControls {
         this.root.open = state.open ?? false;
         this.root.addEventListener("toggle", () => { state.open = this.root.open; });
         const summary = documentContext.createElement("summary");
-        summary.textContent = "Axes & scale";
+        summary.textContent = "Adjust histogram axes";
         this.summary = summary;
         this.root.append(summary);
         this.rows = new Map();
@@ -152,7 +152,7 @@ export class HistogramAxisControls {
      * and the current histogram. Percentile limits are recalculated for this sample.
      * If a saved range or log scale cannot be used, build that axis with Auto/Linear
      * and show a warning without overwriting the saved settings.
-     * Update each axis's status text and the "Axes & scale" label.
+     * Update each axis's status text and the "Adjust histogram axes" label.
      * @return {Object} Axis limits and coordinate conversions, indexed by axis key.
      * @throws {RangeError} If the histogram cannot form even an Auto/Linear axis.
      */
@@ -177,7 +177,7 @@ export class HistogramAxisControls {
     }
 
     /**
-     * Set the "Axes & scale" disclosure label, adding "log", "clipped", or
+     * Set the "Adjust histogram axes" disclosure label, adding "log", "clipped", or
      * "using Auto/Linear" when those conditions apply to the displayed axes.
      * The label remains visible when the controls are collapsed.
      * @param {Object} axes Displayed axis limits, scales, and notices.
@@ -189,7 +189,7 @@ export class HistogramAxisControls {
         if (fallback) notes.push("using Auto/Linear");
         if (Object.values(axes).some(axis => axis.scale === "log")) notes.push("log");
         if (Object.values(axes).some(axis => axis.notice.includes("clipped"))) notes.push("clipped");
-        this.summary.textContent = "Axes & scale" + (notes.length ? " · " + notes.join(" · ") : "");
+        this.summary.textContent = "Adjust histogram axes" + (notes.length ? " · " + notes.join(" · ") : "");
     }
 
     /**

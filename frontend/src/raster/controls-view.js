@@ -410,7 +410,7 @@ export class RasterControlsView {
      */
     setSamplingAreaMode(mode, label = "") {
         this.#samplingAreaView.setSamplingAreaMode(mode, label);
-        this.#histogramView.setSamplingAreaMode(mode, label);
+        this.#histogramView.setSamplingAreaMode(mode);
     }
 
     /** Return whether Sampling box is selected for pointer preview.
@@ -560,18 +560,4 @@ export class RasterControlsView {
         this.#bivariateView.highlightPair(xValue, yValue);
     }
 
-    /**
-     * Render exact values retained from the current map click.
-     *
-     * @param {Object} snapshot Immutable point-sampling snapshot.
-     * @return {void}
-     */
-    renderPointSamples(snapshot) {
-        this.#histogramView.renderPointSamples(snapshot);
-    }
-
-    /** Clear retained point values from Analysis tools. @return {void} */
-    clearPointSamples() {
-        this.#histogramView.clearPointSamples();
-    }
 }

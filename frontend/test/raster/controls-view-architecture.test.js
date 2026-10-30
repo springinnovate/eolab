@@ -13,7 +13,6 @@ const FOCUSED_VIEW_IMPORTS = {
         "./histogram-view.js",
         "./percentile-controls-view.js",
         "./required-control.js",
-        "./value-format.js",
     ],
     "percentile-controls-view.js": ["./statistics.js", "./value-format.js"],
     "style-histogram-view.js": [

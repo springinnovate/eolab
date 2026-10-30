@@ -416,8 +416,6 @@ test("one collapsed sampling control stays outside the toolbar and results colum
     assert.match(exploration.source, /No visible raster layers/);
     assert.match(requireElementRange("raster-histogram-list").source,
         /aria-label="Raster histograms"/);
-    assert.match(MARKUP, /id="raster-point-samples"[^>]*aria-live="polite"/s);
-    assert.match(MARKUP, /id="raster-point-sample-list"/);
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
 });
 
@@ -454,7 +452,6 @@ test("analysis destinations share one compact navigation above the selected resu
 });
 
 test("histogram charts precede optional help, point details and mode controls", () => {
-    assert.ok(requireElementRange("raster-histogram").end < requireElementRange("raster-point-samples").start);
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histograms">×/);
     assert.match(requireElementRange("map-click-histogram").source,
@@ -465,8 +462,6 @@ test("histogram charts precede optional help, point details and mode controls", 
     for (const id of ["raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
         assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
     }
-    assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
-    assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("map-histogram-scope"));
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*calc\(16px \+ var\(--map-tools-height, 42px\)\) 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px - var\(--map-tools-height, 42px\)\)/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
@@ -723,9 +718,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-histogram-list",
         "raster-histogram",
         "raster-histogram-detail-layer",
-        "raster-histogram-scope",
-        "raster-point-samples",
-        "raster-point-sample-list",
         "raster-cursor-values",
         "raster-cursor-position",
         "raster-cursor-value-list",
@@ -745,7 +737,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection-tab-style",
         "toggle-map-inspection-dock",
         "map-histogram-panel",
-        "map-histogram-scope",
         "close-map-histogram",
         "layer-style-editor",
     ];

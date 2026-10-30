@@ -259,11 +259,6 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
         "AOI · area.gpkg · boundary"
     );
     assert.equal(view.isSamplingBoxSelected(), false);
-    assert.equal(
-        documentContext.querySelector("#raster-histogram")
-            .getAttribute("data-sampling-area"),
-        "catalogSelection"
-    );
     const wholeChoice = documentContext.querySelector(
         "#clear-raster-sample-window"
     );
@@ -315,7 +310,6 @@ test("composed controls present one catalog selection consistently", () => {
     for (const mode of ["vector", "catalogSelection"]) {
         view.setSamplingAreaMode(mode, "Vector selection · Peru");
         assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, true);
-        assert.equal(documentContext.querySelector("#raster-histogram").getAttribute("data-sampling-area"), mode);
     }
     assert.equal(view.setTemporaryAoiAvailability, undefined);
 });
@@ -343,7 +337,6 @@ test("RasterControlsView delegates retained histogram summaries", () => {
             canCalculate: true,
             label: "retained-raster.tif",
             state: "ready",
-            scope: "Whole raster",
             counts: [1, 3, 2],
         },
     ], "retained-raster");
@@ -480,8 +473,6 @@ test("RasterControlsView exposes the current raster viewer controls", () => {
         "showHistogramWidget",
         "setRenderingControlsAvailable",
         "setControlsVisible",
-        "renderPointSamples",
-        "clearPointSamples",
     ];
 
     for (const methodName of expectedMethods) {
