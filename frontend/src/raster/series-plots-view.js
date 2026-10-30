@@ -87,7 +87,7 @@ export class RasterSeriesPlotsView {
      * @param {{id:number,scale:string}[]} state.plots Plot settings.
      * @param {Object[]} state.statistics Formulas, display settings and ordered result rows.
      * @param {boolean} state.showingPrevious Whether every plot uses the previous area.
-     * @param {"line"|"scatter"} state.chartType Plot geometry.
+     * @param {"line"|"scatter"|"bar"} state.chartType Plot geometry.
      * @param {Object|null} state.temporal Temporal dataset choices, or null for ordinary raster layers.
      * @return {void}
      */
@@ -143,7 +143,8 @@ export class RasterSeriesPlotsView {
         const unitsText = units.length > 1 ? `Mixed units: ${units.join(", ")}. Assign statistics to separate plots if needed.`
             : units[0] === "unit unspecified" ? "Units are not specified by these formulas."
             : units.length ? `Values in ${units[0]}.` : "";
-        note.textContent = [unitsText, excluded ? `Log scale omits ${excluded} zero or negative ${excluded === 1 ? "value" : "values"}; see the table or CSV.` : ""].filter(Boolean).join(" ");
+        note.textContent = [unitsText, excluded ? `Log scale omits ${excluded} zero or negative ${excluded === 1 ? "value" : "values"}; see the table or CSV.` : "",
+            plot.scale === "log" && state.chartType === "bar" ? "Log bars start at the lower axis bound, not zero." : ""].filter(Boolean).join(" ");
         for (const statistic of statistics) {
             const button = this.document.createElement("button"); button.type = "button";
             button.dataset.statisticId = String(statistic.id); button.className = "raster-series-legend-item";

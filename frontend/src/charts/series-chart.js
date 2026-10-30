@@ -76,17 +76,18 @@ function svgElement(documentContext, name, attributes, text = null) {
 }
 
 /**
- * Draw a line or scatter plot over an ordinal sequence.
+ * Draw a line, scatter or grouped bar plot over ordered observations.
  *
  * Null Y values retain their X position and break line segments, so callers can
  * communicate missing observations without inventing numeric values.
+ * Linear bars start at zero; log bars start at the lower Y-axis bound.
  *
  * @param {Object} configuration Closed rendering contract.
  * @param {Document} configuration.documentContext Owning document.
  * @param {SVGElement} configuration.chart Empty target SVG element.
  * @param {{xLabel:string,yValue:number|null,xValue?:number}[]} [configuration.points] Single-series ordered points.
  * @param {ChartSeries[]} [configuration.series] Multiple series sharing the same ordered X positions; replaces points.
- * @param {"line"|"scatter"} configuration.chartType Plot geometry.
+ * @param {"line"|"scatter"|"bar"} configuration.chartType Plot geometry.
  * @param {"ordinal"|"numeric"} [configuration.xScale="ordinal"] X spacing.
  * @param {"linear"|"log"} [configuration.yScale="linear"] Y spacing; log excludes non-positive values.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
@@ -120,7 +121,7 @@ export function renderOrdinalSeriesChart({
     points = plottedSeries[0]?.points;
     if (
         !Array.isArray(points) || points.length === 0 ||
-        !["line", "scatter"].includes(chartType) ||
+        !["line", "scatter", "bar"].includes(chartType) ||
         !["ordinal", "numeric"].includes(xScale) ||
         !["linear", "log"].includes(yScale) ||
         typeof xAxisLabel !== "string" || typeof yAxisLabel !== "string" ||
@@ -148,6 +149,10 @@ export function renderOrdinalSeriesChart({
     const values = finitePoints.map(point => yScale === "log" ? Math.log10(point.yValue) : point.yValue);
     let minimum = Math.min(...values);
     let maximum = Math.max(...values);
+    if (chartType === "bar" && yScale === "linear") {
+        minimum = Math.min(0, minimum);
+        maximum = Math.max(0, maximum);
+    }
     if (minimum === maximum) {
         const padding = yScale === "log" ? 0.5 : Math.abs(minimum) * 0.1 || 1;
         minimum -= padding;
@@ -166,15 +171,22 @@ export function renderOrdinalSeriesChart({
     ) {
         throw new TypeError("Numeric series chart X values must be finite.");
     }
+    const sortedX = chartType === "bar" && xScale === "numeric" ? [...new Set(numericX)].sort((a, b) => a - b) : [];
+    const spacing = sortedX.length > 1
+        ? Math.min(...sortedX.slice(1).map((value, index) => value - sortedX[index])) : 1;
+    const xDomain = xScale === "numeric" ? extent(numericX) : [0, points.length - 1];
     const horizontal = scaleLinear()
-        .domain(xScale === "numeric" ? extent(numericX) : [0, points.length - 1])
+        .domain(chartType === "bar" ? [xDomain[0] - spacing / 2, xDomain[1] + spacing / 2] : xDomain)
         .range([CHART_MARGIN.left, CHART_MARGIN.left + plotWidth]);
     const x = index => horizontal(xScale === "numeric" ? numericX[index] : index);
+    const groupWidth = Math.min(60, Math.abs(horizontal(xDomain[0] + spacing) - horizontal(xDomain[0])) * 0.8);
+    const barWidth = groupWidth / plottedSeries.length;
     const y = (yScale === "log" ? scaleLog() : scaleLinear())
         .domain(yScale === "log"
             ? [Math.max(Number.MIN_VALUE, 10 ** minimum), Math.min(Number.MAX_VALUE, 10 ** maximum)]
             : [minimum, maximum])
         .range([CHART_MARGIN.top + plotHeight, CHART_MARGIN.top]);
+    const barBaseline = y(yScale === "log" ? y.domain()[0] : 0);
     const xAxisY = CHART_MARGIN.top + plotHeight;
     chart.setAttribute("viewBox", `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`);
     chart.setAttribute("aria-label", ariaLabel);
@@ -200,7 +212,7 @@ export function renderOrdinalSeriesChart({
     const pointElements = [];
     const pointGroups = [];
     const inspectionState = { focused: null, hovered: null };
-    for (const item of plottedSeries) {
+    for (const [seriesIndex, item] of plottedSeries.entries()) {
         const group = series ? svgElement(documentContext, "g", { "data-series-id": item.id }) : chart;
         if (item.color) group.setAttribute("style", `--series-color: ${item.color}`);
         if (series) chart.append(group);
@@ -233,15 +245,21 @@ export function renderOrdinalSeriesChart({
             const markerPaths = { square: "M-4,-4h8v8h-8z", diamond: "M0,-6L5,0L0,6L-5,0z",
                 triangle: "M0,-6L5,4L-5,4z", cross: "M-5,0h10M0,-5v10" };
             const markerPath = markerPaths[item.marker];
-            const circle = svgElement(documentContext, markerPath ? "path" : "circle", {
-                class: "series-chart-point",
+            const barHeight = Math.abs(y(point.yValue) - barBaseline);
+            const circle = svgElement(documentContext, chartType === "bar" ? "rect" : markerPath ? "path" : "circle", {
+                class: chartType === "bar" ? "series-chart-point series-chart-bar" : "series-chart-point",
                 cx: x(index),
                 cy: y(point.yValue),
                 r: 4.5,
                 tabindex: 0,
                 role: selectable ? "button" : "img",
                 ...(selectable ? { "aria-pressed": "false" } : {}),
-                ...(markerPath ? { d: markerPath, transform: `translate(${x(index)} ${y(point.yValue)})` } : {}),
+                ...(chartType === "bar" ? {
+                    x: x(index) - groupWidth / 2 + seriesIndex * barWidth,
+                    y: barHeight === 0 ? barBaseline - 0.5 : Math.min(y(point.yValue), barBaseline),
+                    width: barWidth * 0.9,
+                    height: Math.max(1, barHeight),
+                } : markerPath ? { d: markerPath, transform: `translate(${x(index)} ${y(point.yValue)})` } : {}),
                 "data-point-index": index,
                 "aria-label": pointAccessibleLabel(point, item, index),
             });
