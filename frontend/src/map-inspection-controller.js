@@ -802,7 +802,8 @@ export class MapInspectionController {
     /**
      * Render foreground task/source/scope, retained navigation and active-panel visibility.
      * Raster destinations use stable native buttons; their owners handle opening.
-     * Features share the compact result navigation; other tools keep their retained tabs.
+     * Features share the compact result navigation. Raster statistics omits the
+     * inactive Style tab while retaining its editor; other tools keep their tabs.
      * Polygon editing names its selected layer in the panel without another task heading.
      * Opening or updating a tool never replaces its focused raster destination.
      * Hide the panel surface when no tool is active so the retained result header
@@ -837,7 +838,8 @@ export class MapInspectionController {
         for (const { name, panel, tab, resultNavigation } of this.tools) {
             const open = !panel.hidden;
             const active = open && this.activeTool === name;
-            tab.hidden = resultNavigation ? false : !open;
+            tab.hidden = resultNavigation ? false : !open ||
+                (name === "style" && this.activeTool === "raster-series");
             if (resultNavigation) tab.setAttribute("aria-pressed", String(active && !this.minimized));
             else {
                 tab.setAttribute("aria-selected", String(active));
