@@ -8,6 +8,8 @@
 .raster-series-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; margin: 0.4rem 0; }
 .raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
 .raster-series-controls label[hidden] { display: none; }
+.raster-series-source-mode { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
+#raster-series-data-inputs { margin-bottom: 0.5rem; }
 #raster-series-temporal { font-size: 0.78rem; }
 #raster-series-temporal label { display: grid; gap: 0.25rem; min-width: 0; }
 #raster-series-temporal input, #raster-series-temporal select { max-width: 100%; min-width: 0; }
@@ -23,7 +25,7 @@
 #raster-series-plots:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 #raster-series button, #raster-series select, #raster-series summary, .raster-series-formula-legend { min-height: 24px; }
 #raster-series summary { line-height: 24px; }
-#raster-series-sources { max-height: 12rem; overflow: auto; margin-top: 0.5rem; }
+#raster-series-sources { max-height: 8rem; overflow: auto; margin-top: 0.3rem; }
 #raster-series-sources label { display: flex; align-items: start; gap: 0.5rem; padding: 0.3rem 0; }
 #raster-series-sources span { overflow-wrap: anywhere; min-width: 0; }
 .raster-series-table-scroll { overflow-x: auto; }
@@ -54,8 +56,7 @@
 .raster-series-formula-editor label { display: grid; gap: 0.25rem; margin: 0.35rem 0; font-size: 0.75rem; }
 .raster-statistic-swatch { width: 2rem; height: 1rem; flex: none; }
 #raster-series-plots { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; padding: 0.4rem 0 0.75rem; margin-bottom: 0.5rem; }
-#raster-series-plots[hidden], .raster-series-statistics-chart[hidden], .raster-series-plot-tooltip[hidden], .raster-series-empty-plot[hidden] { display: none; }
-.raster-series-single-result #raster-series-plots, .raster-series-single-result #raster-series-add-plot { display: none; }
+#raster-series-results[hidden], #raster-series-add-plot[hidden], #raster-series-plots[hidden], .raster-series-statistics-chart[hidden], .raster-series-plot-tooltip[hidden], .raster-series-empty-plot[hidden] { display: none; }
 .raster-series-plot { position: relative; box-sizing: border-box; flex: 1 0 min(100%, 32rem); min-width: 0; padding: 0.65rem; border: 1px solid var(--border-1); border-radius: 0.3rem; display: flex; flex-direction: column; scroll-margin-block-start: 3rem; }
 .raster-series-plot-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; min-height: 2rem; }
 .raster-series-plot-header strong { margin-right: auto; }

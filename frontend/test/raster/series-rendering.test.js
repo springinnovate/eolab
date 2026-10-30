@@ -39,7 +39,7 @@ function controlsFixture() {
     const source = { key: "a", label: "Raster A", selected: true };
     const formula = { id: 1, label: "Mean", expression: "mean(a)", visible: true, plotId: 1, styleIndex: 0,
         rows: [{ label: "Raster A", statisticLabel: "Mean", state: "waiting", value: null, rawValue: null }] };
-    const state = { active: true, busy: true, sources: [source], rows: [], previousRows: null,
+    const state = { active: true, busy: true, sources: [source], rows: formula.rows, previousRows: null,
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
@@ -48,19 +48,16 @@ function controlsFixture() {
     return { ...h, plots, state, draw };
 }
 
-test("raster stack places plots and values before configuration and keeps execution actions outside disclosures", async () => {
+test("raster statistics places visible inputs before execution and results", async () => {
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
-    const positions = ["raster-series-context", "raster-series-status", "raster-series-plots", "Values &amp; download",
-        "raster-series-statistics", "raster-series-data-settings", "Formula reference"]
+    const positions = ["raster-series-data-inputs", "raster-series-context", 'id="raster-series-statistics"',
+        "raster-series-status", 'id="raster-series-plots"', "Values &amp; download", "raster-series-data-settings", "Formula reference"]
         .map(name => panel.indexOf(name));
-    // Match owning elements rather than aria-controls references in the section navigation.
-    positions[2] = panel.indexOf('id="raster-series-plots"');
-    positions[4] = panel.indexOf('id="raster-series-statistics"');
-    positions[5] = panel.indexOf('id="raster-series-data-settings"');
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
     const disclosures = [...panel.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map(match => match[0]);
-    for (const id of ["context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
+    for (const id of ["source-mode", "temporal-dataset", "temporal-variable", "period", "sources",
+        "context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
         const attribute = `id="raster-series-${id}"`;
         assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
         assert.ok(disclosures.every(disclosure => !disclosure.includes(attribute)), `${id} stays outside secondary settings`);
@@ -181,9 +178,14 @@ test("result presentation counts requested positions, including waiting, failed 
     h.state.rows = rows;
     h.draw();
     assert.equal(h.view.values.open, true, "one pending position already uses the table");
+    assert.equal(h.view.results.hidden, true, "setup and progress replace the empty result card");
+    assert.equal(h.view.plots.hidden, true);
+    assert.equal(h.view.addPlot.hidden, true);
     for (const [state, status] of [["error", "Unavailable"], ["no_valid_data", "No valid data"]]) {
         rows[0].state = state; h.draw();
         assert.equal(h.view.table.children[0].children[3].textContent, status);
+        assert.equal(h.view.results.hidden, false, "completed nonnumeric outcomes remain inspectable");
+        assert.equal(h.view.plots.hidden, true);
         assert.equal(h.plots.length, 0);
     }
     rows.push({...rows[0], label: "Raster B", state: "value", value: 4, rawValue: "4"});
@@ -191,11 +193,33 @@ test("result presentation counts requested positions, including waiting, failed 
     assert.equal(h.view.values.open, false);
     assert.equal(h.plots.length, 1, "one successful value among several positions remains a graph");
     assert.equal(h.plots[0], h.state);
+    assert.equal(h.view.plots.hidden, false);
+    assert.equal(h.view.addPlot.hidden, false);
     assert.equal(h.view.table.children.length, 2);
     assert.equal(h.view.valueCaption.textContent, "");
     assert.equal(h.view.root.classList.contains("raster-series-single-result"), false);
     rows.length = 0; h.draw();
     assert.equal(h.view.values.open, false, "zero positions do not masquerade as a scalar");
+    assert.equal(h.view.results.hidden, true);
+    assert.equal(h.view.plots.hidden, true, "the retained old plot does not show for empty input");
+});
+
+test("previous numerical results remain visible while their replacements are pending", () => {
+    const h = controlsFixture();
+    h.state.statistics[0].rows.push({...h.state.rows[0], label: "Raster B"});
+    h.state.statistics[0].previousRows = h.state.rows.map(row => ({...row, state: "value", value: 2, rawValue: "2"}));
+    h.state.showingPrevious = true;
+    h.draw();
+    assert.equal(h.view.results.hidden, false);
+    assert.equal(h.view.plots.hidden, false);
+    assert.equal(h.view.chartNote.hidden, false);
+    assert.equal(h.plots.at(-1), h.state);
+    h.state.showingPrevious = false;
+    h.state.busy = false;
+    for (const row of h.state.rows) row.state = "no_valid_data";
+    h.draw();
+    assert.equal(h.view.results.hidden, false);
+    assert.equal(h.view.plots.hidden, true, "NoData outcomes keep the table without an empty graph");
 });
 
 test("one temporal observation uses values; several timestamps in the same dataset use plots", () => {
@@ -234,7 +258,7 @@ test("progress preserves the values disclosure and focus; changing result count 
     assert.equal(h.view.values.open, true, "multi-result table also retains the user's choice");
     h.state.statistics[0].rows.pop(); h.draw();
     assert.equal(h.view.values.open, true);
-    assert.equal(h.plots.length, 2, "single-result updates never redraw hidden plots");
+    assert.equal(h.plots.length, 0, "pending and single-result updates never create an empty plot");
     h.state.showingPrevious = true; h.draw();
     assert.equal(h.view.chartNote.hidden, true, "the current-values table does not claim to show previous-area plots");
 });
@@ -273,22 +297,22 @@ test("removing a focused statistic returns focus to Add statistic", () => {
     assert.equal(h.document.activeElement, h.document.querySelector("#raster-series-add-formula"));
 });
 
-test("scope and collapsed data settings describe the active source count and display order", () => {
+test("scope describes the source count while optional settings describe display order", () => {
     const h = controlsFixture();
     h.document.querySelector("#raster-series-order").value = "name";
     h.document.querySelector("#raster-series-direction").value = "reverse";
     h.state.chartType = "scatter";
     h.state.sources.push({ key: "b", label: "Raster B", selected: false });
     h.draw();
-    assert.equal(h.view.sourceSummary.textContent, "Data and order · 1 selected · Layer name · Reverse · Scatter");
+    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Scatter");
     h.state.sources[1].selected = true;
     h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
     h.draw();
     assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
-    assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Scatter");
+    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Scatter");
     h.state.chartType = "bar";
     h.draw();
-    assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Bar");
+    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Bar");
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
@@ -316,7 +340,7 @@ test("temporal controls reuse the period editor and preserve focused input while
         loading: false, datesError: "", selectionError: ""};
     h.draw();
     const field = id => h.document.querySelector("#raster-series-" + id);
-    assert.equal(field("data-settings").open, true);
+    assert.notEqual(field("data-settings").open, true, "choosing a temporal source does not open optional chart settings");
     assert.equal(field("order").parentElement.hidden, true);
     assert.equal(field("value-source").textContent, "Time (UTC)");
     assert.equal(field("temporal-variable").children[1].textContent, "Air temperature (K)");

@@ -64,6 +64,10 @@ export class RasterSeriesView {
         this.status = documentContext.querySelector("#raster-series-status");
         this.sources = documentContext.querySelector("#raster-series-sources");
         this.sourceSummary = documentContext.querySelector("#raster-series-source-summary");
+        this.results = documentContext.querySelector("#raster-series-results");
+        this.plots = documentContext.querySelector("#raster-series-plots");
+        this.addPlot = documentContext.querySelector("#raster-series-add-plot");
+        this.chartSettings = documentContext.querySelector("#raster-series-data-settings");
         this.chartNote = documentContext.querySelector("#raster-series-chart-note");
         this.table = documentContext.querySelector("#raster-series-table-body");
         this.values = documentContext.querySelector("#raster-series-values");
@@ -182,7 +186,9 @@ export class RasterSeriesView {
     /** Update changed controls and figures from one coalesced snapshot.
      * Unchanged presentation leaves existing DOM nodes and attributes intact.
      * One result position opens the existing values table instead of drawing a
-     * chart. Unavailable values still occupy their requested positions.
+     * chart. Pending inputs show only setup/progress guidance; completed failures
+     * and NoData remain available in the values table without an empty chart.
+     * Previous-area values remain plotted while replacements are calculated.
      * @param {SeriesPresentation} state Latest presentation supplied to render().
      * @return {void}
      */
@@ -208,8 +214,8 @@ export class RasterSeriesView {
         const order = this.document.querySelector("#raster-series-order").value === "name" ? "Layer name" : "Map layer order";
         const direction = this.document.querySelector("#raster-series-direction").value === "reverse" ? "Reverse" : "Forward";
         const chartType = {line: "Line", scatter: "Scatter", bar: "Bar"}[state.chartType];
-        const dataSummary = state.temporal ? `Data and period · Temporal dataset · ${chartType}` :
-            `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
+        const dataSummary = state.temporal ? `Chart · ${chartType}` :
+            `Order and chart · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
         const signature = JSON.stringify(state.sources.map(({ key, label, selected }) => [key, label, selected]));
         if (signature !== this.sourceSignature) {
@@ -232,10 +238,19 @@ export class RasterSeriesView {
             }
         }
         const showingPrevious = state.showingPrevious && !singleResult;
+        const hasPlotValues = state.statistics.some(statistic =>
+            (showingPrevious ? statistic.previousRows : statistic.rows).some(row => row.state === "value"));
+        const hasResultRows = state.rows.some(row => row.state !== "waiting");
+        const hideResults = !hasPlotValues && !hasResultRows;
+        if (this.results.hidden !== hideResults) this.results.hidden = hideResults;
+        const hidePlots = singleResult || !hasPlotValues;
+        if (this.plots.hidden !== hidePlots) this.plots.hidden = hidePlots;
+        if (this.addPlot.hidden !== hidePlots) this.addPlot.hidden = hidePlots;
+        if (this.chartSettings.hidden !== !hasPlotValues) this.chartSettings.hidden = !hasPlotValues;
         if (this.chartNote.hidden !== !showingPrevious) this.chartNote.hidden = !showingPrevious;
         const chartNote = showingPrevious ? "Previous results — calculating replacements." : "";
         if (this.chartNote.textContent !== chartNote) this.chartNote.textContent = chartNote;
-        if (!singleResult) this.plotsView.renderPlots(state);
+        if (!hidePlots) this.plotsView.renderPlots(state);
         const tableValues = state.rows.map(row => [row.label, row.statisticLabel,
             row.state === "value" ? (row.rawValue ?? formatSeriesNumber(row.value)) + (row.unit ? " " + row.unit : "") : "-",
             row.errorMessage || (row.state === "value" ? (row.cached ? "Cached" : "Value") : STATES[row.state])]);
@@ -287,8 +302,6 @@ export class RasterSeriesView {
         }
         const heading = this.document.querySelector("#raster-series-value-source"), caption = temporal ? "Time (UTC)" : "Raster";
         if (heading.textContent !== caption) heading.textContent = caption;
-        if (this.sourceMode !== mode && temporal) this.document.querySelector("#raster-series-data-settings").open = true;
-        this.sourceMode = mode;
         if (!temporal) return;
         const dataset = this.document.querySelector("#raster-series-temporal-dataset");
         this.setOptions(dataset, [{value: "", label: "Choose a temporal dataset…"}, ...temporal.datasets.map(source =>
