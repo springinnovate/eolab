@@ -3742,14 +3742,13 @@ article.raster-histogram-summary {
   z-index: 1101;
   display: flex;
   flex-direction: column;
+  gap: 6px;
   width: min(var(--inspection-width), calc(100vw - 40px));
-  padding: 4px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-1);
-  box-shadow: var(--elevation-panel);
+  padding-bottom: 6px;
+  pointer-events: none;
 }
-.map-tools-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.map-tools-toolbar-actions { display: flex; align-self: flex-end; align-items: center; gap: 6px; }
+.map-tools-toolbar-actions > button { pointer-events: auto; }
 .map-tools-toolbar-actions > [hidden] { display: none; }
 #map-tools-more-summary { gap: 6px; }
 
@@ -4861,6 +4860,13 @@ summary:hover > .raster-disclosure-chevron {
 .vector-filter-value-list [aria-disabled="true"] { color: var(--text-2); cursor: not-allowed; }
 .vector-filter-value-picker :is(input, button):focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
 .map-layer-filter-status { grid-column: 2 / -1; justify-self: start; font-size: 0.75rem; }
+.map-filter-summary-group {
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: var(--elevation-panel);
+  pointer-events: auto;
+}
 .map-filter-summary-group:has(> .map-filter-indicators[hidden]) { display: none; }
 .map-filter-summary-heading { display: block; padding: 4px; font-size: 0.74rem; }
 .map-filter-indicators { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; max-height: min(120px, 20dvh); overflow-y: auto; pointer-events: auto; }
