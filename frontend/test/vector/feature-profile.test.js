@@ -266,6 +266,13 @@ test("numeric field-name spacing is reflected on the horizontal axis", () => {
     );
   const positions = circles.map((circle) => Number(circle.getAttribute("cx")));
   assert.ok(positions[2] - positions[1] > 2 * (positions[1] - positions[0]));
+  const chartType = h.documentContext.querySelector("#vector-feature-profile-chart-type");
+  chartType.value = "bar";
+  chartType.dispatchEvent(new Event("change"));
+  const bars = h.documentContext.querySelector("#vector-feature-profile-chart").querySelectorAll(".series-chart-bar");
+  const barPositions = bars.map(bar => Number(bar.getAttribute("cx")));
+  assert.equal(bars.length, circles.length);
+  assert.ok(barPositions[2] - barPositions[1] > 2 * (barPositions[1] - barPositions[0]));
 });
 
 test("per-source rules survive feature navigation and missing values break lines", () => {

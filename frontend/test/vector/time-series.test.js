@@ -274,7 +274,7 @@ test("loading and invalidation retain settings without a stale chart", () => {
   assert.equal(h.controller.settings.yField, "score");
 });
 
-test("scatter mode preserves points and omits the connecting line", () => {
+test("scatter and bar modes redraw the same sampled points without a connecting line", () => {
   const h = fixture();
   h.controller.setSample({
     state: "ready",
@@ -308,6 +308,15 @@ test("scatter mode preserves points and omits the connecting line", () => {
     0,
   );
   assert.match(chart.getAttribute("aria-label"), /Vector series scatter chart/);
+  chartType.value = "bar";
+  chartType.dispatchEvent(new Event("change"));
+  assert.match(chart.getAttribute("aria-label"), /Vector series bar chart/);
+  const bars = chart.querySelectorAll(".series-chart-bar");
+  assert.equal(bars.length, h.controller.pointElements.length);
+  assert.ok(bars.length > 0);
+  bars[0].dispatchEvent(new Event("click"));
+  assert.equal(bars[0].getAttribute("aria-pressed"), "true");
+  assert.equal(h.documentContext.querySelector("#vector-time-series-selection").hidden, false);
 });
 
 test("chart points identify observations and request selected-feature zoom", () => {

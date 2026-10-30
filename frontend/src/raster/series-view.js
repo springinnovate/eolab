@@ -39,7 +39,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {SeriesValueRow[]|null} previousRows Retained values for pending replacements.
  * @property {string} message Progress, guidance or result summary.
  * @property {boolean} busy Whether calculations are running.
- * @property {"line"|"scatter"} chartType Plot geometry.
+ * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
  * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,pendingArea:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and execution availability; pendingArea means results use an earlier selection.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
@@ -207,7 +207,7 @@ export class RasterSeriesView {
         if (this.root.getAttribute("aria-busy") !== busy) this.root.setAttribute("aria-busy", busy);
         const order = this.document.querySelector("#raster-series-order").value === "name" ? "Layer name" : "Map layer order";
         const direction = this.document.querySelector("#raster-series-direction").value === "reverse" ? "Reverse" : "Forward";
-        const chartType = state.chartType === "scatter" ? "Scatter" : "Line";
+        const chartType = {line: "Line", scatter: "Scatter", bar: "Bar"}[state.chartType];
         const dataSummary = state.temporal ? `Data and period · Temporal dataset · ${chartType}` :
             `Data and order · ${selectedCount} selected · ${order} · ${direction} · ${chartType}`;
         if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;

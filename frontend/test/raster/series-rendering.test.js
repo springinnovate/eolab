@@ -286,6 +286,9 @@ test("scope and collapsed data settings describe the active source count and dis
     h.draw();
     assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
     assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Scatter");
+    h.state.chartType = "bar";
+    h.draw();
+    assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Bar");
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
@@ -452,6 +455,17 @@ test("temporal plots use actual UTC spacing and retain NoData gaps through prese
     view.renderPlots(state);
     assert.deepEqual(chart.querySelectorAll(".series-chart-point").map(point => Number(point.getAttribute("cx"))), x);
     assert.equal(chart.querySelector(".series-chart-line"), null);
+    state.chartType = "bar";
+    view.renderPlots(state);
+    const bars = chart.querySelectorAll(".series-chart-bar");
+    const barX = bars.map(point => Number(point.getAttribute("cx")));
+    assert.equal(bars.length, 3);
+    assert.ok(Math.abs((barX[1] - barX[0]) / (barX[2] - barX[0]) - 1 / 6) < 1e-12);
+    assert.match(bars[1].getAttribute("aria-label"), /2\.0000000000000001 K/);
+    state.plots[0].scale = "log";
+    view.renderPlots(state);
+    assert.match(view.cards.get(1).note.textContent, /Log bars start at the lower axis bound, not zero/);
+    state.chartType = "scatter";
     state.temporal = null;
     view.renderPlots(state);
     assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Raster");
