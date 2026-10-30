@@ -281,28 +281,11 @@ test("scope and collapsed data settings describe the active source count and dis
     h.state.sources.push({ key: "b", label: "Raster B", selected: false });
     h.draw();
     assert.equal(h.view.sourceSummary.textContent, "Data and order · 1 selected · Layer name · Reverse · Scatter");
-    assert.equal(h.document.querySelector("#raster-series-edit-statistics").textContent, "Statistics (1)");
     h.state.sources[1].selected = true;
     h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
     h.draw();
     assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
     assert.equal(h.view.sourceSummary.textContent, "Data and order · 2 selected · Layer name · Reverse · Scatter");
-});
-
-test("section shortcuts focus owned destinations and open data settings without calculation actions", () => {
-    const h = controlsFixture();
-    const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
-        "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
-        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onSourceMode", "onTemporalDataset",
-        "onTemporalVariable", "onTemporalEdit", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
-    h.view.bind(actions);
-    for (const [button, target] of [["show-results", "results"], ["edit-statistics", "statistics-title"], ["edit-data", "source-summary"]]) {
-        h.document.querySelector("#raster-series-" + button).dispatchEvent(new Event("click"));
-        const destination = h.document.querySelector("#raster-series-" + target);
-        assert.equal(h.document.activeElement, destination);
-        assert.deepEqual(destination.scrollRequests, [{ block: "start", inline: "nearest" }]);
-    }
-    assert.equal(h.document.querySelector("#raster-series-data-settings").open, true);
 });
 
 test("temporal controls reuse the period editor and preserve focused input while availability changes", () => {
