@@ -23,6 +23,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.raster.source_models import (
     RasterSourceReference,
+    RasterAnalysisSourceReference,
     RunArtifactReference,
     TemporalIntervalSelection,
     TemporalVariableMetadata,
@@ -528,14 +529,14 @@ class ProcessingService:
     async def capture_input_file(
         self,
         owner: str,
-        source: RasterSourceReference | TemporalIntervalSelection,
+        source: RasterAnalysisSourceReference | TemporalIntervalSelection,
         prepared: PreparedJobPlan,
     ) -> PreparedJobPlan:
         """Add a published raster identity to the files retained at job admission.
 
         Args:
             owner: Requesting browser session hash.
-            source: Catalog raster, temporal interval or owned published-file reference.
+            source: Catalog raster, temporal observation/interval or owned published-file reference.
             prepared: Operation-owned queued specification.
 
         Returns:

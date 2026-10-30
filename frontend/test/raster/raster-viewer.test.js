@@ -5578,7 +5578,7 @@ test("independent temporal views preserve explicit saved selections and reset ra
         assert.equal(first.state.rasterStyleWasEdited, false);
         assert.notEqual(first.state.rasterStyle.minimum, 100);
         assert.equal(second.state.item.source.variable, "temperature");
-        assert.equal(first.state.item.capabilities.calculations, false);
+        assert.equal(first.state.item.capabilities.calculations, true);
     } finally {fixture.destroy();}
 });
 
@@ -5694,7 +5694,7 @@ test("temporal timestamp changes preserve automatic ranges and refresh an active
 });
 
 
-test("temporal histogram presentation preserves analysis but excludes Processing actions", async () => {
+test("temporal histogram and paired presentation offer ordinary Processing calculations", async () => {
     const fixture = temporalFixture({
         publishRaster: async item => ({layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90]}),
         loadPairedStatistics: async () => pairedStatistics(),
@@ -5704,12 +5704,12 @@ test("temporal histogram presentation preserves analysis but excludes Processing
         await fixture.viewer.show(createRasterItem("ordinary"));
         await flushPromises();
         const summaries = fixture.controlsView.layerHistograms;
-        assert.equal(summaries.find(summary => summary.key === temporal.entry.key).canCalculate, false);
+        assert.equal(summaries.find(summary => summary.key === temporal.entry.key).canCalculate, true);
         assert.equal(summaries.find(summary => summary.key !== temporal.entry.key).canCalculate, true);
         assert.equal(summaries.find(summary => summary.key === temporal.entry.key).state, "ready");
         fixture.controlsView.handlers.onBivariateModeChange("bivariate");
         await flushPromises();
         const {xItem, yItem} = fixture.controlsView.pairedPresentation;
-        assert.equal([xItem, yItem].filter(item => item.capabilities?.calculations === false).length, 1);
+        assert.equal([xItem, yItem].filter(item => item.capabilities?.calculations === false).length, 0);
     } finally { fixture.destroy(); }
 });

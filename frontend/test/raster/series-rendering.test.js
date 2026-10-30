@@ -43,7 +43,7 @@ function controlsFixture() {
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
-            complete: false, pendingArea: false, recoverable: false } };
+            complete: false, pendingInputs: false, recoverable: false } };
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
@@ -153,7 +153,7 @@ test("completed results leave Calculate available for a newer selected area", ()
     h.draw();
     const calculate = h.document.querySelector("#raster-series-calculate");
     assert.equal(calculate.hidden, true);
-    h.state.area.pendingArea = true;
+    h.state.area.pendingInputs = true;
     h.draw();
     assert.equal(calculate.hidden, false);
     assert.equal(calculate.disabled, false);

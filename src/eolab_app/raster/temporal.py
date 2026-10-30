@@ -88,6 +88,10 @@ class TemporalRasterDataset:
         self.dtypes = self.native_dataset.dtypes
         self.name = self.native_dataset.name
         self.files = self.native_dataset.files
+        self.driver = self.native_dataset.driver
+        self.scales = self.native_dataset.scales
+        self.offsets = self.native_dataset.offsets
+        self.units = self.native_dataset.units
         self.transform = observation.transform
         self.cyclic_x = observation.cyclic_x
         self._column_offset = 0

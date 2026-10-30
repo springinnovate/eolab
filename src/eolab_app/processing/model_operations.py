@@ -23,9 +23,10 @@ from eolab_app.processing.clip_models import ClipJobRequest, ClipSpec, Unprepare
 from eolab_app.raster.models import AuthorizedRaster
 from eolab_app.raster.source_models import (
     RasterSourceReference,
+    RasterAnalysisSourceReference,
     TemporalIntervalSelection,
 )
-from eolab_app.raster.temporal import ResolvedTemporalInterval
+from eolab_app.raster.temporal import ResolvedTemporalInterval, TemporalObservation
 from eolab_app.processing import temporal_operation as temporal
 from eolab_app.processing import temporal_series_operation as series
 from eolab_app.processing import temporal_stack_operation as stack
@@ -161,7 +162,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     source: (
         Callable[
             [Request | Queued | Prepared],
-            RasterSourceReference | TemporalIntervalSelection,
+            RasterAnalysisSourceReference | TemporalIntervalSelection,
         ]
         | None
     )
@@ -169,7 +170,11 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     vector_selections: Callable[[Request], dict[str, VectorSelection]]
     queue: Callable[[Request, AggregateArea | None], PreparedJobPlan]
     prepare: Callable[
-        [OperationContext, Queued, AuthorizedRaster | ResolvedTemporalInterval | None],
+        [
+            OperationContext,
+            Queued,
+            AuthorizedRaster | TemporalObservation | ResolvedTemporalInterval | None,
+        ],
         Awaitable[PreparedJobPlan],
     ]
     execution: Callable[
@@ -196,7 +201,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         [
             OperationContext,
             Prepared,
-            AuthorizedRaster | ResolvedTemporalInterval | None,
+            AuthorizedRaster | TemporalObservation | ResolvedTemporalInterval | None,
         ],
         Awaitable[tuple[Any, Prepared]],
     ] = raster.prepare_raster_execution

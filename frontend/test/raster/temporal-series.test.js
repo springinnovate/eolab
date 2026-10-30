@@ -109,6 +109,7 @@ test("a temporal request restores its period, formulas and result after reload w
     const observations = [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", value: "298.5", state: "ok", unit: "K"}]}];
     await restored.finish(job.jobId, "ready", {observations, csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,298.5"});
     assert.equal(restored.view.state.rows[0].value, 298.5);
+    assert.equal(restored.view.state.area.pendingInputs, false, "retained raster-layer choices do not change a captured interval");
     restored.close();
 });
 

@@ -56,7 +56,7 @@ from eolab_app.raster.source_contract import (
     read_native_raster_window,
 )
 from eolab_app.raster.models import RasterAreaMask
-from eolab_app.raster.reader import RasterDataset
+from eolab_app.raster.reader import RasterData, RasterDataset, open_raster_data
 from eolab_app.processing.raster_mask import temporary_polygon_mask
 
 # Evaluate at most 65,536 pixels per expression tile, even when the source's
@@ -342,7 +342,7 @@ def plan_statistics_grid(
 
 
 def plan_aggregate(
-    path: Path,
+    raster_data: RasterData,
     area: AggregateArea,
     calculations: tuple[NamedCalculation, ...],
     alias: str,
@@ -360,7 +360,7 @@ def plan_aggregate(
     exact geometry planning because their projected envelopes can curve.
 
     Args:
-        path: Path to the input raster.
+        raster_data: Confined raster path or admitted temporal observation.
         area: Selected box, filtered vector, owned polygons or whole raster.
         calculations: Labeled formulas to evaluate, such as sum(a).
         alias: Variable representing the raster in those formulas, such as a.
@@ -385,8 +385,8 @@ def plan_aggregate(
     with rasterio.Env(
         GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)
     ):
-        with rasterio.open(path) as dataset:
-            validate_supported_raster(dataset, path)
+        with open_raster_data(raster_data) as dataset:
+            validate_supported_raster(dataset, raster_data)
             pixel_window = (
                 pixel_sample_window(dataset, pixel_point)
                 if "pixelValue" in functions
@@ -441,7 +441,7 @@ def plan_aggregate(
 
 
 def calculate_raster_statistics_for_area(
-    raster_path: Path,
+    raster_data: RasterData,
     calculation_plan: AggregateSpec,
     directory: Path,
     limits: RasterAggregateLimits,
@@ -454,7 +454,7 @@ def calculate_raster_statistics_for_area(
     provenance file.
 
     Args:
-        raster_path: Path to the input raster.
+        raster_data: Confined raster path or admitted temporal observation.
         calculation_plan: Expressions to evaluate, area to summarize,
             catalog source identity, and grid produced by plan_aggregate.
         directory: Existing directory for result files and progress updates.
@@ -481,8 +481,8 @@ def calculate_raster_statistics_for_area(
     with rasterio.Env(
         GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)
     ):
-        with rasterio.open(raster_path) as dataset, ExitStack() as resources:
-            validate_supported_raster(dataset, raster_path)
+        with open_raster_data(raster_data) as dataset, ExitStack() as resources:
+            validate_supported_raster(dataset, raster_data)
             pixel_window = (
                 pixel_sample_window(dataset, calculation_plan.pixelPoint)
                 if "pixelValue" in functions

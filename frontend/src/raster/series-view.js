@@ -41,7 +41,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} busy Whether calculations are running.
  * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,pendingArea:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and execution availability; pendingArea means results use an earlier selection.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,pendingInputs:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and execution availability; pendingInputs means results use an earlier area or observation.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {{id:number,scale:string}[]} plots Independent plot settings.
  * @property {boolean} showingPrevious Whether plots use retained results.
@@ -383,7 +383,7 @@ export class RasterSeriesView {
         const cannotCalculate = state.busy || (state.temporal ? !!state.temporal.selectionError || !area.area :
             !area.sources.length || (area.areaChoice !== "whole" && !area.area));
         if (calculate.disabled !== cannotCalculate) calculate.disabled = cannotCalculate;
-        const hideCalculate = !!area.complete && !area.hasErrors && !area.pendingArea;
+        const hideCalculate = !!area.complete && !area.hasErrors && !area.pendingInputs;
         if (calculate.hidden !== hideCalculate) calculate.hidden = hideCalculate;
         if (calculate.textContent !== "Calculate") calculate.textContent = "Calculate";
         const cancel = this.document.querySelector("#raster-series-cancel");
