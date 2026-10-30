@@ -3,6 +3,8 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
+import { ModelOutputLayers, artifactLayerKey } from "../../src/model-output-preview/controller.js";
+import { fileManifest, job } from "../../test-support/models/fixtures.js";
 import { MapLayerStyleEditor } from "../../src/map-layers/style-editor.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 import { CatalogVisualizationCoordinator } from "../../src/catalog-visualization.js";
@@ -5324,6 +5326,97 @@ test("category code changes cancel stale statistics while label, color and opaci
     h.destroy();
 });
 
+
+/** Connect result ownership to the ordinary map and raster controllers.
+ * @param {Object} [dependencies={}] Raster transport overrides.
+ * @return {Object} Real controllers with an authorized result and cleanup helper.
+ */
+function resultLayerFixture(dependencies = {}) {
+    const artifacts = fileManifest(), run = job({status: "ready", expiresAt: artifacts.expiresAt, artifacts});
+    const file = artifacts.files[0];
+    let owner;
+    const h = visibleLayerFixture(undefined, {
+        publishRaster: async raster => ({layerName: `eolab:result_${raster.source.artifactId}`, bbox: raster.bbox}),
+        ...dependencies,
+    }, {}, {restoreRemovedLayer: (snapshot, isCurrent) => owner.restore(snapshot, isCurrent)});
+    const api = {getJob: async () => run, readJobStatuses: async () => ({jobs: [run], unavailableJobIds: []})};
+    owner = new ModelOutputLayers({api, clock: {setTimeout() {}, clearTimeout() {}},
+        describe: async source => ({source, version: file.sha256, bounds: [77,20,79,24],
+            capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+        addRaster: (raster, lifecycle, presentation) => h.viewer.showSource(raster, lifecycle, presentation),
+        updateLayer: (key, presentation) => h.mapLayers.updateLocalPresentation(key, presentation),
+        removeLayer: key => h.mapLayers.removeKey(key), onChange() {}, openRun() {}});
+    return {...h, owner, api, run, file, destroy() {owner.destroy(); h.destroy();}};
+}
+
+test("result views share an artifact while style, visibility, name, order and Undo remain independent", async () => {
+    const h = resultLayerFixture();
+    await h.owner.show(h.run, h.file);
+    const originalKey = artifactLayerKey(h.run.jobId, h.file.artifactId);
+    const original = h.mapLayers.getRecord(originalKey);
+    const originalStyle = original.adapter.exportSavedState(original);
+    assert.equal(h.mapLayers.snapshots()[0].canAddView, true);
+    const copyKey = await h.mapLayers.addAnotherView(originalKey);
+    const copy = h.mapLayers.getRecord(copyKey);
+    assert.notEqual(copyKey, originalKey);
+    assert.deepEqual(copy.state.source, original.state.source);
+    assert.equal(copy.state.layer.wmsParams.layers, original.state.layer.wmsParams.layers);
+    editCategoricalAppearance(h, copyKey);
+    h.mapLayers.setOpacity(copyKey, 0.4);
+    h.mapLayers.setVisible(copyKey, false);
+    h.mapLayers.renameLayer(copyKey, "Comparison");
+    h.mapLayers.reorder(copyKey, 0);
+    const copyStyle = copy.adapter.exportSavedState(copy);
+    assert.deepEqual(original.adapter.exportSavedState(original), originalStyle);
+    assert.notEqual(copy.state.layer.wmsParams.raster_style, original.state.layer.wmsParams.raster_style);
+    assert.equal(original.entry.opacity, 1);
+    assert.equal(original.entry.visible, true);
+    assert.equal(original.entry.label, h.file.displayName);
+    assert.equal(h.mapLayers.snapshots()[0].key, copyKey);
+
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const exportSource = main.match(/exportAnnotation: (record => \{[\s\S]*?\n        \}),\r?\n        restoreAnnotation:/)[1];
+    const exportAnnotation = new Function("outputLayers", "vectorMapLayerAdapter", "annotationSessions", `return ${exportSource}`)(
+        h.owner, {}, {getMapReference() {assert.fail("A private result must not be exported as shared polygons");}});
+    assert.equal(exportAnnotation(original), null);
+    assert.equal(exportAnnotation(copy), null);
+    assert.equal(h.viewer.exportTemporal(copy), null);
+
+    h.mapLayers.removeWithUndo(copyKey);
+    assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).onMap, true);
+    assert.equal(h.owner.ownsLayer(copyKey), false);
+    await h.mapLayers.undoLayerRemoval();
+    const restored = h.mapLayers.getRecord(copyKey);
+    assert.deepEqual(restored.adapter.exportSavedState(restored), copyStyle);
+    assert.equal(restored.entry.opacity, 0.4);
+    assert.equal(restored.entry.visible, false);
+    assert.equal(restored.entry.label, "Comparison");
+    h.mapLayers.removeKey(originalKey);
+    await h.owner.show(h.run, h.file);
+    assert.equal(h.mapLayers.snapshots().length, 1, "Show on map recognizes the remaining view");
+    assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).onMap, true);
+    assert.equal(h.run.artifacts.files.length, 3);
+    h.destroy();
+});
+
+test("expiry, run deletion, artifact removal and loss of access remove every result view", async t => {
+    for (const reason of ["expiry", "deletion", "artifact", "access"]) await t.test(reason, async () => {
+        const h = resultLayerFixture();
+        await h.owner.show(h.run, h.file);
+        const key = artifactLayerKey(h.run.jobId, h.file.artifactId);
+        await h.mapLayers.addAnotherView(key);
+        assert.equal(h.mapLayers.snapshots().length, 2);
+        if (reason === "access") h.api.readJobStatuses = async () => ({jobs: [], unavailableJobIds: [h.run.jobId]});
+        else h.owner.updateRun({...h.run, updatedAt: "2099-01-01T00:00:00Z",
+            ...(reason === "expiry" ? {expiresAt: "2000-01-01T00:00:00Z"} :
+                reason === "deletion" ? {status: "deleted", artifacts: null} : {artifacts: {...h.run.artifacts, files: []}})});
+        if (reason === "access") await h.owner.refreshAvailability();
+        assert.equal(h.mapLayers.snapshots().length, 0);
+        assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).onMap, false);
+        assert.match(h.owner.state(h.run.jobId, h.file.artifactId, h.file).error, /no longer available/);
+        h.destroy();
+    });
+});
 
 test("private sources use the same style, histogram, percentile, pixel and paired controls as catalog rasters", async () => {
     const reads = [], pixels = [], paired = [];

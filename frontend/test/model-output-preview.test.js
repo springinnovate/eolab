@@ -348,3 +348,33 @@ test("closing during raster publication cancels attachment without removing an u
     h.owner.destroy(); finish(); await work;
     assert.equal(h.owner.layers.size,0); assert.equal(h.owner.pending.size,0);
 });
+
+test("pending additional result views remain private and are cancelled by source identity", async t => {
+    for (const reason of ["deletion", "artifact"]) await t.test(reason, async () => {
+        let finish, presentation;
+        const h = fixture({describe: async source => ({source, version: "a".repeat(64), bounds: [0,0,1,1],
+            capabilities: {pixels: {supported: true}, statistics: {supported: true}}}),
+            addRaster: async (_raster, _lifecycle, options) => {
+                presentation = options;
+                await new Promise(resolve => {finish = resolve;});
+                assert.equal(options.signal.aborted, true);
+                assert.equal(options.isCurrent(), false);
+                return null;
+            }});
+        h.file.mediaType = "image/tiff";
+        const key = "local:view:independent-result-view";
+        const work = h.owner.restore({key, local: {jobId: h.run.jobId, artifactId: h.file.artifactId}}, () => true);
+        await Promise.resolve(); await Promise.resolve();
+        assert.equal(presentation.key, key);
+        assert.equal(presentation.canAddView, true);
+        assert.equal(h.owner.ownsLayer(key), true, "Saved maps exclude a view while attachment is in progress");
+        assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).busy, true);
+        h.owner.updateRun({...h.run, updatedAt: "2099-01-01T00:00:00Z",
+            ...(reason === "deletion" ? {status: "deleted", artifacts: null} : {artifacts: {...h.run.artifacts, files: []}})});
+        finish(); await work;
+        assert.equal(h.owner.ownsLayer(key), false);
+        assert.equal(h.owner.layers.size, 0);
+        assert.equal(h.owner.state(h.run.jobId, h.file.artifactId, h.file).busy, false);
+        h.owner.destroy();
+    });
+});

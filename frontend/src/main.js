@@ -1369,7 +1369,7 @@ async function initializeCatalog(
         },
         exportAnnotation: record => {
             if (record.adapter === vectorMapLayerAdapter) return null;
-            if (record.entry.key.startsWith("local:artifact:")) return null;
+            if (outputLayers.ownsLayer(record.entry.key)) return null;
             const sharedAnnotation = annotationSessions?.getMapReference(record.state.id);
             if (!sharedAnnotation) return null;
             const { outline, weight, fillOpacity, labels } = record.adapter.exportSavedState(record).style;

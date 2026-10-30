@@ -8,7 +8,7 @@ import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
  */
 const MAP_OUTPUT_MEDIA_TYPES = new Set(["image/tiff", "application/geo+json"]);
 
-/** Return the map identity of one run's immutable file.
+/** Return a result's default map-view key, also used for its file-level messages.
  * @param {string} jobId Run identity. @param {string} artifactId File identity.
  * @return {string} Local map identity, independent of catalog keys.
  */
@@ -48,7 +48,7 @@ export class ModelOutputLayers {
         this.runStates = new Map();
     }
 
-    /** Describe one file's display state to the Models view.
+    /** Describe whether any view of a file is displayed or being added.
      * @param {string} jobId Run identity. @param {string} artifactId File identity.
      * @param {Object} file Validated file format and role.
      * @return {{canShow:boolean,onMap:boolean,busy:boolean,error:string}} Presentation-only status.
@@ -56,8 +56,15 @@ export class ModelOutputLayers {
     state(jobId, artifactId, file) {
         const key = artifactLayerKey(jobId, artifactId);
         return {canShow: MAP_OUTPUT_MEDIA_TYPES.has(file.mediaType) && file.role !== "provenance",
-            onMap: this.layers.has(key), busy: this.pending.has(key), error: this.messages.get(key) ?? ""};
+            onMap: [...this.layers.values()].some(state => state.jobId === jobId && state.file.artifactId === artifactId),
+            busy: [...this.pending.values()].some(state => state.jobId === jobId && state.artifactId === artifactId),
+            error: this.messages.get(key) ?? ""};
     }
+
+    /** Identify private result views, including attachment still in progress, for saved-map exclusion.
+     * @param {string} key Map view identity. @return {boolean} Whether this owner retains or is adding the view.
+     */
+    ownsLayer(key) { return this.layers.has(key) || this.pending.has(key); }
 
     /** Read an output's latest generated name and run group for map presentation.
      * @param {string} jobId Known owning run identity.
@@ -76,17 +83,22 @@ export class ModelOutputLayers {
      * after attachment completes.
      * @param {Object} job Validated owning run snapshot.
      * @param {Object} file Validated manifest file.
-     * @param {Object} [restore] Optional Undo style and map presentation.
-     * @param {()=>boolean} [isCurrent] Whether Undo is still wanted.
+     * @param {Object} [restore] Optional Undo or additional-view identity and presentation.
+     * @param {()=>boolean} [isCurrent] Whether the restored or additional view is still wanted.
      * @return {Promise<void>} Completion after attachment or visible failure.
-     * @throws {Error} On failure during Undo, allowing the shared Undo action to report it.
+     * @throws {Error} On failure during restoration, allowing the shared map action to report it.
      */
     async show(job, file, restore = null, isCurrent = () => true) {
-        const key = artifactLayerKey(job.jobId, file.artifactId);
-        if (this.layers.has(key) || this.pending.has(key)) return;
+        const sourceKey = artifactLayerKey(job.jobId, file.artifactId);
+        const key = restore?.key ?? sourceKey;
+        if (this.ownsLayer(key)) return;
+        const display = this.state(job.jobId, file.artifactId, file);
+        if (!restore && (display.onMap || display.busy)) return;
         this.updateRun(job);
         job = this.runStates.get(job.jobId);
-        const abort = new AbortController(); this.pending.set(key, abort); this.messages.delete(key); this.onChange();
+        const abort = new AbortController();
+        this.pending.set(key, {abort, jobId: job.jobId, artifactId: file.artifactId});
+        this.messages.delete(sourceKey); this.onChange();
         let layer;
         try {
             if (this.layers.size + this.pending.size > 8) throw new Error("Remove a result layer before adding another. Up to eight results can be on the map at once.");
@@ -108,13 +120,13 @@ export class ModelOutputLayers {
                         calculations: true, modelInput: true}}, {
                     /** Reopen the source run without putting private identity into a catalog item. @return {void} */
                     info: () => this.openRun(job.jobId),
-                    /** Retain only source identity and style for fresh authorized Undo.
+                    /** Copy source identity and appearance for Undo or another authorized view.
                      * @param {Object} appearance Shared raster appearance. @return {Object} Restoration data.
                      */
                     copy: appearance => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance}),
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
-                }, {...presentation, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                }, {...presentation, key, canAddView: true, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
                     customName: restore?.customName ?? null,
                     isCurrent: () => !this.destroyed && !abort.signal.aborted && isCurrent() &&
                         this.runStates.get(job.jobId)?.status === "ready" && Date.parse(this.runStates.get(job.jobId).expiresAt) > Date.now()});
@@ -143,7 +155,7 @@ export class ModelOutputLayers {
             this.schedule();
         } catch (error) {
             this.layers.delete(key); layer?.release();
-            this.messages.set(key, error.message);
+            this.messages.set(sourceKey, error.message);
             if (restore) throw error;
         } finally { this.pending.delete(key); this.onChange(); }
     }
@@ -218,9 +230,9 @@ export class ModelOutputLayers {
         return vectorStyleLegend(state.appearance);
     }
 
-    /** Reauthorize an Undo from the server, preserving style but never reusing stale display bytes.
-     * @param {Object} snapshot Shared map removal snapshot.
-     * @param {()=>boolean} isCurrent Whether the Undo action is still current.
+    /** Reauthorize an Undo or additional view from the server, preserving its copied presentation.
+     * @param {Object} snapshot Shared map-view identity and copied presentation.
+     * @param {()=>boolean} isCurrent Whether the map action is still current.
      * @return {Promise<void>} Completion after a fresh authorized preview.
      * @throws {Error} If the run or file is unavailable.
      */
@@ -242,8 +254,8 @@ export class ModelOutputLayers {
         this.runStates.set(job.jobId, job);
         let changed = false;
         const available = job.status === "ready" && Date.parse(job.expiresAt) > Date.now();
-        if (!available) {
-            for (const [key, abort] of this.pending) if (key.startsWith(`local:artifact:${job.jobId}:`)) abort.abort();
+        for (const pending of this.pending.values()) {
+            if (pending.jobId === job.jobId && (!available || !job.artifacts.files.some(file => file.artifactId === pending.artifactId))) pending.abort.abort();
         }
         for (const state of [...this.layers.values()]) {
             if (state.jobId !== job.jobId) continue;
@@ -257,7 +269,7 @@ export class ModelOutputLayers {
                 }
             }
             else {
-                this.messages.set(state.key, "Map layer removed because the result is no longer available. Reopen the run to check it.");
+                this.messages.set(artifactLayerKey(state.jobId, state.file.artifactId), "Map layer removed because the result is no longer available. Reopen the run to check it.");
                 this.removeLayer(state.key);
                 changed = true;
             }
@@ -296,7 +308,7 @@ export class ModelOutputLayers {
             if (this.layers.get(state.key) !== state) continue;
             if (jobs.some(value => value.jobId === state.jobId)) continue;
             if (this.runStates.get(state.jobId)?.updatedAt !== revisions.get(state.key)) continue;
-            this.messages.set(state.key, Date.parse(state.expiresAt) <= Date.now()
+            this.messages.set(artifactLayerKey(state.jobId, state.file.artifactId), Date.parse(state.expiresAt) <= Date.now()
                 ? "This result expired and its map layer was removed. Run the model again."
                 : "Map layer removed because the result is no longer available. Reopen the run to check it.");
             this.removeLayer(state.key);
@@ -309,7 +321,7 @@ export class ModelOutputLayers {
      */
     destroy() {
         this.destroyed = true; this.clock.clearTimeout(this.timer); this.clock.clearTimeout(this.expiryTimer);
-        for (const abort of this.pending.values()) abort.abort();
+        for (const {abort} of this.pending.values()) abort.abort();
         for (const key of this.layers.keys()) this.removeLayer(key);
     }
 }
