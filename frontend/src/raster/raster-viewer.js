@@ -3581,8 +3581,7 @@ export function initializeRasterViewer(
             nextStatus = "Whole-overlap paired histogram selected. " +
                 "Click the map to use one shared WGS 84 window.";
         } else {
-            nextStatus = "Whole-raster histogram selected. Click the map or " +
-                "choose Tools → Inspect map center to analyze the map center.";
+            nextStatus = "Whole-raster histogram selected. Click the map to inspect a location.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }

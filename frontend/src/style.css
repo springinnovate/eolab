@@ -4074,7 +4074,6 @@ article.raster-histogram-summary {
 
 #map-inspection:not(:popover-open),
 #map-tools-more-summary[hidden],
-#open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #raster-series[hidden],
 #annotations-panel[hidden],

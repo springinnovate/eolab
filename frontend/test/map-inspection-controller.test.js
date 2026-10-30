@@ -95,7 +95,6 @@ function fixture(configureDocument = () => {}) {
         close,
         calls,
         controller,
-        analysisToolsButton: doc.querySelector("#open-analysis-tools"),
         map: doc.querySelector("#map"),
     };
 }
@@ -144,17 +143,15 @@ test("Tools retains its invoker and open menu through panel opening, minimizatio
     assert.equal(h.toolActionsCalls.length, count + 1, "destroy detaches popover state listeners");
 });
 
-test("map-center and statistics menu actions remain enabled in every panel state", () => {
+test("statistics menu action remains enabled in every panel state", () => {
     const h = fixture();
     for (const update of [() => {}, () => h.controller.showHistogram(),
         () => h.minimizeButton.dispatchEvent(new Event("click")),
         () => h.controller.closeHistogram()]) {
         update();
-        for (const id of ["open-analysis-tools", "open-raster-series"]) {
-            const action = h.doc.querySelector(`#${id}`);
-            assert.equal(action.hidden, false, `${id} remains available`);
-            assert.equal(action.disabled, false, `${id} remains enabled`);
-        }
+        const action = h.doc.querySelector("#open-raster-series");
+        assert.equal(action.hidden, false);
+        assert.equal(action.disabled, false);
     }
     h.controller.destroy();
 });
@@ -217,11 +214,9 @@ test("automatic presentation does not move focus and close retains results", () 
     assert.deepEqual(h.calls, ["show"]);
     assert.equal(h.doc.activeElement, h.map);
     assert.equal(h.histogram.hidden, false);
-    assert.equal(h.analysisToolsButton.hidden, false);
 
     h.close.dispatchEvent(new Event("click"));
     assert.equal(h.histogram.hidden, true);
-    assert.equal(h.analysisToolsButton.hidden, false);
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
 
@@ -633,7 +628,6 @@ test("toolbar reflow reports its height without losing retained tools", () => {
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
     h.controller.showStyle("Coastal resistance.tif");
-    assert.equal(h.analysisToolsButton.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
     assert.equal(h.styleTab.textContent, "Style · Coastal resistance.tif");
@@ -650,14 +644,12 @@ test("histogram and style have independent visibility on one persistent surface"
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
-    assert.equal(h.analysisToolsButton.hidden, false);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.showHistogram();
     h.controller.hideStyle();
     assert.equal(h.histogram.hidden, false);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.destroy();
-    assert.equal(h.analysisToolsButton.hidden, false);
     assert.deepEqual(h.calls, ["show", "hide"]);
 });
 
