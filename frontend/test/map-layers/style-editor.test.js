@@ -40,6 +40,7 @@ function fixture() {
     const edits = [];
     const pairedStyleRequests = [];
     const vectorStyleEvents = [];
+    const styleTargets = [];
     const editor = new MapLayerStyleEditor({ documentContext: doc, inspection,
         mapLayers: {
             snapshots: () => layers,
@@ -57,9 +58,10 @@ function fixture() {
             hide() { vectorStyleEvents.push(["hide"]); },
         },
         getVectorStyleTarget: key => key === 'b' ? { key, style: {} } : null,
+        onTargetChange: kind => styleTargets.push({ kind, activeTool: inspection.activeTool }),
     });
     return { doc, root, histogram, surface, inspection, layers, styleButtons, edits, editor,
-        vectorStyleEvents, pairedStyleRequests,
+        vectorStyleEvents, pairedStyleRequests, styleTargets,
         setLayers(value) { layers = value; } };
 }
 
@@ -88,6 +90,26 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.editor.open('a');
     assert.equal(h.editor.opacity.value, '65');
     h.editor.destroy();
+});
+
+test('style target kind is available before activation and survives switching result tabs', () => {
+    const h = fixture();
+    h.editor.open('a');
+    h.editor.open('b');
+    h.editor.open('a');
+    assert.deepEqual(h.styleTargets, [
+        { kind: 'raster', activeTool: null },
+        { kind: 'vector', activeTool: 'style' },
+        { kind: 'raster', activeTool: 'style' },
+    ]);
+    h.inspection.showHistogram(1);
+    h.doc.querySelector('#map-inspection-tab-style').dispatchEvent(new Event('click'));
+    assert.equal(h.inspection.activeTool, 'style');
+    assert.equal(h.styleTargets.length, 3);
+    h.editor.close();
+    assert.deepEqual(h.styleTargets.at(-1), { kind: null, activeTool: 'histogram' });
+    h.editor.destroy();
+    h.inspection.destroy();
 });
 
 test('renaming a layer refreshes an open style tab without changing the active tool', () => {
@@ -166,6 +188,7 @@ test('paired style shortcuts open the histogram without an ordinary style or opa
     assert.equal(h.editor.key, null);
     assert.equal(h.histogram.hidden, false);
     assert.deepEqual(h.pairedStyleRequests, ['a']);
+    assert.deepEqual(h.styleTargets, [{ kind: null, activeTool: null }]);
     h.editor.opacity.dispatchEvent(new Event('input'));
     assert.deepEqual(h.edits, []);
     h.editor.destroy();
