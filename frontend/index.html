@@ -677,6 +677,27 @@
             <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
+            <div id="raster-series-data-inputs">
+              <label class="raster-series-source-mode">Data source <select id="raster-series-source-mode"><option value="layers">Raster layers</option><option value="temporal">Temporal dataset</option></select></label>
+              <div id="raster-series-temporal" class="temporal-period" hidden>
+                <div class="raster-series-controls">
+                  <label>Dataset <select id="raster-series-temporal-dataset"></select></label>
+                  <label>Variable <select id="raster-series-temporal-variable"></select></label>
+                </div>
+                <div id="raster-series-period"></div>
+                <details>
+                  <summary>Available observations and timing</summary>
+                  <p id="raster-series-temporal-help"></p>
+                  <label>Browse month <select id="raster-series-temporal-month"></select></label>
+                  <p id="raster-series-temporal-coverage" role="status"></p>
+                  <button id="raster-series-use-month" class="secondary-button" type="button">Use this month</button>
+                  <button id="raster-series-refresh-dates" class="secondary-button" type="button">Refresh dates</button>
+                  <p>Browsing months does not change your period. Use this month selects the whole UTC month.</p>
+                  <p>Pixel value uses the clicked point. If no sample area is selected, choose Whole raster; pixel values still use only that point.</p>
+                </details>
+              </div>
+              <div id="raster-series-sources"></div>
+            </div>
             <div id="raster-series-area-controls">
               <p id="raster-series-context">No sample area selected</p>
               <div class="raster-series-controls">
@@ -694,6 +715,13 @@
               </div>
               <p data-vector-sampling="status" role="status"></p>
             </section>
+            <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
+              <div class="raster-series-statistics-header">
+                <h3 id="raster-series-statistics-title">Statistics</h3>
+                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom formula</option></select></label>
+              </div>
+              <div id="raster-series-formulas"></div>
+            </section>
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
@@ -703,7 +731,7 @@
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
-            <div id="raster-series-results" role="region" aria-label="Statistic results">
+            <div id="raster-series-results" role="region" aria-label="Statistic results" hidden>
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
               <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
               <details id="raster-series-values" class="raster-series-settings">
@@ -716,32 +744,8 @@
                 </div>
               </details>
             </div>
-            <section id="raster-series-statistics" aria-labelledby="raster-series-statistics-title">
-              <div class="raster-series-statistics-header">
-                <h3 id="raster-series-statistics-title">Statistics</h3>
-                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="pixel">Pixel value</option><option value="mean">Mean</option><option value="stdev">Standard deviation</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="count">Count above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom formula</option></select></label>
-              </div>
-              <div id="raster-series-formulas"></div>
-            </section>
             <details id="raster-series-data-settings" class="raster-series-settings">
-              <summary id="raster-series-source-summary">Data and order</summary>
-              <label>Data source <select id="raster-series-source-mode"><option value="layers">Raster layers</option><option value="temporal">Temporal dataset</option></select></label>
-              <div id="raster-series-temporal" class="temporal-period" hidden>
-                <label>Dataset <select id="raster-series-temporal-dataset"></select></label>
-                <label>Variable <select id="raster-series-temporal-variable"></select></label>
-                <div id="raster-series-period"></div>
-                <p id="raster-series-temporal-help"></p>
-                <details>
-                  <summary>Available observations</summary>
-                  <label>Browse month <select id="raster-series-temporal-month"></select></label>
-                  <p id="raster-series-temporal-coverage" role="status"></p>
-                  <button id="raster-series-use-month" class="secondary-button" type="button">Use this month</button>
-                  <button id="raster-series-refresh-dates" class="secondary-button" type="button">Refresh dates</button>
-                  <p>Browsing months does not change your period. Use this month selects the whole UTC month.</p>
-                </details>
-                <p>Pixel value uses the clicked point. If no sample area is selected, choose Whole raster; pixel values still use only that point.</p>
-              </div>
-              <div id="raster-series-sources"></div>
+              <summary id="raster-series-source-summary">Order and chart</summary>
               <div class="raster-series-controls">
                 <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
                 <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
