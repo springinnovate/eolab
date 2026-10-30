@@ -875,6 +875,12 @@ async function initializeCatalog(
         ["histogram", true], ["raster-series", false], ["raster-clips", false],
     ]);
     let activeSamplingTool = null;
+    /** Present sampling controls for the active workflow without changing its area. @return {void} */
+    const updateSamplingControls = () => {
+        const active = samplingTools.has(activeSamplingTool);
+        rasterControls.setSamplingControlsActive(active, samplingTools.get(activeSamplingTool) ?? false);
+        if (!active) rasterVisualization?.cancelSampleWindowResize();
+    };
     /** Reflect tool-owned scope in the shared controls without changing calculation inputs.
      * @param {string} tool Sampling workflow name.
      * @param {{source:string,scope:string,usesSamplingBox:boolean}} context Display context from its view.
@@ -883,12 +889,11 @@ async function initializeCatalog(
     const presentSamplingContext = (tool, context) => {
         mapInspection.setToolContext(tool, context);
         samplingTools.set(tool, context.usesSamplingBox);
-        if (activeSamplingTool === tool) rasterControls.setSamplingControlsActive(true, context.usesSamplingBox);
+        if (activeSamplingTool === tool) updateSamplingControls();
     };
     mapInspection.subscribeActiveTool(tool => {
         activeSamplingTool = tool;
-        rasterControls.setSamplingControlsActive(samplingTools.has(tool), samplingTools.get(tool) ?? false);
-        if (!samplingTools.has(tool)) rasterVisualization?.cancelSampleWindowResize();
+        updateSamplingControls();
     });
     /** Focus shared area choices without switching tools or starting calculations. @return {void} */
     const editProcessingArea = () => {
@@ -1265,6 +1270,11 @@ async function initializeCatalog(
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
         inspection: mapInspection,
         vectorStyleControls,
+        onTargetChange: kind => {
+            if (kind === "raster") samplingTools.set("style", true);
+            else samplingTools.delete("style");
+            if (activeSamplingTool === "style") updateSamplingControls();
+        },
         onFilterRequested: (key) => vectorFilterControls.open(key),
         getVectorStyleTarget: (key) => {
             const preview = outputLayers.layers.get(key);
