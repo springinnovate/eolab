@@ -1340,40 +1340,12 @@ h5 {
   display: none;
 }
 
-.raster-histogram[data-sampling-area="selectedArea"] {
-  --histogram-link-color: #2563eb;
-}
-
-.raster-histogram[data-sampling-area="catalogSelection"] {
-  --histogram-link-color: #6d1b7b;
-}
-
 .raster-histogram-body {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 3px;
   scrollbar-gutter: stable;
-}
-
-.raster-histogram-scope {
-  width: fit-content;
-  margin: 0 0 6px;
-  border: 1px solid color-mix(
-    in srgb,
-    var(--histogram-link-color) 55%,
-    var(--border-2)
-  );
-  border-radius: 999px;
-  background: color-mix(
-    in srgb,
-    var(--histogram-link-color) 8%,
-    var(--surface-2)
-  );
-  padding: 4px 8px;
-  color: var(--text-2);
-  font-size: 0.66rem;
-  font-weight: 650;
 }
 
 .raster-appearance-controls[hidden] {
@@ -3074,10 +3046,23 @@ h5 {
 
 .raster-histogram-percentiles {
   min-inline-size: 0;
-  margin: 8px 0;
+  gap: 2px;
+  margin: 2px 0;
   border: 0;
   background: none;
   padding: 0;
+}
+.raster-histogram-percentiles label {
+  grid-template-columns: 42px minmax(36px, 1fr) minmax(90px, auto);
+  gap: 5px;
+}
+.raster-histogram-percentiles input[type="range"] {
+  height: 24px;
+  margin: 0;
+}
+.raster-histogram-percentiles output {
+  grid-column: auto;
+  text-align: right;
 }
 .raster-histogram-percentiles > legend {
   padding: 0;
@@ -3089,6 +3074,7 @@ h5 {
   gap: 6px;
   font-weight: 400;
 }
+.raster-histogram-percentiles .raster-histogram-rescale-help,
 .raster-histogram-percentiles .raster-percentile-status {
   margin: 0;
   font-size: 0.68rem;
@@ -3194,7 +3180,6 @@ article.raster-histogram-summary {
   white-space: nowrap;
 }
 
-.raster-histogram-summary-scope,
 .raster-histogram-summary-status {
   color: var(--text-3);
   font-size: 0.68rem;
@@ -3217,7 +3202,6 @@ article.raster-histogram-summary {
 }
 
 .raster-histogram {
-  --histogram-link-color: var(--brand);
   position: static;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -3407,11 +3391,11 @@ article.raster-histogram-summary {
     bottom: auto;
   }
 
-  .raster-percentile-controls label {
+  .raster-percentile-controls:not(.raster-histogram-percentiles) label {
     grid-template-columns: 42px minmax(60px, 1fr);
   }
 
-  .raster-percentile-controls output {
+  .raster-percentile-controls:not(.raster-histogram-percentiles) output {
     grid-column: 2;
     text-align: left;
   }
@@ -4461,50 +4445,17 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--text-1);
 }
 
+#map-histogram-panel { padding-top: 4px; }
+#map-histogram-panel .raster-histogram-list { margin-top: 0; }
 #map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
-.raster-point-samples { margin: 10px 0; }
-.raster-point-samples > summary { cursor: pointer; font-size: 0.78rem; }
-.raster-histogram-point-value { margin: 6px 0 0; color: var(--text-2); font-size: 0.75rem; overflow-wrap: anywhere; }
-.raster-histogram-point-value[hidden] { display: none; }
-.raster-histogram-point-value[data-state="error"] { color: var(--status-danger); }
-.map-analysis-help { margin: 8px 0; color: var(--text-2); font-size: 0.78rem; }
-.map-analysis-help > summary { cursor: pointer; }
 @media (max-width: 699px) {
   .map-tool-openers { width: auto; max-width: calc(100vw - 40px); }
   #raster-sampling-tool { left: calc(40px + 100% - 100vw); right: auto; width: min(290px, calc(100vw - 205px)); min-width: 90px; }
   #raster-sampling-tool:has(details[open]) { width: min(290px, calc(100vw - 40px)); }
 }
-.raster-point-samples[hidden] { display: none; }
-#raster-point-sample-list { display: grid; gap: 4px; margin: 0; }
-.raster-point-sample-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) fit-content(65%);
-  gap: 10px;
-  align-items: baseline;
-  font-size: 0.72rem;
-}
-.raster-point-sample-name { display: flex; min-width: 0; gap: 6px; }
-.raster-point-sample-name > :last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.raster-point-sample-axis {
-  flex: 0 0 auto;
-  color: var(--brand);
-  font-weight: 700;
-}
-.raster-point-sample-value {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-.raster-point-sample-row[data-state="error"] .raster-point-sample-value {
-  color: var(--status-danger);
-}
-#map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 6px; }
-#map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 12px; border-top: 1px solid var(--border-1); }
+
+#map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 4px; }
+#map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 4px; border-top: 1px solid var(--border-1); }
 #map-histogram-panel .raster-histogram-summary-select { padding: 0; }
 #map-histogram-panel .raster-histogram-summary-name,
 #map-histogram-panel .raster-histogram-detail-layer,
@@ -4521,7 +4472,6 @@ summary:hover > .raster-disclosure-chevron {
 #map-histogram-panel .raster-bivariate-statistics,
 #map-histogram-panel .raster-histogram { grid-template-columns: minmax(0, 1fr); margin: 0; padding: 0; border: 0; background: transparent; }
 #map-histogram-panel .raster-histogram-body { overflow: visible; padding: 0; }
-#map-histogram-scope { margin: 6px 0; font-weight: normal; }
 #map-histogram-panel .raster-bivariate-axis-key { margin: 6px 0; }
 #map-histogram-panel .raster-bivariate-controls {
   gap: 4px;
@@ -5008,7 +4958,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .histogram-axis-controls {
-  margin: 6px 0 10px;
+  margin: 2px 0;
   font-size: 0.76rem;
 }
 .histogram-axis-controls summary { cursor: pointer; color: var(--text-2); }

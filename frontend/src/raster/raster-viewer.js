@@ -358,7 +358,6 @@ export function initializeRasterViewer(
     let pixelPickerEnabled = true;
     let pointerInspectionEnabled = true;
     let rasterCursorPosition = null;
-    let latestPointSampleSnapshot = null;
     let rasterStyleCommitTimeout = null;
     const histogramStyleTimers = new Map();
     let rasterSampleWindowResizeTimeout = null;
@@ -738,7 +737,7 @@ export function initializeRasterViewer(
 
     const pointSamplesController = new RasterPointSamplesController(
         samplePixel,
-        renderRasterPointSamples
+        highlightPairedHistogramPoint
     );
     const cursorSamplesController = new RasterCursorSamplesController(
         sampleCursorPixel,
@@ -1027,7 +1026,7 @@ export function initializeRasterViewer(
      * Build one presentation-ready histogram summary for a retained raster.
      *
      * @param {Object} session Raster-owned retained interaction state.
-     * @return {{key:string,label:string,state:string,scope:string,
+     * @return {{key:string,label:string,state:string,
      * counts:number[]|null,automatic:boolean,valueLabel:string,
      * statistics:Object|null,style:Object,
      * canRetry:boolean,canCalculate:boolean,errorMessage:string}} Histogram view model with cached
@@ -1044,7 +1043,6 @@ export function initializeRasterViewer(
             key: session.key,
             label: session.label,
             state: presentation.state,
-            scope: presentation.scope,
             counts: !categorical && Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
                 ? [...counts] : null,
             automatic: followsVisibleLayers,
@@ -1133,14 +1131,15 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Build the bounded Catalog participants for exact click-value analysis.
+     * Return raster participants for click coverage and paired-cell highlighting.
      *
      * Visible-layer mode uses the top two rasters in map order. Detached Catalog
      * analysis uses its active raster without consulting rendering state. In
      * 2D mode the current axis assignment, including a swap, defines order and
-     * badges without changing the Catalog identities passed to analysis.
+     * badges without changing the Catalog identities passed to analysis. Ordinary
+     * mode uses these identities only to decide whether to open a histogram.
      *
-     * @return {Object[]} Zero, one, or two point-sample participants.
+     * @return {import("./point-samples.js").RasterPointSampleParticipant[]} Zero, one, or two raster participants.
      */
     function rasterPointSampleParticipants() {
         if (bivariateMode.active) {
@@ -2136,7 +2135,6 @@ export function initializeRasterViewer(
             refreshRetainedLayerHistograms(currentRasterSamplingArea(), true);
         } else if (restoreAnalysis) {
             rasterSampleWindowController.clear();
-            controlsView.clearPointSamples();
             controlsView.setControlsVisible(false);
         }
         renderLayerStack();
@@ -2808,7 +2806,6 @@ export function initializeRasterViewer(
             renderLayerStack();
         } else {
             controlsView.setControlsVisible(false);
-            controlsView.clearPointSamples();
             renderLayerStack();
         }
     }
@@ -3633,9 +3630,9 @@ export function initializeRasterViewer(
     /**
      * Explore one composition-owned map position with the current window size.
      *
-     * Request pixel values independently of the published-extent check that
-     * controls histogram selection. Ordinary mode checks all visible extents;
-     * 2D mode checks its current pair. The pixel API determines actual coverage.
+     * Ordinary mode checks visible extents before selecting a histogram area.
+     * 2D mode also reads both pixel values to highlight their paired histogram
+     * cell, independently of published extents; the pixel API determines coverage.
      * Catalog-vector analysis returns to ordinary raster scope before selecting
      * a box. Reject noncanonical coordinates before requesting either analysis.
      *
@@ -3674,7 +3671,7 @@ export function initializeRasterViewer(
                 return true;
             }
         }
-        pointSamplesController.sample(participants, point);
+        if (bivariateMode.active) pointSamplesController.sample(participants, point);
         if (openHistogram) {
             onSelected(getSelectedArea());
         }
@@ -3885,26 +3882,14 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Retain a raw exact-value snapshot and present it in Analysis tools.
-     *
-     * When both bivariate axes have finite values, the same snapshot also
-     * identifies their cell in the existing paired histogram. Presentation
-     * visibility remains owned by the map-inspection controller.
+     * Highlight the paired histogram cell when both clicked values are available.
      *
      * @param {{position:Readonly<Object>,samples:ReadonlyArray<Object>}|null}
      * snapshot Current point values or null after lifecycle clearing.
      * @return {void}
      */
-    function renderRasterPointSamples(snapshot) {
-        latestPointSampleSnapshot = snapshot;
-        if (snapshot === null) {
-            controlsView.clearPointSamples();
-            return;
-        }
-        controlsView.renderPointSamples(applyPixelCategoryLabels(snapshot));
-        if (!bivariateMode.active) {
-            return;
-        }
+    function highlightPairedHistogramPoint(snapshot) {
+        if (snapshot === null || !bivariateMode.active) return;
         const x = snapshot.samples.find((sample) => sample.axis === "X");
         const y = snapshot.samples.find((sample) => sample.axis === "Y");
         if (x?.state === "value" && y?.state === "value") {
@@ -3955,16 +3940,13 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Re-present retained point and cursor values after a committed style change.
+     * Re-present cursor values after a committed style change.
      * The cursor view owns the displayed location while another read is pending;
      * its refresh port preserves that location and never invokes a sample request.
      *
      * @return {void}
      */
     function refreshRasterPixelPresentation() {
-        if (latestPointSampleSnapshot !== null) {
-            controlsView.renderPointSamples(applyPixelCategoryLabels(latestPointSampleSnapshot));
-        }
         cursorValuesView.refreshPresentation?.(applyPixelCategoryLabels);
     }
 
@@ -4412,7 +4394,6 @@ export function initializeRasterViewer(
         bivariateSelectedWindowSizeKm = null;
         controlsView.setControlsVisible(false);
         controlsView.renderLayerHistograms([], null);
-        controlsView.clearPointSamples();
         cursorValuesView.clear();
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.setAppearanceEnabled?.(true);

@@ -51,12 +51,15 @@ export class RasterPercentileControlsView {
         this.rescaleInput.type = "checkbox";
         this.rescaleInput.addEventListener("change", this.handleInput);
         const rescaleText = documentContext.createElement("span");
-        rescaleText.textContent = "Rescale colors to this histogram";
+        rescaleText.textContent = "Match the map color scale to these percentiles";
         rescaleLabel.append(this.rescaleInput, rescaleText);
+        const help = documentContext.createElement("p");
+        help.className = "raster-histogram-rescale-help";
+        help.textContent = "Map colors update as you move the sliders.";
         this.status = documentContext.createElement("p");
         this.status.className = "raster-percentile-status";
         this.status.setAttribute("role", "status");
-        this.root.append(rescaleLabel, this.status);
+        this.root.append(rescaleLabel, help, this.status);
     }
 
     /**

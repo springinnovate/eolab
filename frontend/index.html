@@ -1115,7 +1115,6 @@
                   </details>
                 </div>
               </details>
-              <p id="map-histogram-scope" class="raster-histogram-scope" hidden>Whole overlap</p>
               <p class="raster-histogram-status" id="raster-bivariate-statistics-status"
                 role="status" aria-live="polite" aria-atomic="true"></p>
               <dl class="raster-bivariate-axis-key" aria-label="Raster axes">
@@ -1129,7 +1128,7 @@
                 id="raster-bivariate-histogram-summary" aria-live="polite"></output>
             </section>
             <section class="raster-histogram" id="raster-histogram"
-              data-eomap-region="raster-interpretation" data-sampling-area="wholeRaster"
+              data-eomap-region="raster-interpretation"
               aria-labelledby="raster-histogram-heading" aria-hidden="true" aria-busy="false" hidden>
               <div class="raster-histogram-heading">
                 <div>
@@ -1144,18 +1143,10 @@
               <div class="raster-histogram-body">
                 <svg class="raster-histogram-chart" id="raster-histogram-chart"
                   role="img" hidden></svg>
-                <p class="raster-histogram-scope" id="raster-histogram-scope">Whole raster</p>
                 <p class="raster-histogram-status" id="raster-histogram-status"
                   role="status" aria-live="polite" aria-atomic="true"></p>
               </div>
             </section>
-            <details class="raster-point-samples" id="raster-point-samples"
-              aria-labelledby="raster-point-samples-heading" aria-live="polite"
-              aria-atomic="true" aria-busy="false" hidden>
-              <summary id="raster-point-samples-heading">Clicked pixel values</summary>
-              <dl id="raster-point-sample-list"></dl>
-            </details>
-            <details class="map-analysis-help"><summary>About histograms</summary><p>See the spread of raster values over an area. Result details identify exact or sampled reads. Clicked pixel values refer to the exact point, independently of that area.</p></details>
             <section class="raster-bivariate-controls" id="raster-bivariate-controls"
               data-eomap-region="raster-interpretation" aria-label="Histogram mode">
               <label for="raster-comparison-mode">

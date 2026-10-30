@@ -417,12 +417,6 @@ function createFakeControlsView() {
         setActiveLayer(label) {
             this.activeLayer = { label };
         },
-        renderPointSamples(snapshot) {
-            this.pointSamples = snapshot;
-        },
-        clearPointSamples() {
-            this.pointSamples = null;
-        },
     };
 }
 
@@ -776,7 +770,7 @@ test("inspection summaries describe bounded raster participation and asynchronou
     h.destroy();
 });
 
-test("retained custom names reach histograms, click values and paired axes without new calculations", async () => {
+test("retained custom names reach histograms and paired axes without new calculations", async () => {
     let reads = 0, pairReads = 0;
     const h = visibleLayerFixture(async item => { reads++; return createLayerStatistics(item); }, {
         loadPairedStatistics: async () => { pairReads++; return pairedStatistics(); },
@@ -789,7 +783,6 @@ test("retained custom names reach histograms, click values and paired axes witho
     const priorReads = reads;
     h.mapLayers.renameLayer(record.entry.key, "My rainfall");
     assert.equal(record.state.label, "My rainfall");
-    assert.equal(h.controlsView.pointSamples.samples.find(row => row.key === record.entry.key).label, "My rainfall");
     assert.equal(reads, priorReads);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
@@ -918,7 +911,7 @@ for (const outcome of ["success", "read error", "no matches", "no polygon layer"
             h.controlsView.handlers.onClearSampleWindow();
             await flushPromises();
             assert.equal(h.controlsView.layerHistograms.length, 1);
-            assert.equal(h.controlsView.layerHistograms[0].scope, "Whole raster");
+
         }
         sampling.destroy();
         h.destroy();
@@ -1492,9 +1485,6 @@ test("committed categories refresh retained pixels and clipboard without resampl
     h.mapLayers.setOpacity(key, 0);
     h.viewer.exploreAt({ lng: 1, lat: 1 });
     await flushPromises();
-    assert.equal(h.controlsView.pointSamples.samples[0].value, 41);
-    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Forest (41)");
-    assert.equal(Object.isFrozen(h.controlsView.pointSamples.samples[0]), true);
 
     h.leafletMap.emit("mousemove", {
         latlng: { lng: 1, lat: 1 }, originalEvent: { clientX: 101, clientY: 100 },
@@ -1518,12 +1508,10 @@ test("committed categories refresh retained pixels and clipboard without resampl
     renamed.categories.reverse();
     h.controlsView.categoricalStyle = renamed;
     h.controlsView.handlers.onCategoricalStyleChange();
-    assert.equal(pointReads, 1);
+    assert.equal(pointReads, 0);
     assert.equal(cursorRequests.length, 2);
     assert.equal(cursorRequests[1].signal.aborted, false);
     assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
-    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
-    assert.equal(h.controlsView.pointSamples.samples[0].value, 41);
     assert.equal(marker.style.left, "101px");
     assert.equal(position.textContent, "Lat 1.00000 · Lng 1.00000");
     assert.equal(pending.hidden, false);
@@ -1544,19 +1532,16 @@ test("committed categories refresh retained pixels and clipboard without resampl
     h.controlsView.categoricalStyle = { ...renamed, categories: [] };
     h.controlsView.handlers.onCategoricalStyleChange();
     assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
-    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
     h.controlsView.categoricalStyle = renamed;
     h.controlsView.handlers.onAppearanceModeChange("continuous");
     assert.equal(list.children[0].children[1].textContent, "4.100e+1");
-    assert.equal(Object.hasOwn(h.controlsView.pointSamples.samples[0], "displayValue"), false);
     h.controlsView.handlers.onAppearanceModeChange("categorical");
     assert.equal(h.mapLayers.copyStyle(key), true);
     h.controlsView.handlers.onAppearanceModeChange("continuous");
     assert.equal(await h.mapLayers.pasteStyle(key), true);
     assert.equal(list.children[0].children[1].textContent, "Woodland (41)");
-    assert.equal(h.controlsView.pointSamples.samples[0].displayValue, "Woodland (41)");
     assert.equal(cursorRequests.length, 2);
-    assert.equal(pointReads, 1);
+    assert.equal(pointReads, 0);
     assert.equal(marker.style.left, "101px");
     assert.equal(pending.hidden, false);
 
@@ -1924,7 +1909,7 @@ test("hidden raster category edits remain independent of active analysis and vis
     h.destroy();
 });
 
-test("categorical guards prevent 2D ramps while exact samples and numerical statistics remain available", async () => {
+test("categorical guards prevent 2D ramps while numerical statistics remain available", async () => {
     const statisticsReads = [];
     const pixelReads = [];
     let pairedReads = 0;
@@ -1961,8 +1946,7 @@ test("categorical guards prevent 2D ramps while exact samples and numerical stat
     assert.equal(h.viewer.exploreAt({ lng: 1, lat: 1 }), true);
     await flushPromises();
     assert.equal(statisticsReads.length, readsBefore + 2);
-    assert.deepEqual(new Set(pixelReads), new Set([continuous.entry.item.id, categorical.entry.item.id]));
-    assert.ok(h.controlsView.pointSamples.samples.every((sample) => sample.state === "value" && sample.value === 41));
+    assert.deepEqual(pixelReads, []);
     assert.equal(categorical.state.analysis.rasterStatistics.scope, "selectedArea");
     const summary = h.controlsView.layerHistograms.find((entry) => entry.key === categorical.entry.key);
     assert.equal(summary.state, "ready");
@@ -2326,11 +2310,7 @@ test('three visible rasters render and receive ordinary histograms', async () =>
         requests.map(({ id }) => id).sort(),
         ['bottom', 'middle', 'top'],
     );
-    assert.deepEqual(pointRequests, ['top', 'middle']);
-    assert.deepEqual(
-        h.controlsView.pointSamples.samples.map(({ label }) => label),
-        ['top.tif', 'middle.tif'],
-    );
+    assert.deepEqual(pointRequests, [], 'Ordinary histogram clicks do not request unused pixel values');
     h.destroy();
 });
 
@@ -2595,13 +2575,7 @@ test('2D click requests both axes even when neither published extent contains th
     assert.equal(h.viewer.exploreAt({ lng: -87.44567871093751, lat: 36.798288873837045 }), false);
     await flushPromises();
     assert.deepEqual(requests, ['geotiff-second', 'geotiff-first']);
-    assert.deepEqual(
-        h.controlsView.pointSamples.samples.map(({ axis, state, value }) => ({ axis, state, value })),
-        [
-            { axis: 'X', state: 'value', value: 2.55 },
-            { axis: 'Y', state: 'value', value: 2.55 },
-        ],
-    );
+    assert.deepEqual(h.controlsView.pairedHighlight, {xValue: 2.55, yValue: 2.55});
     h.destroy();
 });
 
@@ -2662,13 +2636,6 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
     assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
     h.viewer.exploreAt({ lng: -74, lat: 41 });
     await flushPromises();
-    assert.deepEqual(
-        h.controlsView.pointSamples.samples.map(({ label, axis }) => ({ label, axis })),
-        [
-            { label: 'top.tif', axis: 'X' },
-            { label: 'middle.tif', axis: 'Y' },
-        ],
-    );
 
     h.controlsView.handlers.onBivariateSwapAxes();
     await flushPromises();
@@ -2678,15 +2645,7 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
     );
     assert.deepEqual(pairedRequests.at(-1), ['middle', 'top']);
     assert.equal(pointRequests.length, 2);
-    assert.deepEqual(
-        h.controlsView.pointSamples.samples.map(({ label, axis, value }) => ({
-            label, axis, value,
-        })),
-        [
-            { label: 'middle.tif', axis: 'X', value: 4 },
-            { label: 'top.tif', axis: 'Y', value: 9 },
-        ],
-    );
+    assert.deepEqual(h.controlsView.pairedHighlight, {xValue: 4, yValue: 9});
 
     h.mapLayers.reorder(bottom.key, 1);
     await flushPromises();
@@ -3016,15 +2975,6 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
         ]
     );
     assert.deepEqual(controlsView.pairedHighlight, { xValue: 9, yValue: 4 });
-    assert.deepEqual(
-        controlsView.pointSamples.samples.map(({ label, axis, state, value }) => ({
-            label, axis, state, value,
-        })),
-        [
-            { label: "second.tif", axis: "X", state: "value", value: 9 },
-            { label: "first.tif", axis: "Y", state: "value", value: 4 },
-        ]
-    );
 
     wmsLayers[0].eventHandlers.get("tileerror")();
     assert.equal(controlsView.bivariateMode.active, true);
@@ -3346,12 +3296,7 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.deepEqual(pixelRequests, []);
     viewer.exploreAt({ lng: -122, lat: 48.5 });
     await flushPromises();
-    assert.deepEqual(pixelRequests, [{
-        item: MOUNTED_GEOTIFF_ITEM,
-        point: { longitude: -122, latitude: 48.5 },
-    }]);
-    assert.equal(controlsView.pointSamples.samples[0].state, "value");
-    assert.equal(controlsView.pointSamples.samples[0].value, 17);
+    assert.deepEqual(pixelRequests, []);
     assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
@@ -3700,7 +3645,7 @@ test("sampling radios stop hover boxes and clear the previous area while vector 
     } finally { sampling.unbind(); h.destroy(); }
 });
 
-test("raster viewer samples click values only inside the single map world", async () => {
+test("raster viewer selects histogram areas only inside the single map world", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -3742,12 +3687,8 @@ test("raster viewer samples click values only inside the single map world", asyn
     assert.equal(rectangleLayers.length, 0, "Whole raster does not preview a box");
     viewer.exploreAt({ lng: -122, lat: 48 });
     await flushPromises();
-    assert.deepEqual(pixelRequests, [{
-        item: MOUNTED_GEOTIFF_ITEM,
-        point: { longitude: -122, latitude: 48 },
-    }]);
+    assert.deepEqual(pixelRequests, []);
     assert.ok(rectangleLayers.some((layer) => layer.kind === "selection"));
-    assert.equal(controlsView.pointSamples.samples[0].value, 1);
     viewer.destroy();
 });
 
@@ -3802,13 +3743,13 @@ for (const wholeState of ["ready", "error"]) {
         const wholeStatistics = h.controlsView.layerHistograms[0].statistics;
         h.viewer.exploreAt({ lng: -74, lat: 41 });
         await flushPromises();
-        assert.equal(h.controlsView.layerHistograms[0].scope, "200 km map sample");
+
         assert.equal(h.controlsView.layerHistograms[0].state, "ready");
 
         h.controlsView.handlers.onClearSampleWindow();
 
         const summary = h.controlsView.layerHistograms[0];
-        assert.equal(summary.scope, "Whole raster");
+
         assert.equal(summary.state, wholeState);
         assert.equal(summary.statistics, wholeStatistics);
         assert.equal(summary.errorMessage, wholeState === "error"
@@ -4078,7 +4019,7 @@ test("raster analysis summaries select a labeled retained histogram", async () =
     );
 
     assert.equal(controlsView.layerHistograms.length, 2);
-    assert.equal(firstHistogram.scope, "Whole raster");
+
     assert.equal(firstHistogram.state, "ready");
     assert.equal(firstHistogram.counts.length, 64);
 
@@ -4498,8 +4439,7 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     assert.ok(selectedThirdRequest);
     assert.equal(wholeThirdRequest.signal.aborted, true);
     assert.equal(selectedThirdRequest.signal.aborted, false);
-    assert.equal(pixelRequests.length, 1);
-    assert.equal(pixelRequests[0].item, third);
+    assert.equal(pixelRequests.length, 0);
 
     const firstKey = layerStackView.layers.find(
         ({ item }) => item === first
@@ -4713,7 +4653,7 @@ test("late histogram results stay scoped to the old area during a resize", async
     h.destroy();
 });
 
-test("click pixel requests use backend coverage independently of histogram opening", async () => {
+test("histogram clicks use visible coverage without requesting unused pixel values", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -4748,9 +4688,8 @@ test("click pixel requests use backend coverage independently of histogram openi
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.exploreAt({ lng: 0, lat: 20 }), false);
     await flushPromises();
-    assert.equal(pixelRequests.length, 1);
+    assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 0);
-    assert.equal(controlsView.pointSamples.samples[0].state, "outside");
     assert.equal(
         rectangleLayers.some((layer) => layer.kind === "selection"),
         false
@@ -4758,14 +4697,12 @@ test("click pixel requests use backend coverage independently of histogram openi
 
     assert.equal(viewer.exploreAt({ lng: 80, lat: 20 }), true);
     await flushPromises();
-    assert.equal(pixelRequests.length, 2);
+    assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 1);
     assert.ok(rectangleLayers.some((layer) => layer.kind === "selection"));
     assert.equal(viewer.exploreAt({ lng: -50, lat: 20 }), false);
     await flushPromises();
-    assert.equal(pixelRequests.length, 3);
-    assert.equal(controlsView.pointSamples.samples[0].state, "value");
-    assert.equal(controlsView.pointSamples.samples[0].value, 1);
+    assert.equal(pixelRequests.length, 0);
     assert.equal(histogramPresentationRequests, 1);
     viewer.destroy();
 
@@ -4792,7 +4729,7 @@ test("click pixel requests use backend coverage independently of histogram openi
     await flushPromises();
     assert.equal(areaRequests.length, 16);
     assert.ok(areaRequests.some(({ item }) => item.id === items[11].id));
-    assert.deepEqual(clickRequests, [items[16].id, items[15].id]);
+    assert.deepEqual(clickRequests, []);
     assert.equal(h.controlsView.layerHistograms.length, 16);
 
     // Even the seventeenth extent can open a box without raising the read cap.
@@ -5327,11 +5264,12 @@ test("category code changes cancel stale statistics while label, color and opaci
 
 test("private sources use the same style, histogram, percentile, pixel and paired controls as catalog rasters", async () => {
     const reads = [], pixels = [], paired = [];
+    const clock = createManualClock();
     let removed = 0;
     const h = visibleLayerFixture(async (source, area, _signal, _fetch, codes) => {
         reads.push({source, area, codes});
         return createCategoryStatistics(source, selectedBoundsFromArea(area), codes);
-    }, {publishRaster: async item => ({layerName: item.source ? `eolab:model_${item.source.jobId}_${item.source.artifactId}` : "eolab:catalog", bbox: item.bbox ?? [77,20,79,24]}), samplePixel: async source => {pixels.push(source); return {inBounds: true, value: 0};},
+    }, {clock, publishRaster: async item => ({layerName: item.source ? `eolab:model_${item.source.jobId}_${item.source.artifactId}` : "eolab:catalog", bbox: item.bbox ?? [77,20,79,24]}), sampleCursorPixel: async source => {pixels.push(source); return {inBounds: true, value: 0};},
         loadPairedStatistics: async (x, y) => {paired.push([x,y]); return pairedStatistics();}});
     const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32)};
     const raster = {source, label: "Clipped habitat", bbox: [77,20,79,24], version: "c".repeat(64),
@@ -5342,6 +5280,8 @@ test("private sources use the same style, histogram, percentile, pixel and paire
     assert.equal(h.viewer.openStyle(record.entry.key), true);
     h.viewer.exploreAt({lng: 78, lat: 22}); await flushPromises();
     assert.ok(reads.some(read => read.source.source?.jobId === source.jobId));
+    h.leafletMap.emit("mousemove", {latlng: {lng: 78, lat: 22}, originalEvent: {clientX: 100, clientY: 100}});
+    clock.flush(); await flushPromises();
     assert.ok(pixels.some(value => value.source?.jobId === source.jobId));
     editCategoricalAppearance(h, record.entry.key); await flushPromises();
     assert.ok(record.state.layer.wmsParams.raster_style);
@@ -5368,13 +5308,14 @@ test("private sources use the same style, histogram, percentile, pixel and paire
 });
 
 test("pixel-capable outputs remain pickable when their format cannot provide distributions", async () => {
-    const pixels=[];
+    const pixels=[], clock=createManualClock();
     const h=visibleLayerFixture(async () => {throw new Error("Distributions are unsupported");}, {
-        publishRaster: async item => ({layerName: "eolab:output", bbox: item.bbox}), samplePixel: async item => {pixels.push(item);return {inBounds:true,value:0};}});
+        clock, publishRaster: async item => ({layerName: "eolab:output", bbox: item.bbox}), sampleCursorPixel: async item => {pixels.push(item);return {inBounds:true,value:0};}});
     const raster={source:{kind:"runArtifact",jobId:"a".repeat(32),artifactId:"b".repeat(32)},label:"Pixel-only raster",
         version:"c".repeat(64),bbox:[77,20,79,24],capabilities:{pixels:true,statistics:false,calculations:true,modelInput:true}};
     await h.viewer.showSource(raster,{removed(){},copy(){},info(){}});
-    h.viewer.exploreAt({lng:78,lat:22});await flushPromises();
+    h.leafletMap.emit("mousemove", {latlng:{lng:78,lat:22}, originalEvent:{clientX:100,clientY:100}});
+    clock.flush(); await flushPromises();
     assert.ok(pixels.some(item=>item.source?.artifactId===raster.source.artifactId));h.destroy();
 });
 
@@ -5595,14 +5536,17 @@ test("removing a temporal row cancels pending publication and cannot resurrect i
 
 
 test("temporal source changes cancel old statistics and exact pixels before accepting new values", async () => {
-    const statistics = [], pixels = [];
+    const statistics = [], pixels = [], cursorValues = [], clock = createManualClock();
     const fixture = temporalFixture({
+        clock, cursorValuesView: {render: snapshot => cursorValues.push(snapshot), clear: () => cursorValues.push(null)},
         loadStatistics: (item, area, signal) => {const deferred = createDeferred(); statistics.push({item, area, signal, ...deferred}); return deferred.promise;},
-        samplePixel: (item, _point, signal) => {const deferred = createDeferred(); pixels.push({item, signal, ...deferred}); return deferred.promise;},
+        sampleCursorPixel: (item, _point, signal) => {const deferred = createDeferred(); pixels.push({item, signal, ...deferred}); return deferred.promise;},
     });
     try {
         const record = await fixture.viewer.showTemporal(temporalItem());
         fixture.viewer.exploreAt({lng: 1, lat: 1});
+        fixture.leafletMap.emit("mousemove", {latlng:{lng:1,lat:1}, originalEvent:{clientX:100,clientY:100}});
+        clock.flush();
         await flushPromises();
         const obsoleteStatistics = [...statistics], oldPixel = pixels[0];
         await fixture.temporalViews[0].handlers.onTimeChange("2020-01-01T02:00:00Z");
@@ -5615,13 +5559,15 @@ test("temporal source changes cancel old statistics and exact pixels before acce
         oldPixel.resolve({inBounds: true, value: 111});
         await flushPromises();
         assert.equal(record.state.analysis.rasterStatistics.mean, 222);
-        assert.equal(fixture.controlsView.pointSamples, null);
+        assert.equal(cursorValues.at(-1), null);
         fixture.viewer.exploreAt({lng: 1, lat: 1});
+        fixture.leafletMap.emit("mousemove", {latlng:{lng:1,lat:1}, originalEvent:{clientX:100,clientY:100}});
+        clock.flush();
         await flushPromises();
         assert.equal(pixels.at(-1).item.source.time, "2020-01-01T02:00:00Z");
         pixels.at(-1).resolve({inBounds: true, value: 222});
         await flushPromises();
-        assert.equal(fixture.controlsView.pointSamples.samples[0].value, 222);
+        assert.equal(cursorValues.at(-1).samples[0].value, 222);
     } finally {fixture.destroy();}
 });
 
