@@ -1,6 +1,6 @@
 #raster-series h2 { margin: 0; font-size: 1.05rem; }
 #raster-series { scroll-padding-block-start: calc(44px + 1rem); }
-#raster-series-context, #raster-series-status, #raster-series-chart-note {
+#raster-series-status, #raster-series-chart-note {
   font-size: 0.78rem;
   overflow-wrap: anywhere;
   margin: 0.3rem 0;
@@ -78,7 +78,8 @@
 .raster-series-legend-item span { overflow-wrap: anywhere; min-width: 0; }
 .raster-series-plot-note { font-size: 0.72rem; margin: 0.2rem 0; }
 .raster-series-plot-note[hidden] { display: none; }
-.raster-series-chart-toolbar { display: flex; justify-content: flex-end; font-size: 0.78rem; }
+.raster-series-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.78rem; }
+.raster-series-chart-toolbar[hidden] { display: none; }
 .raster-series-chart-toolbar label { display: flex; align-items: center; gap: 0.3rem; }
 .raster-series-axis-options { border: 0; padding: 0.3rem 0; margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: start; gap: 0.35rem 0.6rem; font-size: 0.78rem; }
 .raster-series-axis-options legend { font-weight: 600; padding: 0; }

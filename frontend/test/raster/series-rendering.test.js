@@ -59,7 +59,7 @@ function controlsFixture() {
 test("raster statistics places visible inputs before execution and results", async () => {
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
-    const positions = ["raster-series-data-inputs", "raster-series-context", 'id="raster-series-statistics"',
+    const positions = ["raster-series-data-inputs", 'id="raster-series-statistics"',
         "raster-series-status", 'id="raster-series-plots"', "raster-series-data-settings", "Values &amp; download", "Formula reference"]
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
@@ -70,7 +70,7 @@ test("raster statistics places visible inputs before execution and results", asy
     assert.ok(!panel.includes("raster-series-source-mode"));
     assert.ok(!panel.includes("raster-series-temporal-dataset"));
     for (const id of ["temporal-variable", "period", "sources",
-        "context", "status", "area", "retry", "cancel", "recover", "add-plot"]) {
+        "status", "area", "retry", "cancel", "recover", "add-plot"]) {
         const attribute = `id="raster-series-${id}"`;
         assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
     }
@@ -202,11 +202,12 @@ test("one raster opens the existing values table for every statistic instead of 
         {label:"Raster A",statisticLabel:"Mean",state:"value",value:2.5,rawValue:"2.5000000000000001",unit:"K"}];
     h.draw();
     assert.equal(h.plots.length,0);
+    assert.equal(h.view.chartToolbar.hidden,true,"a scalar result needs no chart geometry controls");
     assert.equal(h.view.values.open,true);
     assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
         ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5000000000000001 K","Value"]]);
-    assert.equal(h.view.context.textContent,"Whole raster · 1 raster");
+    assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Whole raster · 1 raster/);
     assert.equal(h.view.valueCaption.textContent,"Raster A");
 });
 
@@ -264,7 +265,7 @@ test("one temporal observation uses values; several timestamps in the same datas
     const h = controlsFixture();
     h.view.renderTemporalControls = () => {};
     h.state.sources = [];
-    h.state.temporal = {item: {properties: {title: "Temperature"}}, variable: "temperature",
+    h.state.temporal = {item: {properties: {title: "Temperature", "cube:variables": {temperature: {description: "Air temperature",unit:"K"}}}}, variable: "temperature",
         periodMode: "times", startTime: "2000-01-01T00:00", endTime: "2000-01-01T02:00"};
     const rows = h.state.statistics[0].rows;
     rows.length = 0; h.draw();
@@ -346,7 +347,6 @@ test("collapsed Inputs summarizes sources and scope without repeating axis setti
     h.state.sources[1].selected = true;
     h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
     h.draw();
-    assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
     assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Watershed polygons · 2 rasters · Mean/);
     h.state.chartType = "bar";
     h.draw();
@@ -355,7 +355,7 @@ test("collapsed Inputs summarizes sources and scope without repeating axis setti
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
         assert.equal(h.document.querySelector("#raster-series-selected-area").textContent, label);
-        assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters", "provided area names remain useful context");
+        assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Watershed polygons · 2 rasters/,"provided area names remain useful context");
     }
 });
 

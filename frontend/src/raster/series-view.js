@@ -61,13 +61,13 @@ export class RasterSeriesView {
         this.document = documentContext;
         this.onContextChange = onContextChange;
         this.root = documentContext.querySelector("#raster-series");
-        this.context = documentContext.querySelector("#raster-series-context");
         this.status = documentContext.querySelector("#raster-series-status");
         this.sources = documentContext.querySelector("#raster-series-sources");
         this.sourceSummary = documentContext.querySelector("#raster-series-source-summary");
         this.results = documentContext.querySelector("#raster-series-results");
         this.plots = documentContext.querySelector("#raster-series-plots");
         this.addPlot = documentContext.querySelector("#raster-series-add-plot");
+        this.chartToolbar = documentContext.querySelector("#raster-series-chart-toolbar");
         this.chartSettings = documentContext.querySelector("#raster-series-data-settings");
         this.chartNote = documentContext.querySelector("#raster-series-chart-note");
         this.table = documentContext.querySelector("#raster-series-table-body");
@@ -212,9 +212,9 @@ export class RasterSeriesView {
         this.renderTemporalControls(state.temporal);
         const scope = state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected";
         const selectedCount = state.sources.filter(source => source.selected).length;
-        const context = state.temporal ? `${scope} · ${state.temporal.item?.properties.title || "Temporal dataset"} · ${state.temporal.variable || "Choose a variable"} · ${describeTemporalPeriod(state.temporal)}` :
+        const variable = state.temporal?.item?.properties["cube:variables"][state.temporal.variable];
+        const context = state.temporal ? `${scope} · ${variable?.description || "Choose a variable"} · ${describeTemporalPeriod(state.temporal)}` :
             `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
-        if (this.context.textContent !== context) this.context.textContent = context;
         if (this.status.textContent !== state.message) this.status.textContent = state.message;
         const busy = String(state.busy);
         if (this.root.getAttribute("aria-busy") !== busy) this.root.setAttribute("aria-busy", busy);
@@ -287,6 +287,7 @@ export class RasterSeriesView {
         const hidePlots = singleResult || !hasPlotValues;
         if (this.plots.hidden !== hidePlots) this.plots.hidden = hidePlots;
         if (this.addPlot.hidden !== hidePlots) this.addPlot.hidden = hidePlots;
+        if (this.chartToolbar.hidden !== hidePlots) this.chartToolbar.hidden = hidePlots;
         if (this.chartSettings.hidden !== !hasPlotValues) this.chartSettings.hidden = !hasPlotValues;
         if (this.chartNote.hidden !== !showingPrevious) this.chartNote.hidden = !showingPrevious;
         const chartNote = showingPrevious ? "Previous results — calculating replacements." : "";

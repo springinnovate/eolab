@@ -700,7 +700,6 @@
               </div>
             </div>
             <div id="raster-series-area-controls">
-              <p id="raster-series-context">No sample area selected</p>
               <div class="raster-series-controls">
                 <label>Sample area <select id="raster-series-area"><option id="raster-series-selected-area" value="selection">No area selected</option><option value="vector">Polygon layer</option><option value="whole">Whole raster</option></select></label>
               </div>
@@ -732,9 +731,10 @@
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
-            <div class="raster-series-chart-toolbar"><label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label></div>
             <div id="raster-series-results" role="region" aria-label="Statistic results" hidden>
+              <div id="raster-series-chart-toolbar" class="raster-series-chart-toolbar"><label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label>
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
+              </div>
               <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
               <details id="raster-series-data-settings" class="raster-series-settings">
                 <summary id="raster-series-source-summary">Axis options</summary>
