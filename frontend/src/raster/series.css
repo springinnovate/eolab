@@ -9,11 +9,10 @@
 .raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
 .raster-series-controls label[hidden] { display: none; }
 #raster-series-data-inputs { margin-bottom: 0.5rem; }
-#raster-series-inputs > summary { color: var(--brand); }
-#raster-series-inputs[open] #raster-series-input-summary,
-#raster-series-inputs:not([open]) .raster-series-inputs-expanded { display: none; }
-#raster-series-inputs { margin-bottom: 0.4rem; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 0.35rem 0.5rem; }
-#raster-series-inputs[open] > summary { border-bottom: 1px solid var(--border-1); padding-bottom: 0.3rem; }
+#raster-series-toggle-inputs { position: sticky; top: 0; z-index: 2; display: block; width: 100%; padding: 0.35rem 0.5rem; text-align: left; font-size: 0.78rem; background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius); }
+#raster-series-toggle-inputs[aria-expanded="true"] { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+#raster-series-inputs { margin-bottom: 0.4rem; border: 1px solid var(--border-1); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 0.35rem 0.5rem; }
+#raster-series-inputs[hidden] { display: none; }
 #raster-series-temporal-title { margin: 0.4rem 0; font-weight: 600; }
 #raster-series-temporal { font-size: 0.78rem; }
 #raster-series-temporal label:not([hidden]) { display: grid; gap: 0.25rem; min-width: 0; }

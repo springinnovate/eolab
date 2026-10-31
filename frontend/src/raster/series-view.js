@@ -2,7 +2,6 @@
 import { formatSeriesNumber } from "../charts/series-chart.js";
 import { createStatisticSwatch, RasterSeriesPlotsView, STATISTIC_STYLES } from "./series-plots-view.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
-import { describeTemporalPeriod } from "../temporal-period.js";
 
 const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No matches", no_valid_data: "No valid data", invalid_arithmetic: "Invalid arithmetic", overflow: "Overflow" };
 
@@ -124,6 +123,14 @@ export class RasterSeriesView {
     bind(actions) {
         this.actions = actions;
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
+        const inputs = this.document.querySelector("#raster-series-inputs");
+        const toggleInputs = this.document.querySelector("#raster-series-toggle-inputs");
+        toggleInputs.addEventListener("click", () => {
+            inputs.hidden = !inputs.hidden;
+            toggleInputs.setAttribute("aria-expanded", String(!inputs.hidden));
+            toggleInputs.textContent = inputs.hidden ? "Inputs · Show" : "Inputs · Hide";
+            this.root.scrollTop = 0;
+        });
         this.document.querySelector("#raster-series-temporal-variable").addEventListener("change", event => actions.onTemporalVariable(event.target.value));
         /** Create a text-only period control element.
          * @param {string} tag HTML tag. @param {string} [text=""] Caption.
@@ -214,17 +221,9 @@ export class RasterSeriesView {
         if (this.valueCaption.textContent !== valueCaption) this.valueCaption.textContent = valueCaption;
         this.renderAreaControls(state);
         this.renderTemporalControls(state.temporal);
-        const scope = state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected";
-        const selectedCount = state.sources.filter(source => source.selected).length;
-        const variable = state.temporal?.item?.properties["cube:variables"][state.temporal.variable];
-        const context = state.temporal ? `${scope} · ${variable?.description || "Choose a variable"} · ${describeTemporalPeriod(state.temporal)}` :
-            `${scope} · ${selectedCount} ${selectedCount === 1 ? "raster" : "rasters"}`;
         if (this.status.textContent !== state.message) this.status.textContent = state.message;
         const busy = String(state.busy);
         if (this.root.getAttribute("aria-busy") !== busy) this.root.setAttribute("aria-busy", busy);
-        const summary = this.document.querySelector("#raster-series-input-summary");
-        const inputSummary = `${context} · ${state.statistics.map(statistic => statistic.label || "Custom statistic").join(", ")}`;
-        if (summary.textContent !== inputSummary) summary.textContent = inputSummary;
         const timeRange = Boolean(state.temporal);
         const signature = JSON.stringify([timeRange, state.sources.map(({ key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected }) =>
             [key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected])]);

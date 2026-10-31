@@ -677,8 +677,8 @@
             <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
-            <details id="raster-series-inputs" open>
-              <summary><span class="raster-series-inputs-expanded">Inputs · hide</span><span id="raster-series-input-summary"></span></summary>
+            <button id="raster-series-toggle-inputs" type="button" aria-expanded="true" aria-controls="raster-series-inputs">Inputs · Hide</button>
+            <div id="raster-series-inputs">
               <div id="raster-series-data-inputs">
               <div id="raster-series-sources" aria-label="Raster sources"></div>
               <div id="raster-series-temporal" class="temporal-period" hidden>
@@ -698,7 +698,7 @@
               </div>
               <div id="raster-series-formulas"></div>
             </section>
-            </details>
+            </div>
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">

@@ -63,7 +63,8 @@ test("raster statistics places visible inputs before execution and results", asy
         "raster-series-status", 'id="raster-series-plots"', "Values &amp; download", "raster-series-data-settings", "Formula reference"]
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
-    assert.match(panel, /<details id="raster-series-inputs" open>/);
+    assert.match(panel, /<button id="raster-series-toggle-inputs" type="button" aria-expanded="true" aria-controls="raster-series-inputs">Inputs · Hide<\/button>/);
+    assert.ok(!panel.includes("raster-series-input-summary"));
     assert.ok(!panel.includes('id="raster-series-calculate"'));
     assert.ok(!panel.includes('id="raster-series-edit-area"'));
     assert.ok(!panel.includes('id="raster-series-area-controls"'), "editable areas live only in the floating tool");
@@ -208,7 +209,6 @@ test("one raster opens the existing values table for every statistic instead of 
     assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
         ["Raster A","Pixel value","3","Value"],["Raster A","Mean","2.5000000000000001 K","Value"]]);
-    assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Whole raster · 1 raster/);
     assert.equal(h.view.valueCaption.textContent,"Raster A");
 });
 
@@ -373,27 +373,23 @@ test("removing a focused statistic returns focus to Add statistic", () => {
     assert.equal(h.document.activeElement, h.document.querySelector("#raster-series-add-formula"));
 });
 
-test("collapsed Inputs summarizes sources and scope without repeating axis settings", () => {
+test("the selected area name opens the existing sample control", () => {
     const h = controlsFixture();
     h.document.querySelector("#raster-series-order").value = "name";
     h.document.querySelector("#raster-series-direction").value = "reverse";
     h.state.chartType = "scatter";
     h.state.sources.push({ key: "b", label: "Raster B", selected: false });
     h.draw();
-    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Whole raster · 1 raster · Mean/);
     h.state.sources[1].selected = true;
     h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
     h.draw();
-    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Watershed polygons · 2 rasters · Mean/);
     h.state.chartType = "bar";
     h.draw();
-    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Watershed polygons · 2 rasters · Mean/);
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
         assert.equal(h.document.querySelector("#raster-series-area-summary").textContent, "Watershed polygons");
         assert.equal(h.document.querySelector("#raster-series-open-area").getAttribute("aria-label"), "Change sample area: Watershed polygons");
-        assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Watershed polygons · 2 rasters/,"provided area names remain useful context");
     }
 });
 
@@ -410,6 +406,21 @@ test("temporal controls reuse the period editor and preserve focused input while
     };
     h.view.bind(actions);
     h.view.plotsView = {renderPlots() {}};
+    const inputBody = h.document.querySelector("#raster-series-inputs");
+    const inputToggle = h.document.querySelector("#raster-series-toggle-inputs");
+    inputToggle.focus(); h.view.root.scrollTop = 300;
+    inputToggle.dispatchEvent(new Event("click"));
+    assert.equal(inputBody.hidden, true);
+    assert.equal(inputToggle.getAttribute("aria-expanded"), "false");
+    assert.equal(inputToggle.textContent, "Inputs · Show");
+    assert.equal(h.view.root.scrollTop, 0, "collapsing reveals the graph rather than leaving the panel scrolled below it");
+    h.draw();
+    assert.equal(inputBody.hidden, true, "result updates preserve the user's disclosure choice");
+    assert.equal(h.document.activeElement, inputToggle);
+    inputToggle.dispatchEvent(new Event("click"));
+    assert.equal(inputBody.hidden, false);
+    assert.equal(inputToggle.getAttribute("aria-expanded"), "true");
+    assert.equal(inputToggle.textContent, "Inputs · Hide");
     h.state.busy = false;
     h.state.area.area = {kind: "wholeRaster"};
     h.state.temporal = {datasets: [{key: "observations", label: "Weather observations"}], datasetKey: "observations",
