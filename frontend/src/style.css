@@ -1393,14 +1393,15 @@ h5 {
   line-height: 1.4;
 }
 
-.raster-histogram-chart {
+.raster-histogram-chart,
+.raster-series-statistics-chart {
   display: block;
   width: 100%;
-  height: 190px;
   border: 1px solid var(--border-2);
   border-radius: 2px;
   background: var(--surface-2);
 }
+.raster-histogram-chart { height: 190px; }
 
 .raster-histogram[aria-busy="true"] .raster-histogram-chart {
   opacity: 0.58;
@@ -1466,21 +1467,28 @@ h5 {
   font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.raster-histogram-axes text {
+.raster-histogram-axes text,
+.raster-series-statistics-chart .series-chart-x-axis text,
+.raster-series-statistics-chart .series-chart-y-axis text {
   fill: var(--text-2);
   font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.raster-histogram-axes .raster-histogram-axis-title {
+.raster-histogram-axes .raster-histogram-axis-title,
+.raster-series-statistics-chart .series-chart-axis-title {
+  fill: var(--text-2);
   font: 12px/1 system-ui, sans-serif;
 }
 
-.raster-histogram-grid {
+.raster-histogram-grid,
+.raster-series-statistics-chart .series-chart-y-axis .tick line {
   stroke: var(--border-2);
   stroke-dasharray: 2 3;
 }
 
-.raster-histogram-baseline {
+.raster-histogram-baseline,
+.raster-series-statistics-chart .domain,
+.raster-series-statistics-chart .series-chart-x-axis .tick line {
   fill: none;
   stroke: var(--text-3);
 }
@@ -3115,12 +3123,16 @@ h5 {
   cursor: pointer;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 10px;
+  color: var(--text-1);
+  text-align: left;
+}
+
+.raster-histogram-summary,
+#raster-series-figure {
   border: 1px solid var(--border-1);
   border-radius: 5px;
   background: var(--surface-2);
   padding: 9px 10px;
-  color: var(--text-1);
-  text-align: left;
 }
 
 article.raster-histogram-summary {
@@ -3171,13 +3183,13 @@ article.raster-histogram-summary {
   background: var(--surface-selected);
 }
 
-.raster-histogram-summary-name {
+.raster-histogram-summary-name,
+#raster-series-plot-title,
+.raster-series-plot-header strong {
   min-width: 0;
-  overflow: hidden;
-  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .raster-histogram-summary-status {

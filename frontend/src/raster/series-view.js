@@ -69,7 +69,7 @@ export class RasterSeriesView {
         this.results = documentContext.querySelector("#raster-series-results");
         this.plots = documentContext.querySelector("#raster-series-plots");
         this.plotArea = documentContext.querySelector("#raster-series-plot-area");
-        this.plotHeading = documentContext.querySelector("#raster-series-plot-heading");
+        this.figure = documentContext.querySelector("#raster-series-figure");
         this.plotTitle = documentContext.querySelector("#raster-series-plot-title");
         this.plotContext = documentContext.querySelector("#raster-series-plot-context");
         this.plotProgress = documentContext.querySelector("#raster-series-plot-progress");
@@ -297,7 +297,7 @@ export class RasterSeriesView {
         if (this.addPlot.hidden !== hidePlots) this.addPlot.hidden = hidePlots;
         const hideToolbar = hidePlots && !calculating;
         if (this.chartToolbar.hidden !== hideToolbar) this.chartToolbar.hidden = hideToolbar;
-        if (this.plotHeading.hidden !== hideToolbar) this.plotHeading.hidden = hideToolbar;
+        if (this.figure.hidden !== hideToolbar) this.figure.hidden = hideToolbar;
         this.renderPlotHeading(state);
         const hideValues = calculating && !hasResultRows;
         if (this.values.hidden !== hideValues) this.values.hidden = hideValues;
