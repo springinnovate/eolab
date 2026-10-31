@@ -164,10 +164,10 @@ test("temporal stack automatically samples one period and axis edits reuse its e
         const reads = h.discovery.length;
         h.view.actions.onChartType("scatter"); h.view.actions.onAddPlot();
         h.view.actions.onStatisticDisplay(1, {plotId: 2, visible: false});
-        h.view.actions.onPlotAxis(2, {scale: "log", bounds: [1, 1000], xBounds: [Date.UTC(2000,0,1), Date.UTC(2000,0,1,3)]});
+        h.view.actions.onPlotOptions(2, {scale: "log", bounds: [1, 1000], xBounds: [Date.UTC(2000,0,1), Date.UTC(2000,0,1,3)]});
         h.view.actions.onEditFormula(1, {label: "Average"});
         h.view.actions.onStatisticDisplay(1, {color: "#ff0000"});
-        h.view.actions.onPlotAxis(2, {pointSize: 3, xTickCount: 4, yTickCount: 6, axisFontSize: 12});
+        h.view.actions.onPlotOptions(2, {pointSize: 3, xTickCount: 4, yTickCount: 6, axisFontSize: 12});
         h.controller.updateAvailableRasters([{...ORDINARY, visible: false}], [{...DATASET, time: "2001-06-01T00:00:00Z"}]);
         h.view.actions.onDownload(); await h.tick();
         const exported = csvParse(h.view.csv), original = csvParse(csv);
@@ -237,7 +237,7 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
         h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
         h.view.actions.onRetry(); await flush();
         const first = [...h.server.values()][0];
-        h.view.actions.onPlotAxis(1,{scale:"linear",bounds:[270,310],xBounds:null});
+        h.view.actions.onPlotOptions(1,{scale:"linear",bounds:[270,310],xBounds:null});
         h.view.actions.onOrder("map","reverse"); await h.tick();
         assert.equal(h.submitted.length,1,"axis edits do not replace a pending calculation");
         assert.deepEqual(h.cancelled,[]);
