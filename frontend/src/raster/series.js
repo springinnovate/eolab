@@ -121,7 +121,10 @@ export class RasterSeriesController {
                 [formula.id, {plotId: 1, visible: true, styleIndex: index}]));
             this.selectedArea = area.area;
             this.selectedAreaLabel = area.areaLabel;
-            this.areaChoice = area.area.kind === "wholeRaster" ? "whole" : "selection";
+            this.areaChoice = {wholeRaster: "whole", selectedArea: "selection", catalogSelection: "vector", polygonArea: "vector"}[area.area.kind];
+            if (this.areaChoice === "vector") {
+                this.vectorArea = area.area; this.vectorAreaLabel = area.areaLabel;
+            }
             this.position = area.pixelPoint;
             this.sources = area.sources;
             this.selectedKeys = new Set(area.sources.map(source => source.key));

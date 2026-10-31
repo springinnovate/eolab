@@ -622,6 +622,14 @@ test("catalog predicates and annotation uploads remain exact per-raster inputs",
         await h.area.calculateRemainingRasters();await flush();await h.finish();await h.finish();
         for(const [,intent]of h.requests.filter(([kind])=>kind==="submit"))assert.deepEqual(intent.area,area);
         assert.equal(h.area.complete,true);h.close();
+        const restored = fixture({}, h.data);
+        for (const [id, job] of h.server) restored.server.set(id, job);
+        try {
+            await restored.controller.start();
+            assert.equal(restored.view.state.area.areaChoice, "vector");
+            assert.deepEqual(restored.view.state.area.area, area);
+            assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+        } finally { restored.close(); }
     }
 });
 
