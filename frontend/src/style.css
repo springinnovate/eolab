@@ -4076,6 +4076,8 @@ article.raster-histogram-summary {
   background: var(--surface-1);
 }
 
+#raster-series { padding-top: 0; }
+
 #map-inspection:not(:popover-open),
 #map-tools-more-summary[hidden],
 #map-histogram-panel[hidden],
