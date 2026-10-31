@@ -249,7 +249,7 @@ export class RasterSeriesPlotsView {
             : "Waiting for statistic values.";
         if (!chart.hidden) elements.domains = renderOrdinalSeriesChart({
             documentContext: this.document, chart, series, chartType: state.chartType, yScale: plot.scale,
-            width: chart.clientWidth, height: 260,
+            width: chart.clientWidth, height: 260 + Math.max(0, (plot.axisFontSize ?? 10) - 10) * 5,
             pointSize: plot.pointSize ?? 5, xTickCount: plot.xTickCount ?? 5, yTickCount: plot.yTickCount ?? 5, axisFontSize: plot.axisFontSize ?? 10,
             yBounds: plot.bounds ?? null, xBounds: state.temporal ? plot.xBounds ?? null : null,
             xReverse: !!state.temporal && state.direction === "reverse",

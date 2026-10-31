@@ -164,8 +164,10 @@ export function renderOrdinalSeriesChart({
     if (finitePoints.length === 0) {
         throw new TypeError("An ordinal series chart requires a finite Y value.");
     }
-    const plotWidth = width - CHART_MARGIN.left - CHART_MARGIN.right;
-    const plotHeight = height - CHART_MARGIN.top - CHART_MARGIN.bottom;
+    const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
+    const margin = {...CHART_MARGIN, left: CHART_MARGIN.left + fontGrowth * 2, bottom: CHART_MARGIN.bottom + fontGrowth * 5};
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
     const values = finitePoints.map(point => yScale === "log" ? Math.log10(point.yValue) : point.yValue);
     let minimum = Math.min(...values);
     let maximum = Math.max(...values);
@@ -197,7 +199,7 @@ export function renderOrdinalSeriesChart({
     const xDomain = xScale === "numeric" ? extent(numericX) : [0, points.length - 1];
     const horizontal = scaleLinear()
         .domain(xBounds ?? (chartType === "bar" ? [xDomain[0] - spacing / 2, xDomain[1] + spacing / 2] : xDomain))
-        .range(xReverse ? [CHART_MARGIN.left + plotWidth, CHART_MARGIN.left] : [CHART_MARGIN.left, CHART_MARGIN.left + plotWidth]);
+        .range(xReverse ? [margin.left + plotWidth, margin.left] : [margin.left, margin.left + plotWidth]);
     const x = index => horizontal(xScale === "numeric" ? numericX[index] : index);
     const groupWidth = Math.min(60, Math.abs(horizontal(xDomain[0] + spacing) - horizontal(xDomain[0])) * 0.8);
     const barWidth = groupWidth / plottedSeries.length;
@@ -205,11 +207,11 @@ export function renderOrdinalSeriesChart({
         .domain(yBounds ?? (yScale === "log"
             ? [Math.max(Number.MIN_VALUE, 10 ** minimum), Math.min(Number.MAX_VALUE, 10 ** maximum)]
             : [minimum, maximum]))
-        .range([CHART_MARGIN.top + plotHeight, CHART_MARGIN.top]);
+        .range([margin.top + plotHeight, margin.top]);
     [minimum, maximum] = y.domain().map(value => yScale === "log" ? Math.log10(value) : value);
     const baselineValue = Math.max(y.domain()[0], Math.min(0, y.domain()[1]));
     const barBaseline = y(baselineValue);
-    const xAxisY = CHART_MARGIN.top + plotHeight;
+    const xAxisY = margin.top + plotHeight;
     chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
     chart.setAttribute("aria-label", ariaLabel);
     const xAxis = svgElement(documentContext, "g", {
@@ -225,7 +227,7 @@ export function renderOrdinalSeriesChart({
     select(xAxis).selectAll("text").attr("transform", "rotate(-35)").attr("text-anchor", "end");
     if (axisFontSize !== null) select(xAxis).selectAll("text").style("font-size", `${axisFontSize}px`);
     const yAxis = svgElement(documentContext, "g", {
-        class: "series-chart-y-axis", transform: `translate(${CHART_MARGIN.left} 0)`,
+        class: "series-chart-y-axis", transform: `translate(${margin.left} 0)`,
     });
     // Generate log ticks in exponent space so subnormal or maximum finite
     // values never overflow the library's decimal tick-step calculation.
@@ -238,7 +240,7 @@ export function renderOrdinalSeriesChart({
     const clipId = `series-chart-clip-${++clipSerial}`;
     const definitions = svgElement(documentContext, "defs", {});
     const clip = svgElement(documentContext, "clipPath", { id: clipId });
-    clip.append(svgElement(documentContext, "rect", { x: CHART_MARGIN.left, y: CHART_MARGIN.top, width: plotWidth, height: plotHeight }));
+    clip.append(svgElement(documentContext, "rect", { x: margin.left, y: margin.top, width: plotWidth, height: plotHeight }));
     definitions.append(clip); chart.append(definitions);
     const pointElements = [];
     const pointGroups = [];
@@ -320,15 +322,15 @@ export function renderOrdinalSeriesChart({
     chart.append(
         svgElement(documentContext, "text", {
             class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
-            x: CHART_MARGIN.left + plotWidth / 2,
+            x: margin.left + plotWidth / 2,
             y: height - 8,
             "text-anchor": "middle",
         }, xAxisLabel),
         svgElement(documentContext, "text", {
             class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
             x: 16,
-            y: CHART_MARGIN.top + plotHeight / 2,
-            transform: `rotate(-90 16 ${CHART_MARGIN.top + plotHeight / 2})`,
+            y: margin.top + plotHeight / 2,
+            transform: `rotate(-90 16 ${margin.top + plotHeight / 2})`,
             "text-anchor": "middle",
         }, yAxisLabel)
     );
