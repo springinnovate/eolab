@@ -111,7 +111,7 @@ test("series publishes selected raster and owned area context while inactive wit
     assert.deepEqual(contexts.at(-1), { source: "Raster A", scope: "Whole raster", usesSamplingBox: false });
     assert.equal(h.frames.size, 0);
     view.render({ ...h.state, active: false, sources: [...h.state.sources, { label: "Raster B", selected: true }],
-        area: { ...h.state.area, areaChoice: "selection", areaLabel: "Selected watershed polygons" } });
+        area: { ...h.state.area, areaChoice: "selection", area: {kind: "catalogSelection"}, areaLabel: "Selected watershed polygons" } });
     assert.deepEqual(contexts.at(-1), { source: "2 selected rasters", scope: "Selected watershed polygons", usesSamplingBox: false });
     assert.equal(h.frames.size, 0);
     view.render({ ...h.state, active: false, area: { ...h.state.area, areaChoice: "selection",

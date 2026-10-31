@@ -171,7 +171,7 @@ export class RasterSeriesView {
         const sources = state.sources.filter(source => source.selected);
         this.onContextChange({ source: state.temporal ? state.temporal.item?.properties.title || "Temporal dataset" : sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
             scope: state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected",
-            usesSamplingBox: state.area.areaChoice !== "whole" && state.area.area?.kind === "selectedArea" });
+            usesSamplingBox: state.area.areaChoice === "selection" && !["catalogSelection", "polygonArea"].includes(state.area.area?.kind) });
         this.pendingState = state;
         if (!state.active) {
             if (this.frame !== null) this.document.defaultView.cancelAnimationFrame(this.frame);

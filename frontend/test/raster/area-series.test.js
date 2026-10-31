@@ -871,3 +871,16 @@ test("the shared activity indicator stays active until every submitted calculati
     assert.deepEqual(activity.at(-1),box(0));
     await h.finish();assert.equal(activity.at(-1),null);h.close();
 });
+
+test("a box choice publishes its intent before composition commits a rectangle", () => {
+    let h;
+    h = fixture({}, new Map(), choice => {
+        assert.equal(h.view.state.area.areaChoice, choice);
+        h.controller.setArea(box(10), "New box");
+    });
+    try {
+        h.controller.chooseArea("selection");
+        assert.deepEqual(h.view.state.area.area, box(10));
+        assert.equal(h.view.state.area.areaChoice, "selection");
+    } finally { h.cleanup(); }
+});

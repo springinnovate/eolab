@@ -463,6 +463,11 @@ export class RasterSeriesController {
     chooseArea(choice) {
         this.areaChoice = choice;
         if (choice === "vector") this.vectorArea = null;
+        if (choice === "selection" && this.selectedArea?.kind !== "selectedArea") {
+            this.selectedArea = null; this.selectedAreaLabel = "";
+        }
+        // Present the new sampling intent before composition selects a map box.
+        this.render();
         this.onAreaChoice(choice);
         this.updateAreaInputs();
     }
