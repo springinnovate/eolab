@@ -707,6 +707,25 @@ function visibleLayerFixture(
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
 
+test("composed box selection and resize publish geometry without a histogram raster", () => {
+    const clock = createManualClock(), areas = [], reads = [];
+    const h = visibleLayerFixture(async (...args) => { reads.push(args); throw new Error("No raster requested"); },
+        {clock}, {onSamplingAreaChange: area => areas.push(area)});
+    try {
+        h.viewer.selectSamplingBox();
+        const initial = h.viewer.getSelectedArea();
+        assert.equal(initial.kind, "selectedArea");
+        assert.deepEqual(areas.at(-1), initial);
+        h.controlsView.handlers.onSampleWindowRangeInput("100");
+        clock.flush();
+        const resized = h.viewer.getSelectedArea();
+        assert.ok(resized.selectedBounds.east < initial.selectedBounds.east);
+        assert.deepEqual(areas.at(-1), resized);
+        assert.equal(reads.length, 0);
+        assert.equal(h.mapLayers.retainedRecords.length, 0);
+    } finally { h.destroy(); }
+});
+
 /**
  * Build a complete categorical appearance with ordered codes and independent alpha.
  * @return {Object} Valid table suitable for an editor draft or saved state.

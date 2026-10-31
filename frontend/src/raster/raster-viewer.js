@@ -3583,7 +3583,8 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Commit one map rectangle and replace selected-area statistics.
+     * Commit one map rectangle for area consumers, then refresh an active histogram.
+     * Geometry selection does not require a raster; histogram reads still do.
      *
      * @param {Object} bounds Canonical selected WGS 84 bounds.
      * @param {Readonly<{longitude:number,latitude:number}>} center Original click.
@@ -3592,9 +3593,6 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function selectRasterSampleWindow(bounds, center, openHistogram = true) {
-        if (!canUseRasterMapInteractions()) {
-            return;
-        }
         onSamplingMethodChange("box");
         pendingVectorSelection = false;
         cancelRasterSampleWindowResize();
@@ -3616,6 +3614,7 @@ export function initializeRasterViewer(
         rasterAnalysis.selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
+        if (!canUseRasterMapInteractions()) return;
         if (openHistogram) showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         void rasterStatisticsController.activate(
@@ -3704,8 +3703,7 @@ export function initializeRasterViewer(
             const [currentBounds] = getPresentedSampleWindow();
             if (
                 bivariateMode.active !== scheduledBivariateMode ||
-                currentBounds !== bounds ||
-                !canUseRasterMapInteractions()
+                currentBounds !== bounds
             ) {
                 return;
             }
@@ -4955,7 +4953,10 @@ export function initializeRasterViewer(
         getSelectedArea,
         // Composition reuses these same map-sampling actions from the floating
         // area form; Processing retains its own polygon selection lifecycle.
-        selectSamplingBox: useMapCenterForRasterStatistics,
+        /** Select a map-centered rectangle without requiring a histogram source.
+         * @return {Object|null} Canonical WGS 84 bounds, or null near a pole/date line.
+         */
+        selectSamplingBox: () => rasterSampleWindowController.selectAt(leafletMap.getCenter()),
         selectWholeRaster: handleClearSampleWindow,
         cancelSampleWindowResize,
         setSamplingActivity: area => rasterSampleWindowController.setActivityBounds(area?.kind === "selectedArea" ? area.selectedBounds : null),
