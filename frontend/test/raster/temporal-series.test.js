@@ -59,12 +59,12 @@ function fixture({server = new Map(), saved = new Map(), variables = {
             discovery.push(source.itemId);
             return {collection: source.collectionId, id: source.itemId, properties: {title: "Weather", "cube:variables": variables}};
         },
-        async loadTemporalTimes(item, variable, month = "2000-01") {
-            discovery.push([item.id, variable, month]);
-            return {months: ["2000-01"], month, times: ["2000-01-01T00:00:00Z", "2000-01-01T01:00:00Z", "2000-01-01T06:00:00Z"]};
-        }});
+    });
     controller.updateAvailableRasters([ORDINARY], [DATASET]); controller.setArea(AREA, "Selected box");
-    const tick = async () => { for (const [id, timer] of [...timers]) if (timer.delay === 0) { timers.delete(id); timer.callback(); } await flush(); };
+    /** Advance scheduled input edits without running status-poll timers.
+     * @return {Promise<void>} Input dispatch and its lifecycle callbacks have settled.
+     */
+    const tick = async () => { for (const [id, timer] of [...timers]) if (timer.delay <= 700) { timers.delete(id); timer.callback(); } await flush(); };
     const finish = async (id, status, csvResult = null) => {
         server.set(id, {...server.get(id), status, csvResult, result: status === "ready" ? {kind: "timeSeries"} : null});
         await jobs.refresh(); await flush();
@@ -73,19 +73,17 @@ function fixture({server = new Map(), saved = new Map(), variables = {
     return {controller, view, calculations, api, submitted, cancelled, downloads, discovery, server, saved, tick, finish, close};
 }
 
-test("accepting a vector area for a temporal period waits for Calculate", async () => {
+test("accepting a vector area automatically calculates its complete temporal period", async () => {
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
         h.view.actions.onArea("vector");
         h.controller.updateSamplingForPanelVisibility(true);
         h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
         await h.tick();
-        assert.equal(h.submitted.length, 0);
-        assert.equal(h.calculations.manual, false);
-        h.view.actions.onCalculate(); await flush();
         assert.equal(h.submitted.length, 1);
+        assert.equal(h.calculations.hasCapturedInputs, true);
         assert.deepEqual(h.submitted[0].area, {kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
     } finally { h.close(); }
 });
@@ -93,46 +91,59 @@ test("accepting a vector area for a temporal period waits for Calculate", async 
 test("a temporal request restores its period, formulas and result after reload without resubmitting", async () => {
     const h = fixture();
     await h.controller.chooseTimeRange(DATASET.key);
-    h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
-    h.view.actions.onCalculate(); await flush();
+    h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
+    h.view.actions.onRetry(); await flush();
     const job = [...h.server.values()][0];
     h.close();
     const restored = fixture(h);
     const starting = restored.controller.start();
+    restored.controller.setArea(null, "No map area during startup");
     restored.controller.updateAvailableRasters([ORDINARY], [DATASET]);
     await starting;
     assert.equal(restored.view.state.temporal.datasetKey, DATASET.key);
     assert.equal(restored.view.state.temporal.datasets.length, 1);
     assert.equal(restored.view.state.temporal.variable, "temperature");
     assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
+    assert.deepEqual(restored.view.state.area.area,AREA,"an empty startup map cannot replace the recovered calculation's area");
     restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();
+    restored.controller.setArea(null,"No map area while another view loads"); await restored.tick();
+    assert.deepEqual(restored.view.state.area.area,AREA,"passive map refresh does not invalidate an active calculation's committed area");
     assert.equal(restored.submitted.length, 0);
     assert.equal(restored.cancelled.length, 0);
     const observations = [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", value: "298.5", state: "ok", unit: "K"}]}];
     await restored.finish(job.jobId, "ready", {observations, csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,298.5"});
     assert.equal(restored.view.state.rows[0].value, 298.5);
-    assert.equal(restored.view.state.area.pendingInputs, false, "retained raster-layer choices do not change a captured interval");
+    assert.deepEqual(restored.calculations.temporalSource,h.submitted[0].source,"retained raster-layer choices do not change a captured interval");
+    const snapshot = {key: "restored-weather-view", label: "Weather snapshot", visible: true,
+        source: {...DATASET, variable: "temperature", time: "2000-01-01T00:00:00Z"}};
+    restored.controller.updateAvailableRasters([ORDINARY, snapshot, {...snapshot, key: "another-weather-view"}], [DATASET]);
+    assert.deepEqual(restored.view.state.sources.filter(source => source.rangeSelected).map(source => source.key),
+        [snapshot.key], "a recovered dataset identifies one switchable range even without a saved map-view key");
+    await restored.controller.chooseTimeRange(null);
+    assert.equal(restored.view.state.temporal, undefined);
+    assert.equal(restored.submitted.length, 0, "turning off the recovered range does not start another temporal job");
     restored.close();
 });
 
-test("temporal stack explicitly samples one independent period and reuses completed values for presentation", async () => {
+test("temporal stack automatically samples one period and axis edits reuse its exact values", async () => {
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
         assert.equal(h.view.state.temporal.startTime, "", "availability does not select a period");
-        h.view.actions.onUseTemporalMonth();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
         h.controller.setPosition({longitude: -63, latitude: -4});
         h.view.actions.onAddFormula("pixel"); h.view.actions.onAddFormula("custom");
         h.view.actions.onEditFormula(3, {expression: "pixelValue(a) - mean(a)"});
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
-        assert.equal(h.submitted.length, 0, "opening and editing do not run a temporal slice");
-        h.view.actions.onCalculate(); await flush();
         assert.equal(h.submitted.length, 1);
         const request = h.submitted[0], job = [...h.server.values()][0];
         assert.equal(h.view.state.message, "Calculating each observation · 0 of 3 blocks");
+        assert.deepEqual(h.view.state.workProgress, job.progress);
         h.server.set(job.jobId, {...job, progress: {...job.progress, completed: 2}});
         await h.finish(job.jobId, "running");
         assert.equal(h.view.state.message, "Calculating each observation · 2 of 3 blocks");
+        assert.equal(h.view.state.workProgress.completed, 2);
+        assert.equal(h.view.state.workProgress.total, 3);
         assert.deepEqual(request.source, {collectionId: DATASET.collectionId, itemId: DATASET.itemId, variable: "temperature",
             startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-02-01T00:00:00.000Z"});
         assert.deepEqual(request.area, AREA);
@@ -146,6 +157,7 @@ test("temporal stack explicitly samples one independent period and reuses comple
             expression: row.expression, value: row.value, value_type: row.valueType, unit: row.unit, state: row.state,
             aggregates: JSON.stringify(row.aggregates)}))));
         await h.finish(job.jobId, "ready", {observations, csv});
+        assert.equal(h.view.state.workProgress, null);
         assert.deepEqual(h.view.state.statistics[0].rows.map(row => row.xValue), observations.map(row => Date.parse(row.time)));
         assert.equal(h.view.state.rows.length, 9);
         assert.equal(h.view.state.statistics[0].rows[1].state, "no_valid_data");
@@ -156,7 +168,10 @@ test("temporal stack explicitly samples one independent period and reuses comple
         const reads = h.discovery.length;
         h.view.actions.onChartType("scatter"); h.view.actions.onAddPlot();
         h.view.actions.onStatisticDisplay(1, {plotId: 2, visible: false});
-        h.view.actions.onPlotScale(2, "log"); h.view.actions.onEditFormula(1, {label: "Average"});
+        h.view.actions.onPlotOptions(2, {scale: "log", bounds: [1, 1000], xBounds: [Date.UTC(2000,0,1), Date.UTC(2000,0,1,3)]});
+        h.view.actions.onEditFormula(1, {label: "Average"});
+        h.view.actions.onStatisticDisplay(1, {color: "#ff0000"});
+        h.view.actions.onPlotOptions(2, {pointSize: 3, xTickCount: 4, yTickCount: 6, axisFontSize: 12});
         h.controller.updateAvailableRasters([{...ORDINARY, visible: false}], [{...DATASET, time: "2001-06-01T00:00:00Z"}]);
         h.view.actions.onDownload(); await h.tick();
         const exported = csvParse(h.view.csv), original = csvParse(csv);
@@ -168,11 +183,9 @@ test("temporal stack explicitly samples one independent period and reuses comple
         assert.equal(h.submitted.length, 1);
         assert.deepEqual(h.downloads, [job.jobId]);
         assert.equal(h.discovery.length, reads);
-        await h.controller.loadTemporalDates(undefined, true);
+        await h.controller.loadTemporalItem();
         assert.deepEqual(h.view.state.rows, [], "explicit refresh releases the completed plot for a new calculation");
         await h.tick();
-        assert.equal(h.submitted.length, 1, "refresh does not run calculations automatically");
-        h.view.actions.onCalculate(); await flush();
         assert.equal(h.submitted.length, 2);
         assert.deepEqual(h.submitted[1].source, request.source, "the same logical interval can be recalculated after refresh");
         await h.finish([...h.server.values()][1].jobId, "ready", {observations, csv});
@@ -181,7 +194,7 @@ test("temporal stack explicitly samples one independent period and reuses comple
         assert.equal(h.view.state.canDownload, false);
         h.view.actions.onEditFormula(1, {expression: "max(a)"});
         await h.tick();
-        assert.equal(h.submitted.length, 2, "formula replacement waits for Calculate");
+        assert.equal(h.submitted.length, 3, "formula replacement automatically uses the latest expression");
     } finally { h.close(); }
 });
 
@@ -189,8 +202,8 @@ test("failed temporal downloads retry the completed job and discard a cancelled 
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
+        h.view.actions.onRetry(); await flush();
         const job = [...h.server.values()][0];
         const result = {csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,12\n",
             observations: [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", expression: "mean(a)",
@@ -205,7 +218,7 @@ test("failed temporal downloads retry the completed job and discard a cancelled 
         };
         await h.finish(job.jobId, "ready", result);
         assert.match(h.view.state.message, /Download interrupted/);
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onRetry(); await flush();
         assert.equal(attempts, 2);
         assert.equal(h.submitted.length, 1);
         h.view.actions.onCancel();
@@ -213,7 +226,7 @@ test("failed temporal downloads retry the completed job and discard a cancelled 
         release(result); await flush();
         assert.deepEqual(h.view.state.rows, []);
         assert.equal(h.view.state.canDownload, false);
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onRetry(); await flush();
         assert.equal(attempts, 3);
         assert.equal(h.submitted.length, 1, "retrying a CSV never resubmits its calculation");
         assert.equal(h.view.state.rows[0].rawValue, "12");
@@ -225,15 +238,19 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
+        h.view.actions.onRetry(); await flush();
         const first = [...h.server.values()][0];
+        h.view.actions.onPlotOptions(1,{scale:"linear",bounds:[270,310],xBounds:null});
+        h.view.actions.onOrder("map","reverse"); await h.tick();
+        assert.equal(h.submitted.length,1,"axis edits do not replace a pending calculation");
+        assert.deepEqual(h.cancelled,[]);
         h.view.actions.onTemporalEdit({periodMode: "times", startTime: "2000-01-01T01:00", endTime: "2000-01-01T07:00"});
         await h.tick();
         assert.deepEqual(h.cancelled, [first.jobId]);
         assert.equal(h.submitted.length, 1);
         await h.finish(first.jobId, "cancelled");
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onRetry(); await flush();
         assert.equal(h.submitted.length, 2);
         assert.equal(h.submitted[1].source.startTime, "2000-01-01T01:00:00.000Z");
         const second = [...h.server.values()][1];
@@ -241,7 +258,7 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
         assert.deepEqual(h.cancelled, [first.jobId]);
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
         assert.equal(h.submitted.length, 2);
-        h.view.actions.onSelect(ORDINARY.key, true); await h.tick();
+        await h.controller.chooseTimeRange(null); await h.tick();
         assert.deepEqual(h.cancelled, [first.jobId, second.jobId]);
         await h.finish(second.jobId, "cancelled");
         assert.equal(h.submitted.length, 3, "ordinary raster selection retains automatic calculation");
@@ -250,7 +267,7 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
     } finally { h.close(); }
 });
 
-test("named temporal views seed range variables once and retain ordinary multi-raster choices", async () => {
+test("named temporal views supply their variables and retain ordinary multi-raster choices", async () => {
     const h = fixture({variables: {
         temperature: {description: "Temperature", unit: "K", "eolab:time_support": "instantaneous"},
         pressure: {description: "Pressure", unit: "Pa", "eolab:time_support": "instantaneous"},
@@ -267,25 +284,27 @@ test("named temporal views seed range variables once and retain ordinary multi-r
         await h.controller.chooseTimeRange(snapshot.key);
         assert.equal(h.view.state.temporal.datasetKey, DATASET.key);
         assert.equal(h.view.state.temporal.variable, "pressure", "the named view supplies the initial variable despite multiple variables");
-        assert.equal(h.view.state.temporal.startTime, "", "choosing the source does not choose a large period");
-        assert.deepEqual(h.view.state.sources.map(source => source.selected), [false, false, false]);
+        assert.equal(h.view.state.temporal.startTime, "2000-01-01T00:00", "the selected view supplies its initial month");
+        assert.equal(h.view.state.temporal.endTime, "2000-02-01T00:00");
+        assert.deepEqual(h.view.state.sources.map(source => source.selected), [true, true, true],
+            "range mode preserves the ordinary checklist choices while the view disables them");
         assert.equal(h.view.state.sources.find(source => source.key === snapshot.key).rangeSelected, true);
         assert.equal(h.view.state.sources.find(source => source.key === independent.key).rangeSelected, false);
-        h.view.actions.onTemporalVariable("temperature");
+        assert.equal(h.view.state.temporal.variableBound, true);
         h.view.actions.onTemporalEdit({periodMode: "times", startTime: "2000-01-03T01:00", endTime: "2000-01-03T02:00"});
         await flush();
         h.controller.updateAvailableRasters([ORDINARY, {...snapshot, source: {...snapshot.source,
             variable: "pressure", time: "2000-02-01T00:00:00Z"}}, independent], [DATASET]);
-        assert.equal(h.view.state.temporal.variable, "temperature");
+        assert.equal(h.view.state.temporal.variable, "pressure");
         assert.equal(h.view.state.temporal.startTime, "2000-01-03T01:00");
         await h.tick();
-        assert.equal(h.submitted.length, 0, "range intent and map changes wait for Calculate");
-        h.view.actions.onSelect(snapshot.key, true);
+        assert.equal(h.submitted.length, 0, "an inactive panel does not start new work");
+        await h.controller.chooseTimeRange(null);
         assert.equal(h.view.state.temporal, undefined);
         assert.deepEqual(h.view.state.sources.filter(source => source.selected).map(source => source.key),
             [ORDINARY.key, snapshot.key, independent.key], "the ordinary mixed-view checklist survives the range intent");
         await h.controller.chooseTimeRange(snapshot.key);
-        assert.equal(h.view.state.temporal.variable, "temperature", "returning to the same range preserves the edited variable");
+        assert.equal(h.view.state.temporal.variable, "pressure", "returning to a named view uses its variable");
         assert.equal(h.view.state.temporal.endTime, "2000-01-03T02:00");
         const metadataReads = h.discovery.filter(entry => typeof entry === "string").length;
         await h.controller.chooseTimeRange(independent.key);
@@ -308,6 +327,8 @@ test("a named retained dataset offers a range without a displayed or published s
         assert.equal(h.view.state.temporal.startTime, "");
         h.controller.updateSamplingForPanelVisibility(true); await h.tick();
         assert.equal(h.submitted.length, 0);
+        h.controller.updateAvailableRasters([], []);
+        assert.equal(h.view.state.temporal, undefined, "removing the active dataset returns to individual raster selection");
     } finally { h.close(); }
 });
 
@@ -328,7 +349,6 @@ test("a second named view can replace a range choice while its Catalog metadata 
         assert.equal(h.view.state.temporal.variable, "pressure");
         assert.equal(h.view.state.temporal.loading, false);
         assert.equal(h.view.state.temporal.error, "");
-        assert.equal(h.view.state.temporal.datesError, "");
         assert.equal(h.submitted.length, 0);
     } finally { h.close(); }
 });

@@ -238,10 +238,13 @@ export class FakeRasterControlDocument extends EventTarget {
     /**
      * Create one fake HTML element.
      *
+     * @param {string} tagName HTML tag used by native-control event binding.
      * @return {FakeRasterControlElement} New fake element.
      */
-    createElement() {
-        return new FakeRasterControlElement("", this);
+    createElement(tagName) {
+        const element = new FakeRasterControlElement("", this);
+        element.tagName = tagName;
+        return element;
     }
 
     /**

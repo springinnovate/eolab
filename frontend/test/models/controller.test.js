@@ -102,7 +102,6 @@ test("calendar controls capture whole years, months and inclusive days as the ex
     assert.deepEqual(captureModelSubmission(draft, "e".repeat(32)).inputs.weather,
         {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId, variable: "temperature",
             startTime: "2000-01-01T00:00:00.000Z", endTime: "2001-01-01T00:00:00.000Z"});
-    assert.match(controls.period.periodSummary.textContent, /2000 · whole year · UTC/);
     controls.period.periodMode.value = "month"; controls.period.periodMode.dispatchEvent(new Event("change"));
     for (const [month, start, end] of [
         ["2000-02", "2000-02-01T00:00:00.000Z", "2000-03-01T00:00:00.000Z"],
@@ -113,7 +112,6 @@ test("calendar controls capture whole years, months and inclusive days as the ex
         const request = captureModelSubmission(draft, "e".repeat(32), -420);
         assert.deepEqual(request.inputs.weather, {collectionId: temporalDataset.collectionId, itemId: temporalDataset.itemId,
             variable: "temperature", startTime: start, endTime: end});
-        assert.match(controls.period.periodSummary.textContent, /UTC/);
     }
     controls.period.periodMode.value = "days"; controls.period.periodMode.dispatchEvent(new Event("change"));
     for (const [first, last, end] of [
@@ -125,7 +123,6 @@ test("calendar controls capture whole years, months and inclusive days as the ex
         const request = captureModelSubmission(draft, "e".repeat(32), -420);
         assert.equal(request.inputs.weather.startTime, `${first}T00:00:00.000Z`);
         assert.equal(request.inputs.weather.endTime, end);
-        assert.match(controls.period.periodSummary.textContent, /includ/);
     }
     const expected = captureModelSubmission(draft, "e".repeat(32)).inputs;
     controls.period.periodMode.value = "times"; controls.period.periodMode.dispatchEvent(new Event("change"));

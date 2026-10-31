@@ -346,7 +346,7 @@ for (const [kind, code, message] of [
         await h.tick(650);
 
         assert.equal(h.controller.snapshot.admission, "retry");
-        assert.equal(h.view.state.message, `${message} Click Calculate to retry.`);
+        assert.equal(h.view.state.message, `${message} Choose Retry to try again.`);
         assert.equal(h.view.state.completedJob, previous);
         assert.equal(h.requests.filter(request => request[0] === "submit").length, 1);
     });

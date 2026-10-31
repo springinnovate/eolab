@@ -162,3 +162,18 @@ test("keyboard slider steps advance small boxes and support range endpoints", ()
     range.dispatchEvent(event);
     assert.equal(received.length, before);
 });
+
+test("composed area context keeps a foreground polygon workflow separate from histogram scope", () => {
+    const document = new FakeRasterControlDocument();
+    const view = new RasterSamplingAreaControlsView(document);
+    view.setSamplingAreaMode("selectedArea", "Histogram box");
+    view.setAreaContext({scope: "Shared reserve drawings", usesSamplingBox: false});
+    view.setActive(true, false); view.openAreaEditor();
+    assert.equal(view.isSamplingBoxSelected(), false);
+    assert.equal(view.mapBoxControls.hidden, true);
+    view.disclosure.open = false;
+    view.setSamplingAreaMode("wholeRaster", "Whole raster");
+    assert.equal(view.samplingAreaSummary.textContent, "Sample area · Shared reserve drawings");
+    view.setAreaContext(null);
+    assert.equal(view.samplingAreaSummary.textContent, "Sample area · Whole raster");
+});

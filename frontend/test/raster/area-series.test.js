@@ -107,12 +107,12 @@ test("layer and histogram actions select one hidden source and preserve the requ
     const h = fixture();
     const selected = {collectionId: "catalog", itemId: "hidden", label: "Hidden raster"};
     h.controller.chooseArea("whole");
-    h.controller.selectSource(selected); h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onCalculate(); await flush();
+    h.controller.selectSource(selected); h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onRetry(); await flush();
     const first = h.requests.find(([kind]) => kind === "submit")[1];
     assert.deepEqual(first.source, selected); assert.deepEqual(first.area, {kind: "wholeRaster"});
     h.controller.selectSource(selected, box(10)); await flush();
     assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 1);
-    await h.finish("cancelled"); h.view.actions.onCalculate(); await flush();
+    await h.finish("cancelled"); h.view.actions.onRetry(); await flush();
     assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").at(-1)[1].area, box(10));
     assert.equal(h.view.state.area.sources.length, 1);
     h.close();
@@ -125,7 +125,7 @@ test("a histogram source selects an existing view without adding another statist
     h.controller.updateAvailableRasters([first, second]);
 
     h.controller.selectSource({collectionId: "catalog", itemId: "1", label: "Second view"}, undefined, second.key);
-    h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onCalculate(); await flush();
+    h.controller.updateSamplingForPanelVisibility(true); h.view.actions.onRetry(); await flush();
 
     assert.deepEqual(h.controller.sources.map(item => item.key), [first.key, second.key]);
     assert.deepEqual([...h.controller.selectedKeys], [second.key]);
@@ -136,34 +136,6 @@ test("a histogram source selects an existing view without adding another statist
     h.close();
 });
 
-test("snapshot edits keep background results and CSV attached to the submitted observation", async () => {
-    const h = fixture();
-    const original = {key: "weather-view", visible: true, label: "Temperature at 00:00",
-        source: {collectionId: "eolab-temporal-datasets", itemId: "weather", variable: "temperature", time: "2000-01-01T00:00:00Z"}};
-    const replacement = {...original, label: "Rain at 01:00", source: {...original.source, variable: "rain", time: "2000-01-01T01:00:00Z"}};
-    try {
-        h.controller.updateAvailableRasters([original, source("1")]);
-        h.controller.updateSamplingForPanelVisibility(true);
-        h.view.actions.onCalculate(); await flush();
-        h.controller.updateSamplingForPanelVisibility(false);
-        h.controller.updateAvailableRasters([replacement, source("1")]);
-        h.controller.updateSamplingForPanelVisibility(true); await h.tick();
-        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
-        assert.equal(h.view.state.area.pendingInputs, true);
-        assert.equal(h.view.state.statistics[0].rows[0].label, original.label);
-        assert.equal(h.view.state.sources[0].label, replacement.label, "the next input remains the live map view");
-        await h.finish(); await h.finish();
-        assert.match(h.controller.exportCsv(), /Temperature at 00:00/);
-        assert.doesNotMatch(h.controller.exportCsv(), /Rain at 01:00/);
-        assert.match(h.controller.exportCsv(), /2000-01-01T00:00:00Z/);
-        h.view.actions.onCalculate(); await flush();
-        const submissions = h.requests.filter(([kind]) => kind === "submit");
-        assert.equal(submissions.length, 4);
-        assert.equal(submissions[2][1].source.variable, "rain");
-        assert.equal(submissions[2][1].source.time, replacement.source.time);
-        assert.equal(h.view.state.area.pendingInputs, false);
-    } finally { h.close(); }
-});
 
 test("changing a live snapshot replaces automatic work under its retained view key", async () => {
     const h = fixture();
@@ -192,7 +164,7 @@ test("catalog, upload and drawing selections preserve captured background work w
         h.controller.setVectorSelectionState({phase: "reading"});
         assert.equal(h.view.state.area.area, null);
         h.controller.setVectorSamplingArea({...info, label: "Reviewed polygons"});
-        h.view.actions.onCalculate(); await flush();
+        h.view.actions.onRetry(); await flush();
         const expected = info.polygonArea ? {kind: "polygonArea", polygonArea: info.polygonArea}
             : {kind: "catalogSelection", catalogSelection: info.selection};
         assert.deepEqual(h.requests.filter(([kind]) => kind === "submit").map(([, request]) => request.area), [expected, expected]);
@@ -221,7 +193,7 @@ test("invalidating the active automatic vector area cancels its work and ignores
     h.close();
 });
 
-test("accepting polygon features calculates automatically without making a background calculation", async () => {
+test("accepting polygon features automatically starts recoverable background work", async () => {
     const choices = [];
     const h = fixture({}, new Map(), choice => choices.push(choice));
     h.view.actions.onArea("vector");
@@ -230,7 +202,7 @@ test("accepting polygon features calculates automatically without making a backg
     h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
     await h.tick();
     assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
-    assert.equal(h.area.manual, false, "accepting features does not make the work a background calculation");
+    assert.equal(h.area.hasCapturedInputs, true, "all submitted calculations survive closing the panel");
     h.view.actions.onArea("vector");
     assert.equal(h.view.state.area.area, null, "retrying Vector clears the previous selected features");
     assert.deepEqual(choices, ["vector", "vector"]);
@@ -265,50 +237,6 @@ test("changing area mode cancels polygon selection and ignores its late reply", 
     sampling.destroy(); h.close();
 });
 
-test("reopening preserves captured polygon work and Calculate uses the latest committed filter", async () => {
-    const h = fixture();
-    h.controller.updateSamplingForPanelVisibility(true);
-    let target = {key: "countries", label: "Countries", item: CATALOG_SELECTION, filter: CATALOG_SELECTION.filter};
-    const prepared = [];
-    const replacement = deferred();
-    const sampling = new VectorSamplingController({
-        view: {bind() {}, render() {}, unbind() {}},
-        getTargets: () => [target],
-        createArea: async (_item, filter) => {
-            const selection = {...CATALOG_SELECTION, filter}; prepared.push(selection);
-            return prepared.length === 1 ? {selection, label: target.label, matched: 1, total: 200} : replacement.promise;
-        },
-        onActivate: area => h.controller.setVectorSamplingArea({selection: area.selection, label: area.label}),
-        onInvalidate: selection => h.controller.invalidateArea({kind: "catalogSelection", catalogSelection: selection}),
-        onSelectionState: state => h.controller.setVectorSelectionState(state),
-        onEditFilter() {},
-    });
-    try {
-        h.view.actions.onArea("vector"); await sampling.use();
-        h.view.actions.onCalculate(); await flush();
-        h.controller.updateSamplingForPanelVisibility(false);
-        target = {...target, filter: {...target.filter, rules: [{field: "iso3", operator: "eq", value: "CAN"}]}};
-        sampling.refresh(); await flush();
-        assert.equal(prepared.length, 2, "the selected vector follows the committed filter");
-        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0);
-        assert.deepEqual(h.area.area, {kind: "catalogSelection", catalogSelection: CATALOG_SELECTION});
-        assert.equal(h.area.manual, true);
-        h.controller.updateSamplingForPanelVisibility(true); await h.tick();
-        replacement.resolve({selection: prepared[1], label: target.label, matched: 1, total: 200});
-        await flush();
-        assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 0, "reopening does not replace running work");
-        assert.equal(h.view.state.area.pendingInputs, true);
-        assert.deepEqual(h.view.state.area.area.catalogSelection, prepared[1]);
-        assert.match(h.view.state.message, /Results use the previous inputs\. Calculate to update\./);
-        await h.finish(); await h.finish();
-        assert.equal(h.area.results.size, 2, "the captured calculation still accepts its results");
-        h.view.actions.onCalculate(); await flush();
-        const submissions = h.requests.filter(([kind]) => kind === "submit");
-        assert.equal(submissions.length, 4);
-        assert.ok(submissions.slice(2).every(([, request]) => request.area.catalogSelection.filter.rules[0].value === "CAN"));
-        assert.equal(h.view.state.area.pendingInputs, false);
-    } finally { sampling.destroy(); h.close(); }
-});
 
 test("standard deviation submits the population formula per raster and retains results in series CSV", async () => {
     const h = fixture(); h.controller.addFormula("stdev"); await h.open();
@@ -332,7 +260,7 @@ test("explicit calculations keep their sources, point and area while hidden and 
     assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 2);
     h.view.actions.onCancel(); await flush();
     await h.finish("cancelled"); await h.finish("cancelled");
-    h.view.actions.onCalculate(); await flush();
+    h.view.actions.onRetry(); await flush();
     await h.finish("ready", false, "1");
     h.controller.updateSamplingForPanelVisibility(false);
     h.controller.setArea(box(10), "Another map box");
@@ -367,9 +295,9 @@ test("explicit calculations keep their sources, point and area while hidden and 
 
 test("retrying a failed raster keeps the successful peer's saved result", async () => {
     const h = fixture(); h.controller.updateSamplingForPanelVisibility(true);
-    h.view.actions.onCalculate(); await flush();
+    h.view.actions.onRetry(); await flush();
     await h.finish("ready", false, "1"); await h.finish("failed", false, "2");
-    h.view.actions.onCalculate(); await flush();
+    h.view.actions.onRetry(); await flush();
     assert.equal(h.requests.filter(([kind]) => kind === "submit").length, 3);
     const records = [...h.data.values()].map(value => JSON.parse(value));
     assert.deepEqual(records.map(record => record.intent.source.itemId).sort(), ["1", "2"]);
@@ -389,15 +317,15 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     h.controller.editFormula(1,{label:"Renamed"});
     h.view.actions.onAddPlot();
     h.view.actions.onStatisticDisplay(2, {plotId:2});
-    h.view.actions.onPlotScale(2,"log");
+    h.view.actions.onPlotOptions(2,{scale:"log",bounds:[1,30],xBounds:null});
     h.view.actions.onStatisticDisplay(1, {visible:false});
-    assert.deepEqual(h.view.state.plots,[{id:1,scale:"linear"},{id:2,scale:"log"}]);
+    assert.deepEqual(h.view.state.plots.map(({id,scale})=>({id,scale})),[{id:1,scale:"linear"},{id:2,scale:"log"}]);
     assert.deepEqual(h.view.state.statistics.map(row=>[row.id,row.visible,row.plotId,row.styleIndex]),[[1,false,1,0],[2,true,2,1]]);
     assert.deepEqual(h.view.state.statistics[1].rows.map(row=>[row.rawValue,row.unit]),[["22","ha"],["22","ha"]]);
     assert.equal(h.view.state.rows.length,4,"table retains hidden statistics");
     h.view.actions.onRemovePlot(2);
     h.view.actions.onRemovePlot(1);
-    assert.deepEqual(h.view.state.plots,[{id:1,scale:"linear"}]);
+    assert.deepEqual(h.view.state.plots.map(({id,scale})=>({id,scale})),[{id:1,scale:"linear"}]);
     assert.equal(h.view.state.statistics[1].plotId,1);
     const csv=h.controller.exportCsv();
     assert.match(csv,/"-123.4567890123456789"/);
@@ -455,15 +383,6 @@ test("opening area statistics and changing selected rasters require no editing p
     h.close();
 });
 
-test("reopening unfinished area statistics schedules remaining work immediately",async()=>{
-    const h=fixture();await h.open();
-    h.controller.updateSamplingForPanelVisibility(false);await flush();
-    await h.finish("cancelled");await h.finish("cancelled");
-    h.controller.updateSamplingForPanelVisibility(true);await h.advance(0);
-    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,4);
-    assert.equal(h.area.pending.size,2);
-    h.close();
-});
 
 test("formula typing waits 700 ms after the latest expression and submits only that expression",async()=>{
     const h=fixture();await h.open();await h.finish();await h.finish();
@@ -494,12 +413,13 @@ for(const action of ["hide","cancel"]) {
     });
 }
 
-test("hiding raster series drops the pending stack and waits for acknowledged cancellation",async()=>{
+test("hiding and reopening raster statistics keeps the same submitted work running",async()=>{
     const h=fixture();await h.open();h.controller.updateSamplingForPanelVisibility(false);await flush();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,2);
-    await h.finish("cancelled");await h.finish("cancelled");
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
+    h.controller.updateSamplingForPanelVisibility(true); await h.tick();
+    await h.finish();await h.finish();
     assert.equal(h.requests.filter(([kind])=>kind==="submit").length,2);
-    assert.equal(h.area.results.size,0);h.close();
+    assert.equal(h.area.results.size,2);h.close();
 });
 
 test("retained raster visibility refreshes stack defaults and subsequent map-click calculations", async () => {
@@ -552,6 +472,8 @@ test("explicit raster choices survive visibility, rename, reorder, clicks and pa
     h.controller.updateAvailableRasters([source("1"), source("2"), source("hidden"), source("new")]);
     h.controller.setPosition({ longitude: 7, latitude: 8 });
     await h.open();
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["hidden", "new"], "opening preserves the captured calculation");
+    h.view.actions.onSelect("2",true); await h.tick();
     assert.deepEqual(h.area.sources.map(raster => raster.key), ["2", "hidden", "new"]);
     assert.equal(h.view.state.sources.find(raster => raster.key === "1").selected, false);
     h.close();
@@ -680,16 +602,16 @@ test("uncertain submissions recover with their original key",async()=>{
     h.close();
 });
 
-test("reload cancels every automatic request without resubmitting",async()=>{
+test("reload recovers automatically started work without cancelling or resubmitting",async()=>{
     const h=fixture();await h.open();
     const originals=[...h.server.values()];h.close();
     const recovered=fixture({},h.data);
     for(const job of originals)recovered.server.set(job.jobId,job);
     await recovered.area.start();await flush();
-    assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,2);
-    await recovered.finish("cancelled");await recovered.finish("cancelled");
+    assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,0);
+    await recovered.finish();await recovered.finish();
     assert.equal(recovered.requests.filter(([kind])=>kind==="submit").length,0);
-    assert.deepEqual(recovered.storage.savedClientNames(),[]);recovered.close();
+    assert.equal(recovered.area.results.size,2);recovered.close();
 });
 
 test("catalog predicates and annotation uploads remain exact per-raster inputs",async()=>{
@@ -700,6 +622,14 @@ test("catalog predicates and annotation uploads remain exact per-raster inputs",
         await h.area.calculateRemainingRasters();await flush();await h.finish();await h.finish();
         for(const [,intent]of h.requests.filter(([kind])=>kind==="submit"))assert.deepEqual(intent.area,area);
         assert.equal(h.area.complete,true);h.close();
+        const restored = fixture({}, h.data);
+        for (const [id, job] of h.server) restored.server.set(id, job);
+        try {
+            await restored.controller.start();
+            assert.equal(restored.view.state.area.areaChoice, "vector");
+            assert.deepEqual(restored.view.state.area.area, area);
+            assert.equal(restored.requests.filter(([kind]) => kind === "submit").length, 0);
+        } finally { restored.close(); }
     }
 });
 
@@ -867,18 +797,19 @@ test("all 64 rasters finish automatically through a smaller job queue",async con
     assert.equal(h.view.state.rows.length,64);
     assert.equal(h.server.size,64,"each raster was accepted exactly once");
     assert.equal(h.requests.filter(([kind])=>kind==="plan").length,0);
-    assert.deepEqual(h.storage.savedClientNames(),[]);
+    assert.equal(h.storage.savedClientNames().length,64,"completed results remain recoverable");
     h.close();
 });
 
-test("reload recovers and cancels all 64 independent submissions",async()=>{
+test("reload recovers all 64 independent submissions without cancelling them",async()=>{
     const h=fixture();
     h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i))));
     await h.open();h.close();
     const recovered=fixture(h.api,h.data);
     await recovered.area.start();await flush();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,64);
-    assert.ok([...h.server.values()].every(job=>job.status==="cancelling"));
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
+    assert.equal(recovered.area.pending.size,64);
+    assert.ok([...h.server.values()].every(job=>job.status==="running"));
     recovered.close();
 });
 
@@ -922,6 +853,7 @@ test("reload recovers multiple lost submissions with original keys before cancel
     await restored.area.start();await flush();
     assert.deepEqual(restored.requests.filter(([kind])=>kind==="submit").map(([,input])=>input),originals);
     assert.equal(restored.server.size,2);
+    restored.area.cancelRemainingRasters(); await flush();
     assert.equal(restored.requests.filter(([kind])=>kind==="cancel").length,2);
     await restored.finish("cancelled");await restored.finish("cancelled");
     assert.deepEqual(restored.storage.savedClientNames(),[]);restored.close();
@@ -946,4 +878,17 @@ test("the shared activity indicator stays active until every submitted calculati
     await h.open();await h.finish();
     assert.deepEqual(activity.at(-1),box(0));
     await h.finish();assert.equal(activity.at(-1),null);h.close();
+});
+
+test("a box choice publishes its intent before composition commits a rectangle", () => {
+    let h;
+    h = fixture({}, new Map(), choice => {
+        assert.equal(h.view.state.area.areaChoice, choice);
+        h.controller.setArea(box(10), "New box");
+    });
+    try {
+        h.controller.chooseArea("selection");
+        assert.deepEqual(h.view.state.area.area, box(10));
+        assert.equal(h.view.state.area.areaChoice, "selection");
+    } finally { h.close(); }
 });

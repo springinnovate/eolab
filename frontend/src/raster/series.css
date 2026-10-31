@@ -1,6 +1,6 @@
 #raster-series h2 { margin: 0; font-size: 1.05rem; }
 #raster-series { scroll-padding-block-start: calc(44px + 1rem); }
-#raster-series-context, #raster-series-status, #raster-series-chart-note {
+#raster-series-status, #raster-series-chart-note {
   font-size: 0.78rem;
   overflow-wrap: anywhere;
   margin: 0.3rem 0;
@@ -9,6 +9,10 @@
 .raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
 .raster-series-controls label[hidden] { display: none; }
 #raster-series-data-inputs { margin-bottom: 0.5rem; }
+#raster-series-toggle-inputs { position: sticky; top: 0; z-index: 2; display: block; width: 100%; padding: 0.35rem 0.5rem; text-align: left; font-size: 0.78rem; background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius); }
+#raster-series-toggle-inputs[aria-expanded="true"] { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+#raster-series-inputs { margin-bottom: 0.4rem; border: 1px solid var(--border-1); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 0.35rem 0.5rem; }
+#raster-series-inputs[hidden] { display: none; }
 #raster-series-temporal-title { margin: 0.4rem 0; font-weight: 600; }
 #raster-series-temporal { font-size: 0.78rem; }
 #raster-series-temporal label:not([hidden]) { display: grid; gap: 0.25rem; min-width: 0; }
@@ -23,14 +27,20 @@
 .raster-series-statistics-header select { max-width: 100%; min-width: 0; font-size: inherit; }
 .raster-series-settings { border-top: 1px solid var(--border-1); padding: 0.4rem 0; }
 #raster-series-plots:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+#raster-series-plot-heading { margin-top: 0.4rem; overflow-wrap: anywhere; }
+#raster-series-plot-heading[hidden] { display: none; }
+#raster-series-plot-title { margin: 0; font-size: 0.9rem; }
+#raster-series-plot-context { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--text-2); }
 #raster-series button, #raster-series select, #raster-series summary, .raster-series-formula-legend { min-height: 24px; }
 #raster-series summary { line-height: 24px; }
-#raster-series-sources { max-height: 8rem; overflow: auto; margin-top: 0.3rem; }
+#raster-series-sources { margin-top: 0.3rem; }
 #raster-series-sources .raster-series-source { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; }
 #raster-series-sources .raster-series-source-name { display: flex; align-items: start; gap: 0.5rem; flex: 1; min-width: 0; }
-#raster-series-sources small { display: block; }
-#raster-series-sources button { flex: none; font-size: inherit; }
-#raster-series-sources button[aria-pressed="true"] { background: var(--surface-selected); font-weight: 600; }
+#raster-series-sources.raster-series-source-columns .raster-series-source,
+#raster-series-sources .raster-series-source-headings { display: grid; grid-template-columns: minmax(0, 1fr) 7rem; gap: 0.5rem; }
+#raster-series-sources .raster-series-source-headings { font-weight: 600; padding-bottom: 0.25rem; }
+#raster-series-sources .raster-series-source-headings span:last-child { text-align: center; }
+#raster-series-sources .raster-series-range-choice { display: flex; align-items: center; justify-content: center; min-height: 24px; cursor: pointer; }
 #raster-series-sources span { overflow-wrap: anywhere; min-width: 0; }
 .raster-series-table-scroll { overflow-x: auto; }
 #raster-series table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
@@ -59,17 +69,40 @@
 .raster-series-formula-editor[open] { grid-column: 1 / -1; grid-row: 2; }
 .raster-series-formula-editor label { display: grid; gap: 0.25rem; margin: 0.35rem 0; font-size: 0.75rem; }
 .raster-statistic-swatch { width: 2rem; height: 1rem; flex: none; }
-#raster-series-plots { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; padding: 0.4rem 0 0.75rem; margin-bottom: 0.5rem; }
+#raster-series-plots { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; padding: 0.4rem 0 0; margin-bottom: 0; }
+#raster-series-plot-area { position: relative; }
+#raster-series-plot-area.is-calculating { min-height: 260px; }
+#raster-series-plot-progress { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 0.75rem; pointer-events: none; }
+#raster-series-plot-progress[hidden] { display: none; }
+.raster-series-progress-message { display: grid; gap: 0.65rem; max-width: 100%; box-sizing: border-box; padding: 1rem; text-align: center; background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius); }
+.raster-series-progress-message strong { font-size: 1.35rem; line-height: 1.25; }
+.raster-series-progress-message p { margin: 0; font-size: 0.9rem; overflow-wrap: anywhere; }
+.raster-series-progress-message progress { width: 100%; height: 0.65rem; accent-color: var(--brand); }
 #raster-series-results[hidden], #raster-series-add-plot[hidden], #raster-series-plots[hidden], .raster-series-statistics-chart[hidden], .raster-series-plot-tooltip[hidden], .raster-series-empty-plot[hidden] { display: none; }
-.raster-series-plot { position: relative; box-sizing: border-box; flex: 1 0 min(100%, 32rem); min-width: 0; padding: 0.65rem; border: 1px solid var(--border-1); border-radius: 0.3rem; display: flex; flex-direction: column; scroll-margin-block-start: 3rem; }
+.raster-series-plot { position: relative; box-sizing: border-box; flex: 1 0 min(100%, 32rem); min-width: 0; padding: 0.25rem 0; display: flex; flex-direction: column; scroll-margin-block-start: 3rem; }
 .raster-series-plot-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; min-height: 2rem; }
+.raster-series-plot-header[hidden] { display: none; }
 .raster-series-plot-header strong { margin-right: auto; }
 .raster-series-plot-header select { font-size: inherit; }
 .raster-series-plot-header button { padding: 0.1rem 0.4rem; }
-.raster-series-legend { display: flex; flex-wrap: wrap; align-content: start; gap: 0.1rem 0.5rem; height: 3.5rem; overflow-y: auto; padding-top: 0.4rem; }
+.raster-series-legend { display: flex; flex-wrap: wrap; align-content: start; gap: 0.1rem 0.5rem; padding-top: 0.15rem; }
+.raster-series-legend[hidden] { display: none; }
 .raster-series-legend-item { display: flex; align-items: center; gap: 0.25rem; color: var(--text-1); background: none; border: none; padding: 0.1rem; font-size: 0.75rem; max-width: 100%; }
 .raster-series-legend-item span { overflow-wrap: anywhere; min-width: 0; }
-.raster-series-plot-note { font-size: 0.72rem; height: 3.8rem; overflow-y: auto; margin: 0.3rem 0; }
+.raster-series-plot-note { font-size: 0.72rem; margin: 0.2rem 0; }
+.raster-series-plot-note[hidden] { display: none; }
+.raster-series-chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.78rem; }
+.raster-series-chart-toolbar[hidden] { display: none; }
+.raster-series-chart-toolbar label { display: flex; align-items: center; gap: 0.3rem; }
+.raster-series-axis-options { border: 0; padding: 0.3rem 0; margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: start; gap: 0.35rem 0.6rem; font-size: 0.78rem; }
+.raster-series-axis-options legend { font-weight: 600; padding: 0; }
+.raster-series-axis-options label { display: flex; align-items: center; gap: 0.3rem; }
+.raster-series-axis-range { min-width: 0; }
+.raster-series-axis-range[hidden], .raster-series-axis-bounds[hidden], .raster-series-axis-error[hidden] { display: none; }
+.raster-series-axis-bounds { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.raster-series-axis-bounds label { display: grid; gap: 0.2rem; }
+.raster-series-axis-bounds input { width: 10rem; max-width: 100%; min-width: 0; box-sizing: border-box; font-size: inherit; }
+.raster-series-axis-error { color: var(--status-danger); margin: 0; }
 .raster-series-statistics-chart { width: 100%; height: auto; display: block; }
 .raster-series-statistics-chart.is-previous { opacity: 0.25; }
 .raster-series-statistics-chart .is-muted { opacity: 0.2; }
@@ -79,7 +112,7 @@
 @media (pointer: coarse) {
   #raster-series button, #raster-series select, #raster-series summary { min-width: 44px; min-height: 44px; }
   #raster-series-sources label, .raster-series-formula-legend { min-height: 44px; }
-  #raster-series select, .raster-series-formula input:not([type="checkbox"]) { font-size: 16px; }
+  #raster-series select, .raster-series-formula input:not([type="checkbox"]), .raster-series-axis-bounds input { font-size: 16px; min-height: 44px; }
   #raster-series summary { line-height: 44px; }
   .raster-series-formula { grid-template-columns: minmax(0, 1fr) auto auto 44px; }
   .raster-series-formula button { min-width: 44px; }
@@ -91,3 +124,13 @@
 .summary-vector-area p { margin: 0; color: var(--text-2); }
 .summary-vector-area [data-vector-sampling="predicate"] { overflow-wrap: anywhere; }
 @media (pointer: coarse) { .summary-text-button { min-height: 44px; min-width: 44px; } }
+
+.raster-series-axis-options input[type="number"] { width: 4.5rem; font-size: inherit; }
+.raster-series-formula-editor input[type="color"] { width: 3rem; height: 1.75rem; padding: 0.1rem; }
+#raster-series-values { border-top: 0; padding-top: 0; }
+
+#raster-series-area-controls[hidden] { display: none; }
+#raster-series-area-summary { overflow-wrap: anywhere; }
+.raster-series-sample-area { font-size: 0.75rem; gap: 0.25rem; }
+.raster-series-sample-area button { min-width: 0; max-width: 100%; text-align: left; text-decoration: underline; text-underline-offset: 0.15em; }
+#raster-series-vector-area { margin: 0 0 4px 22px; border: 0; padding: 0; font-size: 0.72rem; }

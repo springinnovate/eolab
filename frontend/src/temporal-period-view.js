@@ -1,6 +1,6 @@
 /** Present stable calendar and UTC time controls for temporal analyses. */
 import { getTemporalYearBoundaries, getTemporalMonthBoundaries, getTemporalDayBoundaries, getTemporalSelectedDays,
-    selectTemporalPeriodMode, describeTemporalPeriod, snapTemporalHour } from "./temporal-period.js";
+    selectTemporalPeriodMode, snapTemporalHour } from "./temporal-period.js";
 
 /** Validate typed calendar text before it enters the UTC period contract.
  * @param {HTMLInputElement} input Year or ISO calendar-date text field.
@@ -78,10 +78,8 @@ export class TemporalPeriodView {
             group.append(field(`${idPrefix}-${name}Time`, name === "start" ? "Start time (UTC)" : "End time (excluded, UTC)", time));
             this.exactFields.append(group);
         }
-        this.periodSummary = element("p", "", "temporal-period-summary");
-        this.periodSummary.setAttribute("role", "status");
-        this.root.append(field(`${idPrefix}-mode`, "Choose time by", this.periodMode),
-            this.calendarFields, this.dayFields, this.exactFields, this.periodSummary);
+        this.root.append(field(`${idPrefix}-mode`, "Time range", this.periodMode),
+            this.calendarFields, this.dayFields, this.exactFields);
     }
 
     /** Pair a full-date text field with a compact, independently labelled native calendar.
@@ -162,6 +160,5 @@ export class TemporalPeriodView {
                 if (this[name + "Picker"]) this[name + "Picker"].disabled = group.hidden;
             }
         }
-        this.periodSummary.textContent = describeTemporalPeriod(temporal);
     }
 }

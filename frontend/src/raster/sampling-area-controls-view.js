@@ -194,6 +194,16 @@ export class RasterSamplingAreaControlsView {
         this.#renderSelectedControls();
     }
 
+    /** Display a foreground workflow's committed area while it edits its own form.
+     * The composition root supplies context; this view does not inspect the workflow.
+     * @param {{scope:string,usesSamplingBox:boolean}|null} context Area description, or null for the ordinary map sampler.
+     * @return {void}
+     */
+    setAreaContext(context) {
+        this.areaContext = context;
+        this.#renderSelectedControls();
+    }
+
     /** Keep vector-area editing available when there is no active raster.
      * @param {boolean} available Whether a raster owns the box and whole-raster actions.
      * @return {void}
@@ -207,7 +217,7 @@ export class RasterSamplingAreaControlsView {
      * @return {boolean} Whether the Sampling box radio is checked.
      */
     isSamplingBoxSelected() {
-        return this.useMapWindowButton.checked;
+        return this.areaContext?.usesSamplingBox ?? this.useMapWindowButton.checked;
     }
 
     /** Open the existing area choices while leaving the current results visible.
@@ -223,7 +233,8 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     #renderSelectedControls() {
-        this.mapBoxControls.hidden = !this.useMapWindowButton.checked || !(this.usesBox || this.disclosure.open);
+        const boxSelected = this.areaContext?.usesSamplingBox ?? this.useMapWindowButton.checked;
+        this.mapBoxControls.hidden = !boxSelected || !(this.usesBox || this.disclosure.open);
         this.vectorControls.hidden = !this.vectorChoice.checked;
         this.#renderAreaSummary();
     }
@@ -296,9 +307,9 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     #renderAreaSummary() {
-        this.samplingAreaSummary.textContent = this.disclosure.open ? "Sample area" : this.useMapWindowButton.checked
+        this.samplingAreaSummary.textContent = this.disclosure.open ? "Sample area" : this.isSamplingBoxSelected()
             ? `Sampling box · ${this.dimensions.textContent}`
-            : `Sample area · ${this.areaLabel}`;
+            : `Sample area · ${this.areaContext?.scope ?? this.areaLabel}`;
     }
 
     /** Convert a logarithmic slider edit to integer kilometers. @return {void} */

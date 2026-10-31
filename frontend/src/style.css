@@ -4076,6 +4076,8 @@ article.raster-histogram-summary {
   background: var(--surface-1);
 }
 
+#raster-series { padding-top: 0; }
+
 #map-inspection:not(:popover-open),
 #map-tools-more-summary[hidden],
 #map-histogram-panel[hidden],
@@ -4417,6 +4419,7 @@ summary:hover > .raster-disclosure-chevron {
 #vector-sampling[hidden] {
   display: none;
 }
+.raster-sampling-area-options[hidden] { display: none; }
 .raster-sampling-area-options {
   display: grid;
   min-width: 0;
@@ -5109,5 +5112,4 @@ summary:hover > .raster-disclosure-chevron {
 .temporal-date-entry .temporal-calendar-picker { width: 100%; min-width: 0; padding: 4px; }
 .temporal-calendar-picker::-webkit-datetime-edit { display: none; }
 .temporal-calendar-picker::-webkit-calendar-picker-indicator { width: 1.4rem; height: 1.4rem; margin: 0 auto; }
-.temporal-period-summary { margin: 4px 0; padding: 10px; background: var(--surface-selected); border-radius: var(--radius); font-size: 0.8rem; overflow-wrap: anywhere; }
 .temporal-period[hidden], .temporal-period [hidden] { display: none; }
