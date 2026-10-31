@@ -180,7 +180,7 @@ export class CalculationExecutor {
                 this.#status.completedCalculation = this.#saved.intent;
                 this.#status.message = "Calculation complete.";
             } else this.#status.message = this.#saved.cancelRequested || job.status === "cancelled"
-                ? "Calculation cancelled." : job.error?.detail ?? "Calculation interrupted. Calculate to try again.";
+                ? "Calculation cancelled." : job.error?.detail ?? "Calculation interrupted. Retry to try again.";
             this.jobs.tracked.delete(job.jobId);
             // Keep explicit requests, including finished peers, together across reload.
             // Replacing inputs or cancelling releases these per-position records.
@@ -192,7 +192,7 @@ export class CalculationExecutor {
             this.#retryRequired = true;
             this.#pending = null;
             this.#status.phase = "error";
-            this.#status.message = `${error.message}${this.#saved ? " Recover / retry to confirm or cancel the same job safely." : " Click Calculate to retry."}`;
+            this.#status.message = `${error.message}${this.#saved ? " Recover / retry to confirm or cancel the same job safely." : " Choose Retry to try again."}`;
         } finally {
             this.#advancing = false;
             this.#notify();
