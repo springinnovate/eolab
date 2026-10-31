@@ -364,7 +364,7 @@ test("temporal controls reuse the period editor and preserve focused input while
     const h = controlsFixture();
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea", "onOpenArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
-        "onRemovePlot", "onPlotAxis", "onRetry", "onCancel", "onRecover", "onTimeRange",
+        "onRemovePlot", "onPlotOptions", "onRetry", "onCancel", "onRecover", "onTimeRange",
         "onTemporalVariable"].map(key => [key, () => assert.fail(key)]));
     actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
     actions.onTimeRange = key => {
@@ -564,7 +564,7 @@ test("axis editors redraw retained observations and preserve the valid plot duri
     const state = {plots:[{id:1,scale:"linear",bounds:null,xBounds:null}],chartType:"bar",temporal:{},showingPrevious:false,
         statistics:[{id:1,label:"Mean",expression:"mean(a)",styleIndex:0,visible:true,plotId:1,rows}]};
     const original = JSON.stringify(rows), changes = [];
-    const view = new RasterSeriesPlotsView(h.document, {onPlotAxis(id, change) {
+    const view = new RasterSeriesPlotsView(h.document, {onPlotOptions(id, change) {
         changes.push(change); Object.assign(state.plots[0],change); view.renderPlots(state);
     }});
     view.renderPlots(state);

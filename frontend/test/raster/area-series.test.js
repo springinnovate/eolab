@@ -317,7 +317,7 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     h.controller.editFormula(1,{label:"Renamed"});
     h.view.actions.onAddPlot();
     h.view.actions.onStatisticDisplay(2, {plotId:2});
-    h.view.actions.onPlotAxis(2,{scale:"log",bounds:[1,30],xBounds:null});
+    h.view.actions.onPlotOptions(2,{scale:"log",bounds:[1,30],xBounds:null});
     h.view.actions.onStatisticDisplay(1, {visible:false});
     assert.deepEqual(h.view.state.plots.map(({id,scale})=>({id,scale})),[{id:1,scale:"linear"},{id:2,scale:"log"}]);
     assert.deepEqual(h.view.state.statistics.map(row=>[row.id,row.visible,row.plotId,row.styleIndex]),[[1,false,1,0],[2,true,2,1]]);

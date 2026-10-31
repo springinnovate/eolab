@@ -87,7 +87,7 @@ export class RasterSeriesController {
             onStatisticDisplay: (id, change) => this.changeStatisticDisplay(id, change),
             onAddPlot: () => this.addPlot(),
             onRemovePlot: id => this.removePlot(id),
-            onPlotAxis: (id, change) => this.setPlotAxis(id, change),
+            onPlotOptions: (id, change) => this.setPlotOptions(id, change),
             onRetry: () => this.retryFailedCalculations(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(true),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
@@ -539,12 +539,12 @@ export class RasterSeriesController {
         this.render();
     }
 
-    /** Change validated axis presentation without changing calculation inputs or values.
+    /** Change validated plot appearance without changing calculation inputs or values.
      * @param {number} id Plot identity.
      * @param {{scale:"linear"|"log",bounds:[number,number]|null,xBounds:[number,number]|null,pointSize?:number,xTickCount?:number,yTickCount?:number,axisFontSize?:number}} change Display-only settings validated by the axis editor.
      * @return {void}
      */
-    setPlotAxis(id, change) {
+    setPlotOptions(id, change) {
         const plot = this.plots.find(item => item.id === id);
         Object.assign(plot, change);
         this.render();

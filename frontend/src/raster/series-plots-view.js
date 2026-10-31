@@ -38,7 +38,7 @@ export function createStatisticSwatch(documentContext, styleIndex, color = null)
 export class RasterSeriesPlotsView {
     /** Connect the plot container to presentation-only actions.
      * @param {Document} documentContext Owning document.
-     * @param {{onRemovePlot:(id:number)=>void,onPlotAxis:(id:number,change:Object)=>void}} actions Plot controls; axis changes redraw retained results.
+     * @param {{onRemovePlot:(id:number)=>void,onPlotOptions:(id:number,change:Object)=>void}} actions Plot controls; axis changes redraw retained results.
      */
     constructor(documentContext, actions) {
         this.document = documentContext;
@@ -117,19 +117,19 @@ export class RasterSeriesPlotsView {
         this.container.append(card);
         const elements = { card, title, options, plot, scale, axes, appearance, error, legend, note, chart, empty, tooltip, signature: null };
         for (const input of [scale, ...Object.values(appearance), ...Object.values(axes).flatMap(axis => [axis.range, ...axis.fields])]) {
-            input.addEventListener(input.tagName.toLowerCase() === "input" ? "input" : "change", () => this.editAxes(plot.id, elements));
+            input.addEventListener(input.tagName.toLowerCase() === "input" ? "input" : "change", () => this.editPlotOptions(plot.id, elements));
         }
         return elements;
     }
 
-    /** Validate editable axis bounds, then request a display-only update.
+    /** Validate plot-option edits, then request a display-only update.
      * Incomplete or invalid drafts keep the last valid figure. Automatic values
      * seed custom fields when first opened; result/progress updates never replace drafts.
      * @param {number} id Plot identity.
      * @param {Object} elements Retained axis controls and last rendered domains.
      * @return {void}
      */
-    editAxes(id, elements) {
+    editPlotOptions(id, elements) {
         const change = {scale: elements.scale.value, bounds: null, xBounds: elements.plot.xBounds ?? null};
         let message = "";
         for (const [axis, controls] of Object.entries(elements.axes)) {
@@ -157,7 +157,7 @@ export class RasterSeriesPlotsView {
         }
         elements.rangeModes = Object.fromEntries(Object.entries(elements.axes).map(([axis, controls]) => [axis, controls.range.value]));
         elements.error.hidden = !message; elements.error.textContent = message;
-        if (!message) this.actions.onPlotAxis(id, change);
+        if (!message) this.actions.onPlotOptions(id, change);
     }
 
     /** Add or remove plot cards and refresh those whose settings or results changed.

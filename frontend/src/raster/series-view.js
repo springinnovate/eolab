@@ -107,7 +107,7 @@ export class RasterSeriesView {
      * @param {(id:number,change:{visible?:boolean,plotId?:number,color?:string})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
      * @param {()=>void} actions.onAddPlot Add a linear plot.
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
-     * @param {(id:number,change:Object)=>void} actions.onPlotAxis Change one plot's validated display bounds and scale.
+     * @param {(id:number,change:Object)=>void} actions.onPlotOptions Change one plot's validated axes, point size and font settings.
      * @param {()=>void} actions.onRetry Retry failed sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
