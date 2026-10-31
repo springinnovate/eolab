@@ -419,7 +419,10 @@ export class RasterSeriesView {
         }
         const summary = this.document.querySelector("#raster-series-area-summary");
         const label = area.areaChoice === "whole" ? "Whole raster" : area.areaLabel || "No area selected";
-        if (summary.textContent !== `Sample area: ${label}`) summary.textContent = `Sample area: ${label}`;
+        if (summary.textContent !== label) summary.textContent = label;
+        const action = this.document.querySelector("#raster-series-open-area");
+        const actionLabel = `Change sample area: ${label}`;
+        if (action.getAttribute("aria-label") !== actionLabel) action.setAttribute("aria-label", actionLabel);
         const vector = this.document.querySelector("#raster-series-vector-area");
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const addFormula = this.document.querySelector("#raster-series-add-formula");

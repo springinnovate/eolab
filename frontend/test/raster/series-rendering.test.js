@@ -355,7 +355,8 @@ test("collapsed Inputs summarizes sources and scope without repeating axis setti
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
-        assert.equal(h.document.querySelector("#raster-series-area-summary").textContent, "Sample area: Watershed polygons");
+        assert.equal(h.document.querySelector("#raster-series-area-summary").textContent, "Watershed polygons");
+        assert.equal(h.document.querySelector("#raster-series-open-area").getAttribute("aria-label"), "Change sample area: Watershed polygons");
         assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Watershed polygons · 2 rasters/,"provided area names remain useful context");
     }
 });
