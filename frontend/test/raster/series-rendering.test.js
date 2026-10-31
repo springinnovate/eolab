@@ -66,11 +66,12 @@ test("raster statistics places visible inputs before execution and results", asy
     assert.match(panel, /<details id="raster-series-inputs" open>/);
     assert.ok(!panel.includes('id="raster-series-calculate"'));
     assert.ok(!panel.includes('id="raster-series-edit-area"'));
+    assert.ok(!panel.includes('id="raster-series-area-controls"'), "editable areas live only in the floating tool");
     assert.match(panel, />Axis and plot options<\/summary>/);
     assert.ok(!panel.includes("raster-series-source-mode"));
     assert.ok(!panel.includes("raster-series-temporal-dataset"));
     for (const id of ["temporal-variable", "period", "sources",
-        "status", "area", "retry", "cancel", "recover", "add-plot"]) {
+        "status", "open-area", "retry", "cancel", "recover", "add-plot"]) {
         const attribute = `id="raster-series-${id}"`;
         assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
     }
@@ -354,14 +355,14 @@ test("collapsed Inputs summarizes sources and scope without repeating axis setti
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
-        assert.equal(h.document.querySelector("#raster-series-selected-area").textContent, label);
+        assert.equal(h.document.querySelector("#raster-series-area-summary").textContent, "Sample area: Watershed polygons");
         assert.match(h.document.querySelector("#raster-series-input-summary").textContent,/Watershed polygons · 2 rasters/,"provided area names remain useful context");
     }
 });
 
 test("temporal controls reuse the period editor and preserve focused input while availability changes", () => {
     const h = controlsFixture();
-    const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
+    const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea", "onOpenArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
         "onRemovePlot", "onPlotAxis", "onRetry", "onCancel", "onRecover", "onTimeRange",
         "onTemporalVariable"].map(key => [key, () => assert.fail(key)]));

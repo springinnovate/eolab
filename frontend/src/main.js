@@ -875,9 +875,17 @@ async function initializeCatalog(
         ["histogram", true], ["raster-series", false], ["raster-clips", false],
     ]);
     let activeSamplingTool = null;
+    let statisticsSamplingContext = null;
     /** Present sampling controls for the active workflow without changing its area. @return {void} */
     const updateSamplingControls = () => {
         const active = samplingTools.has(activeSamplingTool);
+        const statistics = activeSamplingTool === "raster-series";
+        document.querySelector("#raster-sampling-area-controls").hidden = statistics;
+        document.querySelector("#raster-series-area-controls").hidden = !statistics;
+        const slot = document.querySelector(statistics ? "#raster-series-box-controls" : "#raster-histogram-box-controls");
+        const boxControls = document.querySelector("#raster-map-box-controls");
+        if (boxControls.parentElement !== slot) slot.append(boxControls);
+        rasterControls.setSamplingAreaContext(statistics ? statisticsSamplingContext : null);
         rasterControls.setSamplingControlsActive(active, samplingTools.get(activeSamplingTool) ?? false);
         if (!active) rasterVisualization?.cancelSampleWindowResize();
     };
@@ -889,6 +897,7 @@ async function initializeCatalog(
     const presentSamplingContext = (tool, context) => {
         mapInspection.setToolContext(tool, context);
         samplingTools.set(tool, context.usesSamplingBox);
+        if (tool === "raster-series") statisticsSamplingContext = context;
         if (activeSamplingTool === tool) updateSamplingControls();
     };
     mapInspection.subscribeActiveTool(tool => {
@@ -907,9 +916,14 @@ async function initializeCatalog(
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
+        onOpenArea: editProcessingArea,
         onAreaChoice: choice => {
             if (choice === "vector") void summarySampling.use();
-            else summarySampling.invalidate("");
+            else {
+                summarySampling.invalidate("");
+                if (choice === "selection") rasterVisualization.selectSamplingBox();
+                else rasterVisualization.selectWholeRaster();
+            }
         },
         view: new RasterSeriesView(document, {
             onContextChange: context => presentSamplingContext("raster-series", context),
@@ -957,7 +971,6 @@ async function initializeCatalog(
             updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected polygons" : area?.kind === "selectedArea" ? "Sampling box" : "Sample area");
         },
         onSamplingMethodChange: method => {
-            if (rasterSeries.active) rasterSeries.chooseArea("selection");
             if (method === "vector") void vectorSampling.use();
             else vectorSampling.invalidate("");
         },

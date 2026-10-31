@@ -429,6 +429,14 @@ export class RasterControlsView {
         this.#samplingAreaView.setActive(active, usesBox);
     }
 
+    /** Show composed area context without replacing the map sampler's retained selection.
+     * @param {{scope:string,usesSamplingBox:boolean}|null} context Foreground workflow area, or ordinary map sampling.
+     * @return {void}
+     */
+    setSamplingAreaContext(context) {
+        this.#samplingAreaView.setAreaContext(context);
+    }
+
     /** Focus area choices without opening or recalculating a histogram. @return {void} */
     openSamplingControls() {
         this.#samplingAreaView.openAreaEditor();

@@ -76,6 +76,7 @@ export class RasterSeriesView {
         this.valueCaption = documentContext.querySelector("#raster-series-value-caption");
         this.download = documentContext.querySelector("#raster-series-download");
         this.sourceSignature = null;
+        this.areaChoices = ["selection", "whole", "vector"].map(choice => [choice, documentContext.querySelector("#raster-series-area-" + choice)]);
         this.formulaRows = documentContext.querySelector("#raster-series-formulas");
         /** @type {Map<number, HTMLDivElement>} Retained editor nodes owned by this view. */
         this.formulaNodes = new Map();
@@ -98,7 +99,8 @@ export class RasterSeriesView {
      * @param {(order:string,direction:string)=>void} actions.onOrder Change plot order.
      * @param {(type:string)=>void} actions.onChartType Change line/scatter presentation.
      * @param {()=>void} actions.onDownload Download the current values.
-     * @param {(choice:string)=>void} actions.onArea Sampling area or whole raster.
+     * @param {(choice:string)=>void} actions.onArea Sampling box, whole raster or polygons.
+     * @param {()=>void} actions.onOpenArea Open the floating Sample area tool.
      * @param {(preset:string)=>void} actions.onAddFormula Add statistic.
      * @param {(id:number,change:{label?:string,expression?:string})=>void} actions.onEditFormula Update formula/name.
      * @param {(id:number)=>void} actions.onRemoveFormula Remove statistic.
@@ -142,7 +144,10 @@ export class RasterSeriesView {
         for (const input of [order, direction]) input.addEventListener("change", () => actions.onOrder(order.value, direction.value));
         this.document.querySelector("#raster-series-chart-type").addEventListener("change", event => actions.onChartType(event.target.value));
         this.download.addEventListener("click", actions.onDownload);
-        this.document.querySelector("#raster-series-area").addEventListener("change", event => actions.onArea(event.target.value));
+        this.document.querySelector("#raster-series-open-area").addEventListener("click", actions.onOpenArea);
+        for (const [choice, input] of this.areaChoices) {
+            input.addEventListener("change", () => { if (input.checked) actions.onArea(choice); });
+        }
         this.document.querySelector("#raster-series-add-formula").addEventListener("change", event => {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
@@ -409,12 +414,12 @@ export class RasterSeriesView {
             if (plot.getAttribute("aria-label") !== label) plot.setAttribute("aria-label", label);
             if (plot.value !== String(formula.plotId)) plot.value = String(formula.plotId);
         }
-        const areaChoice = this.document.querySelector("#raster-series-area");
-        if (areaChoice.value !== area.areaChoice) areaChoice.value = area.areaChoice;
-        const selectedArea = this.document.querySelector("#raster-series-selected-area");
-        const selectedAreaLabel = area.area?.kind === "selectedArea" ? "Sampling box"
-            : area.area?.kind === "catalogSelection" || area.area?.kind === "polygonArea" ? "Selected polygons" : "No area selected";
-        if (selectedArea.textContent !== selectedAreaLabel) selectedArea.textContent = selectedAreaLabel;
+        for (const [choice, input] of this.areaChoices) {
+            if (input.checked !== (choice === area.areaChoice)) input.checked = choice === area.areaChoice;
+        }
+        const summary = this.document.querySelector("#raster-series-area-summary");
+        const label = area.areaChoice === "whole" ? "Whole raster" : area.areaLabel || "No area selected";
+        if (summary.textContent !== `Sample area: ${label}`) summary.textContent = `Sample area: ${label}`;
         const vector = this.document.querySelector("#raster-series-vector-area");
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
         const addFormula = this.document.querySelector("#raster-series-add-formula");

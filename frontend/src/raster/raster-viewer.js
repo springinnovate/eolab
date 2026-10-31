@@ -4953,6 +4953,10 @@ export function initializeRasterViewer(
         remove,
         setVectorSelection,
         getSelectedArea,
+        // Composition reuses these same map-sampling actions from the floating
+        // area form; Processing retains its own polygon selection lifecycle.
+        selectSamplingBox: useMapCenterForRasterStatistics,
+        selectWholeRaster: handleClearSampleWindow,
         cancelSampleWindowResize,
         setSamplingActivity: area => rasterSampleWindowController.setActivityBounds(area?.kind === "selectedArea" ? area.selectedBounds : null),
         destroy,

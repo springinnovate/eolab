@@ -4417,6 +4417,7 @@ summary:hover > .raster-disclosure-chevron {
 #vector-sampling[hidden] {
   display: none;
 }
+.raster-sampling-area-options[hidden] { display: none; }
 .raster-sampling-area-options {
   display: grid;
   min-width: 0;

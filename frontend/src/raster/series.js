@@ -45,10 +45,11 @@ export class RasterSeriesController {
      * @param {import("./series-view.js").RasterSeriesView} options.view Plot controls.
      * @param {import("../processing/raster-series-calculations.js").RasterSeriesCalculations} options.areaStatistics Area formulas and Processing client.
      * @param {()=>void} options.onClose Request that composition close this tool.
+     * @param {()=>void} [options.onOpenArea] Open the composed floating area controls.
      * @param {(choice:"selection"|"vector"|"whole")=>void} [options.onAreaChoice] Start or cancel polygon selection after an explicit area choice.
      * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
      */
-    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, getTemporalItem }) {
+    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, onOpenArea = () => {}, getTemporalItem }) {
         this.view = view;
         this.getTemporalItem = getTemporalItem;
         this.areaStatistics = areaStatistics;
@@ -78,6 +79,7 @@ export class RasterSeriesController {
             startTime: "", endTime: "", loading: false, error: ""};
         view.bind({
             onClose,
+            onOpenArea,
             onArea: choice => this.chooseArea(choice),
             onAddFormula: preset => this.addFormula(preset),
             onEditFormula: (id, change) => this.editFormula(id, change),
