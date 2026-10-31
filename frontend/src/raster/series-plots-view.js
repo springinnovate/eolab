@@ -36,11 +36,12 @@ export function createStatisticSwatch(documentContext, styleIndex) {
 export class RasterSeriesPlotsView {
     /** Connect the plot container to presentation-only actions.
      * @param {Document} documentContext Owning document.
-     * @param {{onRemovePlot:(id:number)=>void,onPlotScale:(id:number,scale:string)=>void}} actions Plot controls.
+     * @param {{onRemovePlot:(id:number)=>void,onPlotAxis:(id:number,change:Object)=>void}} actions Plot controls; axis changes redraw retained results.
      */
     constructor(documentContext, actions) {
         this.document = documentContext;
         this.container = documentContext.querySelector("#raster-series-plots");
+        this.axisOptions = documentContext.querySelector("#raster-series-plot-options");
         this.actions = actions;
         this.cards = new Map();
     }
@@ -55,13 +56,38 @@ export class RasterSeriesPlotsView {
         card.setAttribute("aria-label", `Plot ${plot.id}`);
         const header = this.document.createElement("div"); header.className = "raster-series-plot-header";
         const title = this.document.createElement("strong"); title.textContent = `Plot ${plot.id}`;
-        const label = this.document.createElement("label"); label.textContent = "Y axis ";
+        const options = this.document.createElement("fieldset"); options.className = "raster-series-axis-options";
+        const caption = this.document.createElement("legend"); caption.textContent = `Plot ${plot.id}`;
+        options.append(caption); this.axisOptions.append(options);
+        const label = this.document.createElement("label"); label.textContent = "Y scale ";
         const scale = this.document.createElement("select"); scale.setAttribute("aria-label", `Plot ${plot.id} Y axis`);
         for (const value of ["linear", "log"]) {
             const option = this.document.createElement("option"); option.value = value; option.textContent = value === "log" ? "Log" : "Linear"; scale.append(option);
         }
-        scale.addEventListener("change", () => this.actions.onPlotScale(plot.id, scale.value));
-        label.append(scale); header.append(title, label);
+        label.append(scale); options.append(label); header.append(title);
+        const axes = {};
+        for (const axis of ["x", "y"]) {
+            const group = this.document.createElement("div"); group.className = "raster-series-axis-range";
+            const rangeLabel = this.document.createElement("label"); rangeLabel.textContent = axis === "x" ? "Time (UTC) " : "Y bounds ";
+            const range = this.document.createElement("select"); range.setAttribute("aria-label", `Plot ${plot.id} ${axis.toUpperCase()} bounds`);
+            for (const [value, text] of [["auto", "Automatic"], ["custom", "Custom"]]) {
+                const option = this.document.createElement("option"); option.value = value; option.textContent = text; range.append(option);
+            }
+            range.value = "auto"; rangeLabel.append(range);
+            const bounds = this.document.createElement("div"); bounds.className = "raster-series-axis-bounds"; bounds.hidden = true;
+            const fields = ["Minimum", "Maximum"].map(name => {
+                const field = this.document.createElement("label"); field.textContent = axis === "x" ? (name === "Minimum" ? "From (UTC)" : "To (UTC)") : name;
+                const input = this.document.createElement("input"); input.type = axis === "x" ? "text" : "number";
+                input.step = "any";
+                if (axis === "x") input.placeholder = "YYYY-MM-DD HH:mm";
+                input.setAttribute("aria-label", `Plot ${plot.id} ${axis.toUpperCase()} ${name.toLowerCase()}`);
+                field.append(input); bounds.append(field); return input;
+            });
+            group.append(rangeLabel, bounds); options.append(group);
+            axes[axis] = {group, range, bounds, fields};
+        }
+        const error = this.document.createElement("p"); error.className = "raster-series-axis-error"; error.setAttribute("role", "status"); error.hidden = true;
+        options.append(error);
         if (plot.id !== 1) {
             const remove = this.document.createElement("button"); remove.type = "button"; remove.className = "secondary-button"; remove.textContent = "×";
             remove.setAttribute("aria-label", `Remove Plot ${plot.id}; move statistics to Plot 1`);
@@ -76,7 +102,40 @@ export class RasterSeriesPlotsView {
         const tooltip = this.document.createElement("div"); tooltip.className = "raster-series-plot-tooltip"; tooltip.hidden = true;
         card.append(header, legend, note, chart, empty, tooltip);
         this.container.append(card);
-        return { card, scale, legend, note, chart, empty, tooltip, signature: null };
+        const elements = { card, title, options, scale, axes, error, legend, note, chart, empty, tooltip, signature: null };
+        for (const input of [scale, ...Object.values(axes).flatMap(axis => [axis.range, ...axis.fields])]) {
+            input.addEventListener(input.tagName.toLowerCase() === "input" ? "input" : "change", () => this.editAxes(plot.id, elements));
+        }
+        return elements;
+    }
+
+    /** Validate editable axis bounds, then request a display-only update.
+     * Incomplete or invalid drafts keep the last valid figure. Automatic values
+     * seed custom fields when first opened; result/progress updates never replace drafts.
+     * @param {number} id Plot identity.
+     * @param {Object} elements Retained axis controls and last rendered domains.
+     * @return {void}
+     */
+    editAxes(id, elements) {
+        const change = {scale: elements.scale.value, bounds: null, xBounds: null};
+        let message = "";
+        for (const [axis, controls] of Object.entries(elements.axes)) {
+            controls.bounds.hidden = controls.range.value !== "custom";
+            if (controls.group.hidden || controls.range.value !== "custom") continue;
+            const domain = elements.domains?.[axis === "x" ? "xDomain" : "yDomain"];
+            if (elements.rangeModes?.[axis] !== "custom" && domain) controls.fields.forEach((field, index) => {
+                if (!field.value) field.value = axis === "x" ? new Date(domain[index]).toISOString().slice(0, 16).replace("T", " ") : String(domain[index]);
+            });
+            const bounds = controls.fields.map(field => axis === "x" ? Date.parse(field.value.replace(" ", "T") + "Z") : Number(field.value));
+            if (controls.fields.some(field => !field.value) || bounds.some(value => !Number.isFinite(value))) message = "Enter both axis bounds.";
+            else if (axis === "x" && controls.fields.some((field, index) => !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(field.value) || new Date(bounds[index]).toISOString().slice(0, 16).replace("T", " ") !== field.value)) message = "Use YYYY-MM-DD HH:mm for UTC bounds.";
+            else if (bounds[0] >= bounds[1]) message = "The maximum must be greater than the minimum.";
+            else if (axis === "y" && change.scale === "log" && bounds[0] <= 0) message = "Logarithmic bounds must be greater than zero.";
+            change[axis === "x" ? "xBounds" : "bounds"] = bounds;
+        }
+        elements.rangeModes = Object.fromEntries(Object.entries(elements.axes).map(([axis, controls]) => [axis, controls.range.value]));
+        elements.error.hidden = !message; elements.error.textContent = message;
+        if (!message) this.actions.onPlotAxis(id, change);
     }
 
     /** Add or remove plot cards and refresh those whose settings or results changed.
@@ -95,14 +154,15 @@ export class RasterSeriesPlotsView {
         for (const [id, elements] of this.cards) {
             if (state.plots.some(plot => plot.id === id)) continue;
             const hadFocus = elements.card.contains(this.document.activeElement);
-            elements.card.remove(); this.cards.delete(id);
+            elements.card.remove(); elements.options.remove(); this.cards.delete(id);
             if (hadFocus) this.document.querySelector("#raster-series-add-plot").focus();
         }
         for (const plot of state.plots) {
             const added = !this.cards.has(plot.id);
             if (added) this.cards.set(plot.id, this.createPlotCard(plot));
             const elements = this.cards.get(plot.id);
-            if (elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
+            if (elements.error.hidden && elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
+            elements.axes.x.group.hidden = !state.temporal;
             const statistics = state.statistics.filter(statistic => statistic.plotId === plot.id && statistic.visible);
             const series = statistics.map(statistic => ({
                 id: String(statistic.id), label: `${statistic.label || "Custom statistic"} · ${statistic.expression}`,
@@ -112,7 +172,7 @@ export class RasterSeriesPlotsView {
                 })),
             }));
             // Only chart inputs belong here: progress and catalog metadata do not change a figure.
-            const signature = JSON.stringify([plot.scale, state.chartType, state.showingPrevious, !!state.temporal, series]);
+            const signature = JSON.stringify([elements.chart.clientWidth, plot, state.direction, state.chartType, state.showingPrevious, !!state.temporal, series]);
             if (elements.signature === signature) continue;
             elements.signature = signature;
             this.renderPlot(elements, plot, statistics, state, series);
@@ -131,6 +191,8 @@ export class RasterSeriesPlotsView {
      */
     renderPlot(elements, plot, statistics, state, series) {
         const { chart, tooltip, legend, note, empty } = elements;
+        elements.title.textContent = state.plots.length === 1 && statistics.length === 1 ? statistics[0].label || "Custom statistic" : `Plot ${plot.id}`;
+        legend.hidden = statistics.length < 2;
         const focused = this.document.activeElement;
         const hadChartFocus = chart.contains(focused);
         const focusSeries = focused?.closest?.("[data-series-id]")?.getAttribute("data-series-id");
@@ -140,11 +202,10 @@ export class RasterSeriesPlotsView {
         const values = series.flatMap(item => item.points).filter(point => Number.isFinite(point.yValue));
         const units = [...new Set(values.map(point => point.unit || "unit unspecified"))];
         const excluded = plot.scale === "log" ? values.filter(point => point.yValue <= 0).length : 0;
-        const unitsText = units.length > 1 ? `Mixed units: ${units.join(", ")}. Assign statistics to separate plots if needed.`
-            : units[0] === "unit unspecified" ? "Units are not specified by these formulas."
-            : units.length ? `Values in ${units[0]}.` : "";
+        const unitsText = units.length > 1 ? `Mixed units: ${units.join(", ")}. Assign statistics to separate plots if needed.` : "";
         note.textContent = [unitsText, excluded ? `Log scale omits ${excluded} zero or negative ${excluded === 1 ? "value" : "values"}; see the table or CSV.` : "",
-            plot.scale === "log" && state.chartType === "bar" ? "Log bars start at the lower axis bound, not zero." : ""].filter(Boolean).join(" ");
+            state.chartType === "bar" && (plot.scale === "log" || plot.bounds && (plot.bounds[0] > 0 || plot.bounds[1] < 0)) ? "Bars start at the displayed axis bound." : ""].filter(Boolean).join(" ");
+        note.hidden = !note.textContent;
         for (const statistic of statistics) {
             const button = this.document.createElement("button"); button.type = "button";
             button.dataset.statisticId = String(statistic.id); button.className = "raster-series-legend-item";
@@ -162,8 +223,11 @@ export class RasterSeriesPlotsView {
         empty.textContent = !statistics.length ? "Choose this plot beside a statistic to show it here."
             : excluded && excluded === values.length ? "No positive values to plot. Choose Linear to see these results."
             : "Waiting for statistic values.";
-        if (!chart.hidden) renderOrdinalSeriesChart({
+        if (!chart.hidden) elements.domains = renderOrdinalSeriesChart({
             documentContext: this.document, chart, series, chartType: state.chartType, yScale: plot.scale,
+            width: chart.clientWidth, height: 260,
+            yBounds: plot.bounds ?? null, xBounds: state.temporal ? plot.xBounds ?? null : null,
+            xReverse: !!state.temporal && state.direction === "reverse",
             xScale: state.temporal ? "numeric" : "ordinal", xAxisLabel: state.temporal ? "Time (UTC)" : "Raster",
             yAxisLabel: (units.length === 1 && units[0] !== "unit unspecified" ? units[0] : "Value") + (plot.scale === "log" ? " (log)" : ""),
             ariaLabel: `Plot ${plot.id}${state.showingPrevious ? "; previous results" : ""}: ${series.map(item => item.label).join("; ")}`,

@@ -21,8 +21,8 @@ function calculationInputKey(sources, area, formulas, point, temporalSource) {
 /**
  * Calculate up to five formulas over selected rasters or a temporal interval.
  * Ordinary rasters use independent requests; a temporal interval uses one model run.
- * Input changes cancel obsolete work. Automatic calculations stop when hidden;
- * explicitly started calculations continue in the background and recover after reload.
+ * Input changes cancel obsolete work. Submitted calculations continue in the
+ * background and recover after reload; display settings never change their inputs.
  */
 export class RasterSeriesCalculations {
     /** Initialize independent multi-raster inputs, results and progress tracking.
@@ -42,7 +42,8 @@ export class RasterSeriesCalculations {
         this.area = null;
         this.areaLabel = "";
         this.active = false;
-        this.manual = false;
+        this.hasCapturedInputs = false;
+        this.paused = false;
         this.version = 0;
         this.results = new Map();
         this.previousResults = null;
@@ -54,6 +55,7 @@ export class RasterSeriesCalculations {
         this.temporalMode = false;
         this.temporalSource = null;
         this.temporalResult = null;
+        this.previousTemporalResult = null;
         this.resultAbort = null;
     }
 
@@ -65,7 +67,7 @@ export class RasterSeriesCalculations {
      */
     setProgressListener(onChange) { this.onChange = onChange; }
 
-    /** Restore explicit requests and their finished peers; cancel automatic work after reload.
+    /** Restore submitted requests and their finished peers after reload.
      * Inputs are restored synchronously before the first server lookup. The UI can
      * then display the captured sources, area and formulas while recovery proceeds.
      * @return {Promise<void>} Initial observation or recovery of saved requests.
@@ -73,16 +75,16 @@ export class RasterSeriesCalculations {
     async start() {
         const clients = this.requests.savedClientNames()
             .map(name => [Number(name.split(":")[1]), this.getOrCreateRasterExecutor(Number(name.split(":")[1]))]);
-        const manual = clients.filter(([, client]) => {
+        const retained = clients.filter(([, client]) => {
             const saved = client.snapshot.unfinishedCalculation;
             return !saved.cancelRequested && !saved.context.automatic;
         });
-        if (manual.length) {
-            const first = manual[0][1].snapshot.unfinishedCalculation;
+        if (retained.length) {
+            const first = retained[0][1].snapshot.unfinishedCalculation;
             const intent = first.calculation;
             this.formulas = intent.calculations.map((formula, index) => ({id: Number(formula.label.slice(5)),
                 label: first.context.presentation.names[index], expression: formula.expression}));
-            this.sources = manual.filter(([, client]) => client.snapshot.unfinishedCalculation.calculation.kind !== "temporal")
+            this.sources = retained.filter(([, client]) => client.snapshot.unfinishedCalculation.calculation.kind !== "temporal")
                 .map(([, client]) => {
                     const saved = client.snapshot.unfinishedCalculation;
                     return {key: saved.context.presentation.key, label: saved.calculation.source.label, source: saved.calculation.source};
@@ -93,16 +95,16 @@ export class RasterSeriesCalculations {
             this.temporalMode = intent.kind === "temporal";
             this.temporalSource = this.temporalMode ? intent.source : undefined;
             this.inputKey = calculationInputKey(this.sources, this.area, this.formulas, this.pixelPoint, this.temporalSource);
-            this.manual = true;
+            this.hasCapturedInputs = true;
             this.temporalModel = intent.model;
-            for (const [index, client] of manual) {
+            for (const [index, client] of retained) {
                 const saved = client.snapshot.unfinishedCalculation;
                 this.pending.set(index, {key: saved.context.presentation.key, calculationInputs: saved.calculation,
                     submitted: true, phase: "recovering", message: "Recovering calculation…"});
             }
             this.updateSeriesProgress();
         }
-        for (const [, client] of clients) if (!manual.some(([, current]) => current === client)) client.stop();
+        for (const [, client] of clients) if (!retained.some(([, current]) => current === client)) client.stop();
         await Promise.all(clients.map(([, client]) => client.start()));
     }
 
@@ -155,7 +157,7 @@ export class RasterSeriesCalculations {
         else this.onChange();
     }
 
-    /** Replace a temporal slice without running it until the user chooses Calculate.
+    /** Replace a temporal slice and automatically calculate valid active inputs.
      * @param {Object|null} sourceInterval Catalog variable and UTC interval, or null while incomplete.
      * @param {Object|null} area Shared sampling area or whole raster.
      * @param {string} label Readable sampling-area description.
@@ -167,28 +169,27 @@ export class RasterSeriesCalculations {
         this.updateCalculationInputs([], area, label, formulas, pixelPoint, sourceInterval);
     }
 
-    /** Clear temporal results after an explicit dataset refresh without recalculating.
-     * The next Calculate uses newly admitted observations even when the interval is unchanged.
+    /** Replace temporal results after an explicit dataset refresh.
+     * An active panel recalculates newly admitted observations even when its interval is unchanged.
      * @return {void}
      */
     discardTemporalResults() {
         if (this.temporalMode) this.resetResultsForChangedInputs(false);
     }
 
-    /** Resume automatic calculations when shown; keep explicit requests running when hidden.
+    /** Start incomplete inputs when shown and keep submitted work running when hidden.
      * Call when the Raster series panel opens or closes.
-     * Temporal intervals require Calculate. Completed results remain available when the user returns.
+     * Cancellation stays paused until inputs change; completed values remain available.
      * @param {boolean} visible Whether the Raster series panel is active.
      * @return {void}
      */
     updateCalculationForPanelVisibility(visible) {
         if (this.active === visible) return;
         this.active = visible;
-        if (!visible && !this.manual && (this.busy || this.pending.size)) this.cancelRemainingRasters();
-        else if (visible && !this.complete && !this.temporalMode && !this.manual) this.scheduleRemainingCalculations();
+        if (visible && !this.complete && !this.hasCapturedInputs && !this.paused) this.scheduleRemainingCalculations();
     }
 
-    /** Clear changed inputs' results and schedule only ordinary raster replacements.
+    /** Retain previous values and schedule replacement calculations for changed inputs.
      * Keep completed values separately for the faded previous plot. Cancel pending
      * work so each replacement is validated by its submission endpoint.
      * @param {boolean} debounce Whether changed formulas must wait for editing to pause.
@@ -196,22 +197,25 @@ export class RasterSeriesCalculations {
      */
     resetResultsForChangedInputs(debounce) {
         if (this.results.size) this.previousResults = new Map(this.results);
+        if (this.temporalResult) this.previousTemporalResult = this.temporalResult;
         this.temporalResult = null;
         this.cancelRemainingRasters();
         this.results = new Map();
         this.complete = false;
-        if (this.active && !this.temporalMode) this.scheduleRemainingCalculations(debounce);
-        else { this.message = this.temporalMode ? "Choose Calculate to sample this period." : this.message; this.onChange(); }
+        if (this.active) this.scheduleRemainingCalculations(debounce || this.temporalMode);
+        else this.onChange();
     }
 
-    /** Stop the unfinished series after cancellation, input replacement or hiding the plot.
+    /** Stop unfinished work after cancellation or input replacement.
      * Cancel the debounce timer, ignore late responses, and ask
      * Processing to cancel all of this series' submitted jobs. Completed results
      * remain available; executors retain jobs still needing cancellation recovery.
+     * @param {boolean} [pause=false] User cancellation waits for another input edit before restarting.
      * @return {void} Cancellation is requested here and acknowledged asynchronously.
      */
-    cancelRemainingRasters() {
-        this.manual = false;
+    cancelRemainingRasters(pause = false) {
+        this.hasCapturedInputs = false;
+        this.paused = pause;
         this.version++;
         this.clock.clearTimeout(this.timer);
         this.resultAbort?.abort();
@@ -220,7 +224,7 @@ export class RasterSeriesCalculations {
         this.progress.clear();
         this.busy = false;
         for (const client of this.clients.values()) client.stop();
-        this.message = "Calculation stopped. Calculate to continue.";
+        this.message = "Calculation cancelled. Change inputs to start again.";
         this.onChange();
     }
 
@@ -232,6 +236,7 @@ export class RasterSeriesCalculations {
      */
     scheduleRemainingCalculations(debounce = false) {
         this.clock.clearTimeout(this.timer);
+        this.paused = false;
         this.message = debounce ? "Waiting for edits to finish…" : "Submitting calculations…";
         this.busy = true;
         this.timer = this.clock.setTimeout(() => void this.calculateRemainingRasters(false), debounce ? 700 : 0);
@@ -239,7 +244,7 @@ export class RasterSeriesCalculations {
     }
 
     /** Calculate a temporal interval or submit all unfinished ordinary rasters.
-     * Calculate retries failed rows. Active requests
+     * An explicit retry replaces failed rows. Active requests
      * continue unchanged; uncertain submissions require Recover first.
      * @param {boolean} [retryFailures=true] Retry failed rows when explicitly requested.
      * @return {void} Request dispatch, not calculation completion.
@@ -247,7 +252,7 @@ export class RasterSeriesCalculations {
     calculateRemainingRasters(retryFailures = true) {
         this.clock.clearTimeout(this.timer);
         if (!this.active || this.dispatching) return;
-        this.manual = retryFailures;
+        this.paused = false;
         if (this.temporalMode) { void this.calculateTemporalInterval(); return; }
         if (!this.sources.length || !this.area) {
             this.busy = false;
@@ -260,6 +265,7 @@ export class RasterSeriesCalculations {
             this.onChange(); return;
         }
         const version = this.version;
+        this.hasCapturedInputs = true;
         if (retryFailures) {
             for (const [key, result] of this.results) if (result.error) this.results.delete(key);
         }
@@ -281,8 +287,8 @@ export class RasterSeriesCalculations {
                 additions.push([client, request]);
             }
             for (const [client, request] of additions) {
-                if (version !== this.version || (!this.active && !this.manual)) return;
-                client.submit(request.calculationInputs, {automatic: !this.manual,
+                if (version !== this.version) return;
+                client.submit(request.calculationInputs, {automatic: false,
                     presentation: {key: request.key, names: this.formulas.map(formula => formula.label)}});
             }
             this.dispatching = false;
@@ -298,9 +304,10 @@ export class RasterSeriesCalculations {
      * @return {Promise<void>} Submission dispatch or a visible input/discovery failure.
      */
     async calculateTemporalInterval() {
-        if (this.pending.size || this.temporalResult || this.needsRecovery) return;
+        if (this.pending.size || this.temporalResult || this.needsRecovery) { this.updateSeriesProgress(); return; }
         const unreadResult = this.results.get("temporal");
         if (unreadResult?.job) {
+            this.hasCapturedInputs = true;
             const request = {...unreadResult, key: "temporal", submitted: true, phase: "reading", message: "Reading calculated observations…"};
             this.pending.set(0, request);
             this.updateSeriesProgress();
@@ -308,13 +315,16 @@ export class RasterSeriesCalculations {
             return;
         }
         if (!this.temporalSource || !this.area) {
+            this.busy = false;
             this.message = !this.temporalSource ? "Choose a dataset, variable and period." : "Choose an area or click the map to calculate.";
             this.onChange(); return;
         }
         if (!this.pixelPoint && this.formulas.some(({expression}) => /\bpixelValue\s*\(/.test(expression))) {
+            this.busy = false;
             this.message = "Click the map to choose a pixel for pixelValue(a)."; this.onChange(); return;
         }
         const version = this.version;
+        this.hasCapturedInputs = true;
         this.results.delete("temporal");
         this.busy = this.dispatching = true;
         this.message = "Submitting temporal calculation…"; this.onChange();
@@ -421,14 +431,14 @@ export class RasterSeriesCalculations {
             this.message = this.complete ? `${this.temporalResult.observations.length} observations calculated.`
                 : this.needsRecovery ? "Recover the interrupted request to confirm or cancel the same job."
                 : this.pending.size ? [...this.pending.values()][0].message
-                : this.results.get("temporal")?.error ?? "Choose Calculate to sample this period.";
+                : this.results.get("temporal")?.error ?? "Choose a dataset, variable, period and area.";
             this.onChange(); return;
         }
         if (this.complete) {
-            this.message = this.commonError || (this.hasErrors ? "Some rasters failed. Calculate to retry failed rasters." : "Raster series complete.");
+            this.message = this.commonError || (this.hasErrors ? "Some rasters failed. Retry failed rasters to try again." : "Raster series complete.");
         } else if (this.needsRecovery) {
             this.message = "Recover interrupted requests to confirm or cancel the same jobs safely. Other rasters can continue.";
-        } else this.message = this.busy ? "Calculating rasters; results appear as each finishes." : "Calculate to continue.";
+        } else this.message = this.busy ? "Calculating rasters; results appear as each finishes." : "Choose rasters and a sample area.";
         this.onChange();
     }
 
@@ -452,7 +462,8 @@ export class RasterSeriesCalculations {
      */
     async retryInterruptedCalculations() {
         await Promise.all([...this.clients.values()].filter(client => client.snapshot.recoverable).map(client => client.retry()));
-        this.updateSeriesProgress();
+        if (this.active && !this.paused && !this.complete && !this.pending.size && !this.needsRecovery) this.scheduleRemainingCalculations();
+        else this.updateSeriesProgress();
     }
 
     /** Detach observers, preserving unfinished submissions for recovery after reload.

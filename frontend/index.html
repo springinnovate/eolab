@@ -677,7 +677,9 @@
             <pre id="models-yaml" aria-label="Model YAML" tabindex="0" hidden></pre>
           </section>
           <section id="raster-series" role="region" aria-labelledby="open-raster-series-dock" hidden>
-            <div id="raster-series-data-inputs">
+            <details id="raster-series-inputs" open>
+              <summary><span class="raster-series-inputs-expanded">Inputs · hide</span><span id="raster-series-input-summary"></span></summary>
+              <div id="raster-series-data-inputs">
               <div id="raster-series-sources" aria-label="Raster sources"></div>
               <div id="raster-series-temporal" class="temporal-period" hidden>
                 <p id="raster-series-temporal-title"></p>
@@ -701,7 +703,6 @@
               <p id="raster-series-context">No sample area selected</p>
               <div class="raster-series-controls">
                 <label>Sample area <select id="raster-series-area"><option id="raster-series-selected-area" value="selection">No area selected</option><option value="vector">Polygon layer</option><option value="whole">Whole raster</option></select></label>
-                <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
               </div>
             </div>
             <section id="raster-series-vector-area" class="vector-selection-card summary-vector-area" aria-label="Polygon sample area for raster statistics" hidden>
@@ -721,18 +722,28 @@
               </div>
               <div id="raster-series-formulas"></div>
             </section>
+            </details>
             <div class="raster-series-run-controls">
               <p id="raster-series-status" role="status" aria-live="polite"></p>
               <div class="raster-series-actions">
-                <button id="raster-series-calculate" type="button">Calculate</button>
-                <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel remaining</button>
+                <button id="raster-series-retry" class="secondary-button" type="button" hidden>Retry failed rasters</button>
+                <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel</button>
                 <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
               </div>
             </div>
             <p id="raster-series-chart-note" hidden></p>
+            <div class="raster-series-chart-toolbar"><label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label></div>
             <div id="raster-series-results" role="region" aria-label="Statistic results" hidden>
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
               <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
+              <details id="raster-series-data-settings" class="raster-series-settings">
+                <summary id="raster-series-source-summary">Axis options</summary>
+                <div class="raster-series-controls">
+                  <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
+                  <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
+                </div>
+                <div id="raster-series-plot-options"></div>
+              </details>
               <details id="raster-series-values" class="raster-series-settings">
                 <summary>Values &amp; download</summary>
                 <div class="raster-series-table-scroll">
@@ -743,14 +754,6 @@
                 </div>
               </details>
             </div>
-            <details id="raster-series-data-settings" class="raster-series-settings">
-              <summary id="raster-series-source-summary">Order and chart</summary>
-              <div class="raster-series-controls">
-                <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
-                <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
-                <label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label>
-              </div>
-            </details>
             <details class="raster-series-help raster-series-settings"><summary>Formula reference</summary>
               <p>Area formulas use the same box, imported polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
               <ul>

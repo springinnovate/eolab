@@ -43,7 +43,8 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} canDownload Whether current values can be exported.
  * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,pendingInputs:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and execution availability; pendingInputs means results use an earlier area or observation.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
- * @property {{id:number,scale:string}[]} plots Independent plot settings.
+ * @property {{id:number,scale:"linear"|"log",bounds:[number,number]|null,xBounds:[number,number]|null}[]} plots Independent display bounds and scale; null chooses automatic bounds.
+ * @property {"forward"|"reverse"} direction Display direction; temporal data and CSV retain observation order.
  * @property {boolean} showingPrevious Whether plots use retained results.
  * @property {Object|null} [temporal] Dataset, variable and period controls; absent for ordinary raster layers.
  */
@@ -79,6 +80,13 @@ export class RasterSeriesView {
         this.formulaNodes = new Map();
         this.frame = null;
         this.pendingState = null;
+        this.resizeObserver = new this.document.defaultView.ResizeObserver(entries => {
+            const width = entries[0].contentRect.width;
+            if (width === this.width) return;
+            this.width = width;
+            if (this.snapshot) this.render(this.snapshot);
+        });
+        this.resizeObserver.observe(this.root);
     }
 
     /**
@@ -90,15 +98,14 @@ export class RasterSeriesView {
      * @param {(type:string)=>void} actions.onChartType Change line/scatter presentation.
      * @param {()=>void} actions.onDownload Download the current values.
      * @param {(choice:string)=>void} actions.onArea Sampling area or whole raster.
-     * @param {()=>void} actions.onEditArea Open existing area controls.
      * @param {(preset:string)=>void} actions.onAddFormula Add statistic.
      * @param {(id:number,change:{label?:string,expression?:string})=>void} actions.onEditFormula Update formula/name.
      * @param {(id:number)=>void} actions.onRemoveFormula Remove statistic.
      * @param {(id:number,change:{visible?:boolean,plotId?:number})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
      * @param {()=>void} actions.onAddPlot Add a linear plot.
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
-     * @param {(id:number,scale:string)=>void} actions.onPlotScale Change one Y scale.
-     * @param {()=>void} actions.onCalculate Calculate remaining sources.
+     * @param {(id:number,change:Object)=>void} actions.onPlotAxis Change one plot's validated display bounds and scale.
+     * @param {()=>void} actions.onRetry Retry failed sources.
      * @param {()=>void} actions.onCancel Cancel remaining work.
      * @param {()=>void} actions.onRecover Recover uncertain submission.
      * @param {(key:string|null)=>void} actions.onTimeRange Choose a named view or dataset's time range; null restores individual raster choices.
@@ -146,7 +153,7 @@ export class RasterSeriesView {
             actions.onAddFormula(event.target.value); event.target.value = "";
         });
         this.document.querySelector("#raster-series-add-plot").addEventListener("click", actions.onAddPlot);
-        for (const [id, action] of [["edit-area", actions.onEditArea], ["calculate", actions.onCalculate],
+        for (const [id, action] of [["retry", actions.onRetry],
             ["cancel", actions.onCancel], ["recover", actions.onRecover]]) {
             this.document.querySelector("#raster-series-" + id).addEventListener("click", action);
         }
@@ -161,6 +168,7 @@ export class RasterSeriesView {
      * @return {void}
      */
     render(state) {
+        this.snapshot = state;
         const sources = state.sources.filter(source => source.selected);
         this.onContextChange({ source: state.temporal ? state.temporal.item?.properties.title || "Temporal dataset" : sources.length === 1 ? sources[0].label : `${sources.length} selected rasters`,
             scope: state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected",
@@ -210,12 +218,9 @@ export class RasterSeriesView {
         if (this.status.textContent !== state.message) this.status.textContent = state.message;
         const busy = String(state.busy);
         if (this.root.getAttribute("aria-busy") !== busy) this.root.setAttribute("aria-busy", busy);
-        const order = this.document.querySelector("#raster-series-order").value === "name" ? "Layer name" : "Map layer order";
-        const direction = this.document.querySelector("#raster-series-direction").value === "reverse" ? "Reverse" : "Forward";
-        const chartType = {line: "Line", scatter: "Scatter", bar: "Bar"}[state.chartType];
-        const dataSummary = state.temporal ? `Chart · ${chartType}` :
-            `Order and chart · ${order} · ${direction} · ${chartType}`;
-        if (this.sourceSummary.textContent !== dataSummary) this.sourceSummary.textContent = dataSummary;
+        const summary = this.document.querySelector("#raster-series-input-summary");
+        const inputSummary = `${context} · ${state.statistics.map(statistic => statistic.label || "Custom statistic").join(", ")}`;
+        if (summary.textContent !== inputSummary) summary.textContent = inputSummary;
         const timeRange = Boolean(state.temporal);
         const signature = JSON.stringify([timeRange, state.sources.map(({ key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected }) =>
             [key, label, selected, hasSnapshot, temporalDatasetKey, rangeSelected])]);
@@ -328,16 +333,16 @@ export class RasterSeriesView {
     renderTemporalControls(temporal) {
         const controls = this.document.querySelector("#raster-series-temporal");
         if (controls.hidden !== !temporal) controls.hidden = !temporal;
-        for (const id of ["order", "direction"]) {
+        for (const id of ["order"]) {
             const label = this.document.querySelector("#raster-series-" + id).parentElement;
             if (label.hidden !== !!temporal) label.hidden = !!temporal;
         }
         const heading = this.document.querySelector("#raster-series-value-source"), caption = temporal ? "Time (UTC)" : "Raster";
         if (heading.textContent !== caption) heading.textContent = caption;
         if (!temporal) return;
-        this.document.querySelector("#raster-series-temporal-title").textContent = `Time range · ${
-            temporal.item?.properties.title ?? temporal.datasets.find(source => source.key === temporal.datasetKey)?.label ?? ""}`;
+        this.document.querySelector("#raster-series-temporal-title").textContent = temporal.item?.properties["cube:variables"][temporal.variable]?.description ?? "Choose a variable";
         const variable = this.document.querySelector("#raster-series-temporal-variable");
+        variable.parentElement.hidden = !!temporal.variableBound;
         this.setOptions(variable, [{value: "", label: "Choose a variable…"}, ...Object.entries(temporal.item?.properties["cube:variables"] ?? {})
             .map(([value, metadata]) => ({value, label: `${metadata.description} (${metadata.unit})`}))], temporal.variable);
         variable.disabled = !temporal.item;
@@ -347,7 +352,7 @@ export class RasterSeriesView {
             (metadata && metadata["eolab:time_support"] !== "instantaneous" ?
                 "Use each complete observation whose interval overlaps this period, in its stored units. Values are not prorated or integrated over time. " :
                 "Use observations at or after the start and before the end. ") +
-            "The observation displayed on the map does not change this selection. Missing observations are omitted. Choose Calculate to plot.";
+            "Missing observations are omitted. Input changes update the results automatically.";
         const month = this.document.querySelector("#raster-series-temporal-month"), choices = temporal.choices;
         this.setOptions(month, (choices?.months ?? []).map(value => ({value, label: value})), choices?.month ?? "");
         month.disabled = temporal.loading || !choices?.months.length;
@@ -399,6 +404,8 @@ export class RasterSeriesView {
                 } else if (input !== this.document.activeElement && input.value !== formula[input.dataset.field]) input.value = formula[input.dataset.field];
             }
             const plot = row.querySelector("select");
+            const hideAssignment = state.plots.length === 1;
+            if (plot.hidden !== hideAssignment) plot.hidden = hideAssignment;
             const plotsKey = state.plots.map(item => item.id).join(",");
             if (plot.dataset.optionsKey !== plotsKey) {
                 plot.dataset.optionsKey = plotsKey;
@@ -419,17 +426,11 @@ export class RasterSeriesView {
         if (selectedArea.textContent !== selectedAreaLabel) selectedArea.textContent = selectedAreaLabel;
         const vector = this.document.querySelector("#raster-series-vector-area");
         if (vector.hidden !== (area.areaChoice !== "vector")) vector.hidden = area.areaChoice !== "vector";
-        const editArea = this.document.querySelector("#raster-series-edit-area");
-        if (editArea.hidden !== (area.areaChoice !== "selection")) editArea.hidden = area.areaChoice !== "selection";
         const addFormula = this.document.querySelector("#raster-series-add-formula");
         if (addFormula.disabled !== (area.formulas.length >= 5)) addFormula.disabled = area.formulas.length >= 5;
-        const calculate = this.document.querySelector("#raster-series-calculate");
-        const cannotCalculate = state.busy || (state.temporal ? !!state.temporal.selectionError || !area.area :
-            !area.sources.length || (area.areaChoice !== "whole" && !area.area));
-        if (calculate.disabled !== cannotCalculate) calculate.disabled = cannotCalculate;
-        const hideCalculate = !!area.complete && !area.hasErrors && !area.pendingInputs;
-        if (calculate.hidden !== hideCalculate) calculate.hidden = hideCalculate;
-        if (calculate.textContent !== "Calculate") calculate.textContent = "Calculate";
+        const retry = this.document.querySelector("#raster-series-retry");
+        const hideRetry = state.busy || !area.hasErrors || area.recoverable;
+        if (retry.hidden !== hideRetry) retry.hidden = hideRetry;
         const cancel = this.document.querySelector("#raster-series-cancel");
         const hideCancel = !state.busy && !area.recoverable;
         if (cancel.hidden !== hideCancel) cancel.hidden = hideCancel;

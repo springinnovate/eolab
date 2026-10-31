@@ -10,7 +10,15 @@ import { RasterSeriesPlotsView } from "../../src/raster/series-plots-view.js";
  */
 function fixture() {
     const document = new FakeRasterControlDocument();
-    for (const id of ["order", "direction"]) {
+    document.defaultView.ResizeObserver = class {
+        /** Retain the native callback for explicit layout notifications.
+         * @param {Function} callback Resize notifications. */
+        constructor(callback) { this.callback = callback; }
+        /** Record the observed root in this document without a layout engine.
+         * @param {Object} element Target element. @return {void} */
+        observe(element) { this.element = element; }
+    };
+    for (const id of ["order", "direction", "temporal-variable"]) {
         const label = document.createElement("label");
         label.append(document.querySelector("#raster-series-" + id));
     }
@@ -52,17 +60,19 @@ test("raster statistics places visible inputs before execution and results", asy
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
     const positions = ["raster-series-data-inputs", "raster-series-context", 'id="raster-series-statistics"',
-        "raster-series-status", 'id="raster-series-plots"', "Values &amp; download", "raster-series-data-settings", "Formula reference"]
+        "raster-series-status", 'id="raster-series-plots"', "raster-series-data-settings", "Values &amp; download", "Formula reference"]
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
-    const disclosures = [...panel.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map(match => match[0]);
+    assert.match(panel, /<details id="raster-series-inputs" open>/);
+    assert.ok(!panel.includes('id="raster-series-calculate"'));
+    assert.ok(!panel.includes('id="raster-series-edit-area"'));
+    assert.match(panel, />Axis options<\/summary>/);
     assert.ok(!panel.includes("raster-series-source-mode"));
     assert.ok(!panel.includes("raster-series-temporal-dataset"));
     for (const id of ["temporal-variable", "period", "sources",
-        "context", "status", "area", "edit-area", "calculate", "cancel", "recover", "add-plot"]) {
+        "context", "status", "area", "retry", "cancel", "recover", "add-plot"]) {
         const attribute = `id="raster-series-${id}"`;
         assert.equal(panel.split(attribute).length - 1, 1, `${id} has one control`);
-        assert.ok(disclosures.every(disclosure => !disclosure.includes(attribute)), `${id} stays outside secondary settings`);
     }
 });
 
@@ -165,26 +175,27 @@ test("changed controls remain current without overwriting a focused formula edit
     assert.equal(h.view.sources.children[0].children[0].children[1].textContent, "Renamed raster");
     assert.equal(h.view.root.getAttribute("aria-busy"), "false");
     assert.equal(h.view.download.disabled, false);
-    assert.equal(h.document.querySelector("#raster-series-calculate").hidden, true);
+    assert.equal(h.document.querySelector("#raster-series-retry").hidden, true);
     assert.equal(h.document.querySelector("#raster-series-cancel").hidden, false);
     assert.equal(h.document.querySelector("#raster-series-recover").hidden, false);
     h.document.activeElement = null; h.draw();
     assert.equal(expression.value, "mean(a)", "unfocused inputs reflect the supplied state");
 });
 
-test("completed results leave Calculate available for a newer selected area", () => {
+test("retry is available only for failed work, not ordinary pending inputs", () => {
     const h = controlsFixture();
     h.state.busy = false;
     h.state.area.complete = true;
     h.draw();
-    const calculate = h.document.querySelector("#raster-series-calculate");
+    const calculate = h.document.querySelector("#raster-series-retry");
     assert.equal(calculate.hidden, true);
     h.state.area.pendingInputs = true;
     h.draw();
+    assert.equal(calculate.hidden, true);
+    h.state.area.hasErrors = true; h.draw();
     assert.equal(calculate.hidden, false);
-    assert.equal(calculate.disabled, false);
     h.state.busy = true; h.draw();
-    assert.equal(calculate.disabled, true, "the current calculation still owns execution until it finishes or is cancelled");
+    assert.equal(calculate.hidden, true, "running work is controlled by Cancel");
 });
 
 test("one raster opens the existing values table for every statistic instead of drawing a chart", () => {
@@ -326,22 +337,22 @@ test("removing a focused statistic returns focus to Add statistic", () => {
     assert.equal(h.document.activeElement, h.document.querySelector("#raster-series-add-formula"));
 });
 
-test("scope describes the source count while optional settings describe display order", () => {
+test("collapsed Inputs summarizes sources and scope without repeating axis settings", () => {
     const h = controlsFixture();
     h.document.querySelector("#raster-series-order").value = "name";
     h.document.querySelector("#raster-series-direction").value = "reverse";
     h.state.chartType = "scatter";
     h.state.sources.push({ key: "b", label: "Raster B", selected: false });
     h.draw();
-    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Scatter");
+    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Whole raster · 1 raster · Mean/);
     h.state.sources[1].selected = true;
     h.state.area.areaChoice = "selection"; h.state.area.areaLabel = "Watershed polygons";
     h.draw();
     assert.equal(h.view.context.textContent, "Watershed polygons · 2 rasters");
-    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Scatter");
+    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Watershed polygons · 2 rasters · Mean/);
     h.state.chartType = "bar";
     h.draw();
-    assert.equal(h.view.sourceSummary.textContent, "Order and chart · Layer name · Reverse · Bar");
+    assert.match(h.document.querySelector("#raster-series-input-summary").textContent, /Watershed polygons · 2 rasters · Mean/);
     for (const [area, label] of [[null, "No area selected"], [{kind: "selectedArea"}, "Sampling box"],
         [{kind: "catalogSelection"}, "Selected polygons"], [{kind: "polygonArea"}, "Selected polygons"]]) {
         h.state.area.area = area; h.draw();
@@ -354,7 +365,7 @@ test("temporal controls reuse the period editor and preserve focused input while
     const h = controlsFixture();
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
-        "onRemovePlot", "onPlotScale", "onCalculate", "onCancel", "onRecover", "onTimeRange",
+        "onRemovePlot", "onPlotAxis", "onRetry", "onCancel", "onRecover", "onTimeRange",
         "onTemporalVariable", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
     actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
     actions.onTimeRange = key => {
@@ -389,7 +400,6 @@ test("temporal controls reuse the period editor and preserve focused input while
     assert.equal(field("value-source").textContent, "Time (UTC)");
     assert.equal(field("temporal-variable").children[1].textContent, "Air temperature (K)");
     assert.equal(h.view.period.periodMode.value, "month");
-    assert.equal(field("calculate").disabled, false);
     h.view.period.periodMode.value = "times";
     h.view.period.periodMode.dispatchEvent(new Event("change"));
     h.view.period.startTime.focus();
@@ -401,7 +411,7 @@ test("temporal controls reuse the period editor and preserve focused input while
     assert.equal(h.view.period.startTime.value, "03:15");
     assert.equal(h.view.period.startTime.step, "any");
     assert.equal(field("refresh-dates").disabled, true);
-    assert.match(field("temporal-help").textContent, /Choose Calculate/);
+    assert.match(field("temporal-help").textContent, /update the results automatically/);
     inputs()[2].focus(); inputs()[2].checked = false; inputs()[2].dispatchEvent(new Event("change"));
     assert.equal(inputs()[0].disabled, false);
     assert.equal(inputs()[1].disabled, false);
@@ -479,7 +489,7 @@ test("closing cancels drawing; reopening draws current inputs rather than an old
 test("plot signatures ignore progress and catalog metadata, but retain display changes", () => {
     const h = fixture(), calls = [];
     const view = new RasterSeriesPlotsView(h.document, {});
-    view.cards.set(1, { scale: {}, signature: null });
+    view.cards.set(1, view.createPlotCard({id:1,scale:"linear"}));
     view.renderPlot = (...args) => calls.push(args);
     const row = { label: "Raster", state: "value", value: 2, rawValue: "2.000", unit: "ha",
         item: { toJSON() { throw Error("Catalog metadata must never be serialized for drawing"); } } };
@@ -536,13 +546,44 @@ test("temporal plots use actual UTC spacing and retain NoData gaps through prese
     assert.match(bars[1].getAttribute("aria-label"), /2\.0000000000000001 K/);
     state.plots[0].scale = "log";
     view.renderPlots(state);
-    assert.match(view.cards.get(1).note.textContent, /Log bars start at the lower axis bound, not zero/);
+    assert.match(view.cards.get(1).note.textContent, /Bars start at the displayed axis bound/);
     state.chartType = "scatter";
     state.temporal = null;
     view.renderPlots(state);
     assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Raster");
     const ordinalX = chart.querySelectorAll(".series-chart-point").map(point => Number(point.getAttribute("cx")));
     assert.ok(Math.abs((ordinalX[1] - ordinalX[0]) / (ordinalX[2] - ordinalX[0]) - 1 / 3) < 1e-12);
+});
+
+test("axis editors redraw retained observations and preserve the valid plot during incomplete edits", () => {
+    const h = fixture();
+    const rows = [0,1,6].map(hour => ({label: `${hour}:00 UTC`, xValue: Date.UTC(2000,0,1,hour),
+        state:"value",value:hour+1,rawValue:String(hour+1),unit:"K"}));
+    const state = {plots:[{id:1,scale:"linear",bounds:null,xBounds:null}],chartType:"bar",temporal:{},showingPrevious:false,
+        statistics:[{id:1,label:"Mean",expression:"mean(a)",styleIndex:0,visible:true,plotId:1,rows}]};
+    const original = JSON.stringify(rows), changes = [];
+    const view = new RasterSeriesPlotsView(h.document, {onPlotAxis(id, change) {
+        changes.push(change); Object.assign(state.plots[0],change); view.renderPlots(state);
+    }});
+    view.renderPlots(state);
+    const controls = view.cards.get(1), y = controls.axes.y, x = controls.axes.x;
+    y.range.value="custom"; y.range.dispatchEvent(new Event("change"));
+    y.fields[0].value="1"; y.fields[0].dispatchEvent(new Event("input"));
+    y.fields[1].value="8"; y.fields[1].dispatchEvent(new Event("input"));
+    assert.deepEqual(state.plots[0].bounds,[1,8]);
+    const beforeInvalid = controls.signature;
+    y.fields[0].value="9"; y.fields[0].dispatchEvent(new Event("input"));
+    assert.equal(controls.error.hidden,false); assert.equal(controls.signature,beforeInvalid);
+    y.fields[0].value="1"; y.fields[0].dispatchEvent(new Event("input"));
+    controls.scale.value="log"; controls.scale.dispatchEvent(new Event("change"));
+    assert.equal(state.plots[0].scale,"log");
+    x.range.value="custom"; x.range.dispatchEvent(new Event("change"));
+    x.fields[0].value="2000-01-01 00:30"; x.fields[0].dispatchEvent(new Event("input"));
+    x.fields[1].value="2000-01-01 03:00"; x.fields[1].dispatchEvent(new Event("input"));
+    assert.deepEqual(state.plots[0].xBounds,[Date.UTC(2000,0,1,0,30),Date.UTC(2000,0,1,3)]);
+    assert.equal(controls.chart.querySelectorAll("rect").filter(node=>node.getAttribute("data-point-index")!==null).length,1);
+    assert.equal(JSON.stringify(rows),original,"display bounds never remove observations from the result contract");
+    assert.ok(changes.length>0); assert.equal(controls.error.hidden,true);
 });
 
 test("adding a secondary plot reveals it once; initial drawing and updates preserve scroll and focus", () => {

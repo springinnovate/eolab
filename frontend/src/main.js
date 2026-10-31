@@ -908,7 +908,6 @@ async function initializeCatalog(
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
         loadTemporalTimes,
-        onEditArea: editProcessingArea,
         onAreaChoice: choice => {
             if (choice === "vector") void summarySampling.use();
             else summarySampling.invalidate("");
@@ -953,7 +952,6 @@ async function initializeCatalog(
         onCalculateRequested: (item, area, label, key) => {
             rasterSeries.selectSource(describeCalculationSource(item, label), area, key);
             mapInspection.showRasterSeries();
-            rasterSeries.calculate();
         },
         onSamplingAreaChange: area => {
             rasterClips.setSelection(area);
