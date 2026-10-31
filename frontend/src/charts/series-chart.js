@@ -164,10 +164,6 @@ export function renderOrdinalSeriesChart({
     if (finitePoints.length === 0) {
         throw new TypeError("An ordinal series chart requires a finite Y value.");
     }
-    const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
-    const margin = {...CHART_MARGIN, left: CHART_MARGIN.left + fontGrowth * 2, bottom: CHART_MARGIN.bottom + fontGrowth * 5};
-    const plotWidth = width - margin.left - margin.right;
-    const plotHeight = height - margin.top - margin.bottom;
     const values = finitePoints.map(point => yScale === "log" ? Math.log10(point.yValue) : point.yValue);
     let minimum = Math.min(...values);
     let maximum = Math.max(...values);
@@ -193,6 +189,15 @@ export function renderOrdinalSeriesChart({
     ) {
         throw new TypeError("Numeric series chart X values must be finite.");
     }
+    const eligible = points.map((point, index) => index).filter(index => !xBounds || numericX[index] >= xBounds[0] && numericX[index] <= xBounds[1]);
+    const indexes = ordinalTickIndexes(eligible.length, xTickCount ?? (width < 480 ? 4 : 7)).map(index => eligible[index]);
+    const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
+    const tickLength = Math.max(0, ...indexes.map(index => formatTickLabel(points[index].xLabel, width < 480 ? 18 : 28).length));
+    const margin = {...CHART_MARGIN,
+        left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
+        bottom: CHART_MARGIN.bottom + fontGrowth * 5};
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
     const sortedX = chartType === "bar" && xScale === "numeric" ? [...new Set(numericX)].sort((a, b) => a - b) : [];
     const spacing = sortedX.length > 1
         ? Math.min(...sortedX.slice(1).map((value, index) => value - sortedX[index])) : 1;
@@ -217,8 +222,6 @@ export function renderOrdinalSeriesChart({
     const xAxis = svgElement(documentContext, "g", {
         class: "series-chart-x-axis", transform: `translate(0 ${xAxisY})`,
     });
-    const eligible = points.map((point, index) => index).filter(index => !xBounds || numericX[index] >= xBounds[0] && numericX[index] <= xBounds[1]);
-    const indexes = ordinalTickIndexes(eligible.length, xTickCount ?? (width < 480 ? 4 : 7)).map(index => eligible[index]);
     const ticks = (xScale === "numeric" ? indexes.map(index => numericX[index]) : indexes)
         .filter(value => value >= horizontal.domain()[0] && value <= horizontal.domain()[1]);
     select(xAxis).call(axisBottom(horizontal).tickValues([...new Set(ticks)])
@@ -319,6 +322,7 @@ export function renderOrdinalSeriesChart({
         });
     }
     chart.append(...pointGroups);
+    const yTitleX = axisFontSize === null ? 16 : Math.max(16, axisFontSize + 4);
     chart.append(
         svgElement(documentContext, "text", {
             class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
@@ -328,9 +332,9 @@ export function renderOrdinalSeriesChart({
         }, xAxisLabel),
         svgElement(documentContext, "text", {
             class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
-            x: 16,
+            x: yTitleX,
             y: margin.top + plotHeight / 2,
-            transform: `rotate(-90 16 ${margin.top + plotHeight / 2})`,
+            transform: `rotate(-90 ${yTitleX} ${margin.top + plotHeight / 2})`,
             "text-anchor": "middle",
         }, yAxisLabel)
     );
