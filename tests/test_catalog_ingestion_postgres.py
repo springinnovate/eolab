@@ -17,13 +17,13 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 import pytest
 
-
 MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "catalog/migrations/0007_partition_maintenance_locking.sql"
 )
 BASE_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)
 UNSAFE_NOTICES = {"40P01", "23514"}
+CONTROLLER_APPLICATION_NAME = "catalog-barrier-controller"
 
 
 @dataclass(frozen=True)
@@ -64,8 +64,7 @@ def function_contracts(connection: psycopg.Connection[Any]) -> list[tuple[Any, .
     Returns:
         Stable catalog rows for the two existing functions the migration may replace.
     """
-    return connection.execute(
-        """
+    return connection.execute("""
         SELECT p.proname, pg_get_function_identity_arguments(p.oid),
                pg_get_function_result(p.oid), p.prosecdef, p.provolatile,
                p.proconfig, p.proacl::text, p.proowner
@@ -73,8 +72,7 @@ def function_contracts(connection: psycopg.Connection[Any]) -> list[tuple[Any, .
         WHERE n.nspname = 'pgstac'
           AND p.proname IN ('check_partition', 'items_staging_triggerfunc')
         ORDER BY p.proname
-        """
-    ).fetchall()
+        """).fetchall()
 
 
 @pytest.fixture(scope="session")
@@ -91,8 +89,10 @@ def catalog_database() -> CatalogDatabase:
     dsn = os.environ.get("EOLAB_CATALOG_TEST_DSN")
     if dsn is None:
         pytest.skip("Run scripts/test_catalog_postgres.py for real pgSTAC tests")
-    if not psycopg.conninfo.conninfo_to_dict(dsn).get("dbname", "").startswith(
-        "eolab_catalog_test_"
+    if (
+        not psycopg.conninfo.conninfo_to_dict(dsn)
+        .get("dbname", "")
+        .startswith("eolab_catalog_test_")
     ):
         pytest.fail("Catalog tests require an explicit eolab_catalog_test_ database")
     with psycopg.connect(dsn, autocommit=True) as connection:
@@ -113,9 +113,7 @@ def catalog_database() -> CatalogDatabase:
 
 
 @contextmanager
-def collection(
-    database: CatalogDatabase, *, monthly: bool = False
-) -> Iterator[str]:
+def collection(database: CatalogDatabase, *, monthly: bool = False) -> Iterator[str]:
     """Create and remove one test-owned STAC collection after its connections close.
 
     Args:
@@ -269,9 +267,7 @@ def wait_for_writers(
         matches = [
             row[1] == "Lock" and (blocker is None or blocker in row[2]) for row in rows
         ]
-        if (any_writer and any(matches)) or (
-            len(rows) == len(names) and all(matches)
-        ):
+        if (any_writer and any(matches)) or (len(rows) == len(names) and all(matches)):
             return
         time.sleep(0.01)
     raise AssertionError(f"Writers did not reach the required lock schedule: {rows}")
@@ -297,7 +293,11 @@ def statistics_barriers(
     suffix = uuid4().hex
     function = "pause_stats_" + suffix
     keys = [int(suffix[:12], 16) + index for index in range(len(names))]
-    with psycopg.connect(database.dsn, autocommit=True) as control:
+    with psycopg.connect(
+        database.dsn,
+        application_name=CONTROLLER_APPLICATION_NAME,
+        autocommit=True,
+    ) as control:
         clauses = "\n".join(
             f"IF current_setting('application_name') = {sql.Literal(name).as_string(control)} THEN PERFORM pg_advisory_xact_lock({key}); END IF;"
             for name, key in zip(names, keys, strict=True)
@@ -388,13 +388,19 @@ def assert_complete(
         }
         assert actual == expected
         if deferred_constraints:
-            assert connection.execute(
-                "SELECT count(*) FROM pgstac.partition_stats WHERE collection=%s",
-                (identifier,),
-            ).fetchone()[0] > 0
-            assert connection.execute(
-                "SELECT count(*) FROM pgstac.query_queue"
-            ).fetchone()[0] > 0
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM pgstac.partition_stats WHERE collection=%s",
+                    (identifier,),
+                ).fetchone()[0]
+                > 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM pgstac.query_queue"
+                ).fetchone()[0]
+                > 0
+            )
             return
         constraints = connection.execute(
             """
@@ -425,17 +431,50 @@ def test_migration_repeats_without_changing_ingestion_contracts(
     """
     with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
         assert function_contracts(connection) == catalog_database.original_contracts
-        public_definers = connection.execute(
-            """
+        public_definers = connection.execute("""
             SELECT p.proname FROM pg_proc p
             JOIN pg_namespace n ON n.oid=p.pronamespace
             CROSS JOIN LATERAL aclexplode(
                 coalesce(p.proacl, acldefault('f', p.proowner))) a
             WHERE n.nspname='pgstac' AND p.prosecdef
               AND a.grantee=0 AND a.privilege_type='EXECUTE'
-            """
-        ).fetchall()
+            """).fetchall()
         assert public_definers == []
+
+
+def test_existing_ingest_role_can_create_and_widen_partitions(
+    catalog_database: CatalogDatabase,
+) -> None:
+    """Keep cold creation and widening available through the existing ingestion role.
+
+    Args:
+        catalog_database: Guarded disposable database containing the migration.
+    """
+    with collection(catalog_database) as identifier:
+        batches = [
+            items(identifier, "initial", 10, 20),
+            items(identifier, "wider", 0, 30),
+        ]
+        notices: list[tuple[str | None, str | None]] = []
+
+        def notice(diagnostic: psycopg.errors.Diagnostic) -> None:
+            """Retain warnings emitted while the connection acts as pgstac_ingest.
+
+            Args:
+                diagnostic: Server-provided warning SQLSTATE and primary message.
+            """
+            notices.append((diagnostic.sqlstate, diagnostic.message_primary))
+
+        with psycopg.connect(catalog_database.dsn, autocommit=True) as connection:
+            initial = deadlocks(connection)
+            connection.add_notice_handler(notice)
+            connection.execute("SET ROLE pgstac_ingest")
+            for batch in batches:
+                connection.execute("SELECT pgstac.upsert_items(%s)", (Jsonb(batch),))
+            connection.execute("RESET ROLE")
+            connection.execute("SELECT pg_stat_force_next_flush()")
+        result = IngestionResult("pgstac_ingest", None, tuple(notices))
+        assert_complete(catalog_database, identifier, batches, [result], initial)
 
 
 def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
@@ -458,14 +497,16 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(ingest, catalog_database, names[0], batches[0])]
                 try:
-                    wait_for_writers(control, names[:1])
+                    wait_for_writers(control, names[:1], CONTROLLER_APPLICATION_NAME)
                     for index in range(1, 4):
                         futures.append(
-                            pool.submit(ingest, catalog_database, names[index], batches[index])
+                            pool.submit(
+                                ingest, catalog_database, names[index], batches[index]
+                            )
                         )
-                        wait_for_writers(control, names[index:index + 1], names[0])
+                        wait_for_writers(control, names[index : index + 1], names[0])
                     control.execute("SELECT pg_advisory_unlock(%s)", (keys[0],))
-                    wait_for_writers(control, names[1:2])
+                    wait_for_writers(control, names[1:2], CONTROLLER_APPLICATION_NAME)
                     wait_for_writers(control, names[2:], names[1], any_writer=True)
                 finally:
                     control.execute("SELECT pg_advisory_unlock_all()")
@@ -496,7 +537,10 @@ def test_parallel_widening_preserves_committed_bounds(
     with collection(catalog_database) as identifier:
         seed = items(identifier, "seed", 20, 29)
         assert ingest(catalog_database, "seed", seed).error is None
-        batches = [items(identifier, str(index), index * 10, index * 10 + 9) for index in range(4)]
+        batches = [
+            items(identifier, str(index), index * 10, index * 10 + 9)
+            for index in range(4)
+        ]
         names = [f"{uuid4().hex}-{index}" for index in range(4)]
         with psycopg.connect(catalog_database.dsn, autocommit=True) as control:
             initial = deadlocks(control)
@@ -506,16 +550,23 @@ def test_parallel_widening_preserves_committed_bounds(
             ).fetchone()[0]
             control.execute("BEGIN")
             control.execute(
-                sql.SQL("LOCK TABLE pgstac.{} IN SHARE MODE").format(sql.Identifier(partition))
+                sql.SQL("LOCK TABLE pgstac.{} IN SHARE MODE").format(
+                    sql.Identifier(partition)
+                )
             )
             with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = [pool.submit(ingest, catalog_database, name, batch) for name, batch in zip(names, batches, strict=True)]
+                futures = [
+                    pool.submit(ingest, catalog_database, name, batch)
+                    for name, batch in zip(names, batches, strict=True)
+                ]
                 try:
                     wait_for_writers(control, names)
                 finally:
                     control.execute("ROLLBACK")
                 results = [future.result(timeout=25) for future in futures]
-            assert_complete(catalog_database, identifier, [seed, *batches], results, initial)
+            assert_complete(
+                catalog_database, identifier, [seed, *batches], results, initial
+            )
 
 
 def test_covered_batches_keep_four_writers_without_a_maintenance_gate(
@@ -529,15 +580,21 @@ def test_covered_batches_keep_four_writers_without_a_maintenance_gate(
     with collection(catalog_database) as identifier:
         seed = items(identifier, "seed", 0, 100)
         assert ingest(catalog_database, "seed", seed).error is None
-        batches = [items(identifier, str(index), index * 10, index * 10 + 9) for index in range(4)]
+        batches = [
+            items(identifier, str(index), index * 10, index * 10 + 9)
+            for index in range(4)
+        ]
         names = [f"{uuid4().hex}-{index}" for index in range(4)]
         with statistics_barriers(catalog_database, names[:1]) as (control, _):
             initial = deadlocks(control)
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(ingest, catalog_database, names[0], batches[0])]
                 try:
-                    wait_for_writers(control, names[:1])
-                    futures.extend(pool.submit(ingest, catalog_database, name, batch) for name, batch in zip(names[1:], batches[1:], strict=True))
+                    wait_for_writers(control, names[:1], CONTROLLER_APPLICATION_NAME)
+                    futures.extend(
+                        pool.submit(ingest, catalog_database, name, batch)
+                        for name, batch in zip(names[1:], batches[1:], strict=True)
+                    )
                     wait_for_writers(control, names)
                     strong_locks = control.execute(
                         """
@@ -553,7 +610,9 @@ def test_covered_batches_keep_four_writers_without_a_maintenance_gate(
                 finally:
                     control.execute("SELECT pg_advisory_unlock_all()")
                 results = [future.result(timeout=25) for future in futures]
-            assert_complete(catalog_database, identifier, [seed, *batches], results, initial)
+            assert_complete(
+                catalog_database, identifier, [seed, *batches], results, initial
+            )
 
 
 def test_mixed_existing_and_new_partitions_take_the_parent_lock_first(
@@ -570,22 +629,39 @@ def test_mixed_existing_and_new_partitions_take_the_parent_lock_first(
         for seed in (january, february):
             assert ingest(catalog_database, "seed", seed).error is None
         batches = [
-            [*items(identifier, "widen", 0, 72), *items(identifier, "new", 61 * 24, 62 * 24)],
-            *[items(identifier, f"covered-{index}", 32 * 24 + index, 33 * 24 + index) for index in range(3)],
+            [
+                *items(identifier, "widen", 0, 72),
+                *items(identifier, "new", 61 * 24, 62 * 24),
+            ],
+            *[
+                items(identifier, f"covered-{index}", 32 * 24 + index, 33 * 24 + index)
+                for index in range(3)
+            ],
         ]
         names = [f"{uuid4().hex}-{index}" for index in range(4)]
         with statistics_barriers(catalog_database, names[:1]) as (control, _):
             initial = deadlocks(control)
             with ThreadPoolExecutor(max_workers=4) as pool:
-                futures: list[Future[IngestionResult]] = [pool.submit(ingest, catalog_database, names[0], batches[0])]
+                futures: list[Future[IngestionResult]] = [
+                    pool.submit(ingest, catalog_database, names[0], batches[0])
+                ]
                 try:
-                    wait_for_writers(control, names[:1])
-                    futures.extend(pool.submit(ingest, catalog_database, name, batch) for name, batch in zip(names[1:], batches[1:], strict=True))
+                    wait_for_writers(control, names[:1], CONTROLLER_APPLICATION_NAME)
+                    futures.extend(
+                        pool.submit(ingest, catalog_database, name, batch)
+                        for name, batch in zip(names[1:], batches[1:], strict=True)
+                    )
                     wait_for_writers(control, names[1:], names[0])
                 finally:
                     control.execute("SELECT pg_advisory_unlock_all()")
                 results = [future.result(timeout=25) for future in futures]
-            assert_complete(catalog_database, identifier, [january, february, *batches], results, initial)
+            assert_complete(
+                catalog_database,
+                identifier,
+                [january, february, *batches],
+                results,
+                initial,
+            )
 
 
 def test_existing_partition_publishes_its_missing_statistics_identity(
@@ -627,11 +703,17 @@ def test_queued_maintenance_still_publishes_concurrent_items(
         with statistics_barriers(catalog_database, names[:1]) as (control, _):
             initial = deadlocks(control)
             with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = [pool.submit(ingest, catalog_database, names[0], batches[0], use_queue=True)]
+                futures = [
+                    pool.submit(
+                        ingest, catalog_database, names[0], batches[0], use_queue=True
+                    )
+                ]
                 try:
-                    wait_for_writers(control, names[:1])
+                    wait_for_writers(control, names[:1], CONTROLLER_APPLICATION_NAME)
                     futures.extend(
-                        pool.submit(ingest, catalog_database, name, batch, use_queue=True)
+                        pool.submit(
+                            ingest, catalog_database, name, batch, use_queue=True
+                        )
                         for name, batch in zip(names[1:], batches[1:], strict=True)
                     )
                     wait_for_writers(control, names[1:], names[0])
@@ -639,6 +721,10 @@ def test_queued_maintenance_still_publishes_concurrent_items(
                     control.execute("SELECT pg_advisory_unlock_all()")
                 results = [future.result(timeout=25) for future in futures]
             assert_complete(
-                catalog_database, identifier, batches, results, initial,
+                catalog_database,
+                identifier,
+                batches,
+                results,
+                initial,
                 deferred_constraints=True,
             )

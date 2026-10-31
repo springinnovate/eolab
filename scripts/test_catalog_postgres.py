@@ -13,11 +13,11 @@ import tarfile
 import tempfile
 import time
 from typing import Iterator
+from urllib.parse import urlsplit
 from uuid import uuid4
 import xml.etree.ElementTree as ET
 
 from test_processing_postgres import docker
-
 
 ROOT = Path(__file__).resolve().parents[1]
 LABEL = "org.eolab.catalog-test"
@@ -43,27 +43,34 @@ def deployment_images() -> tuple[str, str]:
         migration_recipe,
     )
     if database is None or migration is None:
-        raise ValueError("Catalog tests require the deployment's pgSTAC 0.9.12 digest pins")
+        raise ValueError(
+            "Catalog tests require the deployment's pgSTAC 0.9.12 digest pins"
+        )
     return database.group(1), migration.group(1)
 
 
-def build_test_image(migration_image: str) -> str:
-    """Build only the existing pytest dependency, catalog test and migration inputs.
-
-    Args:
-        migration_image: Exact deployment Python image with pgSTAC and psycopg installed.
+def build_test_image() -> str:
+    """Build the catalog tests with the application's supported Python and psycopg.
 
     Returns:
         Unique test-only image tag owned and removed by this launcher.
 
     Raises:
+        ValueError: If the deployment's exact psycopg version cannot be found.
         subprocess.CalledProcessError: If image construction fails.
         subprocess.TimeoutExpired: If the build exceeds ten minutes.
     """
+    runtime = (ROOT / "deployment/application-runtime-requirements.txt").read_text(
+        encoding="utf-8"
+    )
+    version = re.search(r"(?m)^psycopg==([0-9.]+)\s", runtime)
+    if version is None:
+        raise ValueError("Catalog tests require the deployment's exact psycopg pin")
     recipe = (
-        f"FROM {migration_image}\n"
+        "FROM python:3.12-slim-trixie\n"
         "USER root\nWORKDIR /suite\n"
-        "RUN python -m pip install --no-cache-dir 'pytest==8.4.2'\n"
+        "RUN python -m pip install --no-cache-dir 'pytest==8.4.2' "
+        f"'psycopg[binary]=={version.group(1)}'\n"
         "COPY tests/test_catalog_ingestion_postgres.py /suite/tests/\n"
         "COPY catalog/migrations/ /suite/catalog/migrations/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 "
@@ -116,20 +123,41 @@ def disposable_database(database_image: str) -> Iterator[tuple[str, str, str]]:
     try:
         docker("network", "create", "--internal", "--label", f"{LABEL}={name}", network)
         docker(
-            "run", "--detach", "--name", name,
-            "--label", f"{LABEL}={name}",
-            "--network", network, "--network-alias", "database",
-            "--tmpfs", "/var/lib/postgresql/data:rw",
-            "--memory", "768m",
-            "--env", f"POSTGRES_DB={name}",
-            "--env", "POSTGRES_USER=catalog_test",
-            "--env", f"POSTGRES_PASSWORD={password}",
+            "run",
+            "--detach",
+            "--name",
+            name,
+            "--label",
+            f"{LABEL}={name}",
+            "--network",
+            network,
+            "--network-alias",
+            "database",
+            "--tmpfs",
+            "/var/lib/postgresql/data:rw",
+            "--memory",
+            "768m",
+            "--env",
+            f"POSTGRES_DB={name}",
+            "--env",
+            "POSTGRES_USER=catalog_test",
+            "--env",
+            f"POSTGRES_PASSWORD={password}",
             database_image,
         )
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             ready = subprocess.run(
-                ["docker", "exec", name, "pg_isready", "-U", "catalog_test", "-d", name],
+                [
+                    "docker",
+                    "exec",
+                    name,
+                    "pg_isready",
+                    "-U",
+                    "catalog_test",
+                    "-d",
+                    name,
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
@@ -165,12 +193,15 @@ def disposable_database(database_image: str) -> Iterator[tuple[str, str, str]]:
         print(f"Catalog test cleanup verified: {name}", flush=True)
 
 
-def run_suite(image: str, database_image: str, *, baseline: bool) -> int:
+def run_suite(
+    image: str, database_image: str, migration_image: str, *, baseline: bool
+) -> int:
     """Initialize the real upstream schema and run either the fix or baseline regression.
 
     Args:
         image: Test-only image containing pytest, source tests and application SQL.
         database_image: Pinned deployment database image.
+        migration_image: Pinned deployment image used only to initialize upstream SQL.
         baseline: Omit migration 0007 and run the expected-failing cold race alone.
 
     Returns:
@@ -181,48 +212,92 @@ def run_suite(image: str, database_image: str, *, baseline: bool) -> int:
         subprocess.TimeoutExpired: If a Docker command exceeds its bounded deadline.
     """
     with disposable_database(database_image) as (name, network, dsn):
-        initializer = (
-            "import os; from pathlib import Path; import psycopg; "
-            "from pypgstac.db import PgstacDB; from pypgstac.migrate import Migrate; "
-            "dsn=os.environ['EOLAB_CATALOG_TEST_DSN']; "
-            "Migrate(PgstacDB(dsn)).run_migration(); "
-            "c=psycopg.connect(dsn,autocommit=True); "
-            "[c.execute(p.read_text(),prepare=False) for p in "
-            "sorted(Path('/suite/catalog/migrations').glob('*.sql')) "
-            "if not p.name.startswith('0007_')]; c.close()"
-        )
         docker(
-            "run", "--name", name + "_migrate",
-            "--label", f"{LABEL}={name}", "--network", network,
-            "--env", f"EOLAB_CATALOG_TEST_DSN={dsn}",
-            image, "python", "-c", initializer,
-            timeout=180, capture=False,
+            "run",
+            "--name",
+            name + "_migrate",
+            "--label",
+            f"{LABEL}={name}",
+            "--network",
+            network,
+            "--entrypoint",
+            "pypgstac",
+            "--env",
+            "PGHOST=database",
+            "--env",
+            "PGPORT=5432",
+            "--env",
+            "PGUSER=catalog_test",
+            "--env",
+            f"PGPASSWORD={urlsplit(dsn).password}",
+            "--env",
+            f"PGDATABASE={name}",
+            migration_image,
+            "migrate",
+            timeout=180,
+            capture=False,
         )
         command = [
-            "python", "-m", "pytest", "-c", "/dev/null", "-p", "no:cacheprovider",
-            "-v", "-ra", "--tb=short", "--junitxml=/tmp/catalog-results.xml",
+            "-m",
+            "pytest",
+            "-c",
+            "/dev/null",
+            "-p",
+            "no:cacheprovider",
+            "-v",
+            "-ra",
+            "--tb=short",
+            "--junitxml=/results/catalog-results.xml",
             "/suite/tests/test_catalog_ingestion_postgres.py",
         ]
         if baseline:
             command.extend(["-k", "test_parallel_cold_ingestion"])
-            print("Running the unpatched baseline; this regression must fail", flush=True)
-        docker(
-            "run", "--detach", "--name", name + "_runner",
-            "--label", f"{LABEL}={name}", "--network", network,
-            "--read-only", "--tmpfs", "/tmp:rw,size=128m",
-            "--memory", "512m", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--env", f"EOLAB_CATALOG_TEST_DSN={dsn}",
-            "--env", f"EOLAB_CATALOG_TEST_BASELINE={int(baseline)}",
-            image, *command,
+            print(
+                "Running the unpatched baseline; this regression must fail", flush=True
+            )
+        initializer = (
+            "import os,sys; from pathlib import Path; import psycopg; "
+            "c=psycopg.connect(os.environ['EOLAB_CATALOG_TEST_DSN'],autocommit=True); "
+            "[c.execute(p.read_text(),prepare=False) for p in "
+            "sorted(Path('/suite/catalog/migrations').glob('*.sql')) "
+            "if not p.name.startswith('0007_')]; c.close(); "
+            f"os.execvp(sys.executable,[sys.executable,*{command!r}])"
         )
-        try:
-            status = int(docker("wait", name + "_runner", timeout=180))
-        finally:
-            docker("logs", name + "_runner", timeout=30, capture=False)
         with tempfile.TemporaryDirectory(prefix="eolab-catalog-results-") as directory:
-            report = Path(directory) / "results.xml"
-            docker("cp", name + "_runner:/tmp/catalog-results.xml", str(report))
+            docker(
+                "run",
+                "--detach",
+                "--name",
+                name + "_runner",
+                "--label",
+                f"{LABEL}={name}",
+                "--network",
+                network,
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,size=128m",
+                "--mount",
+                f"type=bind,source={Path(directory).resolve()},target=/results",
+                "--memory",
+                "512m",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--env",
+                f"EOLAB_CATALOG_TEST_DSN={dsn}",
+                "--env",
+                f"EOLAB_CATALOG_TEST_BASELINE={int(baseline)}",
+                image,
+                "python",
+                "-c",
+                initializer,
+            )
+            try:
+                status = int(docker("wait", name + "_runner", timeout=180))
+            finally:
+                docker("logs", name + "_runner", timeout=30, capture=False)
+            report = Path(directory) / "catalog-results.xml"
             suites = ET.parse(report).getroot().iter("testsuite")
             if any(int(suite.attrib.get("skipped", "0")) for suite in suites):
                 raise RuntimeError("The real catalog suite must not skip any tests")
@@ -252,7 +327,8 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--baseline", action="store_true",
+        "--baseline",
+        action="store_true",
         help="Omit migration 0007 and demonstrate the original four-writer failure",
     )
     args = parser.parse_args()
@@ -262,8 +338,8 @@ def main() -> int:
     image = None
     try:
         docker("pull", database_image, timeout=300, capture=False)
-        image = build_test_image(migration_image)
-        return run_suite(image, database_image, baseline=args.baseline)
+        image = build_test_image()
+        return run_suite(image, database_image, migration_image, baseline=args.baseline)
     except KeyboardInterrupt:
         return 130
     finally:
