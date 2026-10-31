@@ -613,6 +613,13 @@ test("temporal plots use actual UTC spacing and retain NoData gaps through prese
     assert.equal(chart.querySelector(".series-chart-line").getAttribute("d").split("M").length - 1, 2,
         "the unavailable observation breaks the line rather than becoming zero");
     assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Time (UTC)");
+    const yTitle = chart.querySelectorAll(".series-chart-axis-title")[1];
+    assert.equal(yTitle.textContent, "Value (K)");
+    assert.equal(yTitle.getAttribute("transform"), null, "the Y label sits above the plot, matching histograms");
+    assert.equal(yTitle.getAttribute("text-anchor"), "start");
+    assert.equal(yTitle.getAttribute("y"), "15");
+    assert.equal(yTitle.getAttribute("style"), "font-size: 12px");
+    assert.equal(chart.querySelector(".series-chart-x-axis").querySelector("text").style.getPropertyValue("font-size"), "11px");
     chart.querySelector(".series-chart-line-hit").dispatchEvent(new Event("pointermove"));
     assert.equal(view.cards.get(1).tooltip.hidden, true, "the line does not repeat the statistic name on hover");
     points[1].dispatchEvent(new Event("pointermove"));
@@ -659,7 +666,8 @@ test("axis editors redraw retained observations and preserve the valid plot duri
     }
     state.chartType = "scatter"; view.renderPlots(state);
     assert.equal(controls.chart.querySelector(".series-chart-point").getAttribute("r"), "1.5");
-    assert.equal(controls.chart.querySelector(".series-chart-axis-title").getAttribute("style"), "font-size: 14px");
+    assert.equal(controls.chart.querySelector(".series-chart-axis-title").getAttribute("style"), "font-size: 15px");
+    assert.equal(controls.chart.querySelector(".series-chart-x-axis").querySelector("text").style.getPropertyValue("font-size"), "14px");
     state.statistics[0].color = "#ff0000"; view.renderPlots(state);
     assert.match(controls.chart.querySelectorAll("g").find(node => node.getAttribute("data-series-id") === "1").getAttribute("style"), /#ff0000/);
     state.chartType = "bar"; view.renderPlots(state);

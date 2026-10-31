@@ -29,7 +29,7 @@
 #raster-series-plots:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 #raster-series-plot-heading { margin-top: 0.4rem; overflow-wrap: anywhere; }
 #raster-series-plot-heading[hidden] { display: none; }
-#raster-series-plot-title { margin: 0; font-size: 0.9rem; }
+#raster-series-plot-title { margin: 0; }
 #raster-series-plot-context { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--text-2); }
 #raster-series button, #raster-series select, #raster-series summary, .raster-series-formula-legend { min-height: 24px; }
 #raster-series summary { line-height: 24px; }
@@ -87,7 +87,7 @@
 .raster-series-plot-header button { padding: 0.1rem 0.4rem; }
 .raster-series-legend { display: flex; flex-wrap: wrap; align-content: start; gap: 0.1rem 0.5rem; padding-top: 0.15rem; }
 .raster-series-legend[hidden] { display: none; }
-.raster-series-legend-item { display: flex; align-items: center; gap: 0.25rem; color: var(--text-1); background: none; border: none; padding: 0.1rem; font-size: 0.75rem; max-width: 100%; }
+.raster-series-legend-item { display: flex; align-items: center; gap: 0.25rem; color: var(--text-1); background: none; border: none; padding: 0.1rem; font: 11px/1.45 system-ui, sans-serif; max-width: 100%; }
 .raster-series-legend-item span { overflow-wrap: anywhere; min-width: 0; }
 .raster-series-plot-note { font-size: 0.72rem; margin: 0.2rem 0; }
 .raster-series-plot-note[hidden] { display: none; }
@@ -103,7 +103,7 @@
 .raster-series-axis-bounds label { display: grid; gap: 0.2rem; }
 .raster-series-axis-bounds input { width: 10rem; max-width: 100%; min-width: 0; box-sizing: border-box; font-size: inherit; }
 .raster-series-axis-error { color: var(--status-danger); margin: 0; }
-.raster-series-statistics-chart { width: 100%; height: auto; display: block; }
+.raster-series-statistics-chart { height: auto; }
 .raster-series-statistics-chart.is-previous { opacity: 0.25; }
 .raster-series-statistics-chart .is-muted { opacity: 0.2; }
 .raster-series-empty-plot { aspect-ratio: 680 / 360; margin: 0; display: grid; place-content: center; font-size: 0.8rem; text-align: center; padding: 0 1rem; box-sizing: border-box; }

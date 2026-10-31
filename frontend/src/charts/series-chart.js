@@ -96,13 +96,14 @@ function svgElement(documentContext, name, attributes, text = null) {
  * @param {[number,number]|null} [configuration.yBounds=null] Validated increasing Y display bounds; positive for log scales.
  * @param {boolean} [configuration.xReverse=false] Reverse the numeric display axis without changing observations.
  * @param {number} [configuration.width=680] Measured SVG width; labels retain their screen size.
- * @param {number} [configuration.height=360] SVG height in screen pixels.
+ * @param {number} [configuration.height=360] SVG height in screen pixels; explicit tick fonts can add caption space without shrinking the plot.
  * @param {number} [configuration.pointSize=9] Marker diameter in screen pixels.
  * @param {number|null} [configuration.xTickCount=null] Maximum X tick labels; null adapts to chart width.
  * @param {number} [configuration.yTickCount=5] Desired Y tick count, rounded by the numeric scale.
- * @param {number|null} [configuration.axisFontSize=null] Tick and axis-title font size in screen pixels; null keeps the caller's CSS.
+ * @param {number|null} [configuration.axisFontSize=null] Tick font size in screen pixels; axis titles are one pixel larger. Null keeps the caller's CSS.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
  * @param {string} configuration.yAxisLabel Vertical-axis title.
+ * @param {"left"|"top"} [configuration.yAxisLabelPosition="left"] Place the Y title beside or above the plot.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
  * @param {(point:Object,series:ChartSeries,index:number)=>string} configuration.pointAccessibleLabel Accessible point label.
  * @param {((point:Object)=>string)|null} [configuration.pointTooltip=null] Native tooltip text, required unless onInspect is supplied.
@@ -131,6 +132,7 @@ export function renderOrdinalSeriesChart({
     axisFontSize = null,
     xAxisLabel,
     yAxisLabel,
+    yAxisLabelPosition = "left",
     ariaLabel,
     pointAccessibleLabel,
     pointTooltip = null,
@@ -194,8 +196,16 @@ export function renderOrdinalSeriesChart({
     const fontGrowth = Math.max(0, (axisFontSize ?? 10) - 10);
     const tickLength = Math.max(0, ...indexes.map(index => formatTickLabel(points[index].xLabel, width < 480 ? 18 : 28).length));
     const margin = {...CHART_MARGIN,
+        top: yAxisLabelPosition === "top" ? Math.max(CHART_MARGIN.top, (axisFontSize ?? 11) + 17) : CHART_MARGIN.top,
         left: axisFontSize === null ? CHART_MARGIN.left : Math.max(CHART_MARGIN.left, tickLength * axisFontSize * 0.5 + 8),
         bottom: CHART_MARGIN.bottom + fontGrowth * 5};
+    if (axisFontSize !== null) {
+        // Leave room for rotated monospaced ticks, then the horizontal axis title.
+        const captionHeight = Math.ceil(tickLength * axisFontSize * 0.62 * Math.sin(35 * Math.PI / 180) + axisFontSize * 2.5 + 17);
+        const extraHeight = Math.max(0, captionHeight - margin.bottom);
+        margin.bottom += extraHeight;
+        height += extraHeight;
+    }
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
     const sortedX = chartType === "bar" && xScale === "numeric" ? [...new Set(numericX)].sort((a, b) => a - b) : [];
@@ -322,20 +332,23 @@ export function renderOrdinalSeriesChart({
         });
     }
     chart.append(...pointGroups);
-    const yTitleX = axisFontSize === null ? 16 : Math.max(16, axisFontSize + 4);
+    const topYTitle = yAxisLabelPosition === "top";
+    const yTitleX = topYTitle ? margin.left : axisFontSize === null ? 16 : Math.max(16, axisFontSize + 4);
+    const yTitleY = topYTitle ? margin.top - 13 : margin.top + plotHeight / 2;
+    const titleFont = axisFontSize === null ? {} : {style: `font-size: ${axisFontSize + 1}px`};
     chart.append(
         svgElement(documentContext, "text", {
-            class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
+            class: "series-chart-axis-title", ...titleFont,
             x: margin.left + plotWidth / 2,
             y: height - 8,
             "text-anchor": "middle",
         }, xAxisLabel),
         svgElement(documentContext, "text", {
-            class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
+            class: "series-chart-axis-title", ...titleFont,
             x: yTitleX,
-            y: margin.top + plotHeight / 2,
-            transform: `rotate(-90 ${yTitleX} ${margin.top + plotHeight / 2})`,
-            "text-anchor": "middle",
+            y: yTitleY,
+            ...(topYTitle ? {} : {transform: `rotate(-90 ${yTitleX} ${yTitleY})`}),
+            "text-anchor": topYTitle ? "start" : "middle",
         }, yAxisLabel)
     );
     chart.removeAttribute("hidden");

@@ -91,7 +91,7 @@ export class RasterSeriesPlotsView {
         const appearance = {};
         for (const [name, caption, value, min, max] of [
             ["pointSize", "Point size (px)", 5, 1, 24], ["xTickCount", "X tick count", 5, 2, 30],
-            ["yTickCount", "Y tick count", 5, 2, 30], ["axisFontSize", "Axis font size (px)", 10, 8, 24],
+            ["yTickCount", "Y tick count", 5, 2, 30], ["axisFontSize", "Axis font size (px)", 11, 8, 24],
         ]) {
             const label = this.document.createElement("label"); label.textContent = caption;
             const input = this.document.createElement("input"); input.type = "number"; input.min = String(min); input.max = String(max);
@@ -249,12 +249,13 @@ export class RasterSeriesPlotsView {
             : "Waiting for statistic values.";
         if (!chart.hidden) elements.domains = renderOrdinalSeriesChart({
             documentContext: this.document, chart, series, chartType: state.chartType, yScale: plot.scale,
-            width: chart.clientWidth, height: 260 + Math.max(0, (plot.axisFontSize ?? 10) - 10) * 5,
-            pointSize: plot.pointSize ?? 5, xTickCount: plot.xTickCount ?? 5, yTickCount: plot.yTickCount ?? 5, axisFontSize: plot.axisFontSize ?? 10,
+            width: chart.clientWidth, height: 260 + Math.max(0, (plot.axisFontSize ?? 11) - 11) * 5,
+            pointSize: plot.pointSize ?? 5, xTickCount: plot.xTickCount ?? 5, yTickCount: plot.yTickCount ?? 5, axisFontSize: plot.axisFontSize ?? 11,
             yBounds: plot.bounds ?? null, xBounds: state.temporal ? plot.xBounds ?? null : null,
             xReverse: !!state.temporal && state.direction === "reverse",
             xScale: state.temporal ? "numeric" : "ordinal", xAxisLabel: state.temporal ? "Time (UTC)" : "Raster",
-            yAxisLabel: (units.length === 1 && units[0] !== "unit unspecified" ? units[0] : "Value") + (plot.scale === "log" ? " (log)" : ""),
+            yAxisLabel: (units.length === 1 && units[0] !== "unit unspecified" ? `Value (${units[0]})` : "Value") + (plot.scale === "log" ? " · log" : ""),
+            yAxisLabelPosition: "top",
             ariaLabel: `Plot ${plot.id}${state.showingPrevious ? "; previous results" : ""}: ${series.map(item => item.label).join("; ")}`,
             pointAccessibleLabel: (point, item, index) => this.describePoint(series, index, plot.scale, state.showingPrevious),
             onInspect: inspection => {
