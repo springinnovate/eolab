@@ -495,6 +495,7 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
         ]
         with statistics_barriers(catalog_database, names[:2]) as (control, keys):
             initial = deadlocks(control)
+            scheduling_failure: AssertionError | None = None
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(ingest, catalog_database, names[0], batches[0])]
                 try:
@@ -509,10 +510,21 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
                     control.execute("SELECT pg_advisory_unlock(%s)", (keys[0],))
                     wait_for_writers(control, names[1:2], CONTROLLER_APPLICATION_NAME)
                     wait_for_writers(control, names[2:], names[1], any_writer=True)
+                except AssertionError as failure:
+                    # A deadlock victim can exit before the next barrier probe.
+                    # Preserve all real SQL outcomes before reporting the schedule.
+                    scheduling_failure = failure
                 finally:
                     control.execute("SELECT pg_advisory_unlock_all()")
                 results = [future.result(timeout=25) for future in futures]
             observed_deadlocks = deadlocks(control) - initial
+            if scheduling_failure is not None:
+                print(
+                    f"Cold ingestion schedule failed: {scheduling_failure}; "
+                    f"database_deadlocks={observed_deadlocks}; "
+                    f"writer_results={results!r}",
+                    flush=True,
+                )
             if observed_deadlocks > 0 or any(
                 (result.error is not None and result.error[0] == "40P01")
                 or any(notice[0] == "40P01" for notice in result.notices)
@@ -525,6 +537,8 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
                     flush=True,
                 )
             assert_complete(catalog_database, identifier, batches, results, initial)
+            if scheduling_failure is not None:
+                raise scheduling_failure
 
 
 def test_parallel_widening_preserves_committed_bounds(

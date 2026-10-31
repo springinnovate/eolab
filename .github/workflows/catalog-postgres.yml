@@ -37,4 +37,5 @@ jobs:
           fi
           grep -F 'CATALOG_BASELINE_DEADLOCK_REPRODUCED' "$RUNNER_TEMP/catalog-deadlock-baseline.log"
       - name: Verify the migrated catalog with four writers
+        if: ${{ !cancelled() }}
         run: python scripts/test_catalog_postgres.py
