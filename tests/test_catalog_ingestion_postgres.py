@@ -490,8 +490,8 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
         batches = [
             items(identifier, "a", 10, 19),
             items(identifier, "b", 0, 9),
-            items(identifier, "c", 0, 39),
-            items(identifier, "d", 0, 49),
+            items(identifier, "c", 20, 29),
+            items(identifier, "d", 30, 39),
         ]
         with statistics_barriers(catalog_database, names[:2]) as (control, keys):
             initial = deadlocks(control)
