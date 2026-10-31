@@ -47,11 +47,10 @@ export class RasterSeriesController {
      * @param {()=>void} options.onClose Request that composition close this tool.
      * @param {(choice:"selection"|"vector"|"whole")=>void} [options.onAreaChoice] Start or cancel polygon selection after an explicit area choice.
      * @param {(source:Object)=>Promise<Object>} options.getTemporalItem Read Catalog metadata for a selected dataset.
-     * @param {(item:Object,variable:string,month?:string,signal?:AbortSignal)=>Promise<Object>} options.loadTemporalTimes Read available observations for guidance.
      */
-    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, getTemporalItem, loadTemporalTimes }) {
+    constructor({ view, onClose, areaStatistics, onAreaChoice = () => {}, getTemporalItem }) {
         this.view = view;
-        Object.assign(this, {getTemporalItem, loadTemporalTimes});
+        this.getTemporalItem = getTemporalItem;
         this.areaStatistics = areaStatistics;
         this.onAreaChoice = onAreaChoice;
         this.areaStatistics.setProgressListener(() => this.render());
@@ -76,7 +75,7 @@ export class RasterSeriesController {
         this.chartType = "line";
         this.sourceMode = "layers";
         this.temporal = {datasets: [], datasetKey: "", item: null, variable: "", periodMode: "month",
-            startTime: "", endTime: "", choices: null, loading: false, error: "", datesError: ""};
+            startTime: "", endTime: "", loading: false, error: ""};
         view.bind({
             onClose,
             onArea: choice => this.chooseArea(choice),
@@ -93,15 +92,9 @@ export class RasterSeriesController {
             onSelect: (key, selected) => this.selectRaster(key, selected),
             onTimeRange: key => void this.chooseTimeRange(key),
             onTemporalVariable: variable => {
-                this.temporal.variable = variable; this.updateAreaInputs(); void this.loadTemporalDates();
+                this.temporal.variable = variable; this.updateAreaInputs();
             },
             onTemporalEdit: change => { Object.assign(this.temporal, change); this.updateAreaInputs(); },
-            onTemporalMonth: month => void this.loadTemporalDates(month),
-            onRefreshTemporal: () => void this.loadTemporalDates(undefined, true),
-            onUseTemporalMonth: () => {
-                Object.assign(this.temporal, {periodMode: "month", ...getTemporalMonthBoundaries(this.temporal.choices.month)});
-                this.updateAreaInputs();
-            },
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
             },
@@ -241,7 +234,7 @@ export class RasterSeriesController {
         this.temporal.datasets = datasets;
         if (this.temporal.datasetKey && !datasets.some(dataset => dataset.key === this.temporal.datasetKey)) {
             this.temporalAbort?.abort();
-            Object.assign(this.temporal, {datasetKey: "", item: null, variable: "", choices: null, loading: false, error: ""});
+            Object.assign(this.temporal, {datasetKey: "", item: null, variable: "", loading: false, error: ""});
             this.sourceMode = "layers";
         }
         const newKeys = new Set(sources.map(source => source.key));
@@ -253,7 +246,7 @@ export class RasterSeriesController {
         const variable = snapshot && rasterSourceReference(snapshot).variable;
         if (this.active && variable && variable !== this.temporal.variable) {
             this.temporal.variable = variable;
-            this.updateAreaInputs(); void this.loadTemporalDates();
+            this.updateAreaInputs();
         } else if (this.areaStatistics.hasCapturedInputs && !this.active) this.render();
         else this.updateAreaInputs();
     }
@@ -263,7 +256,7 @@ export class RasterSeriesController {
      * requested period. A dataset without a snapshot keeps its own variable choice.
      * Turning the range off restores the remembered individual raster choices.
      * @param {string|null} key Retained raster view or dataset key; null returns to the individual raster choices.
-     * @return {Promise<void>} Metadata and availability guidance have finished loading.
+     * @return {Promise<void>} Selected variable metadata has finished loading.
      */
     async chooseTimeRange(key) {
         if (key === null) { this.sourceMode = "layers"; this.updateAreaInputs(); return; }
@@ -280,9 +273,11 @@ export class RasterSeriesController {
         this.temporalAbort?.abort();
         Object.assign(this.temporal, {datasetKey: dataset.key, item: sameDataset ? this.temporal.item : null,
             variable: reference?.variable ?? (sameDataset ? this.temporal.variable : ""),
-            choices: null, loading: false, error: "", datesError: ""});
+            loading: false, error: ""});
         this.updateAreaInputs();
-        await this.loadTemporalDates(undefined, !sameDataset || !this.temporal.item);
+        if (!this.temporal.startTime && reference?.time) Object.assign(this.temporal, getTemporalMonthBoundaries(reference.time.slice(0, 7)));
+        if (!sameDataset || !this.temporal.item) await this.loadTemporalItem();
+        else this.updateAreaInputs();
     }
 
     /** Describe named snapshot and time-range choices without changing their selections.
@@ -311,41 +306,27 @@ export class RasterSeriesController {
         return choices;
     }
 
-    /** Read Catalog guidance while leaving the requested period unchanged.
-     * Superseded selections cancel their availability reads; a failed date listing
-     * does not prevent the user from entering a period directly.
-     * @param {string} [month] UTC month to browse; omission asks for the latest month.
-     * @param {boolean} [reloadItem=false] Whether to reload the dataset's Catalog metadata.
-     * @return {Promise<void>} Updated guidance or a displayed read error.
+    /** Read the selected dataset's variable metadata, also used by explicit Catalog refresh.
+     * Superseded selections ignore late replies. Availability listings are not
+     * needed to choose a year, month, day range or exact UTC interval.
+     * @return {Promise<void>} Metadata loaded or an actual Catalog error displayed.
      */
-    async loadTemporalDates(month, reloadItem = false) {
+    async loadTemporalItem() {
         const temporal = this.temporal;
         const source = temporal.datasets.find(dataset => dataset.key === temporal.datasetKey);
         if (!source) return;
-        if (reloadItem) this.areaStatistics.discardTemporalResults();
+        this.areaStatistics.discardTemporalResults();
         this.temporalAbort?.abort();
         const abort = this.temporalAbort = new AbortController();
-        Object.assign(temporal, {loading: true, error: "", datesError: ""}); this.render();
+        Object.assign(temporal, {loading: true, error: ""}); this.render();
         try {
-            if (reloadItem) {
-                const item = await this.getTemporalItem(source);
-                if (abort.signal.aborted) return;
-                temporal.item = item;
-                const variables = Object.keys(item.properties["cube:variables"]);
-                if (!temporal.variable && variables.length === 1) temporal.variable = variables[0];
-            }
-            if (!temporal.variable) { temporal.choices = null; return; }
-            try {
-                const choices = await this.loadTemporalTimes(temporal.item, temporal.variable, month, abort.signal);
-                if (!abort.signal.aborted) temporal.choices = choices;
-            } catch (error) {
-                if (!abort.signal.aborted) {
-                    temporal.choices = null;
-                    temporal.datesError = `Available dates could not be loaded: ${error.message} You can still enter a period.`;
-                }
-            }
+            const item = await this.getTemporalItem(source);
+            if (abort.signal.aborted) return;
+            temporal.item = item;
+            const variables = Object.keys(item.properties["cube:variables"]);
+            if (!temporal.variable && variables.length === 1) temporal.variable = variables[0];
         } catch (error) {
-            if (!abort.signal.aborted) temporal.error = `Dataset could not be loaded: ${error.message} Refresh to try again.`;
+            if (!abort.signal.aborted) temporal.error = `Dataset could not be loaded: ${error.message} Reload to try again.`;
         } finally {
             if (!abort.signal.aborted) { temporal.loading = false; this.updateAreaInputs(); }
         }
@@ -357,7 +338,7 @@ export class RasterSeriesController {
     temporalSelectionError() {
         const temporal = this.temporal;
         if (!temporal.datasetKey) return temporal.datasets.length ? "Choose a temporal dataset." : "Add a temporal dataset from Catalog to Map layers.";
-        if (temporal.loading) return "Loading available variables and dates…";
+        if (temporal.loading) return "Loading dataset variables…";
         if (temporal.error) return temporal.error;
         if (!temporal.item?.properties["cube:variables"][temporal.variable]) return "Choose a variable.";
         return temporalPeriodError(temporal);

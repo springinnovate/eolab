@@ -364,7 +364,7 @@ test("temporal controls reuse the period editor and preserve focused input while
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea",
         "onEditArea", "onAddFormula", "onEditFormula", "onRemoveFormula", "onStatisticDisplay", "onAddPlot",
         "onRemovePlot", "onPlotAxis", "onRetry", "onCancel", "onRecover", "onTimeRange",
-        "onTemporalVariable", "onTemporalMonth", "onUseTemporalMonth", "onRefreshTemporal"].map(key => [key, () => assert.fail(key)]));
+        "onTemporalVariable"].map(key => [key, () => assert.fail(key)]));
     actions.onTemporalEdit = change => { Object.assign(h.state.temporal, change); h.draw(); };
     actions.onTimeRange = key => {
         assert.equal(key, null);
@@ -378,8 +378,7 @@ test("temporal controls reuse the period editor and preserve focused input while
         item: {properties: {title: "Weather observations", "cube:variables": {temperature: {
             description: "Air temperature", unit: "K", "eolab:time_support": "instantaneous"}}}},
         variable: "temperature", periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00",
-        choices: {months: ["2000-01"], month: "2000-01", times: ["2000-01-01T00:00:00Z"]},
-        loading: false, datesError: "", selectionError: ""};
+        loading: false, selectionError: ""};
     h.state.sources = [h.state.sources[0], {key: "weather-view", label: "Weather · Jan 1, 2000 00:00 UTC",
         selected: true, temporalDatasetKey: "observations", rangeSelected: true}];
     h.draw();
@@ -408,8 +407,6 @@ test("temporal controls reuse the period editor and preserve focused input while
     assert.equal(h.document.activeElement, h.view.period.startTime);
     assert.equal(h.view.period.startTime.value, "03:15");
     assert.equal(h.view.period.startTime.step, "any");
-    assert.equal(field("refresh-dates").disabled, true);
-    assert.match(field("temporal-help").textContent, /update the results automatically/);
     inputs()[2].focus(); inputs()[2].checked = false; inputs()[2].dispatchEvent(new Event("change"));
     assert.equal(inputs()[0].disabled, false);
     assert.equal(inputs()[1].disabled, false);

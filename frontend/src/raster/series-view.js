@@ -111,19 +111,12 @@ export class RasterSeriesView {
      * @param {(key:string|null)=>void} actions.onTimeRange Choose a named view or dataset's time range; null restores individual raster choices.
      * @param {(variable:string)=>void} actions.onTemporalVariable Choose its variable.
      * @param {(change:Object)=>void} actions.onTemporalEdit Edit UTC period boundaries.
-     * @param {(month:string)=>void} actions.onTemporalMonth Browse observation availability.
-     * @param {()=>void} actions.onUseTemporalMonth Select the displayed calendar month.
-     * @param {()=>void} actions.onRefreshTemporal Reload Catalog date guidance.
      * @return {void}
      */
     bind(actions) {
         this.actions = actions;
         this.plotsView = new RasterSeriesPlotsView(this.document, actions);
-        for (const [id, handler] of [["variable", actions.onTemporalVariable], ["month", actions.onTemporalMonth]]) {
-            this.document.querySelector("#raster-series-temporal-" + id).addEventListener("change", event => handler(event.target.value));
-        }
-        this.document.querySelector("#raster-series-use-month").addEventListener("click", actions.onUseTemporalMonth);
-        this.document.querySelector("#raster-series-refresh-dates").addEventListener("click", actions.onRefreshTemporal);
+        this.document.querySelector("#raster-series-temporal-variable").addEventListener("change", event => actions.onTemporalVariable(event.target.value));
         /** Create a text-only period control element.
          * @param {string} tag HTML tag. @param {string} [text=""] Caption.
          * @param {string} [className=""] CSS class. @return {HTMLElement}
@@ -140,7 +133,7 @@ export class RasterSeriesView {
         };
         this.period = new TemporalPeriodView({element, field, document: this.document,
             options: (select, choices, value) => this.setOptions(select, choices, value)},
-        {onEdit: actions.onTemporalEdit, idPrefix: "raster-series-period", describedBy: "raster-series-temporal-help"});
+        {onEdit: actions.onTemporalEdit, idPrefix: "raster-series-period", describedBy: "raster-series-status"});
         this.document.querySelector("#raster-series-period").append(this.period.root);
         this.document.querySelector("#close-raster-series").addEventListener("click", actions.onClose);
         const order = this.document.querySelector("#raster-series-order");
@@ -348,20 +341,6 @@ export class RasterSeriesView {
             .map(([value, metadata]) => ({value, label: `${metadata.description} (${metadata.unit})`}))], temporal.variable);
         variable.disabled = !temporal.item;
         this.period.render(temporal, {roundToHour: false});
-        const metadata = temporal.item?.properties["cube:variables"][temporal.variable];
-        this.document.querySelector("#raster-series-temporal-help").textContent =
-            (metadata && metadata["eolab:time_support"] !== "instantaneous" ?
-                "Use each complete observation whose interval overlaps this period, in its stored units. Values are not prorated or integrated over time. " :
-                "Use observations at or after the start and before the end. ") +
-            "Missing observations are omitted. Input changes update the results automatically.";
-        const month = this.document.querySelector("#raster-series-temporal-month"), choices = temporal.choices;
-        this.setOptions(month, (choices?.months ?? []).map(value => ({value, label: value})), choices?.month ?? "");
-        month.disabled = temporal.loading || !choices?.months.length;
-        this.document.querySelector("#raster-series-use-month").disabled = temporal.loading || !choices?.times.length;
-        this.document.querySelector("#raster-series-refresh-dates").disabled = temporal.loading || !temporal.datasetKey;
-        this.document.querySelector("#raster-series-temporal-coverage").textContent = temporal.loading ? "Loading available observations…" :
-            temporal.datesError || (!choices ? "Choose a variable to browse available observations." :
-                `${choices.times.length.toLocaleString()} observations in ${choices.month}.`);
     }
 
 

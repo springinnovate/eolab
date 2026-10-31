@@ -907,7 +907,6 @@ async function initializeCatalog(
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         getTemporalItem: source => catalogItemClient.get({collection: source.collectionId, id: source.itemId}),
-        loadTemporalTimes,
         onAreaChoice: choice => {
             if (choice === "vector") void summarySampling.use();
             else summarySampling.invalidate("");
@@ -1922,7 +1921,7 @@ async function initializeCatalog(
     async function refreshCatalogDatasets() {
         await loadCatalog(true);
         await Promise.all([rasterVisualization.refreshTemporalLayers(), models.loadTemporalDates(undefined, true),
-            rasterSeries.loadTemporalDates(undefined, true)]);
+            rasterSeries.loadTemporalItem()]);
     }
     const scheduleCatalogSearch = createDebouncedAction(
         loadCatalog.bind(null, false),

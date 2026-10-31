@@ -59,10 +59,7 @@ function fixture({server = new Map(), saved = new Map(), variables = {
             discovery.push(source.itemId);
             return {collection: source.collectionId, id: source.itemId, properties: {title: "Weather", "cube:variables": variables}};
         },
-        async loadTemporalTimes(item, variable, month = "2000-01") {
-            discovery.push([item.id, variable, month]);
-            return {months: ["2000-01"], month, times: ["2000-01-01T00:00:00Z", "2000-01-01T01:00:00Z", "2000-01-01T06:00:00Z"]};
-        }});
+    });
     controller.updateAvailableRasters([ORDINARY], [DATASET]); controller.setArea(AREA, "Selected box");
     /** Advance scheduled input edits without running status-poll timers.
      * @return {Promise<void>} Input dispatch and its lifecycle callbacks have settled.
@@ -80,7 +77,7 @@ test("accepting a vector area automatically calculates its complete temporal per
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
         h.view.actions.onArea("vector");
         h.controller.updateSamplingForPanelVisibility(true);
         h.controller.setVectorSamplingArea({selection: CATALOG_SELECTION, label: "Selected counties"});
@@ -94,7 +91,7 @@ test("accepting a vector area automatically calculates its complete temporal per
 test("a temporal request restores its period, formulas and result after reload without resubmitting", async () => {
     const h = fixture();
     await h.controller.chooseTimeRange(DATASET.key);
-    h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
+    h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
     h.view.actions.onRetry(); await flush();
     const job = [...h.server.values()][0];
     h.close();
@@ -133,7 +130,7 @@ test("temporal stack automatically samples one period and axis edits reuse its e
     try {
         await h.controller.chooseTimeRange(DATASET.key);
         assert.equal(h.view.state.temporal.startTime, "", "availability does not select a period");
-        h.view.actions.onUseTemporalMonth();
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"});
         h.controller.setPosition({longitude: -63, latitude: -4});
         h.view.actions.onAddFormula("pixel"); h.view.actions.onAddFormula("custom");
         h.view.actions.onEditFormula(3, {expression: "pixelValue(a) - mean(a)"});
@@ -180,7 +177,7 @@ test("temporal stack automatically samples one period and axis edits reuse its e
         assert.equal(h.submitted.length, 1);
         assert.deepEqual(h.downloads, [job.jobId]);
         assert.equal(h.discovery.length, reads);
-        await h.controller.loadTemporalDates(undefined, true);
+        await h.controller.loadTemporalItem();
         assert.deepEqual(h.view.state.rows, [], "explicit refresh releases the completed plot for a new calculation");
         await h.tick();
         assert.equal(h.submitted.length, 2);
@@ -199,7 +196,7 @@ test("failed temporal downloads retry the completed job and discard a cancelled 
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
         h.view.actions.onRetry(); await flush();
         const job = [...h.server.values()][0];
         const result = {csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,12\n",
@@ -235,7 +232,7 @@ test("replacing a temporal slice cancels obsolete work; closing keeps the explic
     const h = fixture();
     try {
         await h.controller.chooseTimeRange(DATASET.key);
-        h.view.actions.onUseTemporalMonth(); h.controller.updateSamplingForPanelVisibility(true);
+        h.view.actions.onTemporalEdit({periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"}); h.controller.updateSamplingForPanelVisibility(true);
         h.view.actions.onRetry(); await flush();
         const first = [...h.server.values()][0];
         h.view.actions.onPlotAxis(1,{scale:"linear",bounds:[270,310],xBounds:null});
@@ -281,7 +278,8 @@ test("named temporal views supply their variables and retain ordinary multi-rast
         await h.controller.chooseTimeRange(snapshot.key);
         assert.equal(h.view.state.temporal.datasetKey, DATASET.key);
         assert.equal(h.view.state.temporal.variable, "pressure", "the named view supplies the initial variable despite multiple variables");
-        assert.equal(h.view.state.temporal.startTime, "", "choosing the source does not choose a large period");
+        assert.equal(h.view.state.temporal.startTime, "2000-01-01T00:00", "the selected view supplies its initial month");
+        assert.equal(h.view.state.temporal.endTime, "2000-02-01T00:00");
         assert.deepEqual(h.view.state.sources.map(source => source.selected), [true, true, true],
             "range mode preserves the ordinary checklist choices while the view disables them");
         assert.equal(h.view.state.sources.find(source => source.key === snapshot.key).rangeSelected, true);
@@ -345,7 +343,6 @@ test("a second named view can replace a range choice while its Catalog metadata 
         assert.equal(h.view.state.temporal.variable, "pressure");
         assert.equal(h.view.state.temporal.loading, false);
         assert.equal(h.view.state.temporal.error, "");
-        assert.equal(h.view.state.temporal.datesError, "");
         assert.equal(h.submitted.length, 0);
     } finally { h.close(); }
 });

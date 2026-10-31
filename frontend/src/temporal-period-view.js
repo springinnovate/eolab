@@ -80,7 +80,7 @@ export class TemporalPeriodView {
         }
         this.periodSummary = element("p", "", "temporal-period-summary");
         this.periodSummary.setAttribute("role", "status");
-        this.root.append(field(`${idPrefix}-mode`, "Choose time by", this.periodMode),
+        this.root.append(field(`${idPrefix}-mode`, "Time range", this.periodMode),
             this.calendarFields, this.dayFields, this.exactFields, this.periodSummary);
     }
 
