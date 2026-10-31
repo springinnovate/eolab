@@ -611,7 +611,7 @@ export class RasterSeriesController {
                 results: area.results, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
             statistics, plots: this.plots, sources: this.sourceChoices(), rows: showingPrevious ? [] : observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
-            showingPrevious, busy: area.busy, chartType: this.chartType, direction: this.direction,
+            showingPrevious, busy: area.busy, workProgress: area.temporalWork, chartType: this.chartType, direction: this.direction,
             message: this.temporalSelectionError() || area.message,
             canDownload: !!result && !area.busy});
     }

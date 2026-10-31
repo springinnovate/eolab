@@ -712,7 +712,16 @@
               <div id="raster-series-chart-toolbar" class="raster-series-chart-toolbar"><label>Chart <select id="raster-series-chart-type"><option value="line">Line</option><option value="scatter">Scatter</option><option value="bar">Bar</option></select></label>
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
               </div>
-              <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
+              <div id="raster-series-plot-area">
+                <div id="raster-series-plot-progress" role="status" aria-live="polite" hidden>
+                  <div class="raster-series-progress-message">
+                  <strong>Calculating statistics</strong>
+                  <p id="raster-series-plot-progress-detail"></p>
+                  <progress id="raster-series-plot-progress-bar" aria-label="Calculation progress"></progress>
+                  </div>
+                </div>
+                <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
+              </div>
               <details id="raster-series-values" class="raster-series-settings">
                 <summary>Values &amp; download</summary>
                 <div class="raster-series-table-scroll">

@@ -56,6 +56,8 @@ export class RasterSeriesCalculations {
         this.temporalSource = null;
         this.temporalResult = null;
         this.previousTemporalResult = null;
+        /** @type {{completed?:number|null,total?:number|null,unit?:string|null}|null} Measured work for the active temporal request. */
+        this.temporalWork = null;
         this.resultAbort = null;
     }
 
@@ -221,6 +223,7 @@ export class RasterSeriesCalculations {
         this.resultAbort?.abort();
         this.dispatching = false;
         this.pending.clear();
+        this.temporalWork = null;
         this.progress.clear();
         this.busy = false;
         for (const client of this.clients.values()) client.stop();
@@ -377,6 +380,7 @@ export class RasterSeriesCalculations {
             state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
             if (request.calculationInputs.kind === "temporal") {
                 if (request.phase !== "reading") {
+                    request.work = null;
                     request.phase = "reading"; request.message = "Reading calculated observations…";
                     void this.readTemporalResult(index, request, state.completedJob);
                 }
@@ -392,6 +396,7 @@ export class RasterSeriesCalculations {
         } else {
             request.phase = state.phase;
             request.message = state.currentJob ? describeJobProgress(state.currentJob) : state.message;
+            request.work = state.phase === "cancelling" ? null : state.currentJob?.progress ?? null;
         }
         this.updateSeriesProgress();
     }
@@ -424,6 +429,7 @@ export class RasterSeriesCalculations {
      * @return {void}
      */
     updateSeriesProgress() {
+        this.temporalWork = this.temporalMode ? [...this.pending.values()][0]?.work ?? null : null;
         this.progress = new Map([...this.pending.values()].map(request => [request.key, { phase: request.phase, message: request.message }]));
         this.busy = this.dispatching || [...this.pending.values()].some(request => request.phase !== "recovery");
         this.complete = this.temporalMode ? !!this.temporalResult : !!this.sources.length && this.results.size === this.sources.length;

@@ -285,6 +285,42 @@ test("one temporal observation uses values; several timestamps in the same datas
     assert.equal(h.view.table.children.length, 2);
 });
 
+test("the first temporal calculation opens a prominent plot progress area with measured work", () => {
+    const h = controlsFixture();
+    h.view.renderTemporalControls = () => {};
+    h.state.temporal = {periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00"};
+    h.state.area.area = {kind: "wholeRaster"};
+    h.state.statistics[0].rows = []; h.state.rows = [];
+    h.state.message = "Preparing calculation…";
+    h.draw();
+    assert.equal(h.view.results.hidden, false, "the result area opens before any values arrive");
+    assert.equal(h.view.plotProgress.hidden, false);
+    assert.equal(h.view.status.hidden, true, "progress has one prominent presentation");
+    assert.equal(h.view.chartToolbar.hidden, false);
+    assert.equal(h.view.plotProgressBar.getAttribute("value"), null, "preparation has no invented percentage");
+    h.state.temporal.selectionError = "Enter a valid period."; h.draw();
+    assert.equal(h.view.plotProgress.hidden, true, "incomplete inputs do not flash a calculation indicator");
+    h.state.temporal.selectionError = "";
+    h.state.workProgress = {completed: 2, total: 8, unit: "blocks"};
+    h.state.message = "Summarizing each observation · 2 of 8 blocks";
+    h.draw();
+    assert.equal(h.view.plotProgressDetail.textContent, "Summarizing each observation · 2 of 8 blocks · 6 remaining");
+    assert.equal(h.view.plotProgressBar.getAttribute("max"), "8");
+    assert.equal(h.view.plotProgressBar.getAttribute("value"), "2");
+    h.state.busy = false; h.state.message = "Calculation cancelled."; h.draw();
+    assert.equal(h.view.results.hidden, true);
+    assert.equal(h.view.plotProgress.hidden, true);
+    assert.equal(h.view.status.hidden, false);
+    h.state.busy = true; h.state.workProgress = null; h.state.message = "Preparing calculation…"; h.draw();
+    assert.equal(h.view.plotProgressBar.getAttribute("value"), null, "replacement work does not inherit an old counter");
+    h.state.busy = false;
+    const row = {label: "2000-01-01 00:00 UTC", statisticLabel: "Mean", state: "value", value: 280, rawValue: "280"};
+    h.state.statistics[0].rows = [row]; h.state.rows = [row]; h.draw();
+    assert.equal(h.view.plotProgress.hidden, true);
+    assert.equal(h.view.results.hidden, false);
+    assert.equal(h.view.values.open, true, "one returned observation uses the existing scalar presentation");
+});
+
 test("progress preserves the values disclosure and focus; changing result count restores the presentation", () => {
     const h = controlsFixture(); h.draw();
     const row = h.state.statistics[0].rows[0];

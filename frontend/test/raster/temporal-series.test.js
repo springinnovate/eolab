@@ -138,9 +138,12 @@ test("temporal stack automatically samples one period and axis edits reuse its e
         assert.equal(h.submitted.length, 1);
         const request = h.submitted[0], job = [...h.server.values()][0];
         assert.equal(h.view.state.message, "Calculating each observation · 0 of 3 blocks");
+        assert.deepEqual(h.view.state.workProgress, job.progress);
         h.server.set(job.jobId, {...job, progress: {...job.progress, completed: 2}});
         await h.finish(job.jobId, "running");
         assert.equal(h.view.state.message, "Calculating each observation · 2 of 3 blocks");
+        assert.equal(h.view.state.workProgress.completed, 2);
+        assert.equal(h.view.state.workProgress.total, 3);
         assert.deepEqual(request.source, {collectionId: DATASET.collectionId, itemId: DATASET.itemId, variable: "temperature",
             startTime: "2000-01-01T00:00:00.000Z", endTime: "2000-02-01T00:00:00.000Z"});
         assert.deepEqual(request.area, AREA);
@@ -154,6 +157,7 @@ test("temporal stack automatically samples one period and axis edits reuse its e
             expression: row.expression, value: row.value, value_type: row.valueType, unit: row.unit, state: row.state,
             aggregates: JSON.stringify(row.aggregates)}))));
         await h.finish(job.jobId, "ready", {observations, csv});
+        assert.equal(h.view.state.workProgress, null);
         assert.deepEqual(h.view.state.statistics[0].rows.map(row => row.xValue), observations.map(row => Date.parse(row.time)));
         assert.equal(h.view.state.rows.length, 9);
         assert.equal(h.view.state.statistics[0].rows[1].state, "no_valid_data");

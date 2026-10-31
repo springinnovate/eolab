@@ -40,6 +40,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {SeriesValueRow[]|null} previousRows Retained values for pending replacements.
  * @property {string} message Progress, guidance or result summary.
  * @property {boolean} busy Whether calculations are running.
+ * @property {{completed?:number|null,total?:number|null,unit?:string|null}|null} [workProgress] Measured temporal work; absent before the server reports counts.
  * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
  * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
@@ -67,6 +68,10 @@ export class RasterSeriesView {
         this.sourceSummary = documentContext.querySelector("#raster-series-source-summary");
         this.results = documentContext.querySelector("#raster-series-results");
         this.plots = documentContext.querySelector("#raster-series-plots");
+        this.plotArea = documentContext.querySelector("#raster-series-plot-area");
+        this.plotProgress = documentContext.querySelector("#raster-series-plot-progress");
+        this.plotProgressDetail = documentContext.querySelector("#raster-series-plot-progress-detail");
+        this.plotProgressBar = documentContext.querySelector("#raster-series-plot-progress-bar");
         this.addPlot = documentContext.querySelector("#raster-series-add-plot");
         this.chartToolbar = documentContext.querySelector("#raster-series-chart-toolbar");
         this.chartSettings = documentContext.querySelector("#raster-series-data-settings");
@@ -191,7 +196,7 @@ export class RasterSeriesView {
     /** Update changed controls and figures from one coalesced snapshot.
      * Unchanged presentation leaves existing DOM nodes and attributes intact.
      * One result position opens the existing values table instead of drawing a
-     * chart. Pending inputs show only setup/progress guidance; completed failures
+     * chart. Pending temporal calculations open the plot area with measured progress; completed failures
      * and NoData remain available in the values table without an empty chart.
      * Previous-area values remain plotted while replacements are calculated.
      * Source columns keep individual checkmarks visible but disabled during time-range analysis.
@@ -281,12 +286,16 @@ export class RasterSeriesView {
         const hasPlotValues = state.statistics.some(statistic =>
             (showingPrevious ? statistic.previousRows : statistic.rows).some(row => row.state === "value"));
         const hasResultRows = state.rows.some(row => row.state !== "waiting");
-        const hideResults = !hasPlotValues && !hasResultRows;
+        const calculating = this.renderCalculationProgress(state);
+        const hideResults = !hasPlotValues && !hasResultRows && !calculating;
         if (this.results.hidden !== hideResults) this.results.hidden = hideResults;
         const hidePlots = singleResult || !hasPlotValues;
         if (this.plots.hidden !== hidePlots) this.plots.hidden = hidePlots;
         if (this.addPlot.hidden !== hidePlots) this.addPlot.hidden = hidePlots;
-        if (this.chartToolbar.hidden !== hidePlots) this.chartToolbar.hidden = hidePlots;
+        const hideToolbar = hidePlots && !calculating;
+        if (this.chartToolbar.hidden !== hideToolbar) this.chartToolbar.hidden = hideToolbar;
+        const hideValues = calculating && !hasResultRows;
+        if (this.values.hidden !== hideValues) this.values.hidden = hideValues;
         if (this.chartSettings.hidden !== !hasPlotValues) this.chartSettings.hidden = !hasPlotValues;
         if (this.chartNote.hidden !== !showingPrevious) this.chartNote.hidden = !showingPrevious;
         const chartNote = showingPrevious ? "Previous results — calculating replacements." : "";
@@ -307,6 +316,30 @@ export class RasterSeriesView {
             }));
         }
         if (this.download.disabled !== !state.canDownload) this.download.disabled = !state.canDownload;
+    }
+
+    /** Show prominent temporal progress in the plot area without redrawing retained charts.
+     * Preparation remains indeterminate until the server supplies measured work.
+     * Counts retain the server's unit; block counts are not relabelled as points or used to guess an ETA.
+     * @param {SeriesPresentation} state Current calculation and measured progress.
+     * @return {boolean} Whether the plot area is displaying an active temporal calculation.
+     */
+    renderCalculationProgress(state) {
+        const calculating = Boolean(state.temporal && state.busy && state.area.area && !state.temporal.selectionError);
+        if (this.plotProgress.hidden !== !calculating) this.plotProgress.hidden = !calculating;
+        if (this.status.hidden !== calculating) this.status.hidden = calculating;
+        if (this.plotArea.classList.contains("is-calculating") !== calculating) this.plotArea.classList.toggle("is-calculating", calculating);
+        if (!calculating) return false;
+        const total = state.workProgress?.total;
+        const completed = state.workProgress?.completed ?? 0;
+        const detail = state.message + (total > 0 ? ` · ${(total - completed).toLocaleString()} remaining` : "");
+        if (this.plotProgressDetail.textContent !== detail) this.plotProgressDetail.textContent = detail;
+        if (total > 0) {
+            for (const [name, value] of [["max", total], ["value", completed]]) {
+                if (this.plotProgressBar.getAttribute(name) !== String(value)) this.plotProgressBar.setAttribute(name, String(value));
+            }
+        } else if (this.plotProgressBar.getAttribute("value") !== null) this.plotProgressBar.removeAttribute("value");
+        return true;
     }
 
     /** Update select choices only when their contents change, preserving focused controls.
