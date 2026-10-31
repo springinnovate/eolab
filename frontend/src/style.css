@@ -3123,16 +3123,12 @@ h5 {
   cursor: pointer;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 10px;
-  color: var(--text-1);
-  text-align: left;
-}
-
-.raster-histogram-summary,
-#raster-series-figure {
   border: 1px solid var(--border-1);
   border-radius: 5px;
   background: var(--surface-2);
   padding: 9px 10px;
+  color: var(--text-1);
+  text-align: left;
 }
 
 article.raster-histogram-summary {
@@ -3188,7 +3184,7 @@ article.raster-histogram-summary {
 .raster-series-plot-header strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -4494,7 +4490,6 @@ summary:hover > .raster-disclosure-chevron {
 #map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 4px; }
 #map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 4px; border-top: 1px solid var(--border-1); }
 #map-histogram-panel .raster-histogram-summary-select { padding: 0; }
-#map-histogram-panel .raster-histogram-summary-name,
 #map-histogram-panel .raster-histogram-detail-layer,
 #raster-bivariate-statistics-heading {
   min-width: 0;

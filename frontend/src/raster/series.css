@@ -27,9 +27,8 @@
 .raster-series-statistics-header select { max-width: 100%; min-width: 0; font-size: inherit; }
 .raster-series-settings { border-top: 1px solid var(--border-1); padding: 0.4rem 0; }
 #raster-series-plots:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-#raster-series-figure { box-sizing: border-box; min-width: 0; margin-top: 0.4rem; }
-#raster-series-figure[hidden] { display: none; }
-#raster-series-plot-heading { overflow-wrap: anywhere; }
+#raster-series-plot-heading { margin-top: 0.4rem; overflow-wrap: anywhere; }
+#raster-series-plot-heading[hidden] { display: none; }
 #raster-series-plot-title { margin: 0; }
 #raster-series-plot-context { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--text-2); }
 #raster-series button, #raster-series select, #raster-series summary, .raster-series-formula-legend { min-height: 24px; }

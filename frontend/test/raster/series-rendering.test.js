@@ -205,7 +205,6 @@ test("one raster opens the existing values table for every statistic instead of 
     h.draw();
     assert.equal(h.plots.length,0);
     assert.equal(h.view.chartToolbar.hidden,true,"a scalar result needs no chart geometry controls");
-    assert.equal(h.view.figure.hidden,true,"a scalar result leaves no empty chart card");
     assert.equal(h.view.values.open,true);
     assert.equal(h.view.root.classList.contains("raster-series-single-result"),true);
     assert.deepEqual(h.view.table.children.map(row=>row.children.map(cell=>cell.textContent)),[
@@ -401,7 +400,7 @@ test("graph context identifies its rasters, variable, period and area independen
     const context = h.document.querySelector("#raster-series-plot-context");
     h.state.statistics[0].rows = h.state.rows = [1, 2].map(value => ({label: `Raster ${value}`, state: "value", value}));
     h.draw();
-    assert.equal(h.view.figure.hidden, false);
+    assert.equal(h.view.plotHeading.hidden, false);
     assert.equal(title.textContent, "Raster A");
     assert.equal(context.textContent, "Whole raster");
     h.document.querySelector("#raster-series-inputs").hidden = true;
