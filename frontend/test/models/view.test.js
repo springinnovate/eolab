@@ -571,14 +571,12 @@ test("time entry modes expose only their own required fields and describe the ca
         assert.equal(controls.period.selectedYear.disabled, !["year", "month"].includes(mode));
         assert.equal(controls.period.firstDayPicker.disabled, mode !== "days");
         assert.equal(controls.period.startDatePicker.disabled, mode !== "times");
-        assert.match(controls.period.periodSummary.textContent, /UTC/);
     }
     assert.equal(controls.period.selectedMonth.value, "01"); assert.equal(controls.period.selectedYear.value, "2020");
     assert.equal(controls.period.selectedMonth.children.length, 12);
     assert.equal(controls.period.firstDay.type, "text"); assert.equal(controls.period.lastDay.type, "text");
     assert.equal(controls.period.firstDay.value, "2020-01-01"); assert.equal(controls.period.lastDay.value, "2020-01-31");
     assert.equal(controls.period.lastDay.parentNode.parentNode.children[0].textContent, "Last day (included) (YYYY-MM-DD)");
-    assert.match(controls.period.periodSummary.textContent, /end excluded/);
     assert.equal(h.actions.length, 0);
 });
 

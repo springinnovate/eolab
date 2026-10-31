@@ -5110,5 +5110,4 @@ summary:hover > .raster-disclosure-chevron {
 .temporal-date-entry .temporal-calendar-picker { width: 100%; min-width: 0; padding: 4px; }
 .temporal-calendar-picker::-webkit-datetime-edit { display: none; }
 .temporal-calendar-picker::-webkit-calendar-picker-indicator { width: 1.4rem; height: 1.4rem; margin: 0 auto; }
-.temporal-period-summary { margin: 4px 0; padding: 10px; background: var(--surface-selected); border-radius: var(--radius); font-size: 0.8rem; overflow-wrap: anywhere; }
 .temporal-period[hidden], .temporal-period [hidden] { display: none; }
