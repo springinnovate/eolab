@@ -584,6 +584,10 @@ test("axis editors redraw retained observations and preserve the valid plot duri
     assert.equal(controls.chart.querySelectorAll("rect").filter(node=>node.getAttribute("data-point-index")!==null).length,1);
     assert.equal(JSON.stringify(rows),original,"display bounds never remove observations from the result contract");
     assert.ok(changes.length>0); assert.equal(controls.error.hidden,true);
+    const temporalBounds = state.plots[0].xBounds;
+    state.temporal=null; view.renderPlots(state);
+    y.fields[1].value="9"; y.fields[1].dispatchEvent(new Event("input"));
+    assert.deepEqual(state.plots[0].xBounds,temporalBounds,"editing Y for ordinary rasters preserves hidden temporal display bounds");
 });
 
 test("adding a secondary plot reveals it once; initial drawing and updates preserve scroll and focus", () => {

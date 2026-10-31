@@ -102,7 +102,7 @@ export class RasterSeriesPlotsView {
         const tooltip = this.document.createElement("div"); tooltip.className = "raster-series-plot-tooltip"; tooltip.hidden = true;
         card.append(header, legend, note, chart, empty, tooltip);
         this.container.append(card);
-        const elements = { card, title, options, scale, axes, error, legend, note, chart, empty, tooltip, signature: null };
+        const elements = { card, title, options, plot, scale, axes, error, legend, note, chart, empty, tooltip, signature: null };
         for (const input of [scale, ...Object.values(axes).flatMap(axis => [axis.range, ...axis.fields])]) {
             input.addEventListener(input.tagName.toLowerCase() === "input" ? "input" : "change", () => this.editAxes(plot.id, elements));
         }
@@ -117,11 +117,13 @@ export class RasterSeriesPlotsView {
      * @return {void}
      */
     editAxes(id, elements) {
-        const change = {scale: elements.scale.value, bounds: null, xBounds: null};
+        const change = {scale: elements.scale.value, bounds: null, xBounds: elements.plot.xBounds ?? null};
         let message = "";
         for (const [axis, controls] of Object.entries(elements.axes)) {
             controls.bounds.hidden = controls.range.value !== "custom";
-            if (controls.group.hidden || controls.range.value !== "custom") continue;
+            if (controls.group.hidden) continue;
+            change[axis === "x" ? "xBounds" : "bounds"] = null;
+            if (controls.range.value !== "custom") continue;
             const domain = elements.domains?.[axis === "x" ? "xDomain" : "yDomain"];
             if (elements.rangeModes?.[axis] !== "custom" && domain) controls.fields.forEach((field, index) => {
                 if (!field.value) field.value = axis === "x" ? new Date(domain[index]).toISOString().slice(0, 16).replace("T", " ") : String(domain[index]);
@@ -161,6 +163,7 @@ export class RasterSeriesPlotsView {
             const added = !this.cards.has(plot.id);
             if (added) this.cards.set(plot.id, this.createPlotCard(plot));
             const elements = this.cards.get(plot.id);
+            elements.plot = plot;
             if (elements.error.hidden && elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
             elements.axes.x.group.hidden = !state.temporal;
             const statistics = state.statistics.filter(statistic => statistic.plotId === plot.id && statistic.visible);
