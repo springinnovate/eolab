@@ -41,7 +41,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} busy Whether calculations are running.
  * @property {"line"|"scatter"|"bar"} chartType Plot geometry.
  * @property {boolean} canDownload Whether current values can be exported.
- * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,complete:boolean,pendingInputs:boolean,hasErrors:boolean,recoverable:boolean}} area Selected scope and execution availability; pendingInputs means results use an earlier area or observation.
+ * @property {{formulas:SeriesStatistic[],sources:object[],areaChoice:string,area:object|null,areaLabel:string,hasErrors:boolean,recoverable:boolean}} area Selected scope and retry/recovery availability.
  * @property {SeriesStatistic[]} statistics Statistic presentation.
  * @property {{id:number,scale:"linear"|"log",bounds:[number,number]|null,xBounds:[number,number]|null}[]} plots Independent display bounds and scale; null chooses automatic bounds.
  * @property {"forward"|"reverse"} direction Display direction; temporal data and CSV retain observation order.

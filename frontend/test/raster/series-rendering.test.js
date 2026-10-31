@@ -51,7 +51,7 @@ function controlsFixture() {
         showingPrevious: false, message: "Preparing", canDownload: false, chartType: "line",
         statistics: [formula], plots: [{ id: 1, scale: "linear" }],
         area: { formulas: [formula], sources: [source], results: new Map(), areaChoice: "whole",
-            complete: false, pendingInputs: false, recoverable: false } };
+            hasErrors: false, recoverable: false } };
     const draw = () => { h.view.render(state); h.frame(); };
     return { ...h, plots, state, draw };
 }
@@ -163,7 +163,7 @@ test("changed controls remain current without overwriting a focused formula edit
     h.state.plots.push({ id: 2, scale: "log" });
     h.state.sources[0].label = "Renamed raster";
     h.state.busy = false; h.state.canDownload = true;
-    h.state.area.complete = true; h.state.area.recoverable = true;
+    h.state.area.recoverable = true;
     h.draw();
     assert.equal(expression.value, "mean(a) + ");
     assert.equal(h.document.activeElement, expression);
@@ -185,11 +185,9 @@ test("changed controls remain current without overwriting a focused formula edit
 test("retry is available only for failed work, not ordinary pending inputs", () => {
     const h = controlsFixture();
     h.state.busy = false;
-    h.state.area.complete = true;
     h.draw();
     const calculate = h.document.querySelector("#raster-series-retry");
     assert.equal(calculate.hidden, true);
-    h.state.area.pendingInputs = true;
     h.draw();
     assert.equal(calculate.hidden, true);
     h.state.area.hasErrors = true; h.draw();

@@ -472,6 +472,8 @@ test("explicit raster choices survive visibility, rename, reorder, clicks and pa
     h.controller.updateAvailableRasters([source("1"), source("2"), source("hidden"), source("new")]);
     h.controller.setPosition({ longitude: 7, latitude: 8 });
     await h.open();
+    assert.deepEqual(h.area.sources.map(raster => raster.key), ["hidden", "new"], "opening preserves the captured calculation");
+    h.view.actions.onSelect("2",true); await h.tick();
     assert.deepEqual(h.area.sources.map(raster => raster.key), ["2", "hidden", "new"]);
     assert.equal(h.view.state.sources.find(raster => raster.key === "1").selected, false);
     h.close();

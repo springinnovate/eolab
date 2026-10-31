@@ -100,19 +100,21 @@ test("a temporal request restores its period, formulas and result after reload w
     h.close();
     const restored = fixture(h);
     const starting = restored.controller.start();
+    restored.controller.setArea(null, "No map area during startup");
     restored.controller.updateAvailableRasters([ORDINARY], [DATASET]);
     await starting;
     assert.equal(restored.view.state.temporal.datasetKey, DATASET.key);
     assert.equal(restored.view.state.temporal.datasets.length, 1);
     assert.equal(restored.view.state.temporal.variable, "temperature");
     assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
+    assert.deepEqual(restored.view.state.area.area,AREA,"an empty startup map cannot replace the recovered calculation's area");
     restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();
     assert.equal(restored.submitted.length, 0);
     assert.equal(restored.cancelled.length, 0);
     const observations = [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", value: "298.5", state: "ok", unit: "K"}]}];
     await restored.finish(job.jobId, "ready", {observations, csv: "time_utc,calculation,value\n2000-01-01T00:00:00Z,stat-1,298.5"});
     assert.equal(restored.view.state.rows[0].value, 298.5);
-    assert.equal(restored.view.state.area.pendingInputs, false, "retained raster-layer choices do not change a captured interval");
+    assert.deepEqual(restored.calculations.temporalSource,h.submitted[0].source,"retained raster-layer choices do not change a captured interval");
     const snapshot = {key: "restored-weather-view", label: "Weather snapshot", visible: true,
         source: {...DATASET, variable: "temperature", time: "2000-01-01T00:00:00Z"}};
     restored.controller.updateAvailableRasters([ORDINARY, snapshot, {...snapshot, key: "another-weather-view"}], [DATASET]);

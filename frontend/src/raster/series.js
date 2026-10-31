@@ -184,12 +184,12 @@ export class RasterSeriesController {
      */
     setVectorSamplingArea(info) {
         const keepCalculation = this.areaStatistics.hasCapturedInputs && !this.active;
+        if (keepCalculation) { this.render(); return; }
         this.vectorArea = info.polygonArea ? {kind: "polygonArea", polygonArea: info.polygonArea}
             : {kind: "catalogSelection", catalogSelection: info.selection};
         this.vectorAreaLabel = info.label;
         this.areaChoice = "vector";
-        if (keepCalculation) this.render();
-        else this.updateAreaInputs();
+        this.updateAreaInputs();
     }
 
     /** Clear stale polygon inputs while the chosen Vector area is being read.
@@ -200,9 +200,9 @@ export class RasterSeriesController {
     setVectorSelectionState(selection) {
         if (this.areaChoice === "vector" && selection.phase === "reading") {
             const keepCalculation = this.areaStatistics.hasCapturedInputs && !this.active;
+            if (keepCalculation) { this.render(); return; }
             this.vectorArea = null;
-            if (keepCalculation) this.render();
-            else this.updateAreaInputs();
+            this.updateAreaInputs();
         }
     }
 
@@ -213,6 +213,7 @@ export class RasterSeriesController {
      */
     invalidateArea(area) {
         const keepCalculation = this.areaStatistics.hasCapturedInputs && !this.active;
+        if (keepCalculation) { this.render(); return; }
         /** Compare the invalidated vector input with a captured calculation area.
          * @param {Object|null} candidate Captured area. @return {boolean} Same selection identity.
          */
@@ -220,8 +221,7 @@ export class RasterSeriesController {
             : vectorSelectionsEqual(candidate?.catalogSelection, area.catalogSelection);
         if (matches(this.vectorArea)) this.vectorArea = null;
         if (matches(this.selectedArea)) this.selectedArea = null;
-        if (keepCalculation) this.render();
-        else this.updateAreaInputs();
+        this.updateAreaInputs();
     }
 
     /**
@@ -386,7 +386,6 @@ export class RasterSeriesController {
         if (this.active === panelVisible) return;
         this.active = panelVisible;
         this.areaStatistics.updateCalculationForPanelVisibility(panelVisible);
-        if (panelVisible) this.updateAvailableRasters(this.sources, this.temporal.datasets);
         this.render();
     }
 
@@ -434,9 +433,9 @@ export class RasterSeriesController {
      */
     setArea(area, label = "Current sampling area") {
         const keepCalculation = this.areaStatistics.hasCapturedInputs && !this.active;
+        if (keepCalculation) { this.render(); return; }
         this.selectedArea = area; this.selectedAreaLabel = label;
-        if (keepCalculation) this.render();
-        else this.updateAreaInputs();
+        this.updateAreaInputs();
     }
 
     /** Read the latest area selected for the next calculation.
@@ -447,18 +446,10 @@ export class RasterSeriesController {
             : this.areaChoice === "vector" ? this.vectorArea : this.selectedArea;
     }
 
-    /** Whether a background calculation uses an earlier area than the controls.
-     * @return {boolean} Latest area differs from captured work.
-     */
-    get hasPendingArea() {
-        return this.areaStatistics.hasCapturedInputs && JSON.stringify(this.getSelectedArea()) !== JSON.stringify(this.areaStatistics.area);
-    }
-
-    /** Whether live controls differ from a captured calculation's area or observations.
+    /** Whether live map observations differ from captured raster inputs.
      * @return {boolean} The controls differ from the captured calculation inputs.
      */
     get hasPendingInputs() {
-        if (this.hasPendingArea) return true;
         if (this.sourceMode !== "layers" || !this.areaStatistics.hasCapturedInputs) return false;
         const identities = [this.orderedSources(), this.areaStatistics.sources]
             .map(sources => sources.map(source => [source.key, rasterSourceKey(source)]).sort());
@@ -592,7 +583,7 @@ export class RasterSeriesController {
         this.view.render({
             active: this.active, area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: this.getSelectedArea(), areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
-                results: area.results, complete: area.complete, pendingInputs: this.hasPendingInputs,
+                results: area.results,
                 recoverable: area.needsRecovery, hasErrors: area.hasErrors }, statistics, plots: this.plots,
             sources: this.sourceChoices(),
             rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
@@ -623,13 +614,12 @@ export class RasterSeriesController {
         this.view.render({active: this.active, temporal: {...this.temporal,
             variableBound: this.sources.some(source => source.key === this.temporal.viewKey), selectionError: this.temporalSelectionError()},
             area: {formulas: this.formulas, sources: [], areaChoice: this.areaChoice, area: this.getSelectedArea(),
-                areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel, pendingInputs: this.hasPendingInputs,
-                results: area.results, complete: area.complete, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
+                areaLabel: this.areaChoice === "vector" ? this.vectorAreaLabel : this.selectedAreaLabel,
+                results: area.results, recoverable: area.needsRecovery, hasErrors: area.hasErrors},
             statistics, plots: this.plots, sources: this.sourceChoices(), rows: showingPrevious ? [] : observations.flatMap((_, index) => statistics.map(statistic => statistic.rows[index])),
             previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
             showingPrevious, busy: area.busy, chartType: this.chartType, direction: this.direction,
-            message: (this.temporalSelectionError() || area.message) +
-                (this.hasPendingArea ? " Results use the previous selection." : ""),
+            message: this.temporalSelectionError() || area.message,
             canDownload: !!result && !area.busy});
     }
 
