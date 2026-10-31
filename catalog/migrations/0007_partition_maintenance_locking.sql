@@ -11,6 +11,55 @@ BEGIN
 END;
 $migration$;
 
+-- Return the column's CHECK range from expressions captured by the query.
+-- A concurrent widener can replace a constraint while deparsing waits for DDL.
+-- Looking its old OID up again would return NULL and falsely imply no bounds.
+CREATE OR REPLACE FUNCTION get_tstz_constraint(reloid oid, colname text) RETURNS tstzrange AS $$
+DECLARE
+    expr text := NULL;
+    m text[];
+    ts_lower timestamptz := NULL;
+    ts_upper timestamptz := NULL;
+    lower_inclusive text := '[';
+    upper_inclusive text := ']';
+    ts timestamptz;
+BEGIN
+    SELECT INTO expr
+        string_agg(def, ' AND ')
+    FROM pg_constraint JOIN LATERAL pg_get_expr(conbin, conrelid) AS def ON TRUE
+    WHERE
+        conrelid = reloid
+        AND contype = 'c'
+        AND def LIKE '%' || colname || '%'
+    ;
+
+    IF expr IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    RAISE DEBUG 'Constraint expression for % on %: %', colname, reloid::regclass, expr;
+    -- collect all constraints for the specified column
+    FOR m IN SELECT regexp_matches(expr, '[ (]' || colname || $expr$\s*([<>=]{1,2})\s*'([0-9 :.+\-]+)'$expr$, 'g') LOOP
+        ts := m[2]::timestamptz;
+        IF m[1] IN ('>', '>=')
+        THEN
+            IF ts_lower IS NULL OR ts > ts_lower OR (ts = ts_lower AND m[1] = '>') THEN
+                ts_lower := ts;
+                lower_inclusive := CASE WHEN m[1] = '>' THEN '(' ELSE '[' END;
+            END IF;
+        ELSIF m[1] IN ('<', '<=')
+        THEN
+            IF ts_upper IS NULL OR ts < ts_upper OR (ts = ts_upper AND m[1] = '<') THEN
+                ts_upper := ts;
+                upper_inclusive := CASE WHEN m[1] = '<' THEN ')' ELSE ']' END;
+            END IF;
+        END IF;
+    END LOOP;
+    RAISE DEBUG 'Constraint % for %: % %', colname, reloid::regclass, ts_lower, ts_upper;
+    RETURN tstzrange(ts_lower, ts_upper, lower_inclusive || upper_inclusive);
+END;
+$$ LANGUAGE plpgsql STRICT STABLE;
+
 -- Return the partition for a batch, widening its date constraints safely.
 -- Covered batches need no maintenance lock. Creation and widening take parent
 -- locks before child DDL/statistics locks, then read fresh physical bounds.

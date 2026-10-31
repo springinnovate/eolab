@@ -62,15 +62,17 @@ def function_contracts(connection: psycopg.Connection[Any]) -> list[tuple[Any, .
         connection: Open connection to the guarded test database.
 
     Returns:
-        Stable catalog rows for the two existing functions the migration may replace.
+        Stable catalog rows for the existing functions the migration may replace.
     """
     return connection.execute("""
         SELECT p.proname, pg_get_function_identity_arguments(p.oid),
                pg_get_function_result(p.oid), p.prosecdef, p.provolatile,
-               p.proconfig, p.proacl::text, p.proowner
+               p.proisstrict, p.proparallel, p.proconfig, p.proacl::text, p.proowner
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'pgstac'
-          AND p.proname IN ('check_partition', 'items_staging_triggerfunc')
+          AND p.proname IN (
+              'check_partition', 'items_staging_triggerfunc', 'get_tstz_constraint'
+          )
         ORDER BY p.proname
         """).fetchall()
 
@@ -102,7 +104,7 @@ def catalog_database() -> CatalogDatabase:
             "0.9.12",
         )
         contracts = function_contracts(connection)
-        assert len(contracts) == 2
+        assert len(contracts) == 3
         if os.environ.get("EOLAB_CATALOG_TEST_BASELINE") != "1":
             if not MIGRATION.is_file():
                 pytest.fail(f"Missing catalog migration: {MIGRATION.name}")
@@ -370,6 +372,21 @@ def assert_complete(
         deferred_constraints: Check queued maintenance and published partition identity
             instead of requiring optional CHECK maintenance to have run already.
     """
+    diagnostics = [
+        (
+            result.application_name,
+            result.error,
+            tuple(
+                notice
+                for notice in result.notices
+                if notice[0] in UNSAFE_NOTICES
+                or "Issue Altering Constraints" in (notice[1] or "")
+            ),
+        )
+        for result in results
+    ]
+    if any(error is not None or notices for _, error, notices in diagnostics):
+        print(f"Catalog ingestion failures: {diagnostics!r}", flush=True)
     assert all(result.error is None for result in results), results
     assert not [
         (result.application_name, notice)
@@ -526,7 +543,7 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
                 print(
                     f"Cold ingestion schedule failed: {scheduling_failure}; "
                     f"database_deadlocks={observed_deadlocks}; "
-                    f"writer_results={results!r}",
+                    f"writer_errors={[(result.application_name, result.error) for result in results]!r}",
                     flush=True,
                 )
             if observed_deadlocks > 0 or any(
