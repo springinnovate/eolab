@@ -1,10 +1,11 @@
 /** Plot cards and legends for area statistics; calculation state stays with the controller. */
 import { formatSeriesNumber, renderOrdinalSeriesChart } from "../charts/series-chart.js";
 
+/** Default color and distinguishable dash/marker for each of the five statistics. */
 // The calculator accepts at most five formulas per raster. The controller
 // assigns each active formula one of these five styles and reuses a freed style
 // when a formula is removed; a growing formula ID is not a palette index.
-const STATISTIC_STYLES = Object.freeze([
+export const STATISTIC_STYLES = Object.freeze([
     { color: "#0072b2", dash: "none", marker: "circle", symbol: "●" },
     { color: "#d55e00", dash: "7 3", marker: "square", symbol: "■" },
     { color: "#009e73", dash: "2 3", marker: "diamond", symbol: "◆" },
@@ -15,18 +16,19 @@ const STATISTIC_STYLES = Object.freeze([
 /** Create the same color, dash and marker sample used by a statistic's plot.
  * @param {Document} documentContext Owning document.
  * @param {number} styleIndex Controller-assigned index from 0 to 4, stable for the statistic's lifetime.
+ * @param {string|null} [color=null] User-selected color, or the default style color.
  * @return {SVGElement} Decorative legend sample; its containing control supplies the name.
  */
-export function createStatisticSwatch(documentContext, styleIndex) {
+export function createStatisticSwatch(documentContext, styleIndex, color = null) {
     const style = STATISTIC_STYLES[styleIndex];
     const svg = documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 40 18");
     svg.setAttribute("aria-hidden", "true");
     svg.classList.add("raster-statistic-swatch");
     const line = documentContext.createElementNS(svg.namespaceURI, "line");
-    for (const [key, value] of Object.entries({ x1: 1, x2: 39, y1: 9, y2: 9, stroke: style.color, "stroke-width": 2, "stroke-dasharray": style.dash })) line.setAttribute(key, String(value));
+    for (const [key, value] of Object.entries({ x1: 1, x2: 39, y1: 9, y2: 9, stroke: color ?? style.color, "stroke-width": 2, "stroke-dasharray": style.dash })) line.setAttribute(key, String(value));
     const marker = documentContext.createElementNS(svg.namespaceURI, "text");
-    for (const [key, value] of Object.entries({ x: 20, y: 13, fill: style.color, "text-anchor": "middle", "font-size": 14 })) marker.setAttribute(key, String(value));
+    for (const [key, value] of Object.entries({ x: 20, y: 13, fill: color ?? style.color, "text-anchor": "middle", "font-size": 14 })) marker.setAttribute(key, String(value));
     marker.textContent = style.symbol;
     svg.append(line, marker);
     return svg;
@@ -86,6 +88,17 @@ export class RasterSeriesPlotsView {
             group.append(rangeLabel, bounds); options.append(group);
             axes[axis] = {group, range, bounds, fields};
         }
+        const appearance = {};
+        for (const [name, caption, value, min, max] of [
+            ["pointSize", "Point size (px)", 5, 1, 24], ["xTickCount", "X tick count", 5, 2, 30],
+            ["yTickCount", "Y tick count", 5, 2, 30], ["axisFontSize", "Axis font size (px)", 10, 8, 24],
+        ]) {
+            const label = this.document.createElement("label"); label.textContent = caption;
+            const input = this.document.createElement("input"); input.type = "number"; input.min = String(min); input.max = String(max);
+            input.step = "1"; input.value = String(plot[name] ?? value);
+            input.setAttribute("aria-label", `Plot ${plot.id} ${caption}`);
+            label.append(input); options.append(label); appearance[name] = input;
+        }
         const error = this.document.createElement("p"); error.className = "raster-series-axis-error"; error.setAttribute("role", "status"); error.hidden = true;
         options.append(error);
         if (plot.id !== 1) {
@@ -102,8 +115,8 @@ export class RasterSeriesPlotsView {
         const tooltip = this.document.createElement("div"); tooltip.className = "raster-series-plot-tooltip"; tooltip.hidden = true;
         card.append(header, legend, note, chart, empty, tooltip);
         this.container.append(card);
-        const elements = { card, title, options, plot, scale, axes, error, legend, note, chart, empty, tooltip, signature: null };
-        for (const input of [scale, ...Object.values(axes).flatMap(axis => [axis.range, ...axis.fields])]) {
+        const elements = { card, title, options, plot, scale, axes, appearance, error, legend, note, chart, empty, tooltip, signature: null };
+        for (const input of [scale, ...Object.values(appearance), ...Object.values(axes).flatMap(axis => [axis.range, ...axis.fields])]) {
             input.addEventListener(input.tagName.toLowerCase() === "input" ? "input" : "change", () => this.editAxes(plot.id, elements));
         }
         return elements;
@@ -134,6 +147,13 @@ export class RasterSeriesPlotsView {
             else if (bounds[0] >= bounds[1]) message = "The maximum must be greater than the minimum.";
             else if (axis === "y" && change.scale === "log" && bounds[0] <= 0) message = "Logarithmic bounds must be greater than zero.";
             change[axis === "x" ? "xBounds" : "bounds"] = bounds;
+        }
+        for (const [name, input] of Object.entries(elements.appearance)) {
+            const value = Number(input.value);
+            if (!input.value || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max)) {
+                message = `${input.getAttribute("aria-label")}: enter a whole number from ${input.min} to ${input.max}.`;
+            }
+            change[name] = value;
         }
         elements.rangeModes = Object.fromEntries(Object.entries(elements.axes).map(([axis, controls]) => [axis, controls.range.value]));
         elements.error.hidden = !message; elements.error.textContent = message;
@@ -170,6 +190,7 @@ export class RasterSeriesPlotsView {
             const series = statistics.map(statistic => ({
                 id: String(statistic.id), label: `${statistic.label || "Custom statistic"} · ${statistic.expression}`,
                 ...STATISTIC_STYLES[statistic.styleIndex],
+                color: statistic.color ?? STATISTIC_STYLES[statistic.styleIndex].color,
                 points: (state.showingPrevious ? statistic.previousRows : statistic.rows).map(row => ({
                     xLabel: row.label, xValue: row.xValue, yValue: row.state === "value" ? row.value : null, rawValue: row.rawValue, unit: row.unit,
                 })),
@@ -213,7 +234,7 @@ export class RasterSeriesPlotsView {
             const button = this.document.createElement("button"); button.type = "button";
             button.dataset.statisticId = String(statistic.id); button.className = "raster-series-legend-item";
             button.setAttribute("aria-label", `Highlight ${statistic.label || statistic.expression}`);
-            button.append(createStatisticSwatch(this.document, statistic.styleIndex));
+            button.append(createStatisticSwatch(this.document, statistic.styleIndex, statistic.color));
             const name = this.document.createElement("span"); name.textContent = statistic.label || statistic.expression || "Custom statistic"; button.append(name);
             for (const event of ["pointerenter", "focus"]) button.addEventListener(event, () => this.highlightStatistic(statistic.id));
             for (const event of ["pointerleave", "blur"]) button.addEventListener(event, () => this.highlightStatistic(null));
@@ -229,6 +250,7 @@ export class RasterSeriesPlotsView {
         if (!chart.hidden) elements.domains = renderOrdinalSeriesChart({
             documentContext: this.document, chart, series, chartType: state.chartType, yScale: plot.scale,
             width: chart.clientWidth, height: 260,
+            pointSize: plot.pointSize ?? 5, xTickCount: plot.xTickCount ?? 5, yTickCount: plot.yTickCount ?? 5, axisFontSize: plot.axisFontSize ?? 10,
             yBounds: plot.bounds ?? null, xBounds: state.temporal ? plot.xBounds ?? null : null,
             xReverse: !!state.temporal && state.direction === "reverse",
             xScale: state.temporal ? "numeric" : "ordinal", xAxisLabel: state.temporal ? "Time (UTC)" : "Raster",
@@ -236,10 +258,8 @@ export class RasterSeriesPlotsView {
             ariaLabel: `Plot ${plot.id}${state.showingPrevious ? "; previous results" : ""}: ${series.map(item => item.label).join("; ")}`,
             pointAccessibleLabel: (point, item, index) => this.describePoint(series, index, plot.scale, state.showingPrevious),
             onInspect: inspection => {
-                tooltip.hidden = inspection === null;
-                tooltip.textContent = !inspection ? "" : inspection.point
-                    ? this.describePoint(series, inspection.index, plot.scale, state.showingPrevious)
-                    : `${state.showingPrevious ? "Previous results\n" : ""}${inspection.series.label}`;
+                tooltip.hidden = !inspection?.point;
+                tooltip.textContent = inspection?.point ? this.describePoint(series, inspection.index, plot.scale, state.showingPrevious) : "";
                 this.highlightStatistic(inspection ? Number(inspection.series.id) : null);
             },
         });

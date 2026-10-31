@@ -97,6 +97,10 @@ function svgElement(documentContext, name, attributes, text = null) {
  * @param {boolean} [configuration.xReverse=false] Reverse the numeric display axis without changing observations.
  * @param {number} [configuration.width=680] Measured SVG width; labels retain their screen size.
  * @param {number} [configuration.height=360] SVG height in screen pixels.
+ * @param {number} [configuration.pointSize=9] Marker diameter in screen pixels.
+ * @param {number|null} [configuration.xTickCount=null] Maximum X tick labels; null adapts to chart width.
+ * @param {number} [configuration.yTickCount=5] Desired Y tick count, rounded by the numeric scale.
+ * @param {number|null} [configuration.axisFontSize=null] Tick and axis-title font size in screen pixels; null keeps the caller's CSS.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
  * @param {string} configuration.yAxisLabel Vertical-axis title.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
@@ -121,6 +125,10 @@ export function renderOrdinalSeriesChart({
     xReverse = false,
     width = CHART_WIDTH,
     height = CHART_HEIGHT,
+    pointSize = 9,
+    xTickCount = null,
+    yTickCount = 5,
+    axisFontSize = null,
     xAxisLabel,
     yAxisLabel,
     ariaLabel,
@@ -208,22 +216,24 @@ export function renderOrdinalSeriesChart({
         class: "series-chart-x-axis", transform: `translate(0 ${xAxisY})`,
     });
     const eligible = points.map((point, index) => index).filter(index => !xBounds || numericX[index] >= xBounds[0] && numericX[index] <= xBounds[1]);
-    const indexes = ordinalTickIndexes(eligible.length, width < 480 ? 4 : 7).map(index => eligible[index]);
+    const indexes = ordinalTickIndexes(eligible.length, xTickCount ?? (width < 480 ? 4 : 7)).map(index => eligible[index]);
     const ticks = (xScale === "numeric" ? indexes.map(index => numericX[index]) : indexes)
         .filter(value => value >= horizontal.domain()[0] && value <= horizontal.domain()[1]);
     select(xAxis).call(axisBottom(horizontal).tickValues([...new Set(ticks)])
         .tickFormat(value => formatTickLabel(points[xScale === "numeric" ? numericX.indexOf(value) : value].xLabel, width < 480 ? 18 : 28))
         .tickSizeOuter(0));
     select(xAxis).selectAll("text").attr("transform", "rotate(-35)").attr("text-anchor", "end");
+    if (axisFontSize !== null) select(xAxis).selectAll("text").style("font-size", `${axisFontSize}px`);
     const yAxis = svgElement(documentContext, "g", {
         class: "series-chart-y-axis", transform: `translate(${CHART_MARGIN.left} 0)`,
     });
     // Generate log ticks in exponent space so subnormal or maximum finite
     // values never overflow the library's decimal tick-step calculation.
-    const yTicks = yScale === "log" ? scaleLinear([minimum, maximum]).ticks(5)
-        .map(value => Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** value))) : y.ticks(5);
+    const yTicks = yScale === "log" ? scaleLinear([minimum, maximum]).ticks(yTickCount)
+        .map(value => Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** value))) : y.ticks(yTickCount);
     select(yAxis).call(axisLeft(y).tickValues(yTicks).tickSize(-plotWidth).tickSizeOuter(0)
         .tickFormat(formatSeriesNumber));
+    if (axisFontSize !== null) select(yAxis).selectAll("text").style("font-size", `${axisFontSize}px`);
     chart.append(xAxis, yAxis);
     const clipId = `series-chart-clip-${++clipSerial}`;
     const definitions = svgElement(documentContext, "defs", {});
@@ -274,7 +284,7 @@ export function renderOrdinalSeriesChart({
                 class: chartType === "bar" ? "series-chart-point series-chart-bar" : "series-chart-point",
                 cx: x(index),
                 cy: y(point.yValue),
-                r: 4.5,
+                r: pointSize / 2,
                 tabindex: 0,
                 role: selectable ? "button" : "img",
                 ...(selectable ? { "aria-pressed": "false" } : {}),
@@ -283,7 +293,7 @@ export function renderOrdinalSeriesChart({
                     y: barHeight === 0 ? barBaseline - 0.5 : Math.min(y(point.yValue), barBaseline),
                     width: barWidth * 0.9,
                     height: Math.max(1, barHeight),
-                } : markerPath ? { d: markerPath, transform: `translate(${x(index)} ${y(point.yValue)})` } : {}),
+                } : markerPath ? { d: markerPath, transform: `translate(${x(index)} ${y(point.yValue)}) scale(${pointSize / 9})` } : {}),
                 "data-point-index": index,
                 "aria-label": pointAccessibleLabel(point, item, index),
             });
@@ -309,13 +319,13 @@ export function renderOrdinalSeriesChart({
     chart.append(...pointGroups);
     chart.append(
         svgElement(documentContext, "text", {
-            class: "series-chart-axis-title",
+            class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
             x: CHART_MARGIN.left + plotWidth / 2,
             y: height - 8,
             "text-anchor": "middle",
         }, xAxisLabel),
         svgElement(documentContext, "text", {
-            class: "series-chart-axis-title",
+            class: "series-chart-axis-title", ...(axisFontSize !== null ? {style: `font-size: ${axisFontSize}px`} : {}),
             x: 16,
             y: CHART_MARGIN.top + plotHeight / 2,
             transform: `rotate(-90 16 ${CHART_MARGIN.top + plotHeight / 2})`,

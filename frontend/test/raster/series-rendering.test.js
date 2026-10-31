@@ -60,13 +60,13 @@ test("raster statistics places visible inputs before execution and results", asy
     const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
     const panel = html.slice(html.indexOf('<section id="raster-series"'), html.indexOf('<section id="annotations-panel"'));
     const positions = ["raster-series-data-inputs", 'id="raster-series-statistics"',
-        "raster-series-status", 'id="raster-series-plots"', "raster-series-data-settings", "Values &amp; download", "Formula reference"]
+        "raster-series-status", 'id="raster-series-plots"', "Values &amp; download", "raster-series-data-settings", "Formula reference"]
         .map(name => panel.indexOf(name));
     assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
     assert.match(panel, /<details id="raster-series-inputs" open>/);
     assert.ok(!panel.includes('id="raster-series-calculate"'));
     assert.ok(!panel.includes('id="raster-series-edit-area"'));
-    assert.match(panel, />Axis options<\/summary>/);
+    assert.match(panel, />Axis and plot options<\/summary>/);
     assert.ok(!panel.includes("raster-series-source-mode"));
     assert.ok(!panel.includes("raster-series-temporal-dataset"));
     for (const id of ["temporal-variable", "period", "sources",
@@ -434,9 +434,11 @@ test("compact statistic controls send stable identities through the existing own
     name.value = "Average"; name.dispatchEvent(new Event("input"));
     const expression = inputs.find(input => input.dataset.field === "expression");
     expression.value = "mean(a) + 1"; expression.dispatchEvent(new Event("input"));
+    const color = inputs.find(input => input.dataset.field === "color");
+    color.value = "#ff0000"; color.dispatchEvent(new Event("input"));
     const plot = row.querySelector("select"); plot.value = "2"; plot.dispatchEvent(new Event("change"));
     assert.deepEqual(events, [["display", 1, { visible: false }], ["edit", 1, { label: "Average" }],
-        ["edit", 1, { expression: "mean(a) + 1" }], ["display", 1, { plotId: 2 }]]);
+        ["edit", 1, { expression: "mean(a) + 1" }], ["display", 1, {color: "#ff0000"}], ["display", 1, { plotId: 2 }]]);
 });
 
 test("results return immediately and a burst draws only its latest snapshot", () => {
@@ -526,6 +528,10 @@ test("temporal plots use actual UTC spacing and retain NoData gaps through prese
     assert.equal(chart.querySelector(".series-chart-line").getAttribute("d").split("M").length - 1, 2,
         "the unavailable observation breaks the line rather than becoming zero");
     assert.equal(chart.querySelector(".series-chart-axis-title").textContent, "Time (UTC)");
+    chart.querySelector(".series-chart-line-hit").dispatchEvent(new Event("pointermove"));
+    assert.equal(view.cards.get(1).tooltip.hidden, true, "the line does not repeat the statistic name on hover");
+    points[1].dispatchEvent(new Event("pointermove"));
+    assert.equal(view.cards.get(1).tooltip.hidden, false, "points retain their observation values");
     assert.match(points[1].getAttribute("aria-label"), /1 Jan 2000 01:00 UTC/);
     assert.match(points[1].getAttribute("aria-label"), /2\.0000000000000001 K/);
     state.chartType = "scatter";
@@ -562,6 +568,16 @@ test("axis editors redraw retained observations and preserve the valid plot duri
     }});
     view.renderPlots(state);
     const controls = view.cards.get(1), y = controls.axes.y, x = controls.axes.x;
+    for (const [name, value] of [["pointSize", 3], ["xTickCount", 3], ["yTickCount", 7], ["axisFontSize", 14]]) {
+        controls.appearance[name].value = String(value); controls.appearance[name].dispatchEvent(new Event("input"));
+        assert.equal(state.plots[0][name], value);
+    }
+    state.chartType = "scatter"; view.renderPlots(state);
+    assert.equal(controls.chart.querySelector(".series-chart-point").getAttribute("r"), "1.5");
+    assert.equal(controls.chart.querySelector(".series-chart-axis-title").getAttribute("style"), "font-size: 14px");
+    state.statistics[0].color = "#ff0000"; view.renderPlots(state);
+    assert.match(controls.chart.querySelectorAll("g").find(node => node.getAttribute("data-series-id") === "1").getAttribute("style"), /#ff0000/);
+    state.chartType = "bar"; view.renderPlots(state);
     y.range.value="custom"; y.range.dispatchEvent(new Event("change"));
     y.fields[0].value="1"; y.fields[0].dispatchEvent(new Event("input"));
     y.fields[1].value="8"; y.fields[1].dispatchEvent(new Event("input"));

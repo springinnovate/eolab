@@ -503,7 +503,7 @@ export class RasterSeriesController {
 
     /** Change only where a statistic is displayed, without requesting calculations.
      * @param {number} id Statistic identity.
-     * @param {{visible?:boolean,plotId?:number}} change Visibility or destination plot.
+     * @param {{visible?:boolean,plotId?:number}} change Visibility, destination plot or user-selected color.
      * @return {void}
      */
     changeStatisticDisplay(id, change) {
@@ -531,7 +531,7 @@ export class RasterSeriesController {
 
     /** Change validated axis presentation without changing calculation inputs or values.
      * @param {number} id Plot identity.
-     * @param {{scale:"linear"|"log",bounds:[number,number]|null,xBounds:[number,number]|null}} change Display-only settings validated by the axis editor.
+     * @param {{scale:"linear"|"log",bounds:[number,number]|null,xBounds:[number,number]|null,pointSize?:number,xTickCount?:number,yTickCount?:number,axisFontSize?:number}} change Display-only settings validated by the axis editor.
      * @return {void}
      */
     setPlotAxis(id, change) {

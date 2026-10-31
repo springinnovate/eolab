@@ -1,6 +1,6 @@
 /** Controls and chart presentation for raster formula series. */
 import { formatSeriesNumber } from "../charts/series-chart.js";
-import { createStatisticSwatch, RasterSeriesPlotsView } from "./series-plots-view.js";
+import { createStatisticSwatch, RasterSeriesPlotsView, STATISTIC_STYLES } from "./series-plots-view.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
 import { describeTemporalPeriod } from "../temporal-period.js";
 
@@ -27,6 +27,7 @@ const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No match
  * @property {boolean} visible Whether to plot the statistic.
  * @property {number} plotId Assigned plot identity.
  * @property {number} styleIndex Stable line/marker identity.
+ * @property {string} [color] User-selected CSS hex color; absent uses its default statistic style.
  * @property {SeriesValueRow[]} rows One row per requested raster or returned temporal observation, including unavailable values.
  * @property {SeriesValueRow[]|null} previousRows Retained values for replacement calculations.
  */
@@ -101,7 +102,7 @@ export class RasterSeriesView {
      * @param {(preset:string)=>void} actions.onAddFormula Add statistic.
      * @param {(id:number,change:{label?:string,expression?:string})=>void} actions.onEditFormula Update formula/name.
      * @param {(id:number)=>void} actions.onRemoveFormula Remove statistic.
-     * @param {(id:number,change:{visible?:boolean,plotId?:number})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
+     * @param {(id:number,change:{visible?:boolean,plotId?:number,color?:string})=>void} actions.onStatisticDisplay Change visibility or plot assignment.
      * @param {()=>void} actions.onAddPlot Add a linear plot.
      * @param {(id:number)=>void} actions.onRemovePlot Remove a secondary plot.
      * @param {(id:number,change:Object)=>void} actions.onPlotAxis Change one plot's validated display bounds and scale.
@@ -369,6 +370,13 @@ export class RasterSeriesView {
             const name = formula.label || formula.expression || "Custom statistic";
             const caption = row.querySelector("span");
             if (caption.textContent !== name) caption.textContent = name;
+            const swatch = row.querySelector("svg");
+            const color = formula.color ?? STATISTIC_STYLES[formula.styleIndex].color;
+            if (swatch.dataset.color !== color) {
+                swatch.querySelector("line").setAttribute("stroke", color);
+                swatch.querySelector("text").setAttribute("fill", color);
+                swatch.dataset.color = color;
+            }
             const editor = row.querySelector("summary");
             const editLabel = `Edit ${name}`;
             if (editor.getAttribute("aria-label") !== editLabel) editor.setAttribute("aria-label", editLabel);
@@ -381,7 +389,10 @@ export class RasterSeriesView {
                     if (input.checked !== formula.visible) input.checked = formula.visible;
                     const label = `Show ${name} on plot`;
                     if (input.getAttribute("aria-label") !== label) input.setAttribute("aria-label", label);
-                } else if (input !== this.document.activeElement && input.value !== formula[input.dataset.field]) input.value = formula[input.dataset.field];
+                } else {
+                    const value = input.dataset.field === "color" ? color : formula[input.dataset.field];
+                    if (input !== this.document.activeElement && input.value !== value) input.value = value;
+                }
             }
             const plot = row.querySelector("select");
             const hideAssignment = state.plots.length === 1;
@@ -430,7 +441,7 @@ export class RasterSeriesView {
         const visible = this.document.createElement("input"); visible.type = "checkbox"; visible.dataset.field = "visible";
         visible.addEventListener("change", () => this.actions.onStatisticDisplay(formula.id, { visible: visible.checked }));
         const name = this.document.createElement("span");
-        legend.append(visible, createStatisticSwatch(this.document, formula.styleIndex), name);
+        legend.append(visible, createStatisticSwatch(this.document, formula.styleIndex, formula.color), name);
         for (const event of ["pointerenter", "focusin"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(formula.id));
         for (const event of ["pointerleave", "focusout"]) legend.addEventListener(event, () => this.plotsView.highlightStatistic(null));
         const plot = this.document.createElement("select"); plot.dataset.field = "plotId";
@@ -445,6 +456,11 @@ export class RasterSeriesView {
             input.addEventListener("input", () => this.actions.onEditFormula(formula.id, { [field]: input.value }));
             fieldLabel.append(input); editor.append(fieldLabel);
         }
+        const colorLabel = this.document.createElement("label"); colorLabel.textContent = "Color";
+        const color = this.document.createElement("input"); color.type = "color"; color.dataset.field = "color";
+        color.setAttribute("aria-label", "Statistic color");
+        color.addEventListener("input", () => this.actions.onStatisticDisplay(formula.id, {color: color.value}));
+        colorLabel.append(color); editor.append(colorLabel);
         const remove = this.document.createElement("button"); remove.type = "button"; remove.textContent = "×";
         remove.className = "summary-text-button";
         remove.addEventListener("click", () => this.actions.onRemoveFormula(formula.id));

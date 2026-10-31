@@ -12,7 +12,8 @@
 #raster-series-inputs > summary { color: var(--brand); }
 #raster-series-inputs[open] #raster-series-input-summary,
 #raster-series-inputs:not([open]) .raster-series-inputs-expanded { display: none; }
-#raster-series-inputs { margin-bottom: 0.4rem; }
+#raster-series-inputs { margin-bottom: 0.4rem; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 0.35rem 0.5rem; }
+#raster-series-inputs[open] > summary { border-bottom: 1px solid var(--border-1); padding-bottom: 0.3rem; }
 #raster-series-temporal-title { margin: 0.4rem 0; font-weight: 600; }
 #raster-series-temporal { font-size: 0.78rem; }
 #raster-series-temporal label:not([hidden]) { display: grid; gap: 0.25rem; min-width: 0; }
@@ -65,7 +66,7 @@
 .raster-series-formula-editor[open] { grid-column: 1 / -1; grid-row: 2; }
 .raster-series-formula-editor label { display: grid; gap: 0.25rem; margin: 0.35rem 0; font-size: 0.75rem; }
 .raster-statistic-swatch { width: 2rem; height: 1rem; flex: none; }
-#raster-series-plots { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; padding: 0.4rem 0 0.75rem; margin-bottom: 0.5rem; }
+#raster-series-plots { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; padding: 0.4rem 0 0; margin-bottom: 0; }
 #raster-series-results[hidden], #raster-series-add-plot[hidden], #raster-series-plots[hidden], .raster-series-statistics-chart[hidden], .raster-series-plot-tooltip[hidden], .raster-series-empty-plot[hidden] { display: none; }
 .raster-series-plot { position: relative; box-sizing: border-box; flex: 1 0 min(100%, 32rem); min-width: 0; padding: 0.25rem 0; display: flex; flex-direction: column; scroll-margin-block-start: 3rem; }
 .raster-series-plot-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; min-height: 2rem; }
@@ -111,3 +112,7 @@
 .summary-vector-area p { margin: 0; color: var(--text-2); }
 .summary-vector-area [data-vector-sampling="predicate"] { overflow-wrap: anywhere; }
 @media (pointer: coarse) { .summary-text-button { min-height: 44px; min-width: 44px; } }
+
+.raster-series-axis-options input[type="number"] { width: 4.5rem; font-size: inherit; }
+.raster-series-formula-editor input[type="color"] { width: 3rem; height: 1.75rem; padding: 0.1rem; }
+#raster-series-values { border-top: 0; padding-top: 0; }

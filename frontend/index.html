@@ -726,14 +726,6 @@
               <button id="raster-series-add-plot" class="summary-text-button" type="button">+ Add plot</button>
               </div>
               <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots"></div>
-              <details id="raster-series-data-settings" class="raster-series-settings">
-                <summary id="raster-series-source-summary">Axis options</summary>
-                <div class="raster-series-controls">
-                  <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
-                  <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
-                </div>
-                <div id="raster-series-plot-options"></div>
-              </details>
               <details id="raster-series-values" class="raster-series-settings">
                 <summary>Values &amp; download</summary>
                 <div class="raster-series-table-scroll">
@@ -742,6 +734,14 @@
                 <div class="raster-series-actions">
                   <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>
                 </div>
+              </details>
+              <details id="raster-series-data-settings" class="raster-series-settings">
+                <summary id="raster-series-source-summary">Axis and plot options</summary>
+                <div class="raster-series-controls">
+                  <label>Order by <select id="raster-series-order"><option value="map">Map layer order</option><option value="name">Layer name</option></select></label>
+                  <label>Direction <select id="raster-series-direction"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></label>
+                </div>
+                <div id="raster-series-plot-options"></div>
               </details>
             </div>
             <details class="raster-series-help raster-series-settings"><summary>Formula reference</summary>
