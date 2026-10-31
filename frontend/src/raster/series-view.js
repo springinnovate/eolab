@@ -2,6 +2,7 @@
 import { formatSeriesNumber } from "../charts/series-chart.js";
 import { createStatisticSwatch, RasterSeriesPlotsView, STATISTIC_STYLES } from "./series-plots-view.js";
 import { TemporalPeriodView } from "../temporal-period-view.js";
+import { describeTemporalPeriod } from "../temporal-period.js";
 
 const STATES = { waiting: "Waiting", error: "Unavailable", no_matches: "No matches", no_valid_data: "No valid data", invalid_arithmetic: "Invalid arithmetic", overflow: "Overflow" };
 
@@ -68,6 +69,9 @@ export class RasterSeriesView {
         this.results = documentContext.querySelector("#raster-series-results");
         this.plots = documentContext.querySelector("#raster-series-plots");
         this.plotArea = documentContext.querySelector("#raster-series-plot-area");
+        this.plotHeading = documentContext.querySelector("#raster-series-plot-heading");
+        this.plotTitle = documentContext.querySelector("#raster-series-plot-title");
+        this.plotContext = documentContext.querySelector("#raster-series-plot-context");
         this.plotProgress = documentContext.querySelector("#raster-series-plot-progress");
         this.plotProgressDetail = documentContext.querySelector("#raster-series-plot-progress-detail");
         this.plotProgressBar = documentContext.querySelector("#raster-series-plot-progress-bar");
@@ -293,6 +297,8 @@ export class RasterSeriesView {
         if (this.addPlot.hidden !== hidePlots) this.addPlot.hidden = hidePlots;
         const hideToolbar = hidePlots && !calculating;
         if (this.chartToolbar.hidden !== hideToolbar) this.chartToolbar.hidden = hideToolbar;
+        if (this.plotHeading.hidden !== hideToolbar) this.plotHeading.hidden = hideToolbar;
+        this.renderPlotHeading(state);
         const hideValues = calculating && !hasResultRows;
         if (this.values.hidden !== hideValues) this.values.hidden = hideValues;
         if (this.chartSettings.hidden !== !hasPlotValues) this.chartSettings.hidden = !hasPlotValues;
@@ -315,6 +321,27 @@ export class RasterSeriesView {
             }));
         }
         if (this.download.disabled !== !state.canDownload) this.download.disabled = !state.canDownload;
+    }
+
+    /** Identify the plotted source, sample area and period beside its legend.
+     * Retained previous results keep their last heading while replacements run.
+     * Inputs disclosure state never changes this context or starts a calculation.
+     * @param {SeriesPresentation} state Current source choices and result ownership.
+     * @return {void}
+     */
+    renderPlotHeading(state) {
+        if (state.showingPrevious) {
+            if (!this.plotTitle.textContent) this.plotTitle.textContent = "Previous results";
+            return;
+        }
+        const selected = state.sources.filter(source => source.selected);
+        const variable = state.temporal?.item?.properties["cube:variables"][state.temporal.variable];
+        const title = state.temporal ? variable?.description || state.temporal.variable || "Temporal dataset"
+            : selected.length === 1 ? selected[0].label : "Raster comparison";
+        const scope = state.area.areaChoice === "whole" ? "Whole raster" : state.area.areaLabel || "No sample area selected";
+        const context = state.temporal ? [state.temporal.item?.properties.title, scope, describeTemporalPeriod(state.temporal)].filter(Boolean).join(" · ") : scope;
+        if (this.plotTitle.textContent !== title) this.plotTitle.textContent = title;
+        if (this.plotContext.textContent !== context) this.plotContext.textContent = context;
     }
 
     /** Show prominent temporal progress in the plot area without redrawing retained charts.

@@ -393,6 +393,39 @@ test("the selected area name opens the existing sample control", () => {
     }
 });
 
+test("graph context identifies its rasters, variable, period and area independently of Inputs", () => {
+    const h = controlsFixture();
+    h.view.period = {render() {}};
+    const title = h.document.querySelector("#raster-series-plot-title");
+    const context = h.document.querySelector("#raster-series-plot-context");
+    h.state.statistics[0].rows = h.state.rows = [1, 2].map(value => ({label: `Raster ${value}`, state: "value", value}));
+    h.draw();
+    assert.equal(h.view.plotHeading.hidden, false);
+    assert.equal(title.textContent, "Raster A");
+    assert.equal(context.textContent, "Whole raster");
+    h.document.querySelector("#raster-series-inputs").hidden = true;
+    h.state.sources.push({key: "b", label: "Raster B", selected: true});
+    h.state.area.areaChoice = "vector"; h.state.area.areaLabel = "Selected county polygons";
+    h.draw();
+    assert.equal(title.textContent, "Raster comparison");
+    assert.equal(context.textContent, "Selected county polygons");
+    h.state.temporal = {item: {properties: {title: "Weather observations", "cube:variables": {
+        pressure: {description: "Surface pressure"}}}}, variable: "pressure", variableBound: true,
+        periodMode: "month", startTime: "2000-01-01T00:00", endTime: "2000-02-01T00:00", selectionError: ""};
+    h.draw();
+    assert.equal(title.textContent, "Surface pressure");
+    assert.match(context.textContent, /^Weather observations · Selected county polygons · January 2000/);
+    const originalContext = context.textContent;
+    h.state.showingPrevious = true;
+    h.state.statistics[0].previousRows = h.state.rows;
+    h.state.area.areaLabel = "A different county";
+    h.state.temporal.startTime = "2000-02-01T00:00"; h.state.temporal.endTime = "2000-03-01T00:00";
+    h.draw();
+    assert.equal(context.textContent, originalContext, "retained results must not be labelled with replacement inputs");
+    h.state.showingPrevious = false; h.draw();
+    assert.match(context.textContent, /A different county · February 2000/);
+});
+
 test("temporal controls reuse the period editor and preserve focused input while availability changes", () => {
     const h = controlsFixture();
     const actions = Object.fromEntries(["onClose", "onSelect", "onOrder", "onChartType", "onDownload", "onArea", "onOpenArea",
@@ -570,6 +603,9 @@ test("temporal plots use actual UTC spacing and retain NoData gaps through prese
         statistics: [{ id: 1, label: "Mean", expression: "mean(a)", styleIndex: 0, visible: true, plotId: 1, rows }] };
     view.renderPlots(state);
     const chart = view.cards.get(1).chart;
+    assert.equal(view.cards.get(1).title.parentElement.hidden, true, "one plot needs no numbered title above its legend");
+    assert.equal(view.cards.get(1).legend.hidden, false, "even one statistic has a color and marker legend");
+    assert.equal(view.cards.get(1).legend.children[0].querySelector("span").textContent, "Mean");
     const points = chart.querySelectorAll(".series-chart-point");
     const x = points.map(point => Number(point.getAttribute("cx")));
     assert.deepEqual(points.map(point => point.getAttribute("data-point-index")), ["0", "1", "3"]);
@@ -659,6 +695,8 @@ test("adding a secondary plot reveals it once; initial drawing and updates prese
     state.plots.push({ id: 2, scale: "linear" });
     view.renderPlots(state);
     const added = view.cards.get(2);
+    assert.equal(view.cards.get(1).title.parentElement.hidden, false);
+    assert.equal(added.title.parentElement.hidden, false);
     assert.equal(added.empty.textContent, "Choose this plot beside a statistic to show it here.");
     assert.deepEqual(added.card.scrollRequests, [{ block: "start", inline: "nearest" }]);
     added.scale.focus();

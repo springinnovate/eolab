@@ -183,6 +183,7 @@ export class RasterSeriesPlotsView {
             const added = !this.cards.has(plot.id);
             if (added) this.cards.set(plot.id, this.createPlotCard(plot));
             const elements = this.cards.get(plot.id);
+            elements.title.parentElement.hidden = state.plots.length === 1;
             elements.plot = plot;
             if (elements.error.hidden && elements.scale.value !== plot.scale) elements.scale.value = plot.scale;
             elements.axes.x.group.hidden = !state.temporal;
@@ -215,8 +216,7 @@ export class RasterSeriesPlotsView {
      */
     renderPlot(elements, plot, statistics, state, series) {
         const { chart, tooltip, legend, note, empty } = elements;
-        elements.title.textContent = state.plots.length === 1 && statistics.length === 1 ? statistics[0].label || "Custom statistic" : `Plot ${plot.id}`;
-        legend.hidden = statistics.length < 2;
+        legend.hidden = !statistics.length;
         const focused = this.document.activeElement;
         const hadChartFocus = chart.contains(focused);
         const focusSeries = focused?.closest?.("[data-series-id]")?.getAttribute("data-series-id");
