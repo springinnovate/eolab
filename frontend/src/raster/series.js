@@ -427,13 +427,15 @@ export class RasterSeriesController {
         });
     }
 
-    /** Accept an exact area from composition; optional outlines never determine availability.
-     * @param {Object|null} area Processing sampling descriptor.
+    /** Adopt a committed map area without forgetting this calculation's area during map refresh.
+     * A null map snapshot means no new selection. Explicit source invalidation
+     * clears affected polygon areas through invalidateArea(). Hidden work retains its inputs.
+     * @param {Object|null} area Newly selected Processing area, or null when the map has no selection to publish.
      * @param {string} [label="Current sampling area"] Area description. @return {void}
      */
     setArea(area, label = "Current sampling area") {
         const keepCalculation = this.areaStatistics.hasCapturedInputs && !this.active;
-        if (keepCalculation) { this.render(); return; }
+        if (area === null || keepCalculation) { this.render(); return; }
         this.selectedArea = area; this.selectedAreaLabel = label;
         this.updateAreaInputs();
     }

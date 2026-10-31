@@ -109,6 +109,8 @@ test("a temporal request restores its period, formulas and result after reload w
     assert.equal(restored.view.state.temporal.startTime, "2000-01-01T00:00:00.000");
     assert.deepEqual(restored.view.state.area.area,AREA,"an empty startup map cannot replace the recovered calculation's area");
     restored.controller.updateSamplingForPanelVisibility(true); await restored.tick();
+    restored.controller.setArea(null,"No map area while another view loads"); await restored.tick();
+    assert.deepEqual(restored.view.state.area.area,AREA,"passive map refresh does not invalidate an active calculation's committed area");
     assert.equal(restored.submitted.length, 0);
     assert.equal(restored.cancelled.length, 0);
     const observations = [{time: "2000-01-01T00:00:00Z", rows: [{label: "stat-1", value: "298.5", state: "ok", unit: "K"}]}];
