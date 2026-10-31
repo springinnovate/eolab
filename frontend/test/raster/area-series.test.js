@@ -882,5 +882,5 @@ test("a box choice publishes its intent before composition commits a rectangle",
         h.controller.chooseArea("selection");
         assert.deepEqual(h.view.state.area.area, box(10));
         assert.equal(h.view.state.area.areaChoice, "selection");
-    } finally { h.cleanup(); }
+    } finally { h.close(); }
 });
