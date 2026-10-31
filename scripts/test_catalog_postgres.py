@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import io
+import os
 from pathlib import Path
 import re
 import signal
@@ -198,6 +199,9 @@ def run_suite(
 ) -> int:
     """Initialize the real upstream schema and run either the fix or baseline regression.
 
+    On POSIX hosts the test container uses the launcher's user and group so it can
+    write the private results directory without Linux capability overrides.
+
     Args:
         image: Test-only image containing pytest, source tests and application SQL.
         database_image: Pinned deployment database image.
@@ -264,6 +268,9 @@ def run_suite(
             f"os.execvp(sys.executable,[sys.executable,*{command!r}])"
         )
         with tempfile.TemporaryDirectory(prefix="eolab-catalog-results-") as directory:
+            runner_user = (
+                f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "0:0"
+            )
             docker(
                 "run",
                 "--detach",
@@ -273,6 +280,8 @@ def run_suite(
                 f"{LABEL}={name}",
                 "--network",
                 network,
+                "--user",
+                runner_user,
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,size=128m",

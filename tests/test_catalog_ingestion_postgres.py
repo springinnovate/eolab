@@ -376,6 +376,7 @@ def assert_complete(
         for result in results
         for notice in result.notices
         if notice[0] in UNSAFE_NOTICES
+        or "Issue Altering Constraints" in (notice[1] or "")
     ], results
     with psycopg.connect(database.dsn, autocommit=True) as connection:
         assert deadlocks(connection) == initial_deadlocks
