@@ -500,15 +500,19 @@ def test_parallel_cold_ingestion(catalog_database: CatalogDatabase) -> None:
                 futures = [pool.submit(ingest, catalog_database, names[0], batches[0])]
                 try:
                     wait_for_writers(control, names[:1], CONTROLLER_APPLICATION_NAME)
-                    for index in range(1, 4):
-                        futures.append(
-                            pool.submit(
-                                ingest, catalog_database, names[index], batches[index]
-                            )
-                        )
-                        wait_for_writers(control, names[index : index + 1], names[0])
+                    futures.append(
+                        pool.submit(ingest, catalog_database, names[1], batches[1])
+                    )
+                    wait_for_writers(control, names[1:2], names[0])
                     control.execute("SELECT pg_advisory_unlock(%s)", (keys[0],))
                     wait_for_writers(control, names[1:2], CONTROLLER_APPLICATION_NAME)
+                    # B's stale constraint failure releases its inner DDL lock.
+                    # Fresh C/D now attempt existing-partition maintenance while
+                    # B still holds the real statistics row lock.
+                    futures.extend(
+                        pool.submit(ingest, catalog_database, name, batch)
+                        for name, batch in zip(names[2:], batches[2:], strict=True)
+                    )
                     wait_for_writers(control, names[2:], names[1], any_writer=True)
                 except AssertionError as failure:
                     # A deadlock victim can exit before the next barrier probe.
