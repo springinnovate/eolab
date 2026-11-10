@@ -155,6 +155,8 @@ test("invited visitors see live polygons without joining; first drawing joins on
         assert.equal(local.length, 1);
         assert.equal(local[0].collection.features.length, 0);
         assert.equal(calls.some(([, method]) => method === "POST" || method === "PUT"), false);
+        assert.equal(events.find(e => e[0] === "display")[2].sessionId, ID, "loading invitations expose stable layer identity");
+        assert.equal(events.filter(e => e[0] === "display").at(-1)[2].sessionId, ID, "read-only visitors receive the shared identity");
         assert.equal(events.filter(e => e[0] === "display").at(-1)[2].collections.length, 1);
         metadata.layers[0].revision = 2;
         await controller.refresh();
@@ -310,13 +312,41 @@ test("creator and joiner both receive one layer and automatically see all shared
         try {
             await controller.connect(mode, "ABCDEFGH", "Rich");
             assert.equal(local.length, 1);
+            assert.equal(events.find(event => event[0] === "display")[2].sessionId, ID, "sharing begins with the server identity");
             const data = events.filter(event => event[0] === "display").at(-1)[2];
+            assert.equal(data.sessionId, ID);
             assert.equal(data.collections.length, 1); assert.equal(data.contributors[1].polygonCount, 1);
             assert.equal(writes[0].collection.features.length, 0, "other contributors are never uploaded as mine");
             await controller.connect("join", "ABCDEFGH", "Rich");
             assert.equal(local.length, 1, "rejoining does not duplicate the existing layer");
         } finally { controller.destroy(); }
     }
+});
+
+test("restored shared layers retain export identity through missing metadata and recovery", async () => {
+    let offline = true;
+    const { controller, local, stored, events } = setup(async (_path, method) => {
+        if (offline) throw new Error("Network interrupted");
+        return method === "PUT" ? { revision: 1 } : snapshot();
+    });
+    local.push({ id: "cached-local", collection: { type: "FeatureCollection", name: "Watersheds", features: [] } });
+    stored.set("eolab-shared-annotation-layers-v1", JSON.stringify([
+        { localId: "cached-local", sessionId: ID, contributorId: "me", revision: 0 },
+    ]));
+    try {
+        await controller.start();
+        const failed = events.filter(event => event[0] === "display").at(-1)[2];
+        assert.equal(failed.sessionId, ID, "the bookmark supplies identity before any snapshot is available");
+        assert.equal(failed.error, true);
+        assert.deepEqual(failed.contributors, []);
+        offline = false;
+        controller.bindings.get("cached-local").nextAttempt = 0;
+        await controller.refresh();
+        const recovered = events.filter(event => event[0] === "display").at(-1)[2];
+        assert.equal(recovered.sessionId, ID);
+        assert.equal(recovered.error, false);
+        assert.equal(recovered.contributors.length, 2);
+    } finally { controller.destroy(); }
 });
 
 test("local storage failures prevent create, join and contribute requests and remain visible in the dialog", async () => {

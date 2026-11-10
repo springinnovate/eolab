@@ -7,6 +7,7 @@ import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
 import { PolygonLabelLayout } from "./polygon-label-layout.js";
+import { createAnnotationDownloadFilename } from "./download-filename.js";
 
 /** Own local layers, isolated polygon drafts, annotation controls and autosave. */
 export class AnnotationController {
@@ -27,8 +28,9 @@ export class AnnotationController {
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {(id:string)=>boolean} [options.requestEditing] Permit editing or open the owning membership prompt.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
+     * @param {string|null} [options.mapSlug=null] Published-map URL name supplied by composition for download filenames.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true, mapSlug = null }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -40,6 +42,7 @@ export class AnnotationController {
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
         this.requestEditing = requestEditing;
+        this.mapSlug = mapSlug;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
         this.shared = new Map();
@@ -232,6 +235,7 @@ export class AnnotationController {
     /** Refresh shared polygons and contributor details without replacing local edits.
      * @param {string} id Local editable layer identity.
      * @param {Object} data Session-owned contributor metadata, GeoJSON and save status.
+     * @param {string} data.sessionId Public shared-layer UUID, independent of this browser's local layer ID.
      * @return {boolean} Whether the available summary geometry changed.
      * @throws {Error} If received polygon geometry is unsupported.
      */
@@ -322,6 +326,7 @@ export class AnnotationController {
 
     /**
      * Download a layer's committed polygons as GeoJSON without sending data to a server.
+     * Name it with its published map (if any), layer identity and UTC export time.
      * @param {string} layerId Annotation layer to export, including filtered-out polygons.
      * @return {void} Starts a browser download or reveals the annotation panel to display an error.
      */
@@ -335,7 +340,8 @@ export class AnnotationController {
             const text = JSON.stringify(collection);
             url = URL.createObjectURL(new Blob([text], { type: "application/geo+json" }));
             link.href = url;
-            link.download = `${layer.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 100) || "annotations"}.geojson`;
+            link.download = createAnnotationDownloadFilename({ name: layer.name,
+                layerId: this.shared.get(layerId)?.sessionId ?? layer.id, mapSlug: this.mapSlug });
             this.document.body.append(link);
             link.click();
             this.fileStatus.textContent = `GeoJSON download started for “${layer.name}”. All saved polygons are included; unfinished edits are excluded.`;

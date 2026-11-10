@@ -86,7 +86,7 @@ import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
-import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath } from "./saved-map-view/api-client.js";
+import { SavedMapApiClient, namedMapSlugFromPath, editableMapSlugFromPath, MAP_LINK_NAME_PATTERN } from "./saved-map-view/api-client.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
@@ -1598,6 +1598,7 @@ async function initializeCatalog(
             onClose: () => { annotations.clearInspection(); mapInspection.hideAnnotations(); } });
         annotations = new AnnotationController({
             panel: annotationPanel,
+            mapSlug: namedMapSlug?.length <= 80 && MAP_LINK_NAME_PATTERN.test(namedMapSlug) ? namedMapSlug : null,
             leaflet: L,
             map: leafletMap,
             mapLayers: mapLayerController,

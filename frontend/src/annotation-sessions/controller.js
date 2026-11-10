@@ -243,7 +243,8 @@ export class AnnotationSessionsController {
         catch { this.display(binding, `Share code: ${binding.snapshot.joinCode}`); }
     }
 
-    /** Publish session presentation without exposing credentials or editable remote polygons.
+    /** Publish shared-layer identity, contributor presentation and synchronization status.
+     * The public sessionId identifies the same shared layer across browsers for exports.
      * @param {Object} binding Shared-layer synchronization state.
      * @param {string} status User-facing save status.
      * @param {boolean} [error=false] Whether attention is required.
@@ -251,7 +252,7 @@ export class AnnotationSessionsController {
      */
     display(binding, status, error = false) {
         const snapshot = binding.snapshot;
-        this.present(binding.localId, { name: snapshot?.name, contributors: snapshot?.contributors.map(person => ({
+        this.present(binding.localId, { sessionId: binding.sessionId, name: snapshot?.name, contributors: snapshot?.contributors.map(person => ({
             ...person, own: person.id === snapshot.contributorId,
             color: person.id === snapshot.contributorId ? binding.pendingColor ?? person.color : person.color,
             polygonCount: snapshot.layers.filter(layer => layer.contributorId === person.id).reduce((sum, layer) => sum + layer.polygonCount, 0),
