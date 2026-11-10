@@ -31,3 +31,30 @@ export function createAnnotationDownloadFilename({ name, layerId, mapSlug = null
     }
     return `${prefix}${shortenedName}${suffix}`;
 }
+
+/**
+ * Prepare an edited polygon filename for download without replacing the user's name.
+ * Trim surrounding whitespace and add the .geojson extension when omitted. Keep
+ * spaces and Unicode within the name; reject unsafe or overlong names so the
+ * dialog can explain the problem instead of silently changing the user's input.
+ * @param {string} value Filename entered in the download dialog.
+ * @return {string} Safe filename with a lowercase .geojson extension, at most 240 UTF-8 bytes.
+ * @throws {Error} If the name is empty, contains forbidden characters, is a reserved device name, or exceeds the byte limit.
+ */
+export function normalizeAnnotationDownloadFilename(value) {
+    const basename = value.trim().replace(/\.geojson$/i, "");
+    if (!basename.trim() || /^\.+$/.test(basename.trim())) {
+        throw new Error("Enter a filename before .geojson.");
+    }
+    if (/[<>:"/\\|?*\x00-\x1f\x7f]/.test(basename)) {
+        throw new Error('Remove these characters from the filename: < > : " / \\ | ? * and control characters.');
+    }
+    if (/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(basename.split(".")[0].trimEnd())) {
+        throw new Error("This filename is reserved by Windows. Choose a different name.");
+    }
+    const filename = `${basename}.geojson`;
+    if (new TextEncoder().encode(filename).length > 240) {
+        throw new Error("This filename is too long. Shorten it and try again.");
+    }
+    return filename;
+}

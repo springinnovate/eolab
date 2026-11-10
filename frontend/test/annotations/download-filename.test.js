@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAnnotationDownloadFilename } from "../../src/annotations/download-filename.js";
+import { createAnnotationDownloadFilename, normalizeAnnotationDownloadFilename } from "../../src/annotations/download-filename.js";
 
 const LAYER_ID = "a1b2c3d4-e5f6-4789-8123-456789abcdef";
 const EXPORTED_AT = new Date("2026-11-10T18:45:12.123Z");
@@ -72,4 +72,46 @@ test("long Unicode layer names keep map context and distinguishing suffixes with
     assert.ok(retainedName.length > 0);
     assert.ok(name.startsWith(retainedName));
     assert.equal(retainedName.isWellFormed(), true, "shortening never splits a Unicode code point");
+});
+
+test("edited filenames keep user wording and receive exactly one GeoJSON extension", () => {
+    assert.equal(normalizeAnnotationDownloadFilename("  Maui condition polygons  "), "Maui condition polygons.geojson");
+    assert.equal(normalizeAnnotationDownloadFilename("Maui condition polygons.geojson"), "Maui condition polygons.geojson");
+    assert.equal(normalizeAnnotationDownloadFilename("Maui condition polygons.GEOJSON"), "Maui condition polygons.geojson");
+    assert.equal(normalizeAnnotationDownloadFilename("珊瑚 🌱 observations"), "珊瑚 🌱 observations.geojson");
+    assert.equal(normalizeAnnotationDownloadFilename("Condition.v2"), "Condition.v2.geojson");
+});
+
+test("edited filenames reject empty names and unsafe paths with actionable errors", () => {
+    for (const name of ["", "  ", ".", "...", ".geojson", "  .GEOJSON  ", "  .geojson", "... .geojson"]) {
+        assert.throws(() => normalizeAnnotationDownloadFilename(name), /Enter a filename/);
+    }
+    for (const name of ["../areas", "folder/areas", "folder\\areas", 'condition:latest', 'condition"layer',
+        "condition<layer>", "condition|layer", "condition?", "condition*", "condition\u0000layer", "condition\u007flayer"]) {
+        assert.throws(() => normalizeAnnotationDownloadFilename(name), /Remove these characters/);
+    }
+});
+
+test("edited filenames reject reserved Windows names without rejecting ordinary words", () => {
+    for (const name of ["CON", "nul.geojson", "AUX.notes", "COM9", "LPT¹.data", "prn .notes"]) {
+        assert.throws(() => normalizeAnnotationDownloadFilename(name), /reserved by Windows/);
+    }
+    assert.equal(normalizeAnnotationDownloadFilename("CON areas"), "CON areas.geojson");
+    assert.equal(normalizeAnnotationDownloadFilename("_CON"), "_CON.geojson");
+});
+
+test("edited filenames are bounded by encoded length without truncating the chosen name", () => {
+    assert.equal(normalizeAnnotationDownloadFilename("a".repeat(232)), `${"a".repeat(232)}.geojson`);
+    assert.throws(() => normalizeAnnotationDownloadFilename("a".repeat(233)), /too long.*Shorten/);
+    assert.equal(normalizeAnnotationDownloadFilename("🌱".repeat(58)), `${"🌱".repeat(58)}.geojson`);
+    assert.throws(() => normalizeAnnotationDownloadFilename("🌱".repeat(59)), /too long.*Shorten/);
+});
+
+test("generated defaults remain valid when the user accepts them unchanged", () => {
+    for (const mapSlug of [null, "maui-restoration", "a".repeat(80)]) {
+        for (const name of ["Condition layer", "CON", "CON.notes", "珊瑚🌱".repeat(40), 'Unsafe <name>:"/\\|?*', "..."]) {
+            const filename = createAnnotationDownloadFilename({ name, layerId: LAYER_ID, mapSlug, exportedAt: EXPORTED_AT });
+            assert.equal(normalizeAnnotationDownloadFilename(filename), filename);
+        }
+    }
 });
