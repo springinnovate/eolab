@@ -253,14 +253,19 @@ def test_preparation_history_cancellation_and_explicit_retry_are_independent(
 
 
 def _publish_report(
-    store: PostgresJobStore, artifacts: LocalJobArtifacts, identifier: str
+    store: PostgresJobStore,
+    artifacts: LocalJobArtifacts,
+    identifier: str,
+    *,
+    failed: int = 0,
 ) -> bytes:
-    """Publish a completion receipt through real artifact and job storage boundaries.
+    """Publish a preparation report through real artifact and job storage boundaries.
 
     Args:
         store: Lifecycle authority with exactly one queued preparation.
         artifacts: Confined attempt and immutable-result adapter.
         identifier: Public handle expected to own the queued computation.
+        failed: Number of missing tiles reported by this two-tile fixture.
 
     Returns:
         Published report bytes for HTTP transfer assertions.
@@ -279,7 +284,27 @@ def _publish_report(
     )
     row = store.get(identifier, HABITAT_PREPARATION_OWNER)
     captured = row["retained_metadata"]["inputs"]
-    content = json.dumps({**captured, "version": 1, "tileCount": 2}).encode()
+    failures = [
+        {
+            "column": index,
+            "row": 0,
+            "stage": "download",
+            "code": "earth_engine_access_denied",
+            "detail": "Earth Engine denied access to a source band.",
+            "httpStatus": 403,
+        }
+        for index in range(failed)
+    ]
+    content = json.dumps(
+        {
+            **captured,
+            "version": 2,
+            "tileCount": 2 - failed,
+            "requiredTileCount": 2,
+            "failedTileCount": failed,
+            "tileFailures": failures,
+        }
+    ).encode()
     directory = artifacts.prepare(claimed["attempt_id"])
     (directory / "result.json").write_bytes(content)
     (directory / "provenance.json").write_text(
@@ -291,7 +316,9 @@ def _publish_report(
         filename="habitat-input-preparation-report.json",
         year=captured["year"],
         configuration_sha256=captured["configurationSha256"],
-        tile_count=2,
+        tile_count=2 - failed,
+        required_tile_count=2,
+        failed_tile_count=failed,
     )
     manifest = artifacts.publish(
         claimed["attempt_id"],
@@ -321,6 +348,39 @@ def _publish_report(
         claimed["id"], claimed["attempt_id"], replace(artifact, manifest=manifest)
     )
     return content
+
+
+def test_ready_partial_preparation_exposes_report_and_can_retry(
+    preparation_boundary: Any, store: PostgresJobStore
+) -> None:
+    """Retain small history counts and the admin-only report of failed tile requests.
+
+    Args:
+        preparation_boundary: Real protected report and retry endpoints.
+        store: Job store fencing the retained report and independent retry.
+    """
+    client, _, source, artifacts = preparation_boundary
+    job = _submit(client, _body(source))
+    identifier = job["jobId"]
+    report = _publish_report(store, artifacts, identifier, failed=1)
+    base = f"{BASE}/{identifier}"
+    completed = client.get(base).json()
+    assert completed["status"] == "ready"
+    assert completed["error"] is None
+    result = completed["result"]
+    assert (
+        result["tileCount"],
+        result["requiredTileCount"],
+        result["failedTileCount"],
+    ) == (1, 2, 1)
+    assert "tileFailures" not in result
+    assert client.get(base + "/report").content == report
+    retry = client.post(
+        base + "/retry", json={"requestId": uuid4().hex}, headers=HEADERS
+    )
+    assert retry.status_code == 202, retry.text
+    assert retry.json()["jobId"] != identifier
+    assert retry.json()["inputs"] == completed["inputs"]
 
 
 def test_preparation_reports_tile_progress_and_restart_requires_explicit_retry(
@@ -377,7 +437,15 @@ def test_report_expiry_preserves_cache_and_retry_metadata(
     base = f"{BASE}/{identifier}"
     completed = client.get(base).json()
     assert completed["result"]["tileCount"] == 2
+    assert completed["result"]["requiredTileCount"] == 2
+    assert completed["result"]["failedTileCount"] == 0
     assert completed["inputs"]["name"] == "Montana preparation"
+    assert (
+        client.post(
+            base + "/retry", json={"requestId": uuid4().hex}, headers=HEADERS
+        ).status_code
+        == 409
+    )
     downloaded_report = client.get(base + "/report")
     assert downloaded_report.content == report
     assert (

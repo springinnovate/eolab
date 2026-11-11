@@ -5,19 +5,20 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import time
 from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import AsyncMock, Mock
 from zipfile import ZipFile
 
 import numpy as np
+import ee
 from numpy.typing import NDArray
 import pytest
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
+from shapely.ops import unary_union
 
 from nhi_terrestrial_integrity_modeling.analysis_config import RasterStackConfiguration
 from nhi_terrestrial_integrity_modeling.habitat_training import IntegrityConfiguration
@@ -31,8 +32,8 @@ from eolab_app.processing import habitat_calculation, habitat_operation
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.habitat_earth_engine import (
-    HabitatEarthEngineRuntime,
     HabitatEarthEngineSettings,
+    get_habitat_tiles,
     load_habitat_stack,
 )
 from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
@@ -149,7 +150,7 @@ def _fixture_native_target(
     operation: Literal["prepare", "calculate"],
     arguments: tuple[Any, ...],
 ) -> None:
-    """Run the production target with controlled remote pixels in its child process.
+    """Run the production target while rejecting all Earth Engine access.
 
     Args:
         queue: Actual native worker result channel.
@@ -158,46 +159,38 @@ def _fixture_native_target(
     """
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(habitat_calculation, "load_habitat_stack", _fixture_configuration)
-        if operation == "calculate":
-            root = arguments[2].parents[2]
-            received = 0
-
-            def record_response() -> None:
-                """Record each real client pixel request and optionally block the second."""
-                nonlocal received
-                received += 1
-                with (root / "pixel-requests.txt").open("a", encoding="utf-8") as log:
-                    log.write("computePixels\n")
-                if received == 2 and (root / "cancel-download").exists():
-                    (root / "download-blocked").touch()
-                    time.sleep(60)
-
-            _use_offline_earth_engine(
-                patch,
-                [
-                    ({"status": "200"}, _tile_response(column, row))
-                    for row in range(2)
-                    for column in range(3)
-                ],
-                before_pixel_response=record_response,
+        for owner, name in (
+            (ee, "Initialize"),
+            (ee, "ServiceAccountCredentials"),
+            (ee.data, "computePixels"),
+        ):
+            patch.setattr(
+                owner,
+                name,
+                Mock(
+                    side_effect=AssertionError("Model runs only read prepared inputs")
+                ),
             )
         habitat_calculation.habitat_process_target(queue, operation, arguments)
 
 
-@pytest.mark.parametrize("cancel", [False, True])
-def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
+@pytest.mark.parametrize(
+    "coverage", ["complete", "partial", "empty", "wrong_year", "no_references"]
+)
+def test_earth_engine_run_uses_prepared_geographic_coverage(
     tmp_path: Path,
     habitat_definition: ModelDefinition,
     monkeypatch: pytest.MonkeyPatch,
-    cancel: bool,
+    coverage: Literal["complete", "partial", "empty", "wrong_year", "no_references"],
 ) -> None:
-    """Match upstream after screening missing drought bands, or cancel acquisition.
+    """Use prepared tiles without downloads and retain model screening and NoData.
 
     Args:
         tmp_path: Separate cache, reference polygons and ordinary worker storage.
         habitat_definition: Installed recipe with small-fixture fitting settings.
-        monkeypatch: Bind the controlled native transport at the execution boundary.
-        cancel: Stop a blocked second tile, preserving the completed first tile.
+        monkeypatch: Supply controlled preparation pixels and reject model downloads.
+        coverage: Complete or partial geographic preparation, no preparation for
+            the selected year, or prepared inputs without usable reference sites.
     """
     aoi = box(0, 0, 24000, 16000)
     area = write_selection(tmp_path / "area.gpkg", [mapping(aoi)], crs="EPSG:6933")
@@ -248,10 +241,47 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
         operation.queue(calculation, {}), invocation, None, {}
     )
     cache = tmp_path / "habitat-cache"
-    runtime = HabitatEarthEngineRuntime(
-        HabitatEarthEngineSettings("private-project", tmp_path / "private-key.json"),
-        cache,
-    )
+    prepared_tiles = [
+        (column, row)
+        for row in range(2)
+        for column in range(3)
+        if coverage != "empty"
+        and not (coverage == "partial" and (column, row) == (1, 1))
+        and not (coverage == "no_references" and row == 0)
+    ]
+    if prepared_tiles:
+        staging = tmp_path / "preparation"
+        staging.mkdir()
+        with monkeypatch.context() as acquisition:
+            _use_offline_earth_engine(
+                acquisition,
+                [
+                    ({"status": "200"}, _tile_response(column, row))
+                    for column, row in prepared_tiles
+                ],
+            )
+            prepared_area = unary_union(
+                [
+                    box(
+                        column * 8000,
+                        8000 - row * 8000,
+                        (column + 1) * 8000,
+                        16000 - row * 8000,
+                    )
+                    for column, row in prepared_tiles
+                ]
+            )
+            get_habitat_tiles(
+                prepared_area,
+                _fixture_configuration(2015 if coverage == "wrong_year" else 2018),
+                HabitatEarthEngineSettings(
+                    "private-project", tmp_path / "private-key.json"
+                ),
+                cache_directory=cache,
+                working_directory=staging,
+                progress=lambda complete, total: None,
+                check_cancelled=lambda: None,
+            )
     authorizer = SimpleNamespace(
         authorize=AsyncMock(side_effect=AssertionError("No Catalog raster is needed"))
     )
@@ -262,9 +292,7 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
     )
     store = Mock()
     store.finish.return_value = True
-    store.heartbeat.side_effect = lambda *args: not (
-        tmp_path / "download-blocked"
-    ).exists()
+    store.heartbeat.return_value = True
     artifacts = LocalJobArtifacts(tmp_path / "artifacts")
     artifacts.initialize()
     native = ReusableProcess(
@@ -280,19 +308,17 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
         RasterClipLimits(),
         native=native,
         areas=areas,
-        operation_settings={operation.id: runtime},
+        operation_settings={operation.id: cache},
     )
-    if cancel:
-        (tmp_path / "cancel-download").touch()
 
     async def run() -> dict[str, Any]:
-        """Run twice against one cache, or stop the initial download and clean its attempt.
+        """Run against unchanged prepared inputs through the ordinary native worker.
 
         Returns:
-            The last completed or interrupted job, including its artifact when ready.
+            The completed or failed job, including its artifact when ready.
         """
         try:
-            for index in range(1 if cancel else 2):
+            for index in range(2 if coverage in {"complete", "partial"} else 1):
                 now = datetime.now(timezone.utc)
                 row = {
                     "id": str(index + 1) * 32,
@@ -315,16 +341,25 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
                 store.claim_next_job.return_value = row
                 assert await worker.run_once()
                 artifact = store.finish.call_args.args[2]
-                if cancel:
+                if coverage in {"empty", "wrong_year", "no_references"}:
                     assert artifact is None
-                    assert store.finish.call_args.args[3]["code"] == "interrupted"
+                    error = store.finish.call_args.args[3]
+                    if coverage == "no_references":
+                        assert error["code"] == "invalid_habitat_inputs"
+                        assert "no_reference_values" in error["detail"]
+                    else:
+                        assert error["code"] == "habitat_inputs_not_prepared"
+                        assert error["detail"] == (
+                            "No Ecosystem Condition inputs are prepared for this area and year. "
+                            "Ask your administrator to prepare them and provide a geospatial "
+                            "file defining your area of interest (AOI)."
+                        )
                     store.cleanup_candidates.return_value = [row]
                     store.active_attempts.return_value = set()
                     await worker.cleanup()
                     assert not (
                         artifacts.root / "attempts" / row["attempt_id"]
                     ).exists()
-                    assert len(list(cache.rglob("tile.tif"))) == 1
                 else:
                     assert artifact is not None, store.finish.call_args
                     row.update(
@@ -335,21 +370,22 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
                             "artifact": asdict(artifact),
                         },
                     )
-                    assert (
-                        len((tmp_path / "pixel-requests.txt").read_text().splitlines())
-                        == 6
-                    )
-                    assert len(list(cache.rglob("tile.tif"))) == 6
+                assert len(list(cache.rglob("tile.tif"))) == len(prepared_tiles)
             return row
         finally:
             await native.close()
 
     ready = asyncio.run(run())
     authorizer.authorize.assert_not_awaited()
-    if cancel:
+    if coverage in {"empty", "wrong_year", "no_references"}:
         return
     response = ModelJobResponse.model_validate(serialize_processing_job(ready))
     assert response.result.name == "reference_similarity"
+    assert response.result.preparedInputCoverage.model_dump() == {
+        "requiredTiles": 6,
+        "cachedTiles": len(prepared_tiles),
+        "missingTiles": 6 - len(prepared_tiles),
+    }
     assert {file.name for file in response.artifacts.files} == {
         "reference_similarity",
         "diagnostics",
@@ -361,6 +397,15 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
         assert secret not in provenance_text
         assert secret not in export_model_job_yaml(ready, run=True).decode()
     provenance = json.loads(provenance_text)
+    assert provenance["prepared_input_coverage"] == {
+        "configuration_sha256": _fixture_configuration(
+            2018
+        ).raster_configuration_sha256,
+        "year": 2018,
+        "required_tiles": 6,
+        "cached_tiles": len(prepared_tiles),
+        "missing_tiles": 6 - len(prepared_tiles),
+    }
     assert provenance["inputs"]["stack"] == {"kind": "earthEngine", "year": 2018}
 
     configuration = _fixture_configuration(2018)
@@ -373,13 +418,13 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
         mode="json"
     )
     named = list(zip(configuration.band_names(), configuration.bands))
-    coverage = {
+    predictor_coverage = {
         item["predictor"]: item for item in provenance["fit"]["predictorCoverage"]
     }
     for name, band in named:
         if band.role != "predictor":
             continue
-        predictor = coverage[name]
+        predictor = predictor_coverage[name]
         if band.identifier in {"d28", "d29"}:
             assert predictor["defined_rows"] == 0
             assert predictor["area_coverage"] == 0
@@ -391,6 +436,10 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
             )
             assert predictor["retained"] is True
     values = _fixture_values()
+    if coverage == "partial":
+        for name, pixels in values.items():
+            if name != "references":
+                pixels[8:16, 8:16] = np.nan
     paths = {}
     for name, pixels in values.items():
         path = tmp_path / f"expected-{name}.tif"
@@ -462,4 +511,6 @@ def test_earth_engine_run_uses_cache_and_normal_worker_lifecycle(
                 assert actual.transform == direct.transform
                 assert actual.descriptions == direct.descriptions
                 np.testing.assert_array_equal(actual.read(), direct.read())
+                if coverage == "partial" and name == "reference_similarity":
+                    assert actual.read(1, masked=True).mask[8:16, 8:16].all()
     assert all(path.is_file() for path in provenance_path.parent.iterdir())

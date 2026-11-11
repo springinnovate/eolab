@@ -3,6 +3,20 @@ import assert from "node:assert/strict";
 import { ProcessingApiClient } from "../../src/processing/api.js";
 import { model, invocation, job, clipModel, clipResult, statisticsResult, seriesModel, timeSeriesResult, fileManifest } from "../../test-support/models/fixtures.js";
 
+test("raster results retain valid prepared input coverage and reject inconsistent counts", async () => {
+    const coverage = {requiredTiles: 35, cachedTiles: 32, missingTiles: 3};
+    const result = {...clipResult, preparedInputCoverage: coverage};
+    const h = fixture(() => job({status: "ready", result}));
+    assert.deepEqual((await h.api.getJob(job().jobId)).result.preparedInputCoverage, coverage);
+    for (const invalid of [null, {...coverage, cachedTiles: 0, missingTiles: 35},
+        {...coverage, missingTiles: 2}, {...coverage, cachedTiles: 36, missingTiles: -1}]) {
+        result.preparedInputCoverage = invalid;
+        await assert.rejects(h.api.getJob(job().jobId), /invalid prepared input coverage/);
+    }
+    delete result.preparedInputCoverage;
+    assert.equal((await h.api.getJob(job().jobId)).result.preparedInputCoverage, undefined);
+});
+
 /** Compose the transport over recorded same-origin HTTP replies.
  * @param {Function} reply Return the requested response body.
  * @return {Object} Client and recorded HTTP requests.

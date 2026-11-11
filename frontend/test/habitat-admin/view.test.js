@@ -31,13 +31,13 @@ function fixture() {
         return root;
     };
     const view = new HabitatAdminView(document);
-    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "loadMore", "cancel", "retry", "refreshInventory"]
+    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "loadMore", "cancel", "retry", "refreshInventory", "openFailureLog", "closeFailureLog"]
         .map(name => [name, (...args) => actions.push([name, ...args])])));
     const state = {options: {minimumYear: 2017, maximumYear: 2019}, sources: [{key: "areas", label: "Country polygons", selection,
         fields: [{name: "code", type: "int"}]}], searching: false, searchError: "", nextSearch: null,
         areas: [], years: [2018], coverageRows: [], checking: false, submissions: [], jobs: [], nextCursor: null,
         inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
-        historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, completedJobs: 0, requestedJobs: 0};
+        historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, completedJobs: 0, requestedJobs: 0, failureLogs: new Map()};
     view.render(state);
     return {view, state, actions, document};
 }
@@ -134,7 +134,7 @@ test("coverage snapshots stay separate from historical completion and job counts
     h.view.render(h.state);
     assert.match(h.view.cards.get("coverage:north:2018").detail.textContent, /^4 cached · 2 missing · 6 required tiles/);
     assert.match(h.view.cards.get("coverage:south:2018").detail.textContent, /^4 cached · 2 missing · 6 required tiles/);
-    assert.equal(h.view.submissionStatus.textContent, "1 of 2 requested jobs completed.");
+    assert.equal(h.view.submissionStatus.textContent, "1 of 2 preparation reports generated.");
     assert.equal(h.view.cards.get(`job:${"a".repeat(32)}`).detail.textContent, "Completed");
     assert.match(markup, /Habitat cached inputs/); assert.match(markup, /\/assets\/habitat-admin\.js/);
     h.view.destroy();
@@ -162,10 +162,11 @@ test("stopped preparation history retains measured tile counts without inventing
     h.state.jobs = [current];
     for (const [status, label] of [["failed", "Failed"], ["interrupted", "Interrupted"], ["cancelling", "Cancelling…"], ["cancelled", "Cancelled"]]) {
         current.status = status; h.view.render(h.state);
-        assert.equal(h.view.cards.get(`job:${current.jobId}`).detail.textContent, `${label} · 3 of 8 tiles`);
+        const progress = status === "cancelling" ? "3 of 8" : "Last reported: 3 of 8";
+        assert.equal(h.view.cards.get(`job:${current.jobId}`).detail.textContent, `${label} · ${progress} tiles prepared`);
     }
     current.progress.completed = 0; h.view.render(h.state);
-    assert.equal(h.view.cards.get(`job:${current.jobId}`).detail.textContent, "Cancelled · 0 of 8 tiles");
+    assert.equal(h.view.cards.get(`job:${current.jobId}`).detail.textContent, "Cancelled · Last reported: 0 of 8 tiles prepared");
     current.progress.completed = null; h.view.render(h.state);
     assert.equal(h.view.cards.get(`job:${current.jobId}`).detail.textContent, "Cancelled");
     current.progress.completed = 3; current.progress.total = null; h.view.render(h.state);
@@ -174,11 +175,14 @@ test("stopped preparation history retains measured tile counts without inventing
 });
 
 test("reports, partial failures and uncertain submissions retain distinct visible actions", () => {
-    const h = fixture(), ready = job({status: "ready", result: {url: "/api/admin/habitat/input-preparations/a/report", provenanceUrl: "/api/admin/habitat/input-preparations/a/provenance"}});
+    const h = fixture(), ready = job({status: "ready", result: {url: "/api/admin/habitat/input-preparations/a/report",
+        provenanceUrl: "/api/admin/habitat/input-preparations/a/provenance", tileCount: 6, requiredTileCount: 6, failedTileCount: 0}});
     h.state.jobs = [ready]; h.state.submissions = [{key: "north:2018", name: "Northern area", year: 2018, status: "uncertain", error: "Connection lost"},
         {key: "south:2018", name: "Southern area", year: 2018, status: "failed", error: "Catalog source unavailable"}];
     h.view.render(h.state);
     const card = h.view.cards.get(`job:${ready.jobId}`), uncertain = h.view.cards.get("submission:north:2018");
+    assert.equal(card.detail.textContent, "Completed · 6 of 6 tiles prepared");
+    assert.equal(card.log.hidden, true); assert.equal(card.retry.hidden, true);
     assert.equal(card.report.hidden, false); assert.equal(card.report.href, ready.result.url); assert.equal(card.provenance.href, ready.result.provenanceUrl);
     assert.match(uncertain.detail.textContent, /unknown/); assert.equal(uncertain.error.textContent, "Connection lost");
     assert.match(h.view.submissionStatus.textContent, /No preparations have been confirmed yet/);
@@ -188,6 +192,56 @@ test("reports, partial failures and uncertain submissions retain distinct visibl
     assert.match(h.view.cards.get("submission:south:2018").detail.textContent, /use Prepare inputs/);
     ready.expiresAt = "2000-01-01T00:00:00Z"; h.view.render(h.state); assert.equal(card.report.hidden, true);
     h.state.submitting = true; h.view.render(h.state); assert.equal(uncertain.recover.disabled, true); assert.equal(h.view.prepare.disabled, true);
+    h.view.destroy();
+});
+
+test("partial and empty reports retain retry and an accessible on-demand failure log until expiry", () => {
+    const h = fixture(), partial = job({status: "ready", result: {url: "/report", provenanceUrl: "/provenance",
+        tileCount: 2, requiredTileCount: 3, failedTileCount: 1}});
+    h.state.jobs = [partial]; h.view.render(h.state);
+    const card = h.view.cards.get(`job:${partial.jobId}`);
+    assert.equal(card.detail.textContent, "Partial coverage · 2 of 3 tiles prepared · 1 failed");
+    assert.equal(card.retry.hidden, false); assert.equal(card.log.hidden, false);
+    assert.match(card.times.textContent, /Report expires .* · Saved inputs expire /);
+    assert.equal(card.logSummary.getAttribute("aria-label"), "View tile failure log for Northern area · 2018");
+    assert.equal(h.actions.length, 0);
+    card.logSummary.focus(); card.log.open = true; card.log.dispatchEvent(new Event("toggle"));
+    assert.deepEqual(h.actions.at(-1), ["openFailureLog", partial.jobId]);
+    h.state.failureLogs.set(partial.jobId, {loading: true}); h.view.render(h.state);
+    assert.match(card.logStatus.textContent, /Loading/);
+    h.state.failureLogs.set(partial.jobId, {error: "Could not reach EOLab."}); h.view.render(h.state);
+    assert.match(card.logStatus.textContent, /Close and reopen the log/);
+    h.state.failureLogs.set(partial.jobId, {failures: [{column: 7, row: -5, stage: "download",
+        detail: "Access to a source dataset was denied.", httpStatus: 403}]}); h.view.render(h.state);
+    assert.equal(h.document.activeElement, card.logSummary);
+    assert.equal(card.logStatus.hidden, true);
+    assert.deepEqual(card.logRows.children[0].children.map(node => node.textContent),
+        ["Tile column 7, row -5 · Download · HTTP 403", "Access to a source dataset was denied."]);
+    const tile = card.logRows.children[0]; h.view.render(h.state);
+    assert.equal(card.logRows.children[0], tile);
+    card.log.open = false; card.log.dispatchEvent(new Event("toggle"));
+    assert.deepEqual(h.actions.at(-1), ["closeFailureLog", partial.jobId]);
+    partial.result = {...partial.result, tileCount: 0, failedTileCount: 3}; h.view.render(h.state);
+    assert.equal(card.detail.textContent, "No tiles prepared · 3 of 3 tiles failed");
+    click(card.retry); assert.deepEqual(h.actions.at(-1), ["retry", partial.jobId]);
+    partial.expiresAt = "2000-01-01T00:00:00Z"; h.view.render(h.state);
+    assert.equal(card.log.hidden, true); assert.equal(card.report.hidden, true); assert.equal(card.retry.hidden, false);
+    assert.equal(h.document.activeElement, card.title);
+    assert.doesNotMatch(card.times.textContent, /Report expires/);
+    h.view.destroy();
+});
+
+test("a large failure log previews the first fifty rows and retains the full report link", () => {
+    const h = fixture(), retained = job({status: "ready", result: {url: "/report", provenanceUrl: "/provenance",
+        tileCount: 0, requiredTileCount: 51, failedTileCount: 51}});
+    const failures = Array.from({length: 51}, (_, column) => ({column, row: -5, stage: "download",
+        detail: "Earth Engine quota exceeded.", httpStatus: 429}));
+    h.state.jobs = [retained]; h.state.failureLogs.set(retained.jobId, {failures}); h.view.render(h.state);
+    const card = h.view.cards.get(`job:${retained.jobId}`);
+    assert.equal(card.logRows.children.length, 50);
+    assert.match(card.logStatus.textContent, /first 50 of 51 tile failures.*Download the report for the full log/);
+    assert.equal(card.report.hidden, false); assert.equal(card.report.href, retained.result.url);
+    assert.equal(failures.length, 51);
     h.view.destroy();
 });
 
@@ -204,18 +258,18 @@ test("new history appears in server order while existing rows keep their control
     h.view.destroy();
 });
 
-test("active job placeholders never appear as report-retention deadlines", () => {
+test("only a report that exists has a report-retention deadline", () => {
     const h = fixture(), current = job({metadataExpiresAt: null, expiresAt: "2000-01-01T00:00:00Z"});
     h.state.jobs = [current];
-    for (const status of ["queued", "running", "cancelling"]) {
+    for (const status of ["queued", "running", "cancelling", "failed"]) {
         current.status = status; h.view.render(h.state);
-        assert.match(h.view.cards.get(`job:${current.jobId}`).times.textContent,
-            /Report expires After completion · Saved inputs expire After completion$/);
+        assert.doesNotMatch(h.view.cards.get(`job:${current.jobId}`).times.textContent, /Report expires/);
     }
     current.status = "ready"; current.expiresAt = "2099-11-04T08:00:00Z";
+    current.result = {tileCount: 6, requiredTileCount: 6, failedTileCount: 0};
     current.progress = {phase: "ready", completed: null, total: null, unit: null};
     current.metadataExpiresAt = "2099-11-10T08:00:00Z"; h.view.render(h.state);
-    assert.doesNotMatch(h.view.cards.get(`job:${current.jobId}`).times.textContent, /After completion/);
+    assert.match(h.view.cards.get(`job:${current.jobId}`).times.textContent, /Report expires .* · Saved inputs expire /);
     h.view.destroy();
 });
 

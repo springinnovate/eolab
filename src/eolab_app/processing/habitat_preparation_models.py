@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.processing.habitat_earth_engine import HabitatTileFailure
 from eolab_app.processing.models import Artifact
 
 OPERATION = "habitat.prepare-inputs.v1"
@@ -78,7 +79,7 @@ class HabitatInputPreparationSpec(BaseModel):
 
 
 class HabitatInputPreparationReport(HabitatInputPreparationInputs):
-    """Record successful acquisition without making shared cache files downloadable.
+    """Record the results of the tile attempts without exposing shared cache files.
 
     Attributes:
         version: Completion-report schema version.
@@ -86,12 +87,17 @@ class HabitatInputPreparationReport(HabitatInputPreparationInputs):
         selection: Catalog source and predicate whose exact polygons were read.
         year: Prepared scientific assessment year.
         configurationSha256: Scientific stack identity used for acquisition.
-        tileCount: Distinct complete cache tiles required by the selected area.
-            This includes tiles reused from earlier work, not just downloads.
+        tileCount: Complete tiles used or downloaded by this preparation.
+        requiredTileCount: All acquisition tiles intersecting the selected area.
+        failedTileCount: Number of remote tile requests that failed.
+        tileFailures: Path-free provider details for each failed request.
     """
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     tileCount: Annotated[int, Field(strict=True, ge=0)]
+    requiredTileCount: Annotated[int, Field(strict=True, ge=0)]
+    failedTileCount: Annotated[int, Field(strict=True, ge=0)]
+    tileFailures: tuple[HabitatTileFailure, ...]
 
 
 @dataclass(frozen=True)
@@ -101,7 +107,10 @@ class HabitatInputPreparationArtifact(Artifact):
     Attributes:
         year: Assessment year whose input tiles are now prepared.
         configuration_sha256: Scientific stack identity recorded in the receipt.
-        tile_count: Required tiles completed or reused by this job.
+        tile_count: Complete tiles reused or downloaded by this job.
+        required_tile_count: All tiles required by the selected area.
+        failed_tile_count: Tile downloads that failed during this job. Individual
+            failure details are kept in the report file.
         result_name: Private report basename accepted by ordinary artifact storage.
         media_type: JSON report format; cached TIFFs remain outside this artifact.
     """
@@ -109,6 +118,8 @@ class HabitatInputPreparationArtifact(Artifact):
     year: int
     configuration_sha256: str
     tile_count: int
+    required_tile_count: int
+    failed_tile_count: int
     result_name: Literal["result.json"] = field(default="result.json", init=False)
     media_type: Literal["application/json"] = field(
         default="application/json", kw_only=True

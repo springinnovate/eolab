@@ -1,5 +1,6 @@
 """Run Habitat condition through existing Processing source and worker contracts."""
 
+from pathlib import Path
 from typing import Any, Callable, cast
 
 from eolab_app.bounded_vector import summary_process
@@ -20,7 +21,6 @@ from eolab_app.processing.habitat_models import (
     QueuedHabitat,
     VectorReferenceSites,
 )
-from eolab_app.processing.habitat_earth_engine import HabitatEarthEngineRuntime
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
 from eolab_app.polygon_areas import PolygonAreaReference
@@ -258,22 +258,20 @@ async def prepare_habitat_execution(
         Authorized file paths and vector readers, plus the saved calculation inputs.
 
     Raises:
-        ProcessingError: If vector reading or automatic-input configuration is unavailable.
+        ProcessingError: If vector reading or the prepared-input cache is unavailable.
         SelectionUnavailableError: If a selected vector cannot be read.
     """
     sources = await resolve_habitat_sources(context, spec.inputs)
     if isinstance(spec.inputs.stack, HabitatEarthEngineStack):
-        runtime = cast(
-            HabitatEarthEngineRuntime | None, context.operation_settings.get(OPERATION)
-        )
-        if runtime is None:
+        cache_directory = cast(Path | None, context.operation_settings.get(OPERATION))
+        if cache_directory is None:
             raise ProcessingError(
-                "habitat_earth_engine_unavailable",
-                "Earth Engine inputs are not configured. Ask the administrator to "
-                "configure Ecosystem Condition's Earth Engine project and credentials.",
+                "habitat_cache_unavailable",
+                "The Ecosystem Condition input cache is unavailable. "
+                "Ask your administrator to check the server configuration.",
                 503,
             )
-        sources = HabitatSources(sources.rasters, sources.vectors, runtime)
+        sources = HabitatSources(sources.rasters, sources.vectors, cache_directory)
     return sources, spec
 
 
@@ -302,3 +300,31 @@ def describe_habitat_policy(spec: HabitatCalculationInputs) -> HabitatSettings:
         The fixed settings used for sampling, fitting and prediction.
     """
     return spec.inputs.settings
+
+
+def describe_habitat_result(
+    summary: dict[str, Any],
+    artifact: dict[str, Any],
+    numerical_policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Describe the completed map and geographic gaps in its prepared inputs.
+
+    Args:
+        summary: Persisted public output grid.
+        artifact: Completed map metadata. Newly calculated cached-input runs
+            include coverage; manual stacks and older saved results do not.
+        numerical_policy: Captured fitting settings, unused for these file counts.
+
+    Returns:
+        Raster result fields with preparedInputCoverage for cached-input runs.
+        Counts describe available files, not the coverage of valid source pixels.
+    """
+    result = {"grid": summary["grid"], "validPixels": artifact["valid_pixels"]}
+    coverage = artifact.get("prepared_input_coverage")
+    if coverage is not None:
+        result["preparedInputCoverage"] = {
+            "requiredTiles": coverage["required_tiles"],
+            "cachedTiles": coverage["cached_tiles"],
+            "missingTiles": coverage["missing_tiles"],
+        }
+    return result

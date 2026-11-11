@@ -1,10 +1,9 @@
 /** Prepare named Catalog areas and observe administrator-owned Habitat jobs. */
-import { ACTIVE_PREPARATION_STATES } from "./api.js";
+import { ACTIVE_PREPARATION_STATES, canRetryPreparation, preparationStatus } from "./api.js";
 import { validateVectorSelection } from "../selected-area.js";
 import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterSummary } from "../vector/filter.js";
 
 const PENDING_KEY = "eolab.habitatAdmin.pending.v1";
-const RETRY_STATES = new Set(["failed", "cancelled", "interrupted", "expired"]);
 
 /** Identify one exact Catalog predicate and assessment year, independently of its label.
  * @param {Object} selection Validated immutable Catalog selection.
@@ -37,6 +36,7 @@ export class HabitatAdminController {
             inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
             historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0 };
         this.jobs = new Map(); this.jobMutations = new Map(); this.mutationRevision = 0;
+        this.failureLogs = new Map();
         this.readControllers = new Set(); this.mutationControllers = new Set();
         this.searchRevision = 0; this.coverageRevision = 0; this.historyRevision = 0; this.inventoryRevision = 0;
         this.started = false; this.destroyed = false; this.pageHidden = false; this.yearsEdited = false;
@@ -48,7 +48,8 @@ export class HabitatAdminController {
             addArea: (name, key, filter) => this.addArea(name, key, filter), removeArea: id => this.removeArea(id),
             setYears: years => this.setYears(years), check: () => this.check(), prepare: () => this.prepare(),
             recover: key => this.recover(key), refreshHistory: () => this.refreshHistory(), loadMore: () => this.loadMore(),
-            cancel: id => this.cancel(id), retry: id => this.retry(id), refreshInventory: () => this.refreshInventory() });
+            cancel: id => this.cancel(id), retry: id => this.retry(id), refreshInventory: () => this.refreshInventory(),
+            openFailureLog: id => this.openFailureLog(id), closeFailureLog: id => this.closeFailureLog(id) });
     }
 
     /** Restore uncertain commands without posting them and load visible metadata/history.
@@ -84,10 +85,43 @@ export class HabitatAdminController {
         this.clock.clearTimeout(this.timer); this.timer = null;
         for (const controller of this.readControllers) controller.abort();
         this.readControllers.clear();
+        for (const [id, log] of this.failureLogs) if (log.controller) this.failureLogs.delete(id);
         this.searchRevision++; this.coverageRevision++; this.historyRevision++; this.inventoryRevision++;
         this.searchRequest = null; this.coverageRequest = null; this.historyRequest = null; this.optionsRequest = null; this.inventoryRequest = null;
         this.state.searching = this.state.checking = this.state.historyLoading = this.state.inventoryLoading = false;
         this.render();
+    }
+
+    /** Read one available failure log after the administrator expands its report.
+     * @param {string} id Preparation whose report supplies the tile diagnostics.
+     * @returns {Promise<void>} Resolves after the log, a read error or cancellation.
+     */
+    async openFailureLog(id) {
+        const job = this.jobs.get(id), current = this.failureLogs.get(id);
+        if (!this.isVisible() || !job?.result?.failedTileCount || preparationStatus(job) !== "ready" ||
+            current?.controller || current?.failures) return;
+        const controller = new AbortController();
+        const log = {sha256: job.result.sha256, controller, failures: null, error: ""};
+        this.failureLogs.set(id, log); this.readControllers.add(controller); this.render();
+        try {
+            const failures = await this.api.failureLog(job.result, controller.signal);
+            if (!controller.signal.aborted) log.failures = failures;
+        } catch (error) {
+            if (!controller.signal.aborted) log.error = error.message;
+        } finally {
+            this.readControllers.delete(controller);
+            if (this.failureLogs.get(id) === log) { log.controller = null; this.render(); }
+        }
+    }
+
+    /** Cancel an unfinished report read when its disclosure closes.
+     * @param {string} id Preparation whose log was closed.
+     * @returns {void}
+     */
+    closeFailureLog(id) {
+        const log = this.failureLogs.get(id);
+        if (!log?.controller) return;
+        this.failureLogs.delete(id); log.controller.abort(); this.render();
     }
 
     /** Read a cache-wide snapshot only after an explicit Refresh action.
@@ -423,17 +457,16 @@ export class HabitatAdminController {
     }
 
     /** Capture a recoverable explicit retry without modifying or reviving the original job.
-     * @param {string} id Failed, cancelled, interrupted or expired preparation handle.
+     * @param {string} id Retryable preparation handle, including a report with failed tiles.
      * @returns {Promise<void>} Resolves after retry acceptance or an independent error.
      */
     async retry(id) {
         if (this.destroyed || this.state.submitting) return;
         const job = this.jobs.get(id), key = `retry:${id}`;
-        const status = job?.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job?.status;
         if (job?.metadataExpiresAt && Date.parse(job.metadataExpiresAt) <= Date.now()) {
             this.state.error = "This preparation's saved inputs have expired. Choose the area and year again."; this.render(); return;
         }
-        if (!job?.inputs || !RETRY_STATES.has(status)) { this.state.error = "Choose a failed, cancelled, interrupted or expired preparation with saved inputs."; this.render(); return; }
+        if (!job?.inputs || !canRetryPreparation(job)) { this.state.error = "Choose a preparation with missing tiles or an expired report and saved inputs."; this.render(); return; }
         const previous = this.state.submissions.find(row => row.key === key);
         if (previous && previous.status !== "failed") return;
         const row = { key, kind: "retry", sourceJobId: id, name: job.inputs.name, year: job.inputs.year,
@@ -456,6 +489,14 @@ export class HabitatAdminController {
      */
     render() {
         if (this.destroyed) return;
+        for (const [id, log] of this.failureLogs) {
+            const job = this.jobs.get(id);
+            if (!job?.result || job.result.sha256 !== log.sha256 || preparationStatus(job) !== "ready") {
+                this.failureLogs.delete(id); log.controller?.abort();
+            }
+        }
+        this.state.failureLogs = new Map([...this.failureLogs].map(([id, {controller, failures, error}]) =>
+            [id, {loading: Boolean(controller), failures, error}]));
         this.state.jobs = [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.jobId.localeCompare(a.jobId));
         const requested = new Set(this.state.submissions.filter(row => row.jobId).map(row => row.jobId));
         this.state.requestedJobs = requested.size;

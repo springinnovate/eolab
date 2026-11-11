@@ -19,6 +19,24 @@ const JOB_STATES = new Set([
     ...ACTIVE_PREPARATION_STATES, "ready", "failed", "cancelled",
     "interrupted", "expired", "deleted",
 ]);
+const RETRY_STATES = new Set(["failed", "cancelled", "interrupted", "expired"]);
+
+/** Return a preparation's status after applying the report's local expiry time.
+ * @param {Object} job Preparation status returned by administration.
+ * @return {string} Effective status, including report expiry between history reads.
+ */
+export function preparationStatus(job) {
+    return job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
+}
+
+/** Check whether this outcome supports retrying the same saved area and year.
+ * @param {Object} job Preparation with its status and available report metadata.
+ * @return {boolean} True for retryable outcomes before checking saved-input expiry.
+ */
+export function canRetryPreparation(job) {
+    const status = preparationStatus(job);
+    return RETRY_STATES.has(status) || status === "ready" && job.result?.failedTileCount > 0;
+}
 
 /**
  * A failed request whose uncertainty determines whether a mutation must be recovered.
@@ -92,7 +110,9 @@ function readPreparation(value, expectedId = null) {
         typeof result.filename !== "string" || !result.filename || /[/\\]/.test(result.filename) ||
         !Number.isInteger(result.bytes) || result.bytes < 0 || !DIGEST.test(result.sha256) ||
         !Number.isInteger(result.year) || !DIGEST.test(result.configurationSha256) ||
-        !Number.isInteger(result.tileCount) || result.tileCount < 0)) {
+        ![result.tileCount, result.requiredTileCount, result.failedTileCount]
+            .every(count => Number.isSafeInteger(count) && count >= 0) ||
+        result.requiredTileCount !== result.tileCount + result.failedTileCount)) {
         throw new TypeError("Invalid preparation report");
     }
     return {...value, inputs, progress: {...progress, completed, total, unit: progress.unit ?? null}};
@@ -374,6 +394,32 @@ export class HabitatAdminApi {
     get(jobId, signal) {
         return this.#request(`${PREPARATIONS}/${encodeURIComponent(jobId)}`, {signal},
             value => readPreparation(value, jobId));
+    }
+
+    /** Read tile failures from a report already identified by its preparation job.
+     * @param {Object} report Validated metadata for this job's available report.
+     * @param {AbortSignal} [signal] Cancel reading a closed or expired failure log.
+     * @return {Promise<Array<{column:number,row:number,stage:string,code:string,detail:string,httpStatus:number|null}>>} Failed tile diagnostics.
+     * @throws {HabitatAdminRequestError} If the report is unavailable or its failures do not match job metadata.
+     * @throws {DOMException} When the request is cancelled.
+     */
+    failureLog(report, signal) {
+        return this.#request(report.url, {signal}, value => {
+            if (!value || value.year !== report.year || value.configurationSha256 !== report.configurationSha256 ||
+                value.tileCount !== report.tileCount || value.requiredTileCount !== report.requiredTileCount ||
+                value.failedTileCount !== report.failedTileCount || !Array.isArray(value.tileFailures) ||
+                value.tileFailures.length !== report.failedTileCount) throw new TypeError("Invalid preparation failure log");
+            return value.tileFailures.map(failure => {
+                if (!failure || !Number.isSafeInteger(failure.column) || !Number.isSafeInteger(failure.row) ||
+                    typeof failure.stage !== "string" || !failure.stage || typeof failure.code !== "string" || !failure.code ||
+                    typeof failure.detail !== "string" || !failure.detail || !(failure.httpStatus === null ||
+                        Number.isInteger(failure.httpStatus) && failure.httpStatus >= 100 && failure.httpStatus <= 599)) {
+                    throw new TypeError("Invalid tile failure");
+                }
+                const {column, row, stage, code, detail, httpStatus} = failure;
+                return {column, row, stage, code, detail, httpStatus};
+            });
+        });
     }
 
     /**

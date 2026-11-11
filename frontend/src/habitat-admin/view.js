@@ -1,7 +1,9 @@
 /** Present current Habitat cache storage, selected-area coverage and preparation history. */
 import { VectorFilterControls } from "../vector/filter-controls.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "../vector/filter.js";
-import { ACTIVE_PREPARATION_STATES } from "./api.js";
+import { ACTIVE_PREPARATION_STATES, canRetryPreparation, preparationStatus } from "./api.js";
+
+const VISIBLE_TILE_FAILURES = 50;
 
 /** Format a retained server timestamp without inventing an unfinished job's deadline.
  * @param {string|null|undefined} value Server timestamp.
@@ -9,17 +11,24 @@ import { ACTIVE_PREPARATION_STATES } from "./api.js";
  */
 function timeLabel(value) { return value ? new Date(value).toLocaleString() : "After completion"; }
 
-/** Present a preparation's lifecycle and last measured tile counts when available.
+/** Present report totals or the job's last recorded progress when no report exists.
  * @param {Object} job Administrator job snapshot.
+ * @param {string} status Effective status after applying the report deadline.
  * @return {string} Readable status, without estimating overall tile coverage.
  */
-function jobStatus(job) {
-    const status = job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
+function jobStatus(job, status) {
+    if (status === "ready" && job.result) {
+        const {tileCount, requiredTileCount, failedTileCount} = job.result;
+        if (failedTileCount === 0) return `Completed · ${tileCount} of ${requiredTileCount} tiles prepared`;
+        if (tileCount === 0) return `No tiles prepared · ${failedTileCount} of ${requiredTileCount} tiles failed`;
+        return `Partial coverage · ${tileCount} of ${requiredTileCount} tiles prepared · ${failedTileCount} failed`;
+    }
     const labels = {queued: "Queued", running: "Preparing inputs", cancelling: "Cancelling…", ready: "Completed",
         failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted", expired: "Report expired"};
     const progress = job.progress;
+    const prefix = ACTIVE_PREPARATION_STATES.has(status) ? "" : "Last reported: ";
     return `${labels[status] ?? status}${progress?.completed != null && progress.total != null
-        ? ` · ${progress.completed} of ${progress.total} tiles` : ""}`;
+        ? ` · ${prefix}${progress.completed} of ${progress.total} tiles prepared` : ""}`;
 }
 
 /** Own the standalone page's controls and stable rows without map dependencies. */
@@ -35,7 +44,7 @@ export class HabitatAdminView {
         this.error = this.element("p", "", "habitat-error"); this.error.setAttribute("role", "alert");
         this.root.append(this.error);
         const inventory = this.section("Cache inventory");
-        inventory.append(this.element("p", "Completed input tiles across all configurations and years, including ordinary model runs. Some source datasets may still contain missing values (NoData); cached tiles show availability, not data quality."));
+        inventory.append(this.element("p", "Completed input tiles across all configurations and years. Some source datasets may still contain missing values (NoData)."));
         this.refreshInventory = this.button("Refresh cache inventory", () => this.handlers.refreshInventory());
         this.inventoryStatus = this.element("p"); this.inventoryStatus.setAttribute("role", "status");
         this.inventoryError = this.element("p", "", "habitat-error"); this.inventoryError.setAttribute("role", "alert");
@@ -80,11 +89,11 @@ export class HabitatAdminView {
         this.coverageStatus = this.element("p"); this.coverageStatus.setAttribute("role", "status");
         this.coverage = this.element("div", "", "habitat-cards"); coverage.append(this.coverageStatus, this.coverage);
         const preparation = this.section("Requested preparations");
-        preparation.append(this.element("p", "Each area and year is a separate job. Completed jobs are counted separately even when their areas overlap."));
+        preparation.append(this.element("p", "Each area and year is a separate preparation."));
         this.submissionStatus = this.element("p"); this.submissionStatus.setAttribute("role", "status");
         this.submissions = this.element("div", "", "habitat-cards"); preparation.append(this.submissionStatus, this.submissions);
         const history = this.section("Preparation history");
-        history.append(this.element("p", "Accepted work continues after you leave this page. Interrupted jobs need an explicit retry; completed tiles are reused. History records completed work, not current cache coverage."));
+        history.append(this.element("p", "Accepted work continues after you leave this page. A retry reuses prepared tiles and tries missing tiles again. Use Checked area coverage to see what is currently cached."));
         this.refresh = this.button("Refresh history", () => this.handlers.refreshHistory());
         this.historyStatus = this.element("p"); this.historyStatus.setAttribute("role", "status");
         this.history = this.element("div", "", "habitat-cards");
@@ -235,7 +244,52 @@ export class HabitatAdminView {
         card.retry = this.button("Retry missing inputs", () => this.handlers.retry(job.jobId));
         card.report = this.element("a", "Download report"); card.provenance = this.element("a", "Download provenance");
         const actions = this.element("div", "", "habitat-actions"); actions.append(card.cancel, card.retry, card.report, card.provenance);
-        card.root.append(card.times, actions); return card;
+        card.log = this.element("details");
+        card.logSummary = this.element("summary", "View tile failure log");
+        card.logStatus = this.element("p"); card.logStatus.setAttribute("role", "status");
+        card.logRows = this.element("ul");
+        this.listen(card.log, "toggle", () => {
+            if (card.log.open && !card.log.hidden) this.handlers.openFailureLog(job.jobId);
+            else this.handlers.closeFailureLog(job.jobId);
+        });
+        card.log.append(card.logSummary, card.logStatus, card.logRows);
+        card.root.append(card.times, card.log, actions); return card;
+    }
+
+    /** Show available diagnostics without replacing the focused log disclosure.
+     * @param {Object} card Preparation card from jobCard.
+     * @param {string} label Area and year for the disclosure's accessible name.
+     * @param {Object|null} report Unexpired report metadata, if the job produced one.
+     * @param {{loading:boolean,failures:Object[]|null,error:string}|undefined} log Explicit report read state.
+     * @return {void}
+     */
+    renderFailureLog(card, label, report, log) {
+        card.log.hidden = !(report?.failedTileCount > 0);
+        if (card.log.hidden) {
+            if (card.log.contains(this.document.activeElement)) card.title.focus();
+            card.log.open = false;
+        }
+        card.logSummary.setAttribute("aria-label", `View tile failure log for ${label}`);
+        const failures = card.log.hidden ? null : log?.failures;
+        card.logStatus.textContent = log?.loading ? "Loading tile failure log…" : log?.error
+            ? `Could not load the tile failure log. ${log.error} Close and reopen the log to try again.`
+            : !failures ? "Open the log again to read it."
+            : failures.length > VISIBLE_TILE_FAILURES
+                ? `Showing the first ${VISIBLE_TILE_FAILURES} of ${failures.length} tile failures. Download the report for the full log.` : "";
+        card.logStatus.hidden = !card.logStatus.textContent;
+        if (card.failures !== failures) {
+            card.failures = failures;
+            card.logRows.replaceChildren();
+            for (const failure of failures?.slice(0, VISIBLE_TILE_FAILURES) ?? []) {
+                const stage = failure.stage === "download" ? "Download" : failure.stage;
+                const status = failure.httpStatus === null ? "" : ` · HTTP ${failure.httpStatus}`;
+                const row = this.element("li");
+                row.append(this.element("strong", `Tile column ${failure.column}, row ${failure.row} · ${stage}${status}`),
+                    this.element("p", failure.detail));
+                card.logRows.append(row);
+            }
+        }
+        card.logRows.hidden = !failures;
     }
 
     /** Present the latest explicitly requested inventory without combining configurations.
@@ -301,7 +355,7 @@ export class HabitatAdminView {
             card.detail.textContent = row.coverage ? `${row.coverage.cachedTiles} cached · ${row.coverage.missingTiles} missing · ${row.coverage.requiredTiles} required tiles. Checked ${timeLabel(row.checkedAt)}.` : "Not checked yet.";
             card.error.textContent = row.error || ""; card.error.hidden = !row.error;
         });
-        this.submissionStatus.textContent = state.requestedJobs ? `${state.completedJobs} of ${state.requestedJobs} requested jobs completed.` :
+        this.submissionStatus.textContent = state.requestedJobs ? `${state.completedJobs} of ${state.requestedJobs} preparation reports generated.` :
             state.submissions.length ? "No preparations have been confirmed yet. Review the submissions below." : "No preparations requested from this page yet.";
         this.renderCards("submission", this.submissions, state.submissions, row => row.key, row => {
             const card = this.textCard(); card.recover = this.button("Recover submission", () => this.handlers.recover(row.key)); card.root.append(card.recover); return card;
@@ -316,23 +370,26 @@ export class HabitatAdminView {
         this.refresh.disabled = Boolean(state.historyLoading); this.more.hidden = !state.nextCursor; this.more.disabled = Boolean(state.historyLoading);
         this.renderCards("job", this.history, state.jobs, job => job.jobId, job => this.jobCard(job), (card, job) => {
             const inputs = job.metadataExpiresAt != null && Date.parse(job.metadataExpiresAt) <= Date.now() ? null : job.inputs;
-            const status = job.status === "ready" && Date.parse(job.expiresAt) <= Date.now() ? "expired" : job.status;
-            card.title.textContent = inputs ? `${inputs.name} · ${inputs.year}` : "Preparation details expired";
-            card.detail.textContent = jobStatus(job); card.error.textContent = job.error?.detail ?? ""; card.error.hidden = !job.error;
-            const reportExpiry = ACTIVE_PREPARATION_STATES.has(job.status) ? "After completion" : timeLabel(job.expiresAt);
-            card.times.textContent = `Updated ${timeLabel(job.updatedAt)} · Report expires ${reportExpiry} · Saved inputs expire ${timeLabel(job.metadataExpiresAt)}`;
+            const status = preparationStatus(job), report = status === "ready" ? job.result : null;
+            const label = inputs ? `${inputs.name} · ${inputs.year}` : "Preparation details expired";
+            card.title.textContent = label;
+            card.detail.textContent = jobStatus(job, status); card.error.textContent = job.error?.detail ?? ""; card.error.hidden = !job.error;
+            const times = [`Updated ${timeLabel(job.updatedAt)}`];
+            if (report) times.push(`Report expires ${timeLabel(job.expiresAt)}`);
+            if (job.metadataExpiresAt) times.push(`Saved inputs expire ${timeLabel(job.metadataExpiresAt)}`);
+            card.times.textContent = times.join(" · ");
+            this.renderFailureLog(card, label, report, state.failureLogs.get(job.jobId));
             card.cancel.hidden = !ACTIVE_PREPARATION_STATES.has(job.status); card.cancel.disabled = this.busy || job.status === "cancelling";
             card.cancel.setAttribute("aria-label", `Cancel preparation for ${inputs?.name ?? "this area"} ${inputs?.year ?? ""}`.trim());
             const retryCommand = state.submissions.find(row => row.kind === "retry" && row.sourceJobId === job.jobId && ["accepted", "uncertain", "submitting"].includes(row.status));
             const retryLabel = retryCommand ? ({accepted: "Retry requested", uncertain: "Retry needs recovery", submitting: "Submitting retry…"})[retryCommand.status] : "Retry missing inputs";
-            card.retry.hidden = !inputs || !["failed", "cancelled", "interrupted", "expired"].includes(status); card.retry.disabled = this.busy || Boolean(retryCommand);
+            card.retry.hidden = !inputs || !canRetryPreparation(job); card.retry.disabled = this.busy || Boolean(retryCommand);
             card.retry.textContent = retryLabel;
             card.retry.setAttribute("aria-label", `${retryLabel} for ${inputs?.name ?? "this area"} ${inputs?.year ?? ""}`.trim());
             card.report.setAttribute("aria-label", `Download report for ${inputs?.name ?? "this preparation"} ${inputs?.year ?? ""}`.trim());
             card.provenance.setAttribute("aria-label", `Download provenance for ${inputs?.name ?? "this preparation"} ${inputs?.year ?? ""}`.trim());
-            const available = job.status === "ready" && job.result && Date.parse(job.expiresAt) > Date.now();
-            card.report.hidden = card.provenance.hidden = !available;
-            if (available) { card.report.href = job.result.url; card.provenance.href = job.result.provenanceUrl; }
+            card.report.hidden = card.provenance.hidden = !report;
+            if (report) { card.report.href = report.url; card.provenance.href = report.provenanceUrl; }
         });
     }
 

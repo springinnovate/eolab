@@ -50,6 +50,7 @@ from eolab_app.processing.model_definitions import ModelRegistry
 from eolab_app.processing.model_operations import get_model_operation
 from eolab_app.processing.habitat_preparation import (
     build_habitat_input_preparation_submission,
+    describe_habitat_input_preparation_outcome,
 )
 from eolab_app.processing.habitat_preparation_models import (
     OPERATION as HABITAT_PREPARATION_OPERATION,
@@ -157,9 +158,7 @@ def serialize_habitat_input_preparation(row: dict[str, Any]) -> dict[str, Any]:
                 "filename": artifact["filename"],
                 "bytes": artifact["size"],
                 "sha256": artifact["sha256"],
-                "year": artifact["year"],
-                "configurationSha256": artifact["configuration_sha256"],
-                "tileCount": artifact["tile_count"],
+                **describe_habitat_input_preparation_outcome(artifact),
             }
             if status == "ready" and artifact is not None
             else None
@@ -529,10 +528,10 @@ class ProcessingService:
     async def retry_habitat_input_preparation(
         self, identifier: str, request_id: str
     ) -> dict[str, Any]:
-        """Start a new preparation using a failed or expired job's retained inputs.
+        """Retry a preparation that could have missing tiles using its saved inputs.
 
         Args:
-            identifier: Failed, cancelled, interrupted or expired preparation handle.
+            identifier: Partial, failed, cancelled, interrupted or expired preparation handle.
             request_id: Stable identifier for this retry command.
 
         Returns:
@@ -541,8 +540,8 @@ class ProcessingService:
             Completed cached tiles are reused by ordinary Habitat acquisition.
 
         Raises:
-            ProcessingError: If the original job is active, ready, unavailable,
-                outside this operation, or its retained inputs have expired.
+            ProcessingError: If the original job is active, completed with every
+                tile, unavailable, outside this operation or its saved inputs expired.
             SelectionUnavailableError: If Catalog authorization now rejects the AOI.
         """
         request_hash = hashlib.sha256(
@@ -557,15 +556,17 @@ class ProcessingService:
             self.jobs.get, identifier, HABITAT_PREPARATION_OWNER
         )
         require_operation(row, HABITAT_PREPARATION_OPERATION)
-        if serialize_habitat_input_preparation(row)["status"] not in {
+        preparation = serialize_habitat_input_preparation(row)
+        report = preparation["result"]
+        if preparation["status"] not in {
             "failed",
             "cancelled",
             "interrupted",
             "expired",
-        }:
+        } and not (report and report["failedTileCount"]):
             raise ProcessingError(
                 "preparation_not_retryable",
-                "Retry a failed, cancelled, interrupted or expired input preparation.",
+                "Retry an input preparation with missing tiles or an expired report.",
                 409,
             )
         inputs = get_retained_habitat_preparation_inputs(row)

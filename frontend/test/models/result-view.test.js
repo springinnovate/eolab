@@ -52,6 +52,16 @@ test("ordinary raster results do not show temporal coverage", () => {
     assert.ok(text.includes("10 × 10 pixels · 90 valid pixels"));
 });
 
+test("prepared input coverage shows tile counts and explains gaps only when tiles are missing", () => {
+    const full = getResultCardText({...clipResult, preparedInputCoverage: {requiredTiles: 35, cachedTiles: 35, missingTiles: 0}});
+    const partial = getResultCardText({...clipResult, preparedInputCoverage: {requiredTiles: 35, cachedTiles: 32, missingTiles: 3}});
+    assert.ok(full.includes("Prepared inputs: 35 of 35 tiles used."));
+    assert.equal(full.some(value => value.includes("NoData")), false);
+    assert.ok(partial.includes("Prepared inputs: 32 of 35 tiles used."));
+    assert.ok(partial.includes("Areas without prepared inputs are shown as NoData."));
+    assert.equal(getResultCardText(clipResult).some(value => value.includes("Prepared inputs")), false);
+});
+
 test("time-series results name each saved calculation and omit unspecified shared units", () => {
     const text = getResultCardText({...timeSeriesResult,
         calculations: [{label: "mean", expression: "mean(a)"}, {label: "Positive area", expression: "areaha(a > 0)"}],

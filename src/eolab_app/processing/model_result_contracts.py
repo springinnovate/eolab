@@ -58,8 +58,32 @@ class TemporalResultCoverage(BaseModel):
     lastObservation: AwareDatetime
 
 
+class PreparedInputCoverage(BaseModel):
+    """Count prepared geographic input tiles used by a completed calculation.
+
+    These counts describe whole cached files intersecting the requested area,
+    not valid-pixel coverage or the fraction of the area's surface assessed.
+
+    Attributes:
+        requiredTiles: Geographic tiles intersecting the requested analysis area.
+        cachedTiles: Complete prepared tiles available when calculation started.
+        missingTiles: Required tiles unavailable to the calculation; their areas
+            remain NoData rather than receiving fabricated model inputs.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    requiredTiles: Annotated[int, Field(gt=0)]
+    cachedTiles: Annotated[int, Field(gt=0)]
+    missingTiles: Annotated[int, Field(ge=0)]
+
+
 class ModelRasterResult(ModelResultFile):
-    """A raster output produced by any registered operation supporting GeoTIFF."""
+    """A raster output produced by any registered operation supporting GeoTIFF.
+
+    preparedInputCoverage is present when a run records which prepared geographic
+    tiles it used. Other input modes and results saved before availability was
+    recorded omit it; validPixels always describes the written result itself.
+    """
 
     kind: Literal["raster"]
     mediaType: Literal["image/tiff"]
@@ -67,6 +91,9 @@ class ModelRasterResult(ModelResultFile):
     grid: RasterResultGrid
     validPixels: Annotated[int, Field(ge=0)]
     temporalCoverage: TemporalResultCoverage | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    preparedInputCoverage: PreparedInputCoverage | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 

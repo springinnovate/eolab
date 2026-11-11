@@ -28,6 +28,7 @@ from shapely.geometry import MultiPolygon, box
 from eolab_app.processing.habitat_earth_engine import (
     HabitatCacheCoverage,
     HabitatEarthEngineSettings,
+    get_cached_habitat_tiles,
     get_habitat_tiles,
     inspect_habitat_cache,
     inspect_habitat_cache_inventory,
@@ -538,35 +539,25 @@ def test_invalid_download_removes_its_private_directory(
     assert [call.args for call in progress.call_args_list] == [(0, 1)]
 
 
-@pytest.mark.parametrize("cancel", [False, True])
-def test_failure_or_cancellation_preserves_completed_tiles(
+def test_cancellation_preserves_completed_tiles(
     tmp_path: Path,
     working_directory: Path,
     monkeypatch: pytest.MonkeyPatch,
     stack: RasterStackConfiguration,
-    cancel: bool,
 ) -> None:
-    """Keep completed tiles when another download fails or is cancelled.
+    """Keep completed tiles when cancellation interrupts another download.
 
     Args:
         tmp_path: Persistent cache parent directory.
         working_directory: Existing private attempt directory.
         monkeypatch: Install the offline Earth Engine transport.
         stack: Scientific settings used to request two tiles.
-        cancel: Cancel before publishing the second tile instead of a remote error.
     """
     _use_offline_earth_engine(
         monkeypatch,
         [
             ({"status": "200"}, _tile_bytes(7, 31)),
-            (
-                ({"status": "200"}, _tile_bytes(27, 31))
-                if cancel
-                else (
-                    {"status": "403"},
-                    '{"error":{"code":403,"message":"private-server-detail"}}',
-                )
-            ),
+            ({"status": "200"}, _tile_bytes(27, 31)),
         ],
     )
     updates: list[tuple[int, int]] = []
@@ -574,14 +565,13 @@ def test_failure_or_cancellation_preserves_completed_tiles(
     def check_cancelled() -> None:
         """Cancel with one published tile and another in private staging."""
         if (
-            cancel
-            and updates
+            updates
             and updates[-1][0] == 1
             and any(working_directory.glob("*/tile.tif"))
         ):
             raise RasterReadCancelled()
 
-    with pytest.raises(RasterReadCancelled if cancel else RuntimeError) as error:
+    with pytest.raises(RasterReadCancelled):
         get_habitat_tiles(
             box(7, 11, 47, 31),
             stack,
@@ -598,12 +588,90 @@ def test_failure_or_cancellation_preserves_completed_tiles(
         assert dataset.read(1)[1, 1] == 3
     assert list(working_directory.iterdir()) == []
     assert updates == [(0, 2), (1, 2)]
-    assert "private-server-detail" not in str(error.value)
     inventory = inspect_habitat_cache_inventory(tmp_path / "cache")
     assert len(inventory) == 1
     assert inventory[0].cached_tiles == 1
     assert inventory[0].stored_bytes == cached[0].stat().st_size
     assert inventory[0].configuration.year == stack.year
+
+
+def test_provider_failure_preserves_safe_reason_and_continues_to_next_tile(
+    tmp_path: Path,
+    working_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: RasterStackConfiguration,
+) -> None:
+    """Retain a safe provider reason, complete the next tile and retry only the gap.
+
+    Args:
+        tmp_path: Persistent cache and credentials fixture paths.
+        working_directory: Private attempt staging beside the cache.
+        monkeypatch: Install controlled responses through the official HTTP client.
+        stack: Two-band stack with two adjacent required tiles.
+    """
+    reason = (
+        "Image.select: Band 'mean' is unavailable. "
+        "Request https://storage.example/data?X-Goog-Signature=signature-secret "
+        "by service-user@example.org. Authorization: Bearer bearer-secret "
+        "access_token='token-secret' credential=/run/private/credential-file.json "
+        "-----BEGIN PRIVATE KEY-----\nkey-material-secret\n-----END PRIVATE KEY-----"
+    )
+    _use_offline_earth_engine(
+        monkeypatch,
+        [
+            (
+                {"status": "403"},
+                json.dumps({"error": {"code": 403, "message": reason}}),
+            ),
+            ({"status": "200"}, _tile_bytes(27, 31)),
+        ],
+    )
+    area = box(7, 11, 47, 31)
+    cache = tmp_path / "cache"
+    options = {
+        "cache_directory": cache,
+        "working_directory": working_directory,
+        "progress": Mock(),
+        "check_cancelled": Mock(),
+    }
+    settings = HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json")
+    acquisition = get_habitat_tiles(area, stack, settings, **options)
+    assert acquisition.required_tiles == 2 and acquisition.missing_tiles == 1
+    assert [path.parent.name for path in acquisition.tiles] == ["1_-1"]
+    assert [call.args for call in options["progress"].call_args_list] == [
+        (0, 2),
+        (0, 2),
+        (1, 2),
+    ]
+    (failure,) = acquisition.failures
+    assert (failure.column, failure.row, failure.httpStatus) == (0, -1, 403)
+    assert failure.stage == "download" and failure.code == "earth_engine_access_denied"
+    assert "Image.select: Band 'mean' is unavailable." in failure.detail
+    for secret in (
+        "signature-secret",
+        "service-user@example.org",
+        "bearer-secret",
+        "token-secret",
+        "credential-file.json",
+        "key-material-secret",
+        "https://storage.example",
+    ):
+        assert secret not in failure.model_dump_json()
+    assert list(working_directory.iterdir()) == []
+
+    with pytest.MonkeyPatch.context() as cached:
+        cached.setattr(
+            ee, "Initialize", Mock(side_effect=AssertionError("cache-only read"))
+        )
+        available = get_cached_habitat_tiles(area, stack, cache)
+    assert available.tiles == acquisition.tiles
+    assert available.required_tiles == 2 and available.missing_tiles == 1
+    assert available.failures == ()
+
+    _use_offline_earth_engine(monkeypatch, [({"status": "200"}, _tile_bytes(7, 31))])
+    repeated = get_habitat_tiles(area, stack, settings, **options)
+    assert repeated.missing_tiles == 0 and repeated.failures == ()
+    assert [path.parent.name for path in repeated.tiles] == ["0_-1", "1_-1"]
 
 
 def test_authentication_errors_do_not_expose_credentials(

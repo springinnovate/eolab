@@ -19,12 +19,11 @@ export function validateCalculationRows(rows) {
     }
 }
 
-/** Check a raster result's grid, valid pixels and saved temporal coverage.
- * Temporal coverage describes the observations used by a period map; ordinary
- * raster results omit it.
+/** Check a raster result's grid, valid pixels and optional input coverage.
+ * Coverage describes the observations or prepared tiles used by the run.
  * @param {Object} result Raster output from the Processing API.
  * @return {void}
- * @throws {Error} If the grid, validity count or temporal coverage is invalid.
+ * @throws {Error} If the grid, validity count or coverage is invalid.
  */
 function validateRasterResult(result) {
     const grid = result.grid;
@@ -34,6 +33,14 @@ function validateRasterResult(result) {
         !Number.isSafeInteger(result.validPixels) || result.validPixels < 0 || result.validPixels > grid.width * grid.height ||
         result.rows !== undefined) throw new Error("Processing returned invalid raster result details.");
     if (result.temporalCoverage !== undefined) validateTemporalCoverage(result.temporalCoverage);
+    if (result.preparedInputCoverage !== undefined) {
+        const coverage = result.preparedInputCoverage;
+        if (!coverage || ![coverage.requiredTiles, coverage.cachedTiles, coverage.missingTiles]
+            .every(count => Number.isSafeInteger(count) && count >= 0) || coverage.cachedTiles === 0 ||
+            coverage.requiredTiles !== coverage.cachedTiles + coverage.missingTiles) {
+            throw new Error("Processing returned invalid prepared input coverage.");
+        }
+    }
 }
 
 /** Check the saved observation count, units and timestamps of a temporal result.

@@ -1,6 +1,6 @@
 """Prepare Habitat's shared Earth Engine inputs through ordinary Processing jobs."""
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -12,17 +12,18 @@ from shapely.ops import unary_union
 
 from eolab_app.catalog_selection import (
     CatalogSelection,
+    ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
 from eolab_app.execution.bounded_process import ProcessResultWriter
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.habitat_calculation import (
-    HabitatSources,
     describe_habitat_file,
     read_habitat_polygons,
 )
 from eolab_app.processing.habitat_earth_engine import (
+    HabitatEarthEngineConnectionError,
     HabitatEarthEngineRuntime,
     get_habitat_tiles,
     load_habitat_stack,
@@ -38,6 +39,19 @@ from eolab_app.processing.habitat_preparation_models import (
 )
 from eolab_app.processing.models import PreparedJobPlan, ProcessingError
 from eolab_app.processing.operation_context import OperationContext
+
+
+@dataclass(frozen=True)
+class HabitatPreparationSources:
+    """Supply authorized source access for one tile preparation attempt.
+
+    Attributes:
+        area: Original Catalog polygon source and exact selection predicate.
+        runtime: Private Earth Engine settings and the shared tile cache root.
+    """
+
+    area: ResolvedCatalogSelection
+    runtime: HabitatEarthEngineRuntime
 
 
 def bind_habitat_input_preparation(
@@ -134,7 +148,7 @@ async def prepare_habitat_input_preparation(
 
 async def prepare_habitat_input_preparation_execution(
     context: OperationContext, spec: HabitatInputPreparationSpec, primary: None
-) -> tuple[HabitatSources, HabitatInputPreparationSpec]:
+) -> tuple[HabitatPreparationSources, HabitatInputPreparationSpec]:
     """Resolve the original Catalog source and server-only acquisition settings.
 
     Args:
@@ -164,13 +178,15 @@ async def prepare_habitat_input_preparation_execution(
             503,
         )
     resolved = await context.areas.resolve_for_sampling(spec.inputs.selection)
-    return HabitatSources({}, {"area": resolved}, runtime), spec
+    return HabitatPreparationSources(resolved, runtime), spec
 
 
 def prepare_habitat_input_cache(
-    sources: HabitatSources, spec: HabitatInputPreparationSpec, directory: Path
+    sources: HabitatPreparationSources,
+    spec: HabitatInputPreparationSpec,
+    directory: Path,
 ) -> HabitatInputPreparationArtifact:
-    """Acquire the selected area's Habitat tiles and write its completion receipt.
+    """Attempt the area's Habitat tiles and write a report of coverage and failures.
 
     Args:
         sources: Authorized original Catalog polygons and server acquisition runtime.
@@ -178,11 +194,11 @@ def prepare_habitat_input_cache(
         directory: Ordinary worker attempt directory beside the persistent cache.
 
     Returns:
-        JSON report metadata for ordinary atomic publication. Shared cache TIFFs
-        are neither copied into the attempt nor declared as result downloads.
+        JSON report metadata for ordinary atomic publication, including partial
+        coverage or no completed tiles after remote request failures.
 
     Raises:
-        ProcessingError: If scientific identity changed or Earth Engine acquisition fails.
+        ProcessingError: If scientific identity changed or Earth Engine cannot initialize.
         SelectionUnavailableError: If original selected polygons cannot be read.
         ValueError: If selected geometry or a downloaded tile is invalid.
         RasterioError: If downloaded raster data cannot be admitted.
@@ -196,9 +212,9 @@ def prepare_habitat_input_cache(
             "The Ecosystem Condition input configuration changed. Submit a new preparation request.",
             409,
         )
-    runtime = cast(HabitatEarthEngineRuntime, sources.earth_engine)
+    runtime = sources.runtime
     polygons = read_habitat_polygons(
-        sources.vectors["area"], CRS.from_string(configuration.grid.crs)
+        sources.area, CRS.from_string(configuration.grid.crs)
     )
     area = unary_union([shape(polygon) for polygon in polygons])
     try:
@@ -214,10 +230,14 @@ def prepare_habitat_input_cache(
             # The existing supervisor stops and joins blocked native acquisition.
             check_cancelled=lambda: None,
         )
-    except RuntimeError as error:
+    except HabitatEarthEngineConnectionError as error:
         raise ProcessingError("habitat_earth_engine_failed", str(error), 502) from error
     report = HabitatInputPreparationReport(
-        **inputs.model_dump(), tileCount=len(tiles.tiles)
+        **inputs.model_dump(),
+        tileCount=len(tiles.tiles),
+        requiredTileCount=tiles.required_tiles,
+        failedTileCount=len(tiles.failures),
+        tileFailures=tiles.failures,
     )
     path = directory / "result.json"
     path.write_text(report.model_dump_json(by_alias=True), encoding="utf-8")
@@ -228,12 +248,16 @@ def prepare_habitat_input_cache(
         filename="habitat-input-preparation-report.json",
         year=inputs.year,
         configuration_sha256=inputs.configurationSha256,
-        tile_count=len(tiles.tiles),
+        tile_count=report.tileCount,
+        required_tile_count=report.requiredTileCount,
+        failed_tile_count=report.failedTileCount,
     )
     provenance = {
         "operation": OPERATION,
         "inputs": inputs.model_dump(mode="json", by_alias=True),
-        "report": report.model_dump(mode="json", by_alias=True),
+        "report": report.model_dump(
+            mode="json", by_alias=True, exclude={"tileFailures"}
+        ),
         **asdict(artifact),
     }
     (directory / "provenance.json").write_text(
@@ -245,7 +269,9 @@ def prepare_habitat_input_cache(
 def habitat_input_preparation_process_target(
     writer: ProcessResultWriter,
     action: Literal["acquire"],
-    arguments: tuple[HabitatSources, HabitatInputPreparationSpec, Path, None],
+    arguments: tuple[
+        HabitatPreparationSources, HabitatInputPreparationSpec, Path, None
+    ],
 ) -> None:
     """Run acquisition and return safe errors through the ordinary native supervisor.
 
@@ -263,9 +289,9 @@ def habitat_input_preparation_process_target(
         writer.put(("error", ("selection_unavailable", error.detail, 409)))
     except ValueError as error:
         detail = str(error)
-        runtime = cast(HabitatEarthEngineRuntime, sources.earth_engine)
+        runtime = sources.runtime
         for path, label in (
-            (sources.vectors["area"].path, "selected polygon source"),
+            (sources.area.path, "selected polygon source"),
             (directory, "preparation files"),
             (runtime.cache_directory, "Ecosystem Condition input cache"),
             (runtime.connection.credentials_file, "Earth Engine credentials"),
@@ -278,7 +304,8 @@ def habitat_input_preparation_process_target(
                 "error",
                 (
                     "habitat_preparation_read_failed",
-                    "The selected area or Ecosystem Condition input files could not be read or written.",
+                    "The selected area or Ecosystem Condition cache files could not be read or written. "
+                    "Check the polygon source and available cache storage before retrying.",
                     409,
                 ),
             )
@@ -299,10 +326,11 @@ def habitat_input_preparation_process_target(
 def describe_habitat_input_preparation_outcome(
     artifact: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return the scientific identity and tile count recorded by a completed job.
+    """Return the scientific identity and measured tile counts in a retained report.
 
     Args:
-        artifact: Validated metadata from a successful preparation artifact.
+        artifact: Metadata from a published preparation report. Earlier reports
+            existed only when every required tile succeeded.
 
     Returns:
         Public report facts without cache paths, pixels or credential settings.
@@ -311,4 +339,8 @@ def describe_habitat_input_preparation_outcome(
         "year": artifact["year"],
         "configurationSha256": artifact["configuration_sha256"],
         "tileCount": artifact["tile_count"],
+        "requiredTileCount": artifact.get(
+            "required_tile_count", artifact["tile_count"]
+        ),
+        "failedTileCount": artifact.get("failed_tile_count", 0),
     }
