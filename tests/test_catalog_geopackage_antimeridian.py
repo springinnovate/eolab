@@ -108,6 +108,56 @@ def test_padus_projection_envelope_imports_without_reading_all_features(
 
 
 @pytest.mark.parametrize(
+    ("south", "east", "north"),
+    [
+        (-10.0, 180.01, 10.0),
+        (-54.75389100000001, 180.1041202621705, 71.36581400000006),
+    ],
+)
+def test_full_world_geopackage_normalizes_catalog_extent(
+    tmp_path: Path, south: float, east: float, north: float
+) -> None:
+    """Keep both world edges searchable when source coordinates extend past 180°.
+
+    Args:
+        tmp_path: Isolated source directory.
+        south: Native southern latitude.
+        east: Native eastern longitude beyond the canonical map.
+        north: Native northern latitude.
+    """
+    path = tmp_path / "world.gpkg"
+    coordinates = [[-180.0, south], [east, north]]
+    write_source(path, "EPSG:4326", coordinates)
+
+    (item,) = build_stac_items(tmp_path, path)
+
+    assert item["assets"]["data"]["href"] == path.resolve().as_uri()
+    footprint = shape(item["geometry"])
+    assert footprint.is_valid
+    assert footprint.covers(Point(-180.0, 0))
+    assert footprint.covers(Point(180.0, 0))
+    with fiona.open(path, layer="source") as source:
+        assert source.bounds == pytest.approx((-180.0, south, east, north))
+        assert item["properties"]["proj:bbox"] == list(source.bounds)
+        assert item["bbox"] == [-180.0, source.bounds[1], 180.0, source.bounds[3]]
+        (feature,) = source
+        assert feature.geometry.coordinates == [tuple(point) for point in coordinates]
+
+
+def test_full_world_geopackage_rejects_invalid_latitude(tmp_path: Path) -> None:
+    """Reject an out-of-range latitude even when longitude spans the world.
+
+    Args:
+        tmp_path: Isolated source directory.
+    """
+    path = tmp_path / "invalid-latitude.gpkg"
+    write_source(path, "EPSG:4326", [[-180.0, -91.0], [180.01, 10.0]])
+
+    with pytest.raises(ValueError, match="GeoPackage layer has invalid WGS 84 bounds"):
+        build_stac_items(tmp_path, path)
+
+
+@pytest.mark.parametrize(
     ("bounds", "kind"),
     [
         ([170, -10, -170, 10], "MultiPolygon"),

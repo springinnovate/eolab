@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.springinnovate.eolab</groupId>
+  <artifactId>longitude-wrap-fix</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <geotools.version>35.1</geotools.version>
+    <geoserver.version>3.0.1</geoserver.version>
+    <patch.skip>false</patch.skip>
+  </properties>
+  <repositories>
+    <repository><id>osgeo-release</id><url>https://repo.osgeo.org/repository/release/</url></repository>
+  </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>org.geotools</groupId><artifactId>gt-render</artifactId>
+      <version>${geotools.version}</version><scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.geoserver</groupId><artifactId>gs-wms-core</artifactId>
+      <version>${geoserver.version}</version><scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.geotools</groupId><artifactId>gt-geopkg</artifactId>
+      <version>${geotools.version}</version><scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.geotools</groupId><artifactId>gt-epsg-hsql</artifactId>
+      <version>${geotools.version}</version><scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version><scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>${project.build.directory}/generated-sources</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>upstream-sources</id><phase>generate-sources</phase><goals><goal>unpack</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.geotools</groupId><artifactId>gt-render</artifactId>
+                  <version>${geotools.version}</version><classifier>sources</classifier>
+                  <includes>**/StreamingRenderer.java</includes>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.geoserver</groupId><artifactId>gs-wms-core</artifactId>
+                  <version>${geoserver.version}</version><classifier>sources</classifier>
+                  <includes>**/GetMap.java</includes>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.sourceDirectory}</outputDirectory>
+            </configuration>
+          </execution>
+          <execution>
+            <id>upstream-jars</id><phase>generate-sources</phase><goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem><groupId>org.geotools</groupId><artifactId>gt-render</artifactId><version>${geotools.version}</version></artifactItem>
+                <artifactItem><groupId>org.geoserver</groupId><artifactId>gs-wms-core</artifactId><version>${geoserver.version}</version></artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/upstream</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>query-adjacent-longitude-coverage</id><phase>process-sources</phase><goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <checksum algorithm="SHA-256" file="${settings.localRepository}/org/geotools/gt-render/${geotools.version}/gt-render-${geotools.version}-sources.jar"
+                          property="b3c1f33a177ef804ee79dc0489f18288165c11ebc5a3f8bfa4b766c8ab5f0f47" verifyproperty="renderer.source.matches"/>
+                <checksum algorithm="SHA-256" file="${settings.localRepository}/org/geoserver/gs-wms-core/${geoserver.version}/gs-wms-core-${geoserver.version}-sources.jar"
+                          property="6763871e21efc515074f7dbe592bd47cb323947340abc9a24dac589e75477a36" verifyproperty="wms.source.matches"/>
+                <checksum algorithm="SHA-256" file="${project.build.directory}/upstream/gt-render-${geotools.version}.jar"
+                          property="7eed4f42faeaef6a36ddc92f2258cf910c3198aaf3de3e121379f13a6e323fee" verifyproperty="renderer.binary.matches"/>
+                <checksum algorithm="SHA-256" file="${project.build.directory}/upstream/gs-wms-core-${geoserver.version}.jar"
+                          property="fb6f6f61e90050be8d07b3cf2c6854b9d8a685ce9b58e25316576fcc4d7b4c2c" verifyproperty="wms.binary.matches"/>
+                <fail message="GeoTools or GeoServer artifacts changed; re-audit the longitude wrapping correction.">
+                  <condition><not><and>
+                    <istrue value="${renderer.source.matches}"/><istrue value="${wms.source.matches}"/>
+                    <istrue value="${renderer.binary.matches}"/><istrue value="${wms.binary.matches}"/>
+                  </and></not></condition>
+                </fail>
+                <!-- Restore pristine upstream classes before every incremental build. -->
+                <unzip src="${settings.localRepository}/org/geotools/gt-render/${geotools.version}/gt-render-${geotools.version}-sources.jar"
+                       dest="${project.build.sourceDirectory}" overwrite="true"><patternset includes="**/StreamingRenderer.java"/></unzip>
+                <unzip src="${settings.localRepository}/org/geoserver/gs-wms-core/${geoserver.version}/gs-wms-core-${geoserver.version}-sources.jar"
+                       dest="${project.build.sourceDirectory}" overwrite="true"><patternset includes="**/GetMap.java"/></unzip>
+                <copy todir="${project.build.sourceDirectory}"><fileset dir="${project.basedir}/src/main/java"/></copy>
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <id>apply-longitude-wrapping-correction</id><phase>process-sources</phase><goals><goal>run</goal></goals>
+            <configuration>
+              <skip>${patch.skip}</skip>
+              <target>
+                <replace file="${project.build.sourceDirectory}/org/geoserver/wms/GetMap.java" failOnNoReplacements="true">
+                  <replacetoken><![CDATA[FeatureTypeInfo featureInfo = mapLayerInfo.getFeature();]]></replacetoken>
+                  <replacevalue><![CDATA[FeatureTypeInfo featureInfo = mapLayerInfo.getFeature();
+        featureLayer.getUserData().put(
+                org.geotools.renderer.lite.LongitudeWrapQueries.NATIVE_BOUNDS_KEY,
+                featureInfo.getNativeBoundingBox());]]></replacevalue>
+                </replace>
+                <replace file="${project.build.sourceDirectory}/org/geotools/renderer/lite/StreamingRenderer.java" failOnNoReplacements="true">
+                  <replacetoken><![CDATA[envelopes = projectionHandler.getQueryEnvelopes();]]></replacetoken>
+                  <replacevalue><![CDATA[envelopes = projectionHandler.getQueryEnvelopes();
+                    if (projectionHandler instanceof WrappingProjectionHandler) {
+                        envelopes = LongitudeWrapQueries.includeAdjacentLongitudeWindows(
+                                envelopes, featCrs,
+                                layer.getUserData().get(LongitudeWrapQueries.NATIVE_BOUNDS_KEY));
+                    }]]></replacevalue>
+                </replace>
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <id>replace-classes-in-original-jars</id><phase>package</phase><goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <mkdir dir="${project.build.directory}/patched"/>
+                <copy todir="${project.build.directory}/patched" overwrite="true"><fileset dir="${project.build.directory}/upstream" includes="*.jar"/></copy>
+                <!-- Preserve all other upstream classes, licenses, manifests and registry resources. -->
+                <zip destfile="${project.build.directory}/patched/gt-render-${geotools.version}.jar" update="true">
+                  <fileset dir="${project.build.outputDirectory}" includes="**/StreamingRenderer*.class,**/LongitudeWrapQueries.class"/>
+                </zip>
+                <zip destfile="${project.build.directory}/patched/gs-wms-core-${geoserver.version}.jar" update="true">
+                  <fileset dir="${project.build.outputDirectory}" includes="**/GetMap*.class"/>
+                </zip>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-failsafe-plugin</artifactId><version>3.5.2</version>
+        <executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions>
+        <configuration>
+          <includes><include>**/LongitudeWrapTest.java</include></includes>
+          <classesDirectory>${project.build.directory}/empty</classesDirectory>
+          <classpathDependencyExcludes>
+            <classpathDependencyExclude>org.geotools:gt-render</classpathDependencyExclude>
+            <classpathDependencyExclude>org.geoserver:gs-wms-core</classpathDependencyExclude>
+          </classpathDependencyExcludes>
+          <additionalClasspathElements>
+            <additionalClasspathElement>${project.build.directory}/patched/gt-render-${geotools.version}.jar</additionalClasspathElement>
+            <additionalClasspathElement>${project.build.directory}/patched/gs-wms-core-${geoserver.version}.jar</additionalClasspathElement>
+          </additionalClasspathElements>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

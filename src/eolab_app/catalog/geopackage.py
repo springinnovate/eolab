@@ -153,6 +153,9 @@ def _build_layer_item(
 ) -> dict[str, Any] | None:
     """Inspect one named GeoPackage layer and build its STAC Item.
 
+    Store full-world longitude coverage in the canonical WGS 84 interval.
+    Projection metadata retains the original native extent.
+
     Args:
         geopackage_path: GeoPackage container to open.
         relative_path_text: Mount-relative POSIX path used for display and
@@ -204,6 +207,9 @@ def _build_layer_item(
             )
         if native_bbox[0] > native_bbox[2] or native_bbox[1] > native_bbox[3]:
             raise ValueError("GeoPackage layer has invalid native bounds")
+        longitude_span = bbox[2] - bbox[0]
+        if math.isfinite(longitude_span) and longitude_span >= 360:
+            bbox[0], bbox[2] = -180.0, 180.0
         # Geographic west > east denotes an antimeridian crossing (RFC 7946).
         if (
             abs(bbox[0]) > 180
