@@ -7,6 +7,8 @@ import { AnnotationMapEditor } from "./map-editor.js";
 import { AnnotationLayerControls } from "./layer-controls.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
 import { PolygonLabelLayout } from "./polygon-label-layout.js";
+import { createAnnotationDownloadFilename } from "./download-filename.js";
+import { AnnotationDownloadDialog } from "./download-dialog.js";
 
 /** Own local layers, isolated polygon drafts, annotation controls and autosave. */
 export class AnnotationController {
@@ -27,8 +29,9 @@ export class AnnotationController {
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {(id:string)=>boolean} [options.requestEditing] Permit editing or open the owning membership prompt.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
+     * @param {string|null} [options.mapSlug=null] Published-map URL name supplied by composition for download filenames.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, onHoverInvalidated = () => {}, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onRenameContributor = () => {}, onCommittedChange = () => {}, onFilter = () => {}, requestEditing = () => true, mapSlug = null }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -40,6 +43,9 @@ export class AnnotationController {
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
         this.requestEditing = requestEditing;
+        this.mapSlug = mapSlug;
+        this.downloadDialog = new AnnotationDownloadDialog(document);
+        this.exportInProgress = false;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
         this.shared = new Map();
@@ -232,6 +238,7 @@ export class AnnotationController {
     /** Refresh shared polygons and contributor details without replacing local edits.
      * @param {string} id Local editable layer identity.
      * @param {Object} data Session-owned contributor metadata, GeoJSON and save status.
+     * @param {string} data.sessionId Public shared-layer UUID, independent of this browser's local layer ID.
      * @return {boolean} Whether the available summary geometry changed.
      * @throws {Error} If received polygon geometry is unsupported.
      */
@@ -321,30 +328,40 @@ export class AnnotationController {
     }
 
     /**
-     * Download a layer's committed polygons as GeoJSON without sending data to a server.
+     * Offer a filename for a snapshot of committed polygons, then download on confirmation.
+     * The default includes the published map (if any), layer identity and UTC time.
+     * Cancelling leaves the layer and browser downloads unchanged.
      * @param {string} layerId Annotation layer to export, including filtered-out polygons.
-     * @return {void} Starts a browser download or reveals the annotation panel to display an error.
+     * @return {Promise<void>} Completes after cancellation, download, or a visible export error.
      */
-    exportGeoJSONFile(layerId) {
+    async exportGeoJSONFile(layerId) {
+        if (this.exportInProgress) return;
+        this.exportInProgress = true;
         let url;
-        const link = this.document.createElement("a");
+        let link;
         this.fileStatus.classList.remove("is-error");
         try {
             const layer = this.model.layer(layerId);
             const collection = exportAnnotationGeoJSON(this.displayLayer(layer), true);
             const text = JSON.stringify(collection);
+            const defaultFilename = createAnnotationDownloadFilename({ name: layer.name,
+                layerId: this.shared.get(layerId)?.sessionId ?? layer.id, mapSlug: this.mapSlug });
+            const filename = await this.downloadDialog.choose(defaultFilename, layer.name);
+            if (filename === null) return;
             url = URL.createObjectURL(new Blob([text], { type: "application/geo+json" }));
+            link = this.document.createElement("a");
             link.href = url;
-            link.download = `${layer.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 100) || "annotations"}.geojson`;
+            link.download = filename;
             this.document.body.append(link);
             link.click();
-            this.fileStatus.textContent = `GeoJSON download started for “${layer.name}”. All saved polygons are included; unfinished edits are excluded.`;
+            this.fileStatus.textContent = `GeoJSON download started for “${collection.name}”. All saved polygons are included; unfinished edits are excluded.`;
         } catch (error) {
             this.fileStatus.textContent = `Cannot export GeoJSON: ${error.message}`;
             this.fileStatus.classList.add("is-error");
             this.panel.show();
         } finally {
-            link.remove();
+            this.exportInProgress = false;
+            link?.remove();
             // Allow the browser to consume the download URL before releasing it.
             if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
@@ -381,7 +398,7 @@ export class AnnotationController {
             color: color => this.onColor(layer.id, color),
             renameContributor: () => this.onRenameContributor(layer.id),
             zoomToContributor: id => this.zoomToContributorPolygons(layer.id, id),
-            exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
+            exportGeoJSON: () => void this.exportGeoJSONFile(layer.id),
             edit: (id, field) => this.beginPolygon(layer.id, id, field),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),
             change: (rebuild = true) => this.perform(() => {

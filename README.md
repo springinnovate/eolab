@@ -407,7 +407,12 @@ To sample histograms or calculate raster statistics using a drawing, save it,
 then choose its layer under **Sample area → Polygon layer**. The calculation uses
 the saved polygons that match the layer's filter. **Export GeoJSON** downloads
 all saved polygons in the layer, including those hidden by its filter, so you
-can keep a copy outside EOLab. Map links omit private local polygons. Share
+can keep a copy outside EOLab. Download filenames include the layer name, a short
+layer identifier and the export date and time in UTC. Downloads from a published
+map also include its URL name, helping you distinguish maps and saved copies.
+Edit the suggested filename in the download dialog, then choose **Download**,
+or **Cancel** to leave without downloading. The `.geojson` extension is added if omitted.
+Map links omit private local polygons. Share
 them in a shared layer when collaborators need to see them.
 
 #### Bring your own polygons

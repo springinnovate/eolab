@@ -165,3 +165,12 @@
 .annotation-inspected-note { white-space: pre-wrap; overflow-wrap: anywhere; }
 .annotation-polygon-inspection label { display: block; margin-top: 0.5rem; }
 .annotation-polygon-inspection select { display: block; width: 100%; }
+.annotation-download-dialog { box-sizing: border-box; width: min(42rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); overflow-y: auto; padding: 1rem; border: 1px solid var(--border-2); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
+.annotation-download-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.annotation-download-dialog h2 { font-size: 1.1rem; margin-top: 0; }
+.annotation-download-dialog label { display: grid; gap: 0.25rem; margin: 0.75rem 0; }
+.annotation-download-dialog input { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; padding: 0.4rem; }
+.annotation-download-dialog p { font-size: 0.85rem; overflow-wrap: anywhere; }
+.annotation-download-dialog [role="alert"] { color: var(--status-danger); }
+.annotation-download-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.annotation-download-actions button { font: inherit; padding: 0.4rem 0.6rem; }

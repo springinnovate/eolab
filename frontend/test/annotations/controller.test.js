@@ -12,7 +12,8 @@ import { EMPTY_VECTOR_FILTER } from "../../src/vector/filter.js";
 function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
-        model: new AnnotationModel(), layers: new Map(), shared: new Map(), loaded: true, dirty: false, saving: false, pendingSave: false,
+        model: new AnnotationModel(), layers: new Map(), shared: new Map(), mapSlug: null,
+        downloadDialog: { async choose(filename) { return filename; } }, exportInProgress: false, loaded: true, dirty: false, saving: false, pendingSave: false,
         controls: new Map(), clearedFilterLayerIds: new Set(), inspectionMatches: [], inspectedPolygon: null, onHoverInvalidated() {},
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
@@ -593,13 +594,13 @@ test("recovered filter notices belong to their layers and clear when a filter is
     }
 });
 
-test("action and export errors open the panel while draft errors stay in the map editor", () => {
+test("action and export errors open the panel while draft errors stay in the map editor", async () => {
     const annotations = controller();
     annotations.perform(() => { throw new Error("Layer limit reached"); });
     assert.equal(annotations.panel.open, true);
     assert.equal(annotations.status.textContent, "Layer limit reached");
     annotations.panel.open = false;
-    annotations.exportGeoJSONFile("missing-layer");
+    await annotations.exportGeoJSONFile("missing-layer");
     assert.equal(annotations.panel.open, true);
     assert.match(annotations.fileStatus.textContent, /Cannot export GeoJSON/);
     annotations.panel.open = false;
@@ -611,6 +612,73 @@ test("action and export errors open the panel while draft errors stay in the map
     assert.match(editorMessage, /at least 3 vertices/);
     assert.equal(annotations.panel.open, false);
     assert.ok(annotations.model.draft);
+});
+
+test("GeoJSON downloads identify shared layers across browsers and maps while preserving saved polygon contents", async t => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: new Date("2026-11-10T18:45:12.123Z") });
+    const blobs = [];
+    const downloads = [];
+    const revoked = [];
+    t.mock.method(URL, "createObjectURL", blob => { blobs.push(blob); return `blob:export-${blobs.length}`; });
+    t.mock.method(URL, "revokeObjectURL", url => revoked.push(url));
+    const annotations = controller();
+    annotations.document = {
+        body: { append() {} },
+        createElement: () => ({ click() { downloads.push({ name: this.download, url: this.href }); }, remove() {} }),
+    };
+    const layer = annotations.model.createLayer("Condition layer");
+    layer.name = "Condition layer";
+    annotations.model.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point));
+    annotations.model.updateDraftText("Saved polygon", "Keep this note");
+    annotations.model.savePolygon();
+    layer.filter = { enabled: true, match: "all", rules: [{ field: "name", operator: "eq", value: "Matches nothing" }] };
+    await annotations.exportGeoJSONFile(layer.id);
+    assert.equal(downloads[0].name, `Condition-layer_${layer.id.replaceAll("-", "").slice(0, 12)}_2026-11-10T184512.123Z.geojson`);
+
+    const peer = exportAnnotationGeoJSON(layer);
+    peer.features[0].id = "peer-polygon";
+    Object.assign(peer.features[0].properties, { name: "Peer polygon", contributor: "Maria", contributorId: "peer" });
+    annotations.controls.set(layer.id, { setCollaboration() {} });
+    annotations.layers.set(layer.id, { refresh() {} });
+    annotations.mapLayers = { render() {} };
+    const data = { sessionId: "a1b2c3d4-e5f6-4789-8123-456789abcdef", collections: [peer], canContribute: true,
+        code: "PRIVATE-JOIN-CODE", contributors: [{ id: "me", name: "Rich", own: true, color: "#FFBE0B" },
+            { id: "peer", name: "Maria", color: "#FB5607" }] };
+    annotations.updateSharedLayer(layer.id, data);
+    annotations.model.beginPolygon(layer.id, layer.polygons[0].id);
+    annotations.model.updateDraftText("Unfinished edit", "Do not export this draft");
+    annotations.mapSlug = "maui-restoration";
+    t.mock.timers.tick(1);
+    await annotations.exportGeoJSONFile(layer.id);
+    assert.equal(downloads[1].name, "maui-restoration_Condition-layer_a1b2c3d4e5f6_2026-11-10T184512.124Z.geojson");
+    const shared = JSON.parse(await blobs[1].text());
+    assert.deepEqual(shared.features.map(feature => feature.properties.name), ["Saved polygon", "Peer polygon"]);
+    assert.deepEqual(shared.features.map(feature => feature.properties.contributor), ["Rich", "Maria"]);
+    assert.equal(shared.features[0].properties.note, "Keep this note");
+    assert.equal(shared.features[1].properties.contributorColor, "#FB5607");
+    assert.doesNotMatch(await blobs[1].text(), /PRIVATE-JOIN-CODE/);
+
+    annotations.model.savePolygon();
+    t.mock.timers.tick(1);
+    await annotations.exportGeoJSONFile(layer.id);
+    assert.equal(downloads[2].name, "maui-restoration_Condition-layer_a1b2c3d4e5f6_2026-11-10T184512.125Z.geojson");
+    assert.equal(JSON.parse(await blobs[2].text()).features[0].properties.name, "Unfinished edit");
+    annotations.mapSlug = "oahu-restoration";
+    await annotations.exportGeoJSONFile(layer.id);
+    assert.equal(downloads[3].name, "oahu-restoration_Condition-layer_a1b2c3d4e5f6_2026-11-10T184512.125Z.geojson");
+
+    const otherBrowser = controller();
+    otherBrowser.document = annotations.document;
+    otherBrowser.mapSlug = "oahu-restoration";
+    const otherLocalLayer = otherBrowser.model.createLayer("Condition layer");
+    otherLocalLayer.name = "Condition layer";
+    assert.notEqual(otherLocalLayer.id, layer.id);
+    otherBrowser.shared.set(otherLocalLayer.id, { ...data, polygons: [], contributors: [] });
+    await otherBrowser.exportGeoJSONFile(otherLocalLayer.id);
+    assert.equal(downloads[4].name, downloads[3].name, "the shared identity is independent of local layer IDs and contributor names");
+    t.mock.timers.tick(1000);
+    assert.deepEqual(revoked, downloads.map(download => download.url));
 });
 
 test("polygon deletion opens the panel so its existing Undo action remains discoverable", () => {
@@ -625,6 +693,52 @@ test("polygon deletion opens the panel so its existing Undo action remains disco
     annotations.deletePolygon(layer.id, polygon.id);
     assert.equal(annotations.panel.open, true);
     assert.equal(annotations.model.deleted.polygon.id, polygon.id);
+});
+
+test("filename choices defer downloads, cancel cleanly and retain the polygon snapshot while the dialog is open", async t => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    layer.name = "Condition layer";
+    const blobs = [];
+    const downloads = [];
+    const choices = [];
+    let resolveFilename;
+    annotations.downloadDialog = { choose(filename, name) {
+        choices.push({ filename, name });
+        return new Promise(resolve => { resolveFilename = resolve; });
+    } };
+    annotations.document = { body: { append() {} }, createElement: () => ({
+        click() { downloads.push(this.download); }, remove() {},
+    }) };
+    t.mock.method(URL, "createObjectURL", blob => { blobs.push(blob); return "blob:confirmed-export"; });
+    t.mock.method(URL, "revokeObjectURL", () => {});
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: new Date("2026-11-10T18:45:12.123Z") });
+    const cancelled = annotations.exportGeoJSONFile(layer.id);
+    assert.equal(choices.length, 1);
+    assert.equal(choices[0].name, "Condition layer");
+    assert.match(choices[0].filename, /^Condition-layer_.*_2026-11-10T184512\.123Z\.geojson$/);
+    await annotations.exportGeoJSONFile(layer.id);
+    assert.equal(choices.length, 1, "a second export cannot open another dialog or schedule another download");
+    assert.equal(blobs.length, 0, "opening the dialog creates no download resources");
+    resolveFilename(null);
+    await cancelled;
+    assert.deepEqual(downloads, []);
+    assert.equal(blobs.length, 0);
+    assert.equal(annotations.exportInProgress, false);
+    assert.equal(layer.name, "Condition layer");
+
+    t.mock.timers.tick(1);
+    const confirmed = annotations.exportGeoJSONFile(layer.id);
+    assert.match(choices[1].filename, /2026-11-10T184512\.124Z\.geojson$/);
+    layer.name = "Name changed while choosing";
+    resolveFilename("Workshop polygons.geojson");
+    await confirmed;
+    assert.deepEqual(downloads, ["Workshop polygons.geojson"]);
+    assert.equal(JSON.parse(await blobs[0].text()).name, "Condition layer", "download retains the snapshot captured with its default name");
+    assert.match(annotations.fileStatus.textContent, /“Condition layer”/);
+    assert.equal(layer.name, "Name changed while choosing", "choosing a filename does not rename the layer");
+    assert.equal(annotations.exportInProgress, false);
+    t.mock.timers.tick(1000);
 });
 
 test("callers awaiting a coalesced save wait for the final document, including the restored layer", async () => {
