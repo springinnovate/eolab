@@ -153,6 +153,10 @@ jobs:
       - name: Native GeoServer extension and categorical rendering fixtures
         if: steps.changes.outputs.application == 'true'
         run: docker build --target reader-assessment-builder -f Dockerfile.geoserver -t eolab-build-inputs:geoserver-extension .
+
+      - name: Verify native longitude wrapping correction
+        if: steps.changes.outputs.application == 'true'
+        run: docker build --target longitude-wrap-builder -f Dockerfile.geoserver -t eolab-build-inputs:longitude-wrap .
       - name: No application tests needed for documentation-only changes
         if: steps.changes.outputs.application == 'false'
         run: echo 'Only documentation changed; application builds and tests are not needed.'

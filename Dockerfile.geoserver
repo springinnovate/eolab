@@ -18,6 +18,13 @@ COPY geoserver/imagen-nodata-fix/ ./
 RUN mvn --batch-mode --no-transfer-progress clean verify
 
 
+FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82 AS longitude-wrap-builder
+
+WORKDIR /build
+COPY geoserver/longitude-wrap-fix/ ./
+RUN mvn --batch-mode --no-transfer-progress clean verify
+
+
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
 
 ADD --checksum=sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e \
@@ -50,6 +57,17 @@ COPY --from=imagen-nodata-builder --chmod=0444 \
     /build/target/patched/scale-0.9.2.jar \
     /build/target/patched/scale2-0.9.2.jar \
     /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/
+
+# Preserve the distribution manifests and resources while replacing the audited classes.
+COPY --from=longitude-wrap-builder \
+    /build/target/classes/ /tmp/eolab-longitude-wrap/
+RUN cd /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
+    && echo '7eed4f42faeaef6a36ddc92f2258cf910c3198aaf3de3e121379f13a6e323fee  gt-render-35.1.jar' | sha256sum -c - \
+    && echo '58f347c8fe40bee4cb41990ee7aea913a0ffef047ed505579fed77ded84fefb6  gs-wms-core-3.0.1.jar' | sha256sum -c - \
+    && cd /tmp/eolab-longitude-wrap \
+    && zip -q /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/gt-render-35.1.jar org/geotools/renderer/lite/*.class \
+    && zip -q /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/gs-wms-core-3.0.1.jar org/geoserver/wms/*.class \
+    && rm -rf /tmp/eolab-longitude-wrap
 
 COPY --chmod=0444 geoserver/jmx-exporter.yml \
     /opt/eolab-jmx/jmx-exporter.yml
