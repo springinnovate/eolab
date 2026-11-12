@@ -45,17 +45,21 @@ class HabitatPreparationProgress(JobProgressResponse):
 
 
 class HabitatPreparationReport(JobResultResponse):
-    """Describe a retained completion report without representing current coverage.
+    """Describe a retained preparation report without representing current coverage.
 
     Attributes:
         year: Assessment year of the prepared scientific stack.
         configurationSha256: Scientific identity recorded by this preparation.
         tileCount: Number of reusable input tiles covered when this job completed.
+        requiredTileCount: Number of tiles needed for the selected area and year.
+        failedTileCount: Number of remote tile downloads that failed in this job.
     """
 
     year: int
     configurationSha256: str
     tileCount: int
+    requiredTileCount: int
+    failedTileCount: int
 
 
 class HabitatPreparationJob(JobResponse):
@@ -66,7 +70,7 @@ class HabitatPreparationJob(JobResponse):
         inputs: Saved name, Catalog AOI, year and identity until metadata expiry.
         metadataExpiresAt: Saved-input expiry after completion, or None while active.
         progress: Actual work counts supplied by the existing worker.
-        result: Downloadable completion report while ordinary result retention allows.
+        result: Downloadable preparation report while ordinary result retention allows.
     """
 
     operation: Literal["habitat.prepare-inputs.v1"] = OPERATION
@@ -240,7 +244,7 @@ def create_habitat_preparation_router(
         """Start a new attempt from saved inputs and reuse completed cached tiles.
 
         Args:
-            job_id: Failed, cancelled, interrupted or expired preparation handle.
+            job_id: Partial, failed, cancelled, interrupted or expired preparation handle.
             body: Stable retry-command identifier for lost-response recovery.
 
         Returns:
@@ -254,7 +258,7 @@ def create_habitat_preparation_router(
 
     @router.api_route("/{job_id}/report", methods=["GET", "HEAD"])
     async def download_report(job_id: PreparationJobId, request: Request) -> Response:
-        """Download the retained completion report with ordinary transfer protection.
+        """Download the retained preparation report with ordinary transfer protection.
 
         Args:
             job_id: Completed preparation handle whose report remains available.

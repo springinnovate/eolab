@@ -38,6 +38,8 @@ dialog::backdrop { background: #0006; }
 #habitat-admin .habitat-years label, #habitat-admin .vector-filter-options label { flex-direction: row; align-items: center; margin: .25rem 0; }
 #habitat-admin .habitat-error { color: #a32121; }
 #habitat-admin .habitat-times { font-size: .875rem; color: #53606a; }
+#habitat-admin .habitat-card summary { color: #005f94; cursor: pointer; width: fit-content; }
+#habitat-admin .habitat-card summary:focus-visible { outline: 3px solid #008bc5; outline-offset: 3px; }
 #habitat-admin .vector-filter-inline { padding: 1rem; border: 1px solid #8a969e; border-radius: 4px; }
 #habitat-admin .vector-filter-inline header, #habitat-admin .vector-filter-actions, #habitat-admin .vector-filter-options { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 #habitat-admin .vector-filter-inline header h2 { font-size: 1.1rem; margin: 0; flex: 1; }

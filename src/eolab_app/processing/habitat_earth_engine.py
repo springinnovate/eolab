@@ -5,12 +5,14 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 from dataclasses import dataclass
 import errno
+import json
 import os
 import re
 import stat
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 from affine import Affine
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +36,20 @@ from shapely.geometry.base import BaseGeometry
 
 from eolab_app.processing.raster_preparation import RasterGrid, calculate_raster_grid
 
+_PROVIDER_ERRORS = (OSError, GoogleAuthError, HttpError, HttpLib2Error, ee.EEException)
+_PROVIDER_SECRETS = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)"
+    r"|\b[a-z][a-z0-9+.-]*://[^\s<>\"']+"
+    r"|\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
+    r"|\b(?:Bearer|Basic)\s+[A-Z0-9._~+/=-]+"
+    r"|\b(?:ya29\.[A-Z0-9._-]+|AIza[A-Z0-9_-]{20,}|eyJ[A-Z0-9_-]+\.[A-Z0-9_-]+\.[A-Z0-9_-]+)"
+    r"|\b(?:(?:access|refresh|id)[_ -]?token|api[_ -]?key|private[_ -]?key|client[_ -]?secret"
+    r"|authorization|token|password|signature|credential)[\"']?\s*[:=]\s*"
+    r"(?:(?:Bearer|Basic)\s+[^\s,;]+|\"[^\"]*(?:\"|$)|'[^']*(?:'|$)|[^\s,;]+)"
+    r"|\b[A-Z]:[\\/][^\s<>\"']+|(?<![\w:/])/[^\s<>\"']+|\\\\[^\s<>\"']+",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 @dataclass(frozen=True)
 class HabitatEarthEngineSettings:
@@ -49,6 +65,31 @@ class HabitatEarthEngineSettings:
     credentials_file: Path
 
 
+class HabitatEarthEngineConnectionError(RuntimeError):
+    """Report why server credentials or the Earth Engine stack could not initialize."""
+
+
+class HabitatTileFailure(BaseModel):
+    """Describe a failed Earth Engine request without paths or credentials.
+
+    Attributes:
+        column: Column on the stack's globally anchored acquisition grid.
+        row: Row on that same grid.
+        stage: Operation that failed, currently the remote tile download.
+        code: Stable category of the provider failure.
+        detail: Bounded, sanitized provider explanation when available.
+        httpStatus: Numeric provider HTTP status when the client retained it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    column: int
+    row: int
+    stage: Literal["download"] = "download"
+    code: str
+    detail: str
+    httpStatus: int | None = None
+
+
 @dataclass(frozen=True)
 class HabitatTiles:
     """Shared cached Habitat tiles and their scientific variable definitions.
@@ -58,10 +99,23 @@ class HabitatTiles:
             Files belong to the persistent cache, not to a calculation attempt.
         bands: Ordered GeoTIFF band names mapped to the original definitions.
             Contains predictors and responses, never computed reference sites.
+        required_tiles: Number of acquisition grid tiles intersecting the AOI.
+        failures: Sanitized remote errors from attempted downloads, in tile order.
     """
 
     tiles: tuple[Path, ...]
     bands: dict[str, RasterBandDefinition]
+    required_tiles: int
+    failures: tuple[HabitatTileFailure, ...] = ()
+
+    @property
+    def missing_tiles(self) -> int:
+        """Count the required tiles missing from this result.
+
+        Returns:
+            The difference between required and available complete tiles.
+        """
+        return self.required_tiles - len(self.tiles)
 
 
 @dataclass(frozen=True)
@@ -286,19 +340,65 @@ def inspect_habitat_cache(
     Raises:
         OSError: If the filesystem cannot inspect a cache entry.
     """
+    cached = get_cached_habitat_tiles(area, configuration, cache_directory)
+    return HabitatCacheCoverage(
+        configuration_sha256=configuration.raster_configuration_sha256,
+        year=configuration.year,
+        required_tiles=cached.required_tiles,
+        cached_tiles=len(cached.tiles),
+        missing_tiles=cached.missing_tiles,
+    )
+
+
+def _get_habitat_model_bands(
+    configuration: RasterStackConfiguration,
+) -> dict[str, RasterBandDefinition]:
+    """Return ordered predictor and response bands stored in each cache tile.
+
+    Args:
+        configuration: Original scientific stack definition for one year.
+
+    Returns:
+        Cache GeoTIFF band names mapped to their scientific definitions.
+    """
+    return {
+        name: band
+        for name, band in zip(configuration.band_names(), configuration.bands)
+        if band.role in ("predictor", "response")
+    }
+
+
+def get_cached_habitat_tiles(
+    area: BaseGeometry,
+    configuration: RasterStackConfiguration,
+    cache_directory: Path,
+) -> HabitatTiles:
+    """Return the already prepared tiles that intersect a projected AOI.
+
+    This read trusts immutable cache entries and never initializes Earth Engine,
+    downloads missing tiles, opens cached rasters or creates cache directories.
+
+    Args:
+        area: Valid nonempty AOI in the scientific grid's CRS.
+        configuration: Scientific stack definition for the selected year.
+        cache_directory: Private persistent cache root.
+
+    Returns:
+        Complete tiles observed in grid order, the band definitions and coverage counts.
+
+    Raises:
+        OSError: If the cache entries cannot be inspected.
+    """
     grids = _select_tile_grids(area, configuration.grid)
-    identity = configuration.raster_configuration_sha256
-    stack_directory = cache_directory / identity
-    cached = sum(
-        _get_tile_cache_directory(grid, configuration.grid, stack_directory).exists()
+    stack_directory = cache_directory / configuration.raster_configuration_sha256
+    entries = (
+        _get_tile_cache_directory(grid, configuration.grid, stack_directory)
         for grid in grids
     )
-    return HabitatCacheCoverage(
-        configuration_sha256=identity,
-        year=configuration.year,
-        required_tiles=len(grids),
-        cached_tiles=cached,
-        missing_tiles=len(grids) - cached,
+    return HabitatTiles(
+        tuple(entry / "tile.tif" for entry in entries if entry.exists()),
+        _get_habitat_model_bands(configuration),
+        len(grids),
     )
 
 
@@ -476,6 +576,81 @@ def _name_downloaded_bands(
         dataset.descriptions = names
 
 
+def _describe_provider_failure(
+    error: Exception, credentials_file: Path
+) -> tuple[str, str, int | None]:
+    """Extract a bounded safe reason and HTTP status from an Earth Engine failure.
+
+    Args:
+        error: Exception from the provider boundary. The Earth Engine client can
+            translate an HTTP exception while retaining it as exception context.
+        credentials_file: Configured secret-file path to redact even when it contains spaces.
+
+    Returns:
+        Stable error category, a sanitized provider reason or local explanation,
+        and the HTTP status when available. Request URLs, credentials, account
+        addresses and local paths are excluded.
+    """
+    if isinstance(error, GoogleAuthError):
+        return "earth_engine_access_denied", "Earth Engine authorization failed.", None
+    if isinstance(error, (OSError, HttpLib2Error)):
+        return (
+            "earth_engine_connection_failed",
+            "The Earth Engine request could not connect.",
+            None,
+        )
+
+    http_error = (
+        error if isinstance(error, HttpError) else error.__cause__ or error.__context__
+    )
+    status = None
+    message = ""
+    if isinstance(http_error, HttpError):
+        if 100 <= http_error.status_code <= 599:
+            status = http_error.status_code
+        # The HttpError string also includes its request URL. Read only the
+        # provider's structured explanation, and ignore non-JSON responses.
+        if len(http_error.content) <= 65536:
+            try:
+                body = json.loads(http_error.content)
+            except (ValueError, UnicodeError):
+                body = None
+            if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                detail = body["error"].get("message")
+                if isinstance(detail, str):
+                    message = detail
+    elif isinstance(error, ee.EEException):
+        message = str(error)
+
+    if status in (401, 403):
+        code, fallback = (
+            "earth_engine_access_denied",
+            "Earth Engine denied access to the request.",
+        )
+    elif status == 429:
+        code, fallback = (
+            "earth_engine_rate_limited",
+            "Earth Engine limited the request rate.",
+        )
+    elif status is not None and 500 <= status < 600:
+        code, fallback = (
+            "earth_engine_service_error",
+            "Earth Engine could not process the request.",
+        )
+    else:
+        code, fallback = (
+            "earth_engine_request_failed",
+            "Earth Engine could not download the tile.",
+        )
+    for spelling in (str(credentials_file), credentials_file.as_posix()):
+        message = message.replace(spelling, "[redacted]")
+    message = _PROVIDER_SECRETS.sub("[redacted]", message[:8192])
+    message = " ".join(
+        "".join(char if char.isprintable() else " " for char in message).split()
+    )
+    return code, message[:512] or fallback, status
+
+
 def _build_habitat_image(
     configuration: RasterStackConfiguration,
     settings: HabitatEarthEngineSettings,
@@ -490,27 +665,33 @@ def _build_habitat_image(
         Earth Engine expression for the configured bands, ready for tile requests.
 
     Raises:
-        RuntimeError: If credentials or initialization fail; raw authentication
-            errors are omitted to keep credential details private.
+        HabitatEarthEngineConnectionError: If credentials, initialization or
+            expression construction fail. Only sanitized reasons are reported.
     """
     try:
         credentials = ee.ServiceAccountCredentials(
             key_file=str(settings.credentials_file)
         )
-        ee.Initialize(credentials, project=settings.project)
-    except (
-        OSError,
-        ValueError,
-        GoogleAuthError,
-        HttpError,
-        HttpLib2Error,
-        ee.EEException,
-    ):
-        raise RuntimeError(
-            "Ecosystem Condition could not connect to Earth Engine. Check the configured project "
-            "and the mounted service-account credentials and permissions."
+    except (ValueError, OSError, GoogleAuthError, ee.EEException):
+        raise HabitatEarthEngineConnectionError(
+            "Ecosystem Condition could not load the mounted service-account credentials. "
+            "Ask the administrator to check the configured project and credentials."
         ) from None
-    return build_earth_engine_stack(configuration)
+    try:
+        ee.Initialize(credentials, project=settings.project)
+    except (*_PROVIDER_ERRORS, ValueError) as error:
+        _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
+        raise HabitatEarthEngineConnectionError(
+            "Ecosystem Condition could not connect to Earth Engine. Check the configured project "
+            f"and the mounted service-account credentials and permissions. {detail}"
+        ) from None
+    try:
+        return build_earth_engine_stack(configuration)
+    except _PROVIDER_ERRORS as error:
+        _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
+        raise HabitatEarthEngineConnectionError(
+            f"Ecosystem Condition could not build the configured Earth Engine inputs. {detail}"
+        ) from None
 
 
 def _publish_tile(directory: Path, entry: Path) -> None:
@@ -542,7 +723,7 @@ def get_habitat_tiles(
     progress: Callable[[int, int], None],
     check_cancelled: Callable[[], None],
 ) -> HabitatTiles:
-    """Reuse completed Habitat tiles and fetch missing tiles for a projected AOI.
+    """Reuse completed Habitat tiles and attempt every missing tile for a projected AOI.
 
     Run in a dedicated Processing native process: Earth Engine initialization is
     process-global. The upstream scientific configuration digest includes year,
@@ -568,33 +749,29 @@ def get_habitat_tiles(
             The native supervisor handles cancellation during a blocking request.
 
     Returns:
-        Shared cached files and ordered band definitions. Never remove these
-        files when a run ends. Failure/cancellation removes this call's staging;
-        previously published tiles remain reusable. After native termination the
-        caller cleans the working directory. Concurrent misses may both fetch;
-        the first completed publication wins without overwriting cached pixels.
+        Shared cached files, ordered bands and sanitized remote tile failures.
+        The first completed publication wins on concurrent cache misses. Failed
+        remote requests leave no cache entry for this attempt.
+        Previously published tiles remain reusable after failure or cancellation.
 
     Raises:
-        RuntimeError: If credentials, initialization or an Earth Engine request
-            fails. Credential contents and raw authentication errors are omitted.
+        HabitatEarthEngineConnectionError: If the provider cannot initialize or
+            construct the stack for any tile request.
         ValueError: If a downloaded raster differs from the requested grid/bands.
         RasterioError: If downloaded pixels or metadata cannot be read or written.
         OSError: If local reads, writes, publication or staging cleanup fail.
         Exception: Propagates exceptions from progress and cancellation callbacks.
     """
     grids = _select_tile_grids(area, configuration.grid)
-    bands = {
-        name: band
-        for name, band in zip(configuration.band_names(), configuration.bands)
-        if band.role in ("predictor", "response")
-    }
+    bands = _get_habitat_model_bands(configuration)
     check_cancelled()
     progress(0, len(grids))
     stack_directory = cache_directory / configuration.raster_configuration_sha256
     stack_directory.mkdir(parents=True, exist_ok=True)
     image = None
-    paths = []
-    for index, grid in enumerate(grids):
+    paths: list[Path] = []
+    failures: list[HabitatTileFailure] = []
+    for grid in grids:
         check_cancelled()
         entry = _get_tile_cache_directory(grid, configuration.grid, stack_directory)
         if not entry.exists():
@@ -623,11 +800,22 @@ def get_habitat_tiles(
                         },
                     }
                 )
-            except (OSError, GoogleAuthError, HttpError, HttpLib2Error, ee.EEException):
-                raise RuntimeError(
-                    "Earth Engine could not download an Ecosystem Condition tile. Check the "
-                    "server connection and access to the configured source datasets."
-                ) from None
+            except _PROVIDER_ERRORS as error:
+                column, row = map(int, entry.name.split("_"))
+                code, detail, status = _describe_provider_failure(
+                    error, settings.credentials_file
+                )
+                failures.append(
+                    HabitatTileFailure(
+                        column=column,
+                        row=row,
+                        code=code,
+                        detail=detail,
+                        httpStatus=status,
+                    )
+                )
+                progress(len(paths), len(grids))
+                continue
             check_cancelled()
             with TemporaryDirectory(
                 prefix="habitat-gee-", dir=working_directory
@@ -639,6 +827,6 @@ def get_habitat_tiles(
                 check_cancelled()
                 _publish_tile(directory, entry)
         paths.append(entry / "tile.tif")
-        progress(index + 1, len(grids))
+        progress(len(paths), len(grids))
     check_cancelled()
-    return HabitatTiles(tuple(paths), bands)
+    return HabitatTiles(tuple(paths), bands, len(grids), tuple(failures))

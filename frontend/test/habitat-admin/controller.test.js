@@ -77,6 +77,43 @@ test("initial metadata/history reads do not check coverage or start preparations
     assert.equal([...h.timers.values()][0].delay, 30000);
 });
 
+test("incomplete ready reports are retryable and failure logs only load on explicit expansion", async t => {
+    const report = {sha256: "c".repeat(64), tileCount: 0, requiredTileCount: 1, failedTileCount: 1};
+    const original = job({status: "ready", result: report});
+    const reads = [], failures = [{column: 7, row: -5, stage: "download", code: "earth_engine_access_denied",
+        detail: "Access to a source dataset was denied.", httpStatus: 403}];
+    const h = fixture({list: async () => ({jobs: [original], nextCursor: null}), failureLog: (_report, signal) => {
+        const request = deferred(); reads.push({request, signal}); return request.promise;
+    }});
+    t.after(() => h.controller.destroy());
+    await h.controller.start();
+    assert.equal(reads.length, 0);
+    const first = h.handlers.openFailureLog(original.jobId);
+    await h.handlers.openFailureLog(original.jobId);
+    assert.equal(reads.length, 1);
+    assert.equal(h.renders.at(-1).failureLogs.get(original.jobId).loading, true);
+    h.handlers.closeFailureLog(original.jobId);
+    assert.equal(reads[0].signal.aborted, true);
+    const second = h.handlers.openFailureLog(original.jobId);
+    reads[0].request.resolve(failures); await first;
+    assert.equal(h.renders.at(-1).failureLogs.get(original.jobId).loading, true);
+    reads[1].request.reject(new Error("Could not reach EOLab.")); await second;
+    assert.equal(h.renders.at(-1).failureLogs.get(original.jobId).error, "Could not reach EOLab.");
+    const third = h.handlers.openFailureLog(original.jobId);
+    reads[2].request.resolve(failures); await third;
+    assert.deepEqual(h.renders.at(-1).failureLogs.get(original.jobId).failures, failures);
+    h.handlers.closeFailureLog(original.jobId);
+    await h.handlers.openFailureLog(original.jobId);
+    assert.equal(reads.length, 3);
+    await h.handlers.retry(original.jobId);
+    assert.equal(h.retried[0].id, original.jobId);
+    original.expiresAt = "2000-01-01T00:00:00Z";
+    await h.handlers.refreshHistory();
+    assert.equal(h.renders.at(-1).failureLogs.has(original.jobId), false);
+    await h.handlers.openFailureLog(original.jobId);
+    assert.equal(reads.length, 3);
+});
+
 test("named Catalog filters are validated and frozen without preparing or checking", async t => {
     const h = fixture(); t.after(() => h.controller.destroy());
     await h.controller.start(); await h.handlers.search("areas");

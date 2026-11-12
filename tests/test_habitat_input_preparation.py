@@ -22,12 +22,12 @@ from eolab_app.execution.reusable_process import ReusableProcess
 from eolab_app.processing import habitat_operation, habitat_preparation
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.habitat_calculation import HabitatSources
 from eolab_app.processing.habitat_earth_engine import (
     HabitatEarthEngineRuntime,
     HabitatEarthEngineSettings,
 )
 from eolab_app.processing.habitat_preparation import (
+    HabitatPreparationSources,
     build_habitat_input_preparation_submission,
     habitat_input_preparation_process_target,
     prepare_habitat_input_cache,
@@ -60,7 +60,9 @@ from test_processing_worker_results import configure_prepared_job_store
 def _preparation_fixture_target(
     writer: ProcessResultWriter,
     action: Literal["acquire"],
-    arguments: tuple[HabitatSources, HabitatInputPreparationSpec, Path, None],
+    arguments: tuple[
+        HabitatPreparationSources, HabitatInputPreparationSpec, Path, None
+    ],
 ) -> None:
     """Run real acquisition with controlled Earth Engine responses in its child.
 
@@ -87,11 +89,14 @@ def _preparation_fixture_target(
         for row in range(2)
         for column in range(3)
     ]
+    failure = (
+        {"status": "403"},
+        '{"error":{"code":403,"message":"Image.select: Required band is missing. Authorization: Bearer private-remote-error"}}',
+    )
     if (root / "fail-download").exists():
-        responses[1] = (
-            {"status": "403"},
-            '{"error":{"code":403,"message":"private-remote-error"}}',
-        )
+        responses[1] = failure
+    elif (root / "fail-all-downloads").exists():
+        responses = [failure] * len(responses)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(habitat_preparation, "load_habitat_stack", _fixture_configuration)
         _use_offline_earth_engine(
@@ -185,7 +190,7 @@ def _consumer_run_plan(
     )
 
 
-@pytest.mark.parametrize("outcome", ["ready", "cancelled", "failed"])
+@pytest.mark.parametrize("outcome", ["ready", "cancelled", "partial", "no_tiles"])
 def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,7 +203,7 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
         tmp_path: Separate source, cache and ordinary worker storage.
         monkeypatch: Bind controlled pixel transport at the native target boundary.
         habitat_definition: Existing recipe configured for small scientific fixtures.
-        outcome: Complete acquisition, cancel a blocking request or fail its second tile.
+        outcome: Complete all tiles, cancel a blocking request, or fail some or all requests.
     """
     area = write_selection(
         tmp_path / "areas.gpkg",
@@ -278,12 +283,14 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
         RasterClipLimits(),
         native=native,
         areas=areas,
-        operation_settings={OPERATION: runtime, "habitat.condition.v1": runtime},
+        operation_settings={OPERATION: runtime, "habitat.condition.v1": cache},
     )
     if outcome == "cancelled":
         (tmp_path / "cancel-download").touch()
-    elif outcome == "failed":
+    elif outcome == "partial":
         (tmp_path / "fail-download").touch()
+    elif outcome == "no_tiles":
+        (tmp_path / "fail-all-downloads").touch()
 
     async def run() -> None:
         """Exercise the real worker, cache publication, cleanup and model consumer."""
@@ -294,15 +301,10 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
             assert await worker.run_once()
             areas.resolve_for_sampling.assert_awaited_once_with(area.selection)
             artifact = store.finish.call_args.args[2]
-            if outcome != "ready":
+            if outcome == "cancelled":
                 assert artifact is None
                 error = store.finish.call_args.args[3]
-                assert error["code"] == (
-                    "interrupted"
-                    if outcome == "cancelled"
-                    else "habitat_earth_engine_failed"
-                )
-                assert "private-remote-error" not in json.dumps(error)
+                assert error["code"] == "interrupted"
                 assert len(list(cache.rglob("tile.tif"))) == 1
                 store.cleanup_candidates.return_value = [row]
                 store.active_attempts.return_value = set()
@@ -313,7 +315,10 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
 
             assert artifact is not None, store.finish.call_args
             assert artifact.media_type == "application/json"
-            assert artifact.tile_count == 6
+            completed = {"ready": 6, "partial": 5, "no_tiles": 0}[outcome]
+            assert artifact.tile_count == completed
+            assert artifact.required_tile_count == 6
+            assert artifact.failed_tile_count == 6 - completed
             assert {file.name for file in artifact.manifest.files} == {
                 "result",
                 "provenance",
@@ -323,7 +328,20 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
                     row["attempt_id"], result_name="result.json"
                 ).read_text()
             )
-            assert report == {**captured, "version": 1, "tileCount": 6}
+            failures = report.pop("tileFailures")
+            assert report == {
+                **captured,
+                "version": 2,
+                "tileCount": completed,
+                "requiredTileCount": 6,
+                "failedTileCount": 6 - completed,
+            }
+            assert len(failures) == 6 - completed
+            for failure in failures:
+                assert failure["code"] == "earth_engine_access_denied"
+                assert failure["httpStatus"] == 403
+                assert "Required band is missing" in failure["detail"]
+                assert "private-remote-error" not in json.dumps(failure)
             assert report["selection"] == area.selection.model_dump(
                 mode="json", by_alias=True
             )
@@ -334,14 +352,16 @@ def test_preparation_worker_publishes_reports_and_preserves_shared_tiles(
                 assert secret not in json.dumps(report)
                 assert secret not in provenance
             assert len((tmp_path / "pixel-requests.txt").read_text().splitlines()) == 6
-            assert len(list(cache.rglob("tile.tif"))) == 6
+            assert len(list(cache.rglob("tile.tif"))) == completed
 
             # Report cleanup leaves the independently owned cache available.
             store.cleanup_candidates.return_value = [row]
             store.active_attempts.return_value = set()
             await worker.cleanup()
             assert not (artifacts.root / "results" / row["attempt_id"]).exists()
-            assert len(list(cache.rglob("tile.tif"))) == 6
+            assert len(list(cache.rglob("tile.tif"))) == completed
+            if outcome != "ready":
+                return
 
             # A second preparation and an ordinary model run make no new pixel requests.
             for number, next_plan in (
@@ -401,7 +421,13 @@ def test_changed_scientific_identity_is_rejected_before_reading_sources(
     )
     with pytest.raises(ProcessingError) as failure:
         prepare_habitat_input_cache(
-            HabitatSources({}, {"area": area}),
+            HabitatPreparationSources(
+                area,
+                HabitatEarthEngineRuntime(
+                    HabitatEarthEngineSettings("habitat-test", tmp_path / "key.json"),
+                    tmp_path / "cache",
+                ),
+            ),
             HabitatInputPreparationSpec(inputs=queued.request),
             tmp_path / "attempt",
         )

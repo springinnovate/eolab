@@ -14,7 +14,7 @@ function formatObservationTime(timestamp) {
     return new Date(timestamp).toISOString().replace("T", " ").replace(/(?:\.000)?Z$/, " UTC");
 }
 
-/** Build a raster file card and its saved temporal coverage, when applicable.
+/** Build a raster file card with input coverage when the run records it.
  * @param {Object} result Raster output.
  * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
  * @return {HTMLElement[]} Result cards.
@@ -32,6 +32,11 @@ function rasterCards(result, element) {
             element("span", `Observations in this run: ${coverage.observationCount.toLocaleString()}`),
             element("span", `First observation: ${formatObservationTime(coverage.firstObservation)}`),
             element("span", `Last observation: ${formatObservationTime(coverage.lastObservation)}`));
+    }
+    if (result.preparedInputCoverage !== undefined) {
+        const {cachedTiles, requiredTiles, missingTiles} = result.preparedInputCoverage;
+        card.append(element("span", `Prepared inputs: ${cachedTiles.toLocaleString()} of ${requiredTiles.toLocaleString()} tiles used.`));
+        if (missingTiles > 0) card.append(element("span", "Areas without prepared inputs are shown as NoData."));
     }
     return [card];
 }

@@ -795,7 +795,9 @@ async def run_processing_worker() -> None:
                     areas=areas,
                     uploads=uploads,
                     operation_settings={
-                        "habitat.condition.v1": settings.habitat_earth_engine,
+                        "habitat.condition.v1": (
+                            settings.processing_data_path / "habitat-cache"
+                        ),
                         HABITAT_INPUT_PREPARATION_OPERATION: settings.habitat_earth_engine,
                     },
                 )

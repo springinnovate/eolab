@@ -344,7 +344,7 @@ OPERATIONS = MappingProxyType(
                 prepare=habitat.prepare_habitat,
                 execution=habitat.select_habitat_execution,
                 policy=habitat.describe_habitat_policy,
-                result=raster.describe_clip_result,
+                result=habitat.describe_habitat_result,
                 outcome=raster.describe_clip_outcome,
                 primary_input=None,
                 extra_sources=habitat.get_habitat_raster_sources,
@@ -357,10 +357,6 @@ OPERATIONS = MappingProxyType(
                     ("raster_preparation", TypeAdapter(HabitatPreparation)),
                 ),
                 progress_descriptions=(
-                    (
-                        "fetching_habitat_tiles",
-                        "Loading Ecosystem Condition input tiles",
-                    ),
                     ("preparing_rasters", "Preparing model rasters"),
                 )
                 + tuple(

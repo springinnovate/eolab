@@ -341,16 +341,22 @@ reference sites and input data.
 
 The default **Original model inputs (Google Earth Engine)** configuration uses
 the [NHI Terrestrial Integrity Modeling](https://github.com/springinnovate/nhi-terrestrial-integrity-modeling)
-inputs for your selected **Assessment year**. Setup links to each dataset's
-catalog page. The first run downloads inputs for your area; later runs reuse
-matching cached tiles. Choose **Choose raster layers** to supply your own stack.
+inputs prepared by an administrator for your selected **Assessment year**.
+Setup links to each dataset's catalog page. Runs use available cached tiles and
+report gaps; areas without prepared inputs remain NoData. If no inputs are
+prepared, ask your administrator to prepare them and provide a geospatial file
+defining your area of interest. Choose **Choose raster layers** to supply your
+own stack.
 
 Administrators can open **Manage cached inputs** in Habitat setup, or the Habitat
 section of `/admin-eolab`, to choose named Catalog polygon areas and assessment
 years. **Check cached inputs** reports current availability; **Prepare inputs**
 queues downloads without running the model. Preparation continues after closing
-the page. Return to administration to check progress, cancel or retry work, and
-download completion reports while the configured job retention permits.
+the page and attempts remaining tiles when a tile download fails. Return to
+administration to check progress, inspect failure details, retry missing inputs,
+or download preparation reports while the configured job retention permits.
+Partial coverage still needs enough usable data and reference sites to fit the
+model; missing pixels are never treated as zero.
 
 ### Collaborate with others
 

@@ -85,10 +85,12 @@ class HabitatRasterStack(HabitatSchema):
 
 
 class HabitatEarthEngineStack(HabitatSchema):
-    """An assessment year for the packaged Earth Engine predictor/response stack.
+    """Use prepared geographic coverage of the original inputs for one year.
 
     The scientific configuration loader owns the supported year range. Reference
     sites still come from the user's separate selection, never from Earth Engine.
+    Ordinary runs read complete cached tiles and leave unprepared areas as NoData;
+    administrators prepare missing inputs separately.
     """
 
     kind: Literal["earthEngine"]

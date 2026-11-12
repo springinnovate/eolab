@@ -40,8 +40,8 @@ from eolab_app.processing.habitat_models import (
     HabitatRequest,
 )
 from eolab_app.processing.habitat_earth_engine import (
-    HabitatEarthEngineRuntime,
-    get_habitat_tiles,
+    HabitatCacheCoverage,
+    get_cached_habitat_tiles,
     load_habitat_stack,
     prepare_habitat_band_views,
 )
@@ -62,20 +62,30 @@ class HabitatSources:
     Attributes:
         rasters: Input files keyed by predictor/response slot or mask role.
         vectors: Independently filtered AOI and reference-site sources.
-        earth_engine: Server-only acquisition configuration, supplied only for
-            automatic input execution and never included in saved inputs.
+        cache_directory: Private prepared-input cache for the original model
+            stack, supplied only for cached-input execution. No connection or
+            credentials are needed to read completed tiles.
     """
 
     rasters: dict[str, Path]
     vectors: dict[str, ResolvedCatalogSelection]
-    earth_engine: HabitatEarthEngineRuntime | None = None
+    cache_directory: Path | None = None
 
 
 @dataclass(frozen=True)
 class HabitatArtifact(Artifact):
-    """Completed Reference similarity map and supporting diagnostic files."""
+    """Completed Reference similarity map and its prepared-input availability.
+
+    Attributes:
+        valid_pixels: Cells with a defined Reference similarity result.
+        prepared_input_coverage: Required, used and missing geographic cache
+            tiles for the selected scientific configuration, or None for a
+            manually selected raster stack. Tile availability is independent
+            of scientific NoData or the model's valid output pixels.
+    """
 
     valid_pixels: int
+    prepared_input_coverage: HabitatCacheCoverage | None
     media_type: str = field(default="image/tiff", kw_only=True)
 
 
@@ -275,10 +285,10 @@ def calculate_habitat(
     directory: Path,
     limits: RasterAggregateLimits,
 ) -> HabitatArtifact:
-    """Acquire or resolve rasters, fit references and prepare the runner's outputs.
+    """Read prepared or selected rasters, fit references and write model outputs.
 
     Args:
-        sources: Authorized raster/vector inputs and server acquisition configuration.
+        sources: Authorized raster/vector inputs and the private prepared-input cache.
         prepared: Captured stack, AOI, output grid, resampling and scientific settings.
         directory: Private attempt directory owned and cleaned by Processing.
         limits: Existing Processing settings used by temporary polygon rasterization.
@@ -288,12 +298,13 @@ def calculate_habitat(
 
     Raises:
         ValueError: If the upstream reader or numerical calculation rejects inputs.
-        ProcessingError: If Habitat cannot connect to or download from Earth Engine.
+        ProcessingError: If no inputs are prepared for the selected area and year.
         RasterioError: If a raster cannot be read or written.
         OSError: If result creation or cleanup fails.
     """
     request = prepared.inputs
     settings = request.settings
+    input_coverage = None
     with ExitStack() as resources:
         grid = RasterGrid(
             crs=CRS.from_user_input(prepared.grid.crs),
@@ -310,29 +321,24 @@ def calculate_habitat(
         }
         if prepared.earthEngine is not None:
             acquisition = prepared.earthEngine
-            runtime = cast(HabitatEarthEngineRuntime, sources.earth_engine)
-            try:
-                tiles = get_habitat_tiles(
-                    aoi,
-                    acquisition,
-                    runtime.connection,
-                    cache_directory=runtime.cache_directory,
-                    working_directory=directory,
-                    progress=lambda complete, total: write_progress(
-                        directory,
-                        "fetching_habitat_tiles",
-                        complete,
-                        total,
-                        unit="tiles",
-                    ),
-                    # Processing terminates the supervised native process on
-                    # cancellation, including while Earth Engine is blocking.
-                    check_cancelled=lambda: None,
-                )
-            except RuntimeError as error:
+            tiles = get_cached_habitat_tiles(
+                aoi, acquisition, cast(Path, sources.cache_directory)
+            )
+            if not tiles.tiles:
                 raise ProcessingError(
-                    "habitat_earth_engine_failed", str(error), 502
-                ) from error
+                    "habitat_inputs_not_prepared",
+                    "No Ecosystem Condition inputs are prepared for this area and year. "
+                    "Ask your administrator to prepare them and provide a geospatial "
+                    "file defining your area of interest (AOI).",
+                    409,
+                )
+            input_coverage = HabitatCacheCoverage(
+                configuration_sha256=acquisition.raster_configuration_sha256,
+                year=acquisition.year,
+                required_tiles=tiles.required_tiles,
+                cached_tiles=len(tiles.tiles),
+                missing_tiles=tiles.missing_tiles,
+            )
             views = resources.enter_context(
                 prepare_habitat_band_views(tiles, directory)
             )
@@ -459,6 +465,7 @@ def calculate_habitat(
         sha256=primary.sha256,
         filename=primary.filename,
         valid_pixels=valid_pixels,
+        prepared_input_coverage=input_coverage,
         additional_outputs=(diagnostics,),
     )
     fitted = result.fitted
@@ -520,8 +527,8 @@ def habitat_process_target(
         locations = {path: name for name, path in arguments[0].rasters.items()}
         if operation == "calculate":
             locations[arguments[2]] = "run files"
-            if arguments[0].earth_engine is not None:
-                locations[arguments[0].earth_engine.cache_directory] = (
+            if arguments[0].cache_directory is not None:
+                locations[arguments[0].cache_directory] = (
                     "Ecosystem Condition input cache"
                 )
         for path, name in locations.items():

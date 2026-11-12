@@ -705,6 +705,8 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setenv("PROCESSING_MAX_EXECUTION_MEMORY_BYTES", str(4 * 1024**3))
     monkeypatch.delenv("GEOSERVER_ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("GEOSERVER_INTERNAL_URL", raising=False)
+    monkeypatch.delenv("HABITAT_EARTH_ENGINE_PROJECT", raising=False)
+    monkeypatch.delenv("HABITAT_EARTH_ENGINE_CREDENTIALS_FILE", raising=False)
     monkeypatch.setattr(composition, "PostgresJobStore", lambda limits: store)
 
     pending = store.submit(
@@ -749,6 +751,10 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
             cleanup_lock: One lock shared by all loops in this container.
         """
         assert isinstance(worker, ProcessingWorker)
+        assert worker.operation_settings["habitat.condition.v1"] == (
+            tmp_path / "outputs" / "habitat-cache"
+        )
+        assert worker.operation_settings["habitat.prepare-inputs.v1"] is None
         composed_workers.append(worker)
         cleanup_locks.append(cleanup_lock)
         assert worker.limits.worker_count == 2

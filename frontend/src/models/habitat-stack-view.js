@@ -43,7 +43,7 @@ export class HabitatStackView {
         manageInputs.target = "_blank"; manageInputs.rel = "noopener noreferrer";
         const administration = element("p", "", "models-help");
         administration.append(manageInputs, element("span", " (administrator password required)"));
-        this.automatic.append(administration);
+        this.automatic.append(element("p", "The model uses the tiles your administrator has prepared for the analysis area and assessment year. Areas without prepared inputs are shown as NoData.", "models-help"), administration);
         this.datasetSources = element("div", "", "models-habitat-datasets");
         this.datasetLists = {};
         for (const [role, title] of [["predictor", "Predictor datasets"], ["response", "Observed response datasets"]]) {

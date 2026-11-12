@@ -393,6 +393,22 @@ def test_habitat_worker_matches_library_and_publishes_outputs(
     assert response.result.name == "reference_similarity"
     assert response.result.label == "Reference similarity"
     assert response.result.presentation == "map"
+    assert response.result.preparedInputCoverage is None
+    assert "preparedInputCoverage" not in response.model_dump(mode="json")["result"]
+    legacy_artifact = {
+        name: value
+        for name, value in asdict(artifact).items()
+        if name != "prepared_input_coverage"
+    }
+    legacy_ready = {
+        **ready,
+        "artifact": legacy_artifact,
+        "retained_outcome": {"status": "ready", "artifact": legacy_artifact},
+    }
+    assert (
+        ModelJobResponse.model_validate(serialize_processing_job(legacy_ready))
+        == response
+    )
     assert {file.name for file in response.artifacts.files} == {
         "reference_similarity",
         "diagnostics",

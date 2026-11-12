@@ -41,7 +41,7 @@ function job(changes = {}) {
 function report(changes = {}) {
     return {url: `${PREPARATIONS}/${ID}/report`, provenanceUrl: `${PREPARATIONS}/${ID}/provenance`,
         filename: "habitat-input-preparation-report.json", bytes: 200, sha256: DIGEST,
-        year: 2018, configurationSha256: DIGEST, tileCount: 6, ...changes};
+        year: 2018, configurationSha256: DIGEST, tileCount: 6, requiredTileCount: 6, failedTileCount: 0, ...changes};
 }
 
 /** Construct a Catalog Item whose footprint must not determine eligibility.
@@ -178,12 +178,35 @@ test("report links identify only the current protected job and retain expired-in
     const expired = new HabitatAdminApi(async () => response(job({status: "expired", inputs: null,
         metadataExpiresAt: "2026-11-03T08:00:00Z"})));
     assert.equal((await expired.get(ID)).inputs, null);
-    for (const changes of [{url: "https://other.test/report"}, {provenanceUrl: "/api/processing/jobs/other/provenance"}]) {
+    for (const changes of [{url: "https://other.test/report"}, {provenanceUrl: "/api/processing/jobs/other/provenance"},
+        {failedTileCount: 1}, {requiredTileCount: -1}]) {
         const api = new HabitatAdminApi(async () => response(job({status: "ready", result: report(changes)})));
         await assert.rejects(api.get(ID), error => error instanceof HabitatAdminRequestError && error.uncertain && error.status === 200);
     }
     const wrong = new HabitatAdminApi(async () => response(job({jobId: "c".repeat(32)})));
     await assert.rejects(wrong.get(ID), error => error instanceof HabitatAdminRequestError && error.uncertain);
+});
+
+test("tile failure details are fetched on demand from the protected report and checked against its metadata", async () => {
+    const metadata = report({tileCount: 0, requiredTileCount: 1, failedTileCount: 1});
+    const failure = {column: 7, row: -5, stage: "download", code: "earth_engine_access_denied",
+        detail: "Access to a source dataset was denied.", httpStatus: 403};
+    const document = {...metadata, tileFailures: [{...failure, privatePath: "/ignored"}]};
+    const calls = [], signal = new AbortController().signal;
+    const api = new HabitatAdminApi(async (url, init) => {
+        calls.push({url, init});
+        return response(url === metadata.url ? document : job({status: "ready", result: metadata}));
+    });
+    const snapshot = await api.get(ID);
+    assert.deepEqual(calls.map(call => call.url), [`${PREPARATIONS}/${ID}`]);
+    assert.deepEqual(await api.failureLog(snapshot.result, signal), [failure]);
+    assert.equal(calls[1].url, metadata.url);
+    assert.equal(calls[1].init.credentials, "same-origin");
+    assert.equal(calls[1].init.signal, signal);
+    for (const changes of [{year: 2015}, {tileFailures: []}, {tileFailures: [{...failure, httpStatus: "403"}]}]) {
+        const malformed = new HabitatAdminApi(async () => response({...document, ...changes}));
+        await assert.rejects(malformed.failureLog(metadata), error => error instanceof HabitatAdminRequestError);
+    }
 });
 
 test("invalid coverage and history payloads are rejected at their response boundaries", async () => {
