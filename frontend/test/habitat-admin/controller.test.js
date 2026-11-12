@@ -27,6 +27,17 @@ function job(changes = {}) {
         progress: {}, error: null, result: null, ...changes };
 }
 
+/** Create a retained preparation for a distinct Catalog area.
+ * @param {string} id One hexadecimal digit repeated for the job identifier.
+ * @param {string} itemId Catalog area identity.
+ * @param {Object} [changes={}] Lifecycle or saved-input overrides.
+ * @returns {Object} Named area/year preparation with unexpired saved inputs.
+ */
+function savedJob(id, itemId, changes = {}) {
+    return job({jobId: id.repeat(32), status: "failed", metadataExpiresAt: "2099-01-01T00:00:00Z",
+        inputs: {name: itemId, selection: {...selection, itemId}, year: 2018, configurationSha256: "b".repeat(64)}, ...changes});
+}
+
 /** Compose the controller with observable browser, storage and transport boundaries.
  * @param {Object} [overrides={}] API methods replaced by the test.
  * @param {Map<string,string>} [values=new Map()] Persistent command storage shared across reloads.
@@ -220,6 +231,171 @@ test("expired saved-input metadata cannot create a fresh retry from an old histo
     t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retry(original.jobId);
     assert.deepEqual(h.retried, []); assert.equal(h.controller.state.submissions.length, 0);
     assert.match(h.controller.state.error, /saved inputs have expired/);
+});
+
+test("retry all checks every retained page, deduplicates saved choices and prepares only current gaps", async t => {
+    const complete = savedJob("1", "complete", {status: "ready", result: {failedTileCount: 0}});
+    const olderDuplicate = savedJob("2", "complete");
+    olderDuplicate.inputs = {...olderDuplicate.inputs, name: "Old name", configurationSha256: "c".repeat(64)};
+    const active = savedJob("6", "active", {status: "running", metadataExpiresAt: null});
+    active.inputs = {...active.inputs, configurationSha256: "d".repeat(64)};
+    const firstPage = [complete, olderDuplicate, savedJob("3", "active"), savedJob("4", "cached")];
+    const pages = [firstPage, [active, savedJob("b", "bad-source"), savedJob("7", "missing", {status: "expired"}),
+        savedJob("8", "expired-inputs", {metadataExpiresAt: "2000-01-01T00:00:00Z"}),
+        savedJob("9", "deleted", {status: "deleted"}), savedJob("a", "unavailable", {inputs: null})]];
+    const listed = [], checked = [], submitted = [];
+    const h = fixture({list: async request => {
+        listed.push(request); return {jobs: pages[request.cursor ? 1 : 0], nextCursor: request.cursor ? null : "older"};
+    }, coverage: async (area, year) => {
+        checked.push({area, year}); if (area.itemId === "bad-source") throw new Error("This source is no longer available.");
+        return {configurationSha256: "e".repeat(64), missingTiles: area.itemId === "cached" ? 0 : 2};
+    }, submit: async request => {
+        submitted.push(structuredClone(request));
+        return savedJob(submitted.length === 1 ? "c" : "d", request.selection.itemId, {status: "queued", metadataExpiresAt: null});
+    }});
+    t.after(() => h.controller.destroy()); await chooseArea(h);
+    const drafts = structuredClone({areas: h.controller.state.areas, years: h.controller.state.years, coverage: h.controller.state.coverageRows});
+    await h.handlers.retryAll();
+    assert.deepEqual(listed.slice(1).map(({cursor, limit}) => ({cursor, limit})), [{cursor: null, limit: 100}, {cursor: "older", limit: 100}]);
+    assert.deepEqual(checked.map(value => value.area.itemId), ["complete", "cached", "bad-source", "missing"]);
+    assert.deepEqual(submitted.map(value => value.selection.itemId), ["complete", "missing"]);
+    assert.equal(submitted[0].name, "complete");
+    assert.ok(submitted.every(value => Object.keys(value).sort().join() === "name,requestId,selection,year"));
+    assert.equal(h.retried.length, 0);
+    assert.equal(h.controller.state.nextCursor, "older", "bulk reads do not change visible history pagination");
+    assert.deepEqual({areas: h.controller.state.areas, years: h.controller.state.years, coverage: h.controller.state.coverageRows}, drafts);
+    assert.deepEqual(h.controller.state.retryAllErrors, [{name: "bad-source", year: 2018, detail: "This source is no longer available."}]);
+    assert.match(h.controller.state.retryAllStatus, /2 queued · 1 already cached · 1 already being prepared · 1 could not be checked/);
+    assert.equal(h.controller.state.submitting, false); assert.equal(h.values.size, 0);
+});
+
+test("retry all finishes reading history before checking or submitting any saved area", async t => {
+    const h = fixture({list: async ({cursor}) => {
+        if (cursor) throw new Error("History unavailable.");
+        return {jobs: [savedJob("1", "north")], nextCursor: "older"};
+    }});
+    t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retryAll();
+    assert.deepEqual(h.checked, []); assert.deepEqual(h.submitted, []);
+    assert.match(h.controller.state.retryAllStatus, /Nothing was submitted.*History unavailable/);
+    assert.equal(h.controller.state.retryAllRunning, false);
+});
+
+test("retry all locks concurrent actions while checking and replaces an old accepted command after a new gap", async t => {
+    const pending = deferred(), original = savedJob("1", "areas");
+    const h = fixture({list: async () => ({jobs: [original], nextCursor: null}), coverage: () => pending.promise});
+    t.after(() => h.controller.destroy()); await chooseArea(h); await h.handlers.prepare();
+    const earlierRequest = h.submitted[0];
+    const bulk = h.handlers.retryAll(); await flush();
+    await h.handlers.retryAll(); await h.handlers.prepare(); await h.handlers.retry(original.jobId); await h.handlers.cancel(original.jobId);
+    assert.equal(h.submitted.length, 1); assert.deepEqual(h.retried, []); assert.deepEqual(h.cancelled, []);
+    pending.resolve({missingTiles: 1}); await bulk;
+    assert.equal(h.submitted.length, 2); assert.notEqual(h.submitted[1].requestId, earlierRequest.requestId);
+    assert.equal(h.controller.state.submissions.length, 1);
+    assert.equal(h.controller.state.submissions[0].kind, "prepare");
+});
+
+test("bulk submissions continue after a lost response and recover the exact saved command after reload", async t => {
+    const retained = [savedJob("1", "north"), savedJob("2", "south")], values = new Map(), attempts = [];
+    const first = fixture({list: async () => ({jobs: retained, nextCursor: null}), submit: async request => {
+        attempts.push(structuredClone(request));
+        if (request.selection.itemId === "north") throw Object.assign(new Error("Connection lost"), {uncertain: true});
+        return savedJob("3", "south", {status: "queued", metadataExpiresAt: null});
+    }}, values);
+    await first.controller.start(); await first.handlers.retryAll();
+    assert.equal(attempts.length, 2);
+    assert.deepEqual(first.controller.state.submissions.map(row => row.status), ["uncertain", "accepted"]);
+    assert.match(first.controller.state.retryAllStatus, /1 queued.*Review requested preparations/);
+    first.controller.destroy();
+    const second = fixture({list: async () => ({jobs: retained, nextCursor: null}), submit: async request => {
+        attempts.push(structuredClone(request)); return savedJob("4", "north", {status: "queued", metadataExpiresAt: null});
+    }}, values);
+    t.after(() => second.controller.destroy()); await second.controller.start();
+    await second.handlers.retryAll();
+    assert.equal(attempts.length, 2); assert.deepEqual(second.checked, []);
+    assert.match(second.controller.state.retryAllStatus, /Use Recover submission in Requested preparations/);
+    await second.handlers.recover(second.controller.state.submissions[0].key);
+    assert.deepEqual(attempts[2], attempts[0]); assert.equal(values.size, 0);
+});
+
+test("bulk preparation never posts when pending commands cannot be saved", async t => {
+    const h = fixture({list: async () => ({jobs: [savedJob("1", "north")], nextCursor: null})});
+    t.after(() => h.controller.destroy()); await h.controller.start();
+    h.storage.setItem = () => { throw new Error("Browser storage is full."); };
+    await h.handlers.retryAll();
+    assert.deepEqual(h.submitted, []); assert.equal(h.controller.state.submissions[0].status, "failed");
+    assert.match(h.controller.state.submissions[0].error, /storage is full/);
+    assert.match(h.controller.state.retryAllStatus, /0 queued.*Review requested preparations/);
+});
+
+test("bulk preparation continues other saved areas after a definite admission rejection", async t => {
+    const attempts = [], h = fixture({list: async () => ({jobs: [savedJob("1", "north"), savedJob("2", "south")], nextCursor: null}),
+        submit: async request => {
+            attempts.push(request.selection.itemId);
+            if (request.selection.itemId === "north") throw Object.assign(new Error("Source access was denied."), {status: 403, uncertain: false});
+            return savedJob("3", "south", {status: "queued", metadataExpiresAt: null});
+        }});
+    t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retryAll();
+    assert.deepEqual(attempts, ["north", "south"]);
+    assert.deepEqual(h.controller.state.submissions.map(row => row.status), ["failed", "accepted"]);
+    assert.equal(h.values.size, 0); assert.match(h.controller.state.retryAllStatus, /1 queued.*Review requested preparations/);
+});
+
+test("an unresolved explicit retry blocks bulk planning until its original command is recovered", async t => {
+    let reads = 0;
+    const original = savedJob("1", "north"), h = fixture({list: async () => { reads++; return {jobs: [original], nextCursor: null}; },
+        retry: async () => { throw Object.assign(new Error("Response lost"), {uncertain: true}); }});
+    t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retry(original.jobId);
+    assert.equal(h.controller.state.submissions[0].kind, "retry");
+    await h.handlers.retryAll();
+    assert.equal(reads, 1); assert.deepEqual(h.checked, []); assert.deepEqual(h.submitted, []);
+    assert.match(h.controller.state.retryAllStatus, /Use Recover submission in Requested preparations/);
+});
+
+test("empty retained history explains how to choose inputs without starting work", async t => {
+    const h = fixture(); t.after(() => h.controller.destroy()); await h.controller.start(); await h.handlers.retryAll();
+    assert.deepEqual(h.submitted, []); assert.deepEqual(h.checked, []);
+    assert.match(h.controller.state.retryAllStatus, /No saved areas and years.*Choose an area and year/);
+    assert.equal(h.controller.state.submitting, false);
+});
+
+for (const phase of ["history", "coverage"]) for (const action of ["hide", "destroy"]) {
+    test(`${action} cancels bulk ${phase} planning without submitting or changing draft choices`, async t => {
+        const pending = deferred(); let reads = 0, coverageReads = 0, signal;
+        const h = fixture({list: async request => {
+            if (++reads > 1 && phase === "history") { signal = request.signal; return pending.promise; }
+            return {jobs: [savedJob("1", "north"), savedJob("2", "south")], nextCursor: null};
+        }, coverage: async (_area, _year, requestSignal) => {
+            if (++coverageReads === 1) return {missingTiles: 1};
+            signal = requestSignal; return pending.promise;
+        }});
+        t.after(() => h.controller.destroy()); await chooseArea(h);
+        const draft = structuredClone(h.controller.state.areas);
+        const bulk = h.handlers.retryAll(); await flush();
+        if (action === "destroy") h.controller.destroy();
+        else { h.document.hidden = true; h.document.visibilityState = "hidden"; h.document.dispatchEvent(new Event("visibilitychange")); }
+        assert.equal(signal.aborted, true);
+        pending.resolve(phase === "history" ? {jobs: [savedJob("1", "north")], nextCursor: null} : {missingTiles: 1});
+        await bulk;
+        assert.deepEqual(h.submitted, []); assert.deepEqual(h.cancelled, []);
+        assert.deepEqual(h.controller.state.areas, draft);
+        if (action === "hide") {
+            assert.match(h.controller.state.retryAllStatus, /Checking stopped.*No new preparations/);
+            assert.equal(h.controller.state.submitting, false);
+        }
+    });
+}
+
+test("closing during bulk admission preserves every command for recovery and never cancels accepted work", async () => {
+    const pending = deferred(), attempts = []; let signal;
+    const h = fixture({list: async () => ({jobs: [savedJob("1", "north"), savedJob("2", "south")], nextCursor: null}),
+        submit: async (request, requestSignal) => { attempts.push(request); signal = requestSignal; return pending.promise; }});
+    await h.controller.start(); const bulk = h.handlers.retryAll(); await flush();
+    h.controller.destroy(); assert.equal(signal.aborted, true);
+    pending.resolve(savedJob("3", "north", {status: "queued", metadataExpiresAt: null})); await bulk;
+    assert.equal(attempts.length, 1); assert.deepEqual(h.cancelled, []);
+    const saved = JSON.parse([...h.values.values()][0]);
+    assert.equal(saved.length, 2); assert.deepEqual(saved[0].request, attempts[0]);
+    assert.equal(saved[1].request.selection.itemId, "south");
 });
 
 test("a definite admission failure without HTTP status still permits correcting and preparing again", async t => {
