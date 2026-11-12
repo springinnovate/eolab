@@ -231,6 +231,27 @@ test("partial and empty reports retain retry and an accessible on-demand failure
     h.view.destroy();
 });
 
+test("an empty-image failure explains the problem and retains the provider details as text", () => {
+    const h = fixture(), retained = job({status: "ready", result: {url: "/report", provenanceUrl: "/provenance",
+        tileCount: 0, requiredTileCount: 1, failedTileCount: 1}});
+    const detail = "Image.select: Band pattern 'snow_count' was applied to an Image with no bands. <script>provider text</script>";
+    h.state.jobs = [retained];
+    h.state.failureLogs.set(retained.jobId, {failures: [{column: 56, row: 6, stage: "download",
+        code: "earth_engine_empty_image", detail, httpStatus: 400}]});
+    h.view.render(h.state);
+    const card = h.view.cards.get(`job:${retained.jobId}`);
+    const row = card.logRows.children[0];
+    assert.deepEqual(row.children.map(node => node.textContent), [
+        "Tile column 56, row 6 · Download · HTTP 400",
+        "A source calculation returned no image data, so this tile could not be prepared. Ask the administrator to check the source data and calculation for the selected year.",
+        `Technical details: ${detail}`,
+    ]);
+    assert.equal(row.children[2].children.length, 0);
+    assert.equal(card.retry.hidden, false);
+    assert.equal(card.report.href, retained.result.url);
+    h.view.destroy();
+});
+
 test("a large failure log previews the first fifty rows and retains the full report link", () => {
     const h = fixture(), retained = job({status: "ready", result: {url: "/report", provenanceUrl: "/provenance",
         tileCount: 0, requiredTileCount: 51, failedTileCount: 51}});
