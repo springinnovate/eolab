@@ -355,6 +355,9 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
+**Retry all missing inputs** checks all areas and years still saved in preparation
+history against current inputs, reuses cached tiles, and skips matching work
+already in progress.
 Partial coverage still needs enough usable data and reference sites to fit the
 model; missing pixels are never treated as zero.
 

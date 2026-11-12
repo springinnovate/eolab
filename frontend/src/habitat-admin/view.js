@@ -95,9 +95,15 @@ export class HabitatAdminView {
         const history = this.section("Preparation history");
         history.append(this.element("p", "Accepted work continues after you leave this page. A retry reuses prepared tiles and tries missing tiles again. Use Checked area coverage to see what is currently cached."));
         this.refresh = this.button("Refresh history", () => this.handlers.refreshHistory());
+        this.retryAll = this.button("Retry all missing inputs", () => this.handlers.retryAll());
+        this.retryAllHelp = this.element("p", "Check all areas and years still saved in preparation history against the current model inputs, and prepare anything missing. Cached tiles are reused; matching work already in progress is skipped.");
+        this.retryAllHelp.id = "habitat-retry-all-help"; this.retryAll.setAttribute("aria-describedby", this.retryAllHelp.id);
+        this.retryAllStatus = this.element("p"); this.retryAllStatus.setAttribute("role", "status");
+        this.retryAllErrors = this.element("ul", "", "habitat-error");
         this.historyStatus = this.element("p"); this.historyStatus.setAttribute("role", "status");
         this.history = this.element("div", "", "habitat-cards");
-        this.more = this.button("Load older preparations", () => this.handlers.loadMore()); history.append(this.refresh, this.historyStatus, this.history, this.more);
+        this.more = this.button("Load older preparations", () => this.handlers.loadMore());
+        history.append(this.retryAll, this.retryAllHelp, this.retryAllStatus, this.retryAllErrors, this.refresh, this.historyStatus, this.history, this.more);
         this.listen(this.source, "change", () => this.changeSource());
         this.listen(this.name, "input", () => this.updateAreaControls());
         this.listen(this.searchForm, "submit", event => { event.preventDefault(); this.handlers.search(this.query.value); });
@@ -348,7 +354,7 @@ export class HabitatAdminView {
         for (const [year, input] of this.yearControls) { input.checked = state.years.includes(year); input.disabled = this.busy; }
         this.check.disabled = !state.areas.length || !state.years.length || state.checking || this.busy;
         this.check.textContent = state.checking ? "Checking cached inputs…" : "Check cached inputs";
-        this.prepare.disabled = !state.canPrepare || this.busy; this.prepare.textContent = this.busy ? "Submitting preparations…" : "Prepare inputs";
+        this.prepare.disabled = !state.canPrepare || this.busy; this.prepare.textContent = this.busy && !state.retryAllRunning ? "Submitting preparations…" : "Prepare inputs";
         this.coverageStatus.textContent = state.checking ? "Checking selected areas and years…" : state.coverageRows.length ? "Last checks for selected areas and years" : "No cache checks yet.";
         this.renderCards("coverage", this.coverage, state.coverageRows, row => row.key, () => this.textCard(), (card, row) => {
             card.title.textContent = `${row.name} · ${row.year}`;
@@ -367,6 +373,14 @@ export class HabitatAdminView {
             card.recover.hidden = row.status !== "uncertain"; card.recover.disabled = this.busy;
         });
         this.historyStatus.textContent = state.historyError || (state.historyLoading ? "Loading preparation history…" : state.jobs.length ? "Preparation history is up to date." : "No retained preparations yet.");
+        const pending = state.submissions.some(row => ["uncertain", "submitting"].includes(row.status));
+        this.retryAll.disabled = this.busy || pending;
+        this.retryAll.textContent = state.retryAllRunning ? "Retrying missing inputs…" : "Retry all missing inputs";
+        this.retryAllStatus.textContent = state.submissions.some(row => row.status === "uncertain") && !state.retryAllRunning
+            ? "Use Recover submission in Requested preparations to check unknown results before retrying all." : state.retryAllStatus ?? "";
+        this.retryAllStatus.hidden = !this.retryAllStatus.textContent;
+        this.retryAllErrors.replaceChildren(...(state.retryAllErrors ?? []).map(row => this.element("li", `${row.name} · ${row.year}: ${row.detail}`)));
+        this.retryAllErrors.hidden = !state.retryAllErrors?.length;
         this.refresh.disabled = Boolean(state.historyLoading); this.more.hidden = !state.nextCursor; this.more.disabled = Boolean(state.historyLoading);
         this.renderCards("job", this.history, state.jobs, job => job.jobId, job => this.jobCard(job), (card, job) => {
             const inputs = job.metadataExpiresAt != null && Date.parse(job.metadataExpiresAt) <= Date.now() ? null : job.inputs;

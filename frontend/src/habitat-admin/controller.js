@@ -34,7 +34,8 @@ export class HabitatAdminController {
         this.state = { options: null, sources: [], searching: false, searchError: "", nextSearch: null,
             areas: [], years: [], coverageRows: [], checking: false, submissions: [], jobs: [], nextCursor: null,
             inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
-            historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0 };
+            historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0,
+            retryAllRunning: false, retryAllStatus: "", retryAllErrors: [] };
         this.jobs = new Map(); this.jobMutations = new Map(); this.mutationRevision = 0;
         this.failureLogs = new Map();
         this.readControllers = new Set(); this.mutationControllers = new Set();
@@ -48,7 +49,7 @@ export class HabitatAdminController {
             addArea: (name, key, filter) => this.addArea(name, key, filter), removeArea: id => this.removeArea(id),
             setYears: years => this.setYears(years), check: () => this.check(), prepare: () => this.prepare(),
             recover: key => this.recover(key), refreshHistory: () => this.refreshHistory(), loadMore: () => this.loadMore(),
-            cancel: id => this.cancel(id), retry: id => this.retry(id), refreshInventory: () => this.refreshInventory(),
+            cancel: id => this.cancel(id), retry: id => this.retry(id), retryAll: () => this.retryAll(), refreshInventory: () => this.refreshInventory(),
             openFailureLog: id => this.openFailureLog(id), closeFailureLog: id => this.closeFailureLog(id) });
     }
 
@@ -473,6 +474,74 @@ export class HabitatAdminController {
             request: { requestId: this.newId() }, status: "submitting", jobId: null, error: "" };
         this.state.submissions = [...this.state.submissions.filter(value => value.key !== key), row];
         await this.sendSubmissions([row]);
+    }
+
+    /** Prepare currently missing inputs for every distinct retained saved area and year.
+     * Read all history before checking coverage, skip matching active work, and use
+     * ordinary recoverable preparations with the current scientific configuration.
+     * Hiding the page cancels planning; accepted preparations keep their normal lifecycle.
+     * @returns {Promise<void>} Resolves after submissions, individual check errors or cancelled planning.
+     */
+    async retryAll() {
+        if (!this.isVisible() || this.state.submitting) return;
+        if (this.state.submissions.some(row => ["uncertain", "submitting"].includes(row.status))) {
+            this.state.retryAllStatus = "Use Recover submission in Requested preparations to check unknown results before retrying all."; this.render(); return;
+        }
+        const controller = new AbortController(); this.readControllers.add(controller);
+        this.state.submitting = this.state.retryAllRunning = true;
+        this.state.retryAllErrors = []; this.state.retryAllStatus = "Reading all saved areas and years…"; this.render();
+        try {
+            const areas = new Map(), active = new Set();
+            let cursor = null;
+            do {
+                const page = await this.api.list({cursor, limit: 100, signal: controller.signal});
+                if (controller.signal.aborted || this.destroyed) return;
+                for (const job of page.jobs) {
+                    if (job.status === "deleted" || !job.inputs ||
+                        job.metadataExpiresAt && Date.parse(job.metadataExpiresAt) <= Date.now()) continue;
+                    const key = preparationKey(job.inputs.selection, job.inputs.year);
+                    if (!areas.has(key)) areas.set(key, job.inputs);
+                    if (ACTIVE_PREPARATION_STATES.has(job.status)) active.add(key);
+                }
+                cursor = page.nextCursor;
+            } while (cursor !== null);
+            const missing = [];
+            let cached = 0;
+            for (const [key, inputs] of areas) {
+                if (active.has(key)) continue;
+                this.state.retryAllStatus = `Checking saved inputs for ${inputs.name} · ${inputs.year}…`; this.render();
+                try {
+                    const coverage = await this.api.coverage(inputs.selection, inputs.year, controller.signal);
+                    if (controller.signal.aborted || this.destroyed) return;
+                    if (coverage.missingTiles) missing.push({key, inputs});
+                    else cached++;
+                } catch (error) {
+                    if (controller.signal.aborted || this.destroyed) return;
+                    this.state.retryAllErrors.push({name: inputs.name, year: inputs.year, detail: error.message});
+                    this.render();
+                }
+            }
+            this.readControllers.delete(controller);
+            const submissions = missing.map(({key, inputs}) => ({key, name: inputs.name, year: inputs.year, kind: "prepare",
+                status: "submitting", request: {requestId: this.newId(), name: inputs.name, selection: inputs.selection, year: inputs.year}, jobId: null, error: ""}));
+            const keys = new Set(submissions.map(row => row.key));
+            this.state.submissions = [...this.state.submissions.filter(row => !keys.has(row.key)), ...submissions];
+            this.state.retryAllStatus = `Requesting ${submissions.length} preparations for missing inputs…`;
+            await this.sendSubmissions(submissions);
+            if (this.destroyed) return;
+            const queued = submissions.filter(row => row.status === "accepted").length;
+            this.state.retryAllStatus = areas.size
+                ? `All saved areas and years checked. ${queued} queued · ${cached} already cached · ${active.size} already being prepared · ${this.state.retryAllErrors.length} could not be checked.${submissions.some(row => row.status !== "accepted") ? " Review requested preparations for submission errors." : ""}`
+                : "No saved areas and years are available. Choose an area and year to prepare inputs.";
+        } catch (error) {
+            if (!controller.signal.aborted && !this.destroyed) this.state.retryAllStatus = `Saved preparations could not be checked. Nothing was submitted. ${error.message}`;
+        } finally {
+            this.readControllers.delete(controller);
+            if (!this.destroyed) {
+                if (controller.signal.aborted) this.state.retryAllStatus = "Checking stopped. No new preparations were submitted. Click Retry all missing inputs to try again.";
+                this.state.submitting = this.state.retryAllRunning = false; this.render(); this.schedule();
+            }
+        }
     }
 
     /** Schedule status polling using the existing active and idle Processing cadence.

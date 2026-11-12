@@ -31,7 +31,7 @@ function fixture() {
         return root;
     };
     const view = new HabitatAdminView(document);
-    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "loadMore", "cancel", "retry", "refreshInventory", "openFailureLog", "closeFailureLog"]
+    view.bind(Object.fromEntries(["search", "searchMore", "addArea", "removeArea", "setYears", "check", "prepare", "recover", "refreshHistory", "loadMore", "cancel", "retry", "retryAll", "refreshInventory", "openFailureLog", "closeFailureLog"]
         .map(name => [name, (...args) => actions.push([name, ...args])])));
     const state = {options: {minimumYear: 2017, maximumYear: 2019}, sources: [{key: "areas", label: "Country polygons", selection,
         fields: [{name: "code", type: "int"}]}], searching: false, searchError: "", nextSearch: null,
@@ -242,6 +242,34 @@ test("a large failure log previews the first fifty rows and retains the full rep
     assert.match(card.logStatus.textContent, /first 50 of 51 tile failures.*Download the report for the full log/);
     assert.equal(card.report.hidden, false); assert.equal(card.report.href, retained.result.url);
     assert.equal(failures.length, 51);
+    h.view.destroy();
+});
+
+test("retry all names its complete history scope and presents progress, recovery and per-area check errors", () => {
+    const h = fixture();
+    assert.equal(h.view.retryAll.textContent, "Retry all missing inputs");
+    assert.equal(h.view.retryAll.getAttribute("aria-describedby"), h.view.retryAllHelp.id);
+    assert.match(h.view.retryAllHelp.textContent, /all areas and years still saved in preparation history.*current model inputs/);
+    assert.equal(h.view.retryAllStatus.getAttribute("role"), "status");
+    assert.equal(h.view.retryAllErrors.hidden, true);
+    click(h.view.retryAll); assert.deepEqual(h.actions.at(-1), ["retryAll"]);
+    h.state.submitting = h.state.retryAllRunning = true; h.state.retryAllStatus = "Checking saved inputs for Northern area · 2018…";
+    h.view.render(h.state);
+    assert.equal(h.view.retryAll.disabled, true); assert.equal(h.view.retryAll.textContent, "Retrying missing inputs…");
+    assert.equal(h.view.prepare.textContent, "Prepare inputs"); assert.equal(h.view.prepare.disabled, true);
+    assert.equal(h.view.retryAllStatus.textContent, h.state.retryAllStatus);
+    h.state.submitting = h.state.retryAllRunning = false;
+    h.state.retryAllErrors = [{name: "Northern area", year: 2018, detail: "<script>source unavailable</script>"}];
+    h.state.retryAllStatus = "All saved areas and years checked. 0 queued · 0 already cached · 0 already being prepared · 1 could not be checked.";
+    h.view.render(h.state);
+    assert.equal(h.view.retryAllErrors.hidden, false);
+    assert.equal(h.view.retryAllErrors.children[0].textContent, "Northern area · 2018: <script>source unavailable</script>");
+    assert.equal(h.view.retryAllErrors.children[0].children.length, 0);
+    h.state.submissions = [{key: "pending", status: "submitting", name: "South", year: 2018}]; h.state.submitting = true; h.view.render(h.state);
+    assert.equal(h.view.retryAll.disabled, true); assert.doesNotMatch(h.view.retryAllStatus.textContent, /Recover submission/);
+    h.state.submissions[0].status = "uncertain"; h.state.submitting = false; h.view.render(h.state);
+    assert.equal(h.view.retryAll.disabled, true); assert.match(h.view.retryAllStatus.textContent, /Use Recover submission in Requested preparations/);
+    assert.equal(h.view.cards.get("submission:pending").recover.disabled, false);
     h.view.destroy();
 });
 
