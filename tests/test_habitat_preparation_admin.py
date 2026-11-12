@@ -72,6 +72,7 @@ def test_all_preparation_endpoints_require_enabled_administration(
     client = _client(service, password)
     for method, suffix in [
         ("POST", ""),
+        ("POST", "/retry-all"),
         ("GET", ""),
         ("GET", f"/{IDENTIFIER}"),
         ("POST", f"/{IDENTIFIER}/cancel"),
@@ -104,7 +105,7 @@ def test_preparation_mutations_require_same_origin_admin_requests(
         headers: Missing admin header or explicit foreign-origin browser request.
     """
     client = _client(service)
-    for suffix in ["", f"/{IDENTIFIER}/cancel", f"/{IDENTIFIER}/retry"]:
+    for suffix in ["", "/retry-all", f"/{IDENTIFIER}/cancel", f"/{IDENTIFIER}/retry"]:
         response = client.post(
             BASE + suffix, json=BODY, headers=headers, auth=("admin", PASSWORD)
         )
@@ -144,7 +145,7 @@ def test_preparation_admission_rejects_invalid_external_inputs(
     service.submit_habitat_input_preparation.assert_not_called()
 
 
-@pytest.mark.parametrize("suffix", ["", f"/{IDENTIFIER}/retry"])
+@pytest.mark.parametrize("suffix", ["", "/retry-all", f"/{IDENTIFIER}/retry"])
 def test_preparation_commands_keep_the_existing_metadata_body_limit(
     service: Mock, suffix: str
 ) -> None:
@@ -196,20 +197,25 @@ def test_preparation_errors_remain_actionable_and_private(
     assert response.headers["cache-control"] == "private, no-store"
 
 
+@pytest.mark.parametrize(
+    "operation", ["habitat.prepare-inputs.v1", "habitat.retry-missing-inputs.v1"]
+)
 @pytest.mark.parametrize("metadata", [{}, {"inputs": "/private/source.gpkg"}])
 def test_malformed_saved_preparation_metadata_returns_a_private_failure(
     metadata: dict[str, Any],
+    operation: str,
 ) -> None:
     """Validate the persisted inputs envelope before serializing an admin response.
 
     Args:
         metadata: Unexpired stored document with missing or incorrectly shaped inputs.
+        operation: Individual or bulk preparation whose persisted inputs are invalid.
     """
     now = datetime.now(timezone.utc)
     jobs = Mock()
     jobs.get.return_value = {
         "id": IDENTIFIER,
-        "operation": "habitat.prepare-inputs.v1",
+        "operation": operation,
         "status": "failed",
         "created_at": now,
         "updated_at": now,

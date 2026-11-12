@@ -44,6 +44,24 @@ function report(changes = {}) {
         year: 2018, configurationSha256: DIGEST, tileCount: 6, requiredTileCount: 6, failedTileCount: 0, ...changes};
 }
 
+/** Supply a bulk-check receipt without individual area/year inputs.
+ * @param {Object} [changes={}] Lifecycle or report fields for the scenario.
+ * @return {Object} Durable server handoff receipt.
+ */
+function bulkJob(changes = {}) {
+    return job({operation: "habitat.retry-missing-inputs.v1", inputs: {areaCount: 4}, ...changes});
+}
+
+/** Supply bulk-report metadata sharing the same protected download contract.
+ * @param {Object} [changes={}] Count or download metadata overrides.
+ * @return {Object} Published check counts and protected report URLs.
+ */
+function bulkReport(changes = {}) {
+    return {url: `${PREPARATIONS}/${ID}/report`, provenanceUrl: `${PREPARATIONS}/${ID}/provenance`,
+        filename: "habitat-missing-inputs-report.json", bytes: 300, sha256: DIGEST,
+        areaCount: 4, queuedCount: 1, cachedCount: 1, activeCount: 1, failedCount: 1, ...changes};
+}
+
 /** Construct a Catalog Item whose footprint must not determine eligibility.
  * @param {string} id Catalog Item identity.
  * @param {Object} [changes={}] Source format or declared feature geometry differences.
@@ -104,6 +122,62 @@ test("the browser HTTP transport retains its required global receiver", async ()
         return response(options);
     });
     assert.deepEqual(await api.getOptions(), options);
+});
+
+test("bulk handoff sends one keepalive command and uses the ordinary authenticated lifecycle endpoints", async () => {
+    const calls = [], receipt = bulkJob();
+    const api = new HabitatAdminApi(async (url, init) => {
+        calls.push({url, init});
+        return response(url.includes("?") ? {jobs: [receipt, job({jobId: "c".repeat(32)})], nextCursor: null} : receipt, init.method === "POST" ? 202 : 200);
+    });
+    const signal = new AbortController().signal;
+    assert.deepEqual(await api.retryAll("retry-all-saved-inputs", signal), receipt);
+    assert.deepEqual(await api.get(ID, signal), receipt);
+    assert.equal((await api.list({signal})).jobs.length, 2);
+    assert.deepEqual(await api.cancel(ID, signal), receipt);
+    assert.deepEqual(calls.map(call => call.url), [`${PREPARATIONS}/retry-all`, `${PREPARATIONS}/${ID}`, `${PREPARATIONS}?limit=50`, `${PREPARATIONS}/${ID}/cancel`]);
+    assert.deepEqual(JSON.parse(calls[0].init.body), {requestId: "retry-all-saved-inputs"});
+    assert.equal(calls[0].init.keepalive, true);
+    for (const {init} of calls) {
+        assert.equal(init.credentials, "same-origin"); assert.equal(init.cache, "no-store"); assert.equal(init.signal, signal);
+        assert.equal(init.headers.has("X-EOLab-Admin"), init.method === "POST");
+        assert.equal(init.headers.has("Authorization"), false);
+    }
+});
+
+test("bulk receipts validate their own inputs, report counts and protected URLs", async () => {
+    const ready = bulkJob({status: "ready", result: bulkReport()});
+    assert.deepEqual((await new HabitatAdminApi(async () => response(ready)).get(ID)).result, bulkReport());
+    for (const changes of [{inputs: {areaCount: -1}}, {inputs: {name: "Wrong inputs", year: 2018}},
+        {progress: {phase: "preparing", completed: 0, total: 4, unit: "tiles"}},
+        {result: bulkReport({areaCount: 5})}, {result: bulkReport({cachedCount: -1})},
+        {result: bulkReport({url: "/somewhere-else/report"})}]) {
+        const api = new HabitatAdminApi(async () => response({...ready, ...changes}));
+        await assert.rejects(api.get(ID), error => error instanceof HabitatAdminRequestError && error.uncertain);
+    }
+    const expired = bulkJob({status: "expired", inputs: null, metadataExpiresAt: "2026-11-03T08:00:00Z"});
+    assert.equal((await new HabitatAdminApi(async () => response(expired)).get(ID)).inputs, null);
+    await assert.rejects(new HabitatAdminApi(async () => response(job())).retryAll("wrong-bulk-operation"), error => error instanceof HabitatAdminRequestError && error.uncertain);
+});
+
+test("bulk report failures are read on demand and validated against every outcome count", async () => {
+    const metadata = bulkReport(), outcomes = [
+        {name: "North", year: 2018, status: "queued", jobId: "c".repeat(32), detail: null},
+        {name: "South", year: 2018, status: "cached", jobId: null, detail: null},
+        {name: "East", year: 2018, status: "active", jobId: null, detail: null},
+        {name: "West", year: 2018, status: "failed", jobId: null, detail: "Source unavailable."},
+    ];
+    const document = {...metadata, version: 1, outcomes}, calls = [];
+    const api = new HabitatAdminApi(async (url, init) => { calls.push({url, init}); return response(document); });
+    const signal = new AbortController().signal;
+    assert.deepEqual(await api.retryAllFailures(metadata, signal), [{name: "West", year: 2018, detail: "Source unavailable."}]);
+    assert.equal(calls[0].url, metadata.url); assert.equal(calls[0].init.signal, signal);
+    for (const changes of [{version: 2}, {failedCount: 2}, {outcomes: outcomes.slice(1)},
+        {outcomes: outcomes.map((row, index) => index === 0 ? {...row, jobId: null} : row)},
+        {outcomes: outcomes.map((row, index) => index === 3 ? {...row, status: "cached", detail: null} : row)},
+        {outcomes: outcomes.map((row, index) => index === 3 ? {...row, detail: null} : row)}]) {
+        await assert.rejects(new HabitatAdminApi(async () => response({...document, ...changes})).retryAllFailures(metadata), error => error instanceof HabitatAdminRequestError);
+    }
 });
 
 test("Catalog search uses Table polygon metadata and follows provider tokens without source paths or WMS", async () => {

@@ -9,6 +9,11 @@ import { EMPTY_VECTOR_FILTER, normalizeVectorFilter } from "../vector/filter.js"
 
 const PREPARATIONS = "/api/admin/habitat/input-preparations";
 const OPERATION = "habitat.prepare-inputs.v1";
+/** Durable server request that checks saved areas and queues missing input preparations.
+ * @type {string}
+ */
+export const RETRY_ALL_OPERATION = "habitat.retry-missing-inputs.v1";
+const RETRY_ALL_COUNTS = ["areaCount", "queuedCount", "cachedCount", "activeCount", "failedCount"];
 const DIGEST = /^[a-f0-9]{64}$/;
 const JOB_ID = /^[a-f0-9]{32}$/;
 /** Preparation states whose server-side work has not finished.
@@ -31,11 +36,12 @@ export function preparationStatus(job) {
 
 /** Check whether this outcome supports retrying the same saved area and year.
  * @param {Object} job Preparation with its status and available report metadata.
- * @return {boolean} True for retryable outcomes before checking saved-input expiry.
+ * @return {boolean} True for retryable individual preparations before checking saved-input expiry; false for bulk checks.
  */
 export function canRetryPreparation(job) {
     const status = preparationStatus(job);
-    return RETRY_STATES.has(status) || status === "ready" && job.result?.failedTileCount > 0;
+    return job.operation !== RETRY_ALL_OPERATION &&
+        (RETRY_STATES.has(status) || status === "ready" && job.result?.failedTileCount > 0);
 }
 
 /**
@@ -60,13 +66,13 @@ export class HabitatAdminRequestError extends Error {
  * Read the server's preparation lifecycle contract and restrict downloads to that job.
  * @param {Object} value JSON returned by an administration endpoint.
  * @param {string|null} [expectedId=null] Requested handle for detail/cancellation reads.
- * @return {Object} Validated job with a copied, path-free Catalog selection.
+ * @return {Object} Validated individual preparation or bulk-check job, with path-free inputs.
  * @throws {TypeError} If lifecycle, identity, progress or report metadata is invalid.
  */
 function readPreparation(value, expectedId = null) {
     if (!value || !JOB_ID.test(value.jobId) ||
         (expectedId !== null && value.jobId !== expectedId) ||
-        value.operation !== OPERATION || !JOB_STATES.has(value.status)) {
+        ![OPERATION, RETRY_ALL_OPERATION].includes(value.operation) || !JOB_STATES.has(value.status)) {
         throw new TypeError("Invalid preparation identity or status");
     }
     for (const field of ["createdAt", "updatedAt", "expiresAt"]) {
@@ -79,16 +85,22 @@ function readPreparation(value, expectedId = null) {
         throw new TypeError("Invalid saved-input expiry");
     }
     let inputs = null;
+    const bulk = value.operation === RETRY_ALL_OPERATION;
     if (value.inputs !== null) {
         const source = value.inputs;
-        if (!source || typeof source.name !== "string" || !source.name.trim() ||
+        if (bulk) {
+            if (!source || !Number.isSafeInteger(source.areaCount) || source.areaCount < 0) throw new TypeError("Invalid saved-area count");
+            inputs = {areaCount: source.areaCount};
+        } else {
+            if (!source || typeof source.name !== "string" || !source.name.trim() ||
             !Number.isInteger(source.year) || !DIGEST.test(source.configurationSha256) ||
             source.selection?.collectionId !== MOUNTED_VECTOR_COLLECTION_ID) {
-            throw new TypeError("Invalid preparation inputs");
+                throw new TypeError("Invalid preparation inputs");
+            }
+            inputs = {name: source.name, year: source.year,
+                configurationSha256: source.configurationSha256,
+                selection: validateVectorSelection(source.selection)};
         }
-        inputs = {name: source.name, year: source.year,
-            configurationSha256: source.configurationSha256,
-            selection: validateVectorSelection(source.selection)};
     }
     const progress = value.progress;
     if (!progress || !(progress.phase === null || typeof progress.phase === "string")) {
@@ -98,8 +110,8 @@ function readPreparation(value, expectedId = null) {
     if ((completed !== null && (!Number.isInteger(completed) || completed < 0)) ||
         (total !== null && (!Number.isInteger(total) || total < 0)) ||
         (completed !== null && total !== null && completed > total) ||
-        !(progress.unit === undefined || progress.unit === null || progress.unit === "tiles")) {
-        throw new TypeError("Invalid measured tile progress");
+        !(progress.unit === undefined || progress.unit === null || !bulk && progress.unit === "tiles")) {
+        throw new TypeError("Invalid preparation progress");
     }
     if (value.error !== null && (!value.error || typeof value.error.code !== "string" ||
         typeof value.error.detail !== "string")) throw new TypeError("Invalid preparation failure");
@@ -108,12 +120,15 @@ function readPreparation(value, expectedId = null) {
     if (result !== null && (!result || value.status !== "ready" ||
         result.url !== `${base}/report` || result.provenanceUrl !== `${base}/provenance` ||
         typeof result.filename !== "string" || !result.filename || /[/\\]/.test(result.filename) ||
-        !Number.isInteger(result.bytes) || result.bytes < 0 || !DIGEST.test(result.sha256) ||
-        !Number.isInteger(result.year) || !DIGEST.test(result.configurationSha256) ||
-        ![result.tileCount, result.requiredTileCount, result.failedTileCount]
-            .every(count => Number.isSafeInteger(count) && count >= 0) ||
-        result.requiredTileCount !== result.tileCount + result.failedTileCount)) {
+        !Number.isInteger(result.bytes) || result.bytes < 0 || !DIGEST.test(result.sha256))) {
         throw new TypeError("Invalid preparation report");
+    }
+    if (result !== null) {
+        if (bulk ? !RETRY_ALL_COUNTS.every(key => Number.isSafeInteger(result[key]) && result[key] >= 0) ||
+            result.areaCount !== result.queuedCount + result.cachedCount + result.activeCount + result.failedCount :
+            !Number.isInteger(result.year) || !DIGEST.test(result.configurationSha256) ||
+            ![result.tileCount, result.requiredTileCount, result.failedTileCount].every(count => Number.isSafeInteger(count) && count >= 0) ||
+            result.requiredTileCount !== result.tileCount + result.failedTileCount) throw new TypeError("Invalid preparation report counts");
     }
     return {...value, inputs, progress: {...progress, completed, total, unit: progress.unit ?? null}};
 }
@@ -449,5 +464,48 @@ export class HabitatAdminApi {
             method: "POST", signal, headers: {"Content-Type": "application/json"},
             body: JSON.stringify({requestId}),
         }, readPreparation);
+    }
+
+    /** Ask the server to check all saved areas and prepare missing inputs after this page closes.
+     * @param {string} requestId Stable identifier reused to recover this exact bulk request.
+     * @param {AbortSignal} [signal] HTTP cancellation; accepted server work continues.
+     * @return {Promise<Object>} Durable bulk job receipt, including a previous acceptance of this request.
+     * @throws {HabitatAdminRequestError} For definite rejection or uncertain acceptance.
+     * @throws {DOMException} If HTTP waiting is cancelled; retain the request ID for recovery.
+     */
+    retryAll(requestId, signal) {
+        return this.#request(`${PREPARATIONS}/retry-all`, {method: "POST", signal, keepalive: true,
+            headers: {"Content-Type": "application/json"}, body: JSON.stringify({requestId})}, value => {
+            const job = readPreparation(value);
+            if (job.operation !== RETRY_ALL_OPERATION) throw new TypeError("Invalid bulk preparation receipt");
+            return job;
+        });
+    }
+
+    /** Read per-area failures from a completed bulk-check report.
+     * @param {Object} report Validated bulk report metadata from its job receipt or history.
+     * @param {AbortSignal} [signal] Cancel reading a closed or expired disclosure.
+     * @return {Promise<Array<{name:string,year:number,detail:string}>>} Failed checks or admissions, without source paths.
+     * @throws {HabitatAdminRequestError} If the report is unavailable or does not match its metadata.
+     * @throws {DOMException} If the caller cancels the read.
+     */
+    retryAllFailures(report, signal) {
+        return this.#request(report.url, {signal}, value => {
+            if (!value || value.version !== 1 || !RETRY_ALL_COUNTS.every(key => value[key] === report[key]) ||
+                !Array.isArray(value.outcomes) || value.outcomes.length !== report.areaCount) throw new TypeError("Invalid saved-area report");
+            const counts = {queued: 0, cached: 0, active: 0, failed: 0}, failures = [];
+            for (const outcome of value.outcomes) {
+                if (!outcome || typeof outcome.name !== "string" || !outcome.name.trim() || !Number.isInteger(outcome.year) ||
+                    !Object.hasOwn(counts, outcome.status) ||
+                    (outcome.status === "queued" ? typeof outcome.jobId !== "string" || !JOB_ID.test(outcome.jobId) : outcome.jobId !== null) ||
+                    (outcome.status === "failed" ? typeof outcome.detail !== "string" || !outcome.detail : outcome.detail !== null)) {
+                    throw new TypeError("Invalid saved-area outcome");
+                }
+                counts[outcome.status]++;
+                if (outcome.status === "failed") failures.push({name: outcome.name, year: outcome.year, detail: outcome.detail});
+            }
+            if (Object.entries(counts).some(([status, count]) => count !== report[`${status}Count`])) throw new TypeError("Invalid saved-area outcome counts");
+            return failures;
+        });
     }
 }

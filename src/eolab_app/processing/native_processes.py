@@ -13,6 +13,9 @@ from eolab_app.processing.habitat_calculation import habitat_process_target
 from eolab_app.processing.habitat_preparation import (
     habitat_input_preparation_process_target,
 )
+from eolab_app.processing.habitat_bulk_preparation import (
+    habitat_bulk_preparation_process_target,
+)
 
 
 def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
@@ -38,6 +41,7 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
             temporal_stack_process_target,
             habitat_process_target,
             habitat_input_preparation_process_target,
+            habitat_bulk_preparation_process_target,
             summary_process,
         ),
         recycle_bytes=1024**3,

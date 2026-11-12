@@ -357,7 +357,10 @@ administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
 **Retry all missing inputs** checks all areas and years still saved in preparation
 history against current inputs, reuses cached tiles, and skips matching work
-already in progress.
+already in progress. Once the request is accepted, checks and preparation continue
+after you leave the page. Return to preparation history for the check report and
+individual download progress; stopping a check leaves already queued preparations
+running.
 Partial coverage still needs enough usable data and reference sites to fit the
 model; missing pixels are never treated as zero.
 
