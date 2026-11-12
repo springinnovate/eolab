@@ -257,6 +257,7 @@ export class HabitatAdminView {
     }
 
     /** Show available diagnostics without replacing the focused log disclosure.
+     * Explain empty source images in plain language and retain the provider's technical details.
      * @param {Object} card Preparation card from jobCard.
      * @param {string} label Area and year for the disclosure's accessible name.
      * @param {Object|null} report Unexpired report metadata, if the job produced one.
@@ -284,8 +285,11 @@ export class HabitatAdminView {
                 const stage = failure.stage === "download" ? "Download" : failure.stage;
                 const status = failure.httpStatus === null ? "" : ` · HTTP ${failure.httpStatus}`;
                 const row = this.element("li");
-                row.append(this.element("strong", `Tile column ${failure.column}, row ${failure.row} · ${stage}${status}`),
-                    this.element("p", failure.detail));
+                row.append(this.element("strong", `Tile column ${failure.column}, row ${failure.row} · ${stage}${status}`));
+                if (failure.code === "earth_engine_empty_image") {
+                    row.append(this.element("p", "A source calculation returned no image data, so this tile could not be prepared. Ask the administrator to check the source data and calculation for the selected year."),
+                        this.element("p", `Technical details: ${failure.detail}`));
+                } else row.append(this.element("p", failure.detail));
                 card.logRows.append(row);
             }
         }
