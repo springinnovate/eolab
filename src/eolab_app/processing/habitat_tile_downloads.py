@@ -89,11 +89,12 @@ def download_habitat_tiles(
     fetch: Callable[[RasterGrid], bytes],
     check_cancelled: Callable[[], None],
 ) -> Generator[tuple[HabitatTileDownload, bytes | Exception | None], None, None]:
-    """Download small groups of tiles and adjust the next group's request count.
+    """Refill available download slots while adapting concurrency to HTTP 429.
 
-    Start with one request. Grow after successful downloads and halve the group size
-    after any 429. Wait for the active group and the cooldown before dispatching
-    more requests. A repeatedly throttled tile eventually returns its error.
+    Start with one request and grow after successful downloads, up to eight.
+    A 429 halves the allowed concurrency and pauses new requests for a cooldown;
+    requests already in flight may finish and publish during that pause. Retry
+    throttled tiles before new work, returning their error after the retry budget.
     Close this iterator on early exit so no request outlives the native attempt.
 
     Args:
@@ -104,61 +105,64 @@ def download_habitat_tiles(
     Yields:
         A completed tile and its bytes, terminal error, or None if another
         attempt already cached it. Completion order can differ from grid order.
+
+    Raises:
+        Exception: Input iteration, cancellation checking or cache access failed.
+        BaseException: A request aborted outside the ordinary Exception hierarchy.
     """
-    retries: deque[tuple[HabitatTileDownload, int]] = deque()
+    pending: deque[tuple[HabitatTileDownload, int]] = deque()
     width, successes = 1, 0
     backoff, resume_at = 1.0, 0.0
     pool = ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_TILES)
+    active: dict[Future[bytes], tuple[HabitatTileDownload, int]] = {}
     try:
         while True:
             check_cancelled()
-            active: dict[Future[bytes], tuple[HabitatTileDownload, int]] = {}
             while len(active) < width:
                 check_cancelled()
-                if retries:
-                    tile, attempt = retries.popleft()
+                if pending:
+                    tile, attempt = pending.popleft()
                 elif (tile := next(tiles, None)) is not None:
                     attempt = 0
                 else:
                     break
-                while (
-                    remaining := resume_at - monotonic()
-                ) > 0 and not tile.entry.exists():
-                    sleep(min(remaining, _CANCEL_CHECK_INTERVAL))
-                    check_cancelled()
                 if tile.entry.exists():
                     yield tile, None
+                elif resume_at > monotonic():
+                    pending.appendleft((tile, attempt))
+                    break
                 else:
                     active[pool.submit(fetch, tile.grid)] = tile, attempt
             if not active:
-                return
+                if not pending:
+                    return
+                sleep(min(max(0.0, resume_at - monotonic()), _CANCEL_CHECK_INTERVAL))
+                continue
 
+            check_cancelled()
+            done, _ = wait(
+                active, timeout=_CANCEL_CHECK_INTERVAL, return_when=FIRST_COMPLETED
+            )
             throttled = False
-            while active:
-                check_cancelled()
-                done, _ = wait(
-                    active, timeout=_CANCEL_CHECK_INTERVAL, return_when=FIRST_COMPLETED
-                )
-                for request in done:
-                    tile, attempt = active.pop(request)
-                    error = request.exception()
-                    if error is None:
+            for request in done:
+                tile, attempt = active.pop(request)
+                error = request.exception()
+                if error is None:
+                    if monotonic() >= resume_at:
                         successes += 1
-                        yield tile, request.result()
+                    yield tile, request.result()
+                    continue
+                if not isinstance(error, Exception):
+                    raise error
+                http_error = get_provider_http_error(error)
+                if http_error is not None and http_error.status_code == 429:
+                    throttled = True
+                    delay = _throttle_delay(_retry_after_seconds(http_error), backoff)
+                    resume_at = max(resume_at, monotonic() + delay)
+                    if attempt < _MAX_THROTTLE_RETRIES:
+                        pending.appendleft((tile, attempt + 1))
                         continue
-                    if not isinstance(error, Exception):
-                        raise error
-                    http_error = get_provider_http_error(error)
-                    if http_error is not None and http_error.status_code == 429:
-                        throttled = True
-                        delay = _throttle_delay(
-                            _retry_after_seconds(http_error), backoff
-                        )
-                        resume_at = max(resume_at, monotonic() + delay)
-                        if attempt < _MAX_THROTTLE_RETRIES:
-                            retries.append((tile, attempt + 1))
-                            continue
-                    yield tile, error
+                yield tile, error
             if throttled:
                 width = max(1, width // 2)
                 successes = 0

@@ -819,6 +819,7 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
     now = 100.0
     received: list[tuple[float, float]] = []
     initial_pair = ThreadBarrier(2, timeout=5)
+    throttle_observed = ThreadEvent()
     cache = tmp_path / "cache"
     pixels = {7 + 20 * index: _tile_bytes(7 + 20 * index, 31) for index in range(5)}
     lock = Lock()
@@ -839,6 +840,8 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
             received.append((left, now))
         if first and left in (47, 67):
             initial_pair.wait()
+        if first and left == 67:
+            assert throttle_observed.wait(timeout=5)
         if first and left == 47:
             return (
                 {"status": "429", "retry-after": "7"},
@@ -849,6 +852,19 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
                 cache / stack.raster_configuration_sha256 / "2_-1" / "tile.tif"
             ).exists()
         return {"status": "200"}, pixels[left]
+
+    def observe_throttle(retry_after: float, backoff: float) -> float:
+        """Release the sibling response after the scheduler observes throttling.
+
+        Args:
+            retry_after: Provider's requested delay.
+            backoff: Local minimum delay.
+
+        Returns:
+            Delay required before another request may start.
+        """
+        throttle_observed.set()
+        return max(retry_after, backoff)
 
     def advance_clock(seconds: float) -> None:
         """Advance the scheduler's clock without a wall-clock wait.
@@ -862,6 +878,7 @@ def test_rate_limit_delays_new_requests_and_retries_the_missing_tile(
     _use_offline_earth_engine(monkeypatch, respond)
     monkeypatch.setattr(habitat_tile_downloads, "monotonic", lambda: now)
     monkeypatch.setattr(habitat_tile_downloads, "sleep", advance_clock)
+    monkeypatch.setattr(habitat_tile_downloads, "_throttle_delay", observe_throttle)
     tiles = get_habitat_tiles(
         box(7, 11, 107, 31),
         stack,
