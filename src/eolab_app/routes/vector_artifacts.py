@@ -32,7 +32,8 @@ from eolab_app.vector.models import (
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.styling import VectorStyleService
-from eolab_app.vector.extent_operation import FeatureExtent
+from eolab_app.vector.extent_operation import ArtifactExtentSelection, FeatureExtent
+from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector_field_values import (
     VectorFieldValuePage,
     VectorFieldValueQuery,
@@ -49,6 +50,8 @@ def create_artifact_vector_router(
     publication: VectorPublicationService,
     styles: VectorStyleService,
     read_owner: Callable[[Request, Response], str],
+    *,
+    extent_executor: ExtentJobs,
 ) -> APIRouter:
     """Connect private result identities to existing vector map and field operations.
 
@@ -57,6 +60,7 @@ def create_artifact_vector_router(
         publication: Existing GeoServer publication and filter owner.
         styles: Existing vector style and numeric/category field reader.
         read_owner: Composition-supplied Processing session and mutation boundary.
+        extent_executor: Existing Jobs-backed filtered extent execution.
 
     Returns:
         Private routes using run/file IDs; no catalog registration or analysis selection.
@@ -327,11 +331,32 @@ def create_artifact_vector_router(
         Raises:
             SourceFileError: If the result or its bounded extent is unavailable.
         """
-        return await apply_to_layer(
-            identity,
-            request,
-            lambda value: sources.measure_layer_extent(value.layer, body.filter),
-        )
+
+        async def measure() -> dict[str, Any]:
+            """Retain the original file until Jobs confirms its reader has stopped.
+
+            Returns:
+                Existing extent result after the source owner rechecks availability.
+
+            Raises:
+                SourceFileError: If source ownership or expiry rejects the read.
+                VectorFeatureError: If Jobs admission or native extent reading fails.
+            """
+            async with sources.files.open(*identity) as source:
+                return await extent_executor.measure_artifact(
+                    ArtifactExtentSelection(
+                        kind="runArtifact",
+                        jobId=identity[1],
+                        artifactId=identity[2],
+                        filter=body.filter,
+                    ),
+                    source.lease_id,
+                )
+
+        try:
+            return await run_until_http_disconnect(request, measure())
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(499, "Vector request cancelled") from error
 
     @router.get("/field-values", response_model=VectorFieldValuePage)
     async def field_values(
