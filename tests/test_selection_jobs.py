@@ -1,4 +1,4 @@
-"""Verify exact feature counts across Catalog, Jobs, and browser HTTP boundaries."""
+"""Verify vector selections across Catalog, Jobs, and browser HTTP boundaries."""
 
 import asyncio
 import hashlib
@@ -19,6 +19,7 @@ from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.catalog import StacVectorCatalog
+from eolab_app.vector.extent_jobs import ExtentJobs
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.vector.sampling import VectorSamplingService
@@ -236,9 +237,21 @@ def test_application_selects_only_through_jobs(
         assert expected in response.text
 
 
+@pytest.mark.parametrize(
+    "route_suffix, executor_name, executor_type",
+    [
+        pytest.param("/areas", "selection_executor", SelectionJobs, id="measurement"),
+        pytest.param("/extent", "extent_executor", ExtentJobs, id="extent"),
+    ],
+)
 @pytest.mark.parametrize("status", ["queued", "running"])
-def test_route_disconnect_cancels_only_its_measurement(
-    outline_case: tuple, tmp_path: Path, status: str
+def test_route_disconnect_cancels_only_its_job(
+    outline_case: tuple[CatalogSelection, dict[str, Any], str],
+    tmp_path: Path,
+    status: str,
+    route_suffix: str,
+    executor_name: str,
+    executor_type: type[SelectionJobs] | type[ExtentJobs],
 ) -> None:
     """Propagate the route's disconnect to the exact admitted Jobs identity.
 
@@ -246,6 +259,9 @@ def test_route_disconnect_cancels_only_its_measurement(
         outline_case: Real catalog descriptor and source.
         tmp_path: Fixture source mount.
         status: State when the browser connection is lost.
+        route_suffix: Selection or extent endpoint under the vector sampling router.
+        executor_name: Service constructor keyword for that endpoint's Jobs adapter.
+        executor_type: Production Jobs adapter that owns the submitted operation.
     """
     selection, _, url = outline_case
 
@@ -295,13 +311,13 @@ def test_route_disconnect_cancels_only_its_measurement(
             service = VectorSamplingService(
                 StacVectorCatalog(catalog_http, url),
                 MountedVectorResolver(tmp_path),
-                selection_executor=SelectionJobs(JobsClient(job_http, TOKEN)),
+                **{executor_name: executor_type(JobsClient(job_http, TOKEN))},
             )
             router = create_vector_sampling_router(service)
             endpoint = next(
                 route.endpoint
                 for route in router.routes
-                if route.path.endswith("/areas")
+                if route.path.endswith(route_suffix)
             )
             task = asyncio.create_task(
                 endpoint(
