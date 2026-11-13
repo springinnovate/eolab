@@ -257,7 +257,7 @@ def read_raster_categorical_statistics(
             ):
                 selected_area.projected_geometries.close()
     values = numpy.asarray(numpy.ma.getdata(sample), dtype=numpy.float64)
-    valid_sample_mask = ~numpy.ma.getmaskarray(sample) & numpy.isfinite(values)
+    valid_sample_mask = ~numpy.ma.getmaskarray(sample)
     selected_valid_sample_mask = valid_sample_mask & (sample_areas_hectares > 0)
     sample = numpy.ma.array(values, mask=~selected_valid_sample_mask)
     statistics = summarize_raster_sample(

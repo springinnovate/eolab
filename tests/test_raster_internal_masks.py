@@ -162,17 +162,19 @@ def write_masked_raster(
 
 
 @pytest.mark.parametrize("nodata", [None, -9999.0, float("nan"), 0.0])
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_exact_pixels_and_partial_blocks_share_all_validity_exclusions(
-    tmp_path: Path, nodata: float | None
+    tmp_path: Path, nodata: float | None, dtype: str
 ) -> None:
     """Combine masks, NoData and nonfinite exclusions without losing valid zero.
 
     Args:
         tmp_path: Native fixture directory.
         nodata: Exercise absent, finite, NaN and explicit zero NoData.
+        dtype: Admitted floating-point source precision.
     """
-    values = np.arange(35 * 37, dtype="float32").reshape(35, 37)
-    values[0, :5] = [0, 99, -9999, np.nan, np.inf]
+    values = np.arange(35 * 37, dtype=dtype).reshape(35, 37)
+    values[0, :6] = [0, 99, -9999, np.nan, np.inf, -np.inf]
     validity = np.ones(values.shape, dtype=bool)
     validity[0, 1] = False
     validity[15:20, 29:34] = False
@@ -188,7 +190,7 @@ def test_exact_pixels_and_partial_blocks_share_all_validity_exclusions(
             0
         ].tolist()
     )
-    for column in range(5):
+    for column in range(6):
         pixel = read_raster_pixel(path, -2 + (column + 0.5) * 4 / 37, 2 - 0.5 * 4 / 35)
         assert pixel.in_bounds
         assert pixel.value == (
@@ -216,23 +218,29 @@ def test_sampled_continuous_categorical_and_paired_reads_keep_native_masks(
         overviews: Missing, mask-aware average, or pre-mask overview pyramid.
     """
     values = (np.indices((600, 600)).sum(axis=0) % 3).astype("float32")
+    values[:, 2] = np.nan
+    values[:, 7] = np.inf
+    values[:, 11] = -np.inf
+    values[:, 16] = -9999
     validity = np.ones(values.shape, dtype=bool)
     validity[180:420, 180:420] = False
     values[300, 300] = np.nan
     path = write_masked_raster(
-        tmp_path / "x.tif", values, validity, overviews=overviews
+        tmp_path / "x.tif", values, validity, nodata=-9999, overviews=overviews
     )
     y_validity = validity.copy()
     y_validity[:150, :] = False
     y_path = write_masked_raster(
-        tmp_path / "y.tif", values, y_validity, overviews=overviews
+        tmp_path / "y.tif", values, y_validity, nodata=-9999, overviews=overviews
     )
     # Independent reference: the established 127-cell grid selects each cell's
     # original integer center, never a resampled category or overview mask.
     edges = np.floor(np.arange(128) * 600 / 127).astype(int)
     centers = edges[:-1] + (edges[1:] - edges[:-1]) // 2
     selected = values[np.ix_(centers, centers)]
-    selected_valid = validity[np.ix_(centers, centers)] & np.isfinite(selected)
+    selected_valid = (
+        validity[np.ix_(centers, centers)] & np.isfinite(selected) & (selected != -9999)
+    )
     with rasterio.open(path) as source:
         sampled, plan = sample_grid.read_source_window_sample_grid(
             source, Window(0, 0, 600, 600)
@@ -250,6 +258,92 @@ def test_sampled_continuous_categorical_and_paired_reads_keep_native_masks(
     paired = read_raster_paired_statistics(path, y_path, None)
     both = selected_valid & y_validity[np.ix_(centers, centers)]
     assert paired.paired_sample_count == int(both.sum())
+
+
+@pytest.mark.parametrize(
+    "dtype", sorted(source_contract.SUPPORTED_RASTER_ANALYSIS_DATA_TYPES)
+)
+def test_exact_and_sampled_readers_preserve_admitted_numeric_values(
+    tmp_path: Path, dtype: str
+) -> None:
+    """Preserve finite extremes and valid zero when sampling widens source values.
+
+    Args:
+        tmp_path: Native fixture directory.
+        dtype: Each numeric type admitted by the neutral analysis reader.
+    """
+    limits = np.finfo(dtype) if dtype.startswith("float") else np.iinfo(dtype)
+    values = np.array([[0, limits.min, limits.max], [3, 4, 5], [6, 7, 8]], dtype=dtype)
+    validity = np.array([[True, True, True], [True, False, True], [True, True, True]])
+    path = write_masked_raster(tmp_path / "extremes.tif", values, validity, nodata=3)
+    expected_validity = validity & (values != 3)
+    expected_values = values[expected_validity].astype(np.float64)
+    with rasterio.open(path) as source:
+        window = Window(0, 0, 3, 3)
+        exact_plan = plan_exact_source_window(source, window)
+        assert exact_plan is not None
+        exact = read_exact_source_window(source, exact_plan)
+        plan = sample_grid.plan_source_window_sample_grid(source, window)
+        sampled = sample_grid.read_planned_sample_grid(source, plan, None)
+    for result in (exact, sampled):
+        assert np.array_equal(~np.ma.getmaskarray(result), expected_validity)
+        assert np.array_equal(result.compressed(), expected_values)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_overview_statistics_preserve_source_validity(
+    tmp_path: Path, dtype: str
+) -> None:
+    """Keep NoData and nonfinite overview cells out of ordinary and paired results.
+
+    Args:
+        tmp_path: Native fixture directory.
+        dtype: Admitted floating-point source precision.
+    """
+    columns = np.repeat(
+        np.array([0, 1, 2, -9999, np.nan, np.inf, -np.inf, 4], dtype=dtype), 128
+    )
+    values = np.tile(columns, (1024, 1))
+    path = tmp_path / "overview.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=1024,
+        height=1024,
+        count=1,
+        dtype=dtype,
+        nodata=-9999,
+        transform=from_origin(-2, 2, 4 / 1024, 4 / 1024),
+        crs="EPSG:4326",
+        tiled=True,
+        blockxsize=128,
+        blockysize=128,
+    ) as target:
+        target.write(values, 1)
+        target.build_overviews([2, 4], Resampling.nearest)
+    with rasterio.open(path) as source:
+        window = Window(0, 0, 1024, 1024)
+        sampled, plan = sample_grid.read_source_window_sample_grid(source, window)
+        paired_sample = sample_grid.read_planned_sample_grid_from_overview(
+            source, window, plan, None
+        )
+        assert paired_sample is not None
+    edges = np.floor(np.arange(128) * 1024 / 127).astype(int)
+    centers = edges[:-1] + (edges[1:] - edges[:-1]) // 2
+    selected = values[np.ix_(centers, centers)]
+    expected_validity = np.isfinite(selected) & (selected != -9999)
+    for result in (sampled, paired_sample):
+        assert np.array_equal(~np.ma.getmaskarray(result), expected_validity)
+        assert np.array_equal(result.compressed(), selected[expected_validity])
+    statistics = read_raster_statistics(path, WholeRasterSamplingArea())
+    paired = read_raster_paired_statistics(path, path, None)
+    assert statistics.valid_sample_count == int(expected_validity.sum())
+    assert statistics.sample_minimum == 0
+    assert statistics.sample_maximum == 4
+    assert paired.paired_sample_count == int(expected_validity.sum())
+    assert sum(statistics.histogram.counts) == statistics.valid_sample_count
+    assert sum(paired.histogram.x_marginal_counts) == paired.paired_sample_count
 
 
 def test_clip_output_can_be_summarized_and_clipped_again(tmp_path: Path) -> None:

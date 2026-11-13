@@ -412,8 +412,8 @@ def read_planned_sample_grid_from_overview(
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
-        Masked values matching the plan shape, or ``None`` when the source has
-        no suitable embedded overview.
+        Values matching the plan shape with all nonfinite and NoData cells
+        masked, or ``None`` when the source has no suitable embedded overview.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
@@ -461,11 +461,8 @@ def read_planned_sample_grid_from_overview(
         overview_pixel_value = overview[overview_row, overview_column]
         if numpy.ma.is_masked(overview_pixel_value):
             continue
-        finite_value = float(overview_pixel_value)
-        if not math.isfinite(finite_value):
-            continue
         sample_row, sample_column = divmod(cell_index, plan.width)
-        sample_values[sample_row, sample_column] = finite_value
+        sample_values[sample_row, sample_column] = float(overview_pixel_value)
         invalid_sample_mask[sample_row, sample_column] = False
     return numpy.ma.array(sample_values, mask=invalid_sample_mask)
 
@@ -556,21 +553,20 @@ def _finite_block_value(
     row: int,
     column: int,
 ) -> float | None:
-    """Return a finite pixel value, or None when that pixel is masked or nonfinite.
+    """Return a finite pixel value, or None when the native reader masked it.
 
     Args:
-        block: Masked native block pixels.
+        block: Native block whose mask excludes nonfinite, NoData and invalid cells.
         row: Zero-based row inside ``block``.
         column: Zero-based column inside ``block``.
 
     Returns:
-        Finite float, or ``None`` for masked/non-finite data.
+        Finite float, or ``None`` for masked data.
     """
     value = block[row, column]
     if numpy.ma.is_masked(value):
         return None
-    finite_value = float(value)
-    return finite_value if math.isfinite(finite_value) else None
+    return float(value)
 
 
 def plan_sample_grid_for_source_positions(
@@ -674,7 +670,7 @@ def read_planned_sample_grid(
         cancellation_requested: Optional thread-safe check that returns true when the read is cancelled.
 
     Returns:
-        Masked sample-grid values.
+        Sample-grid values with all nonfinite, NoData and invalid cells masked.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.

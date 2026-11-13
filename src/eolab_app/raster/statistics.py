@@ -399,7 +399,8 @@ def summarize_raster_sample(
     """Calculate counts, percentiles and a histogram from masked raster samples.
 
     Args:
-        sample: Finite/nodata and selected-area masked band-one values.
+        sample: Band-one values from the neutral raster reader, whose mask
+            excludes nonfinite, NoData and invalid cells, plus any area exclusions.
         source_window: Integral source envelope represented by the sample.
         sampling_area: Validated scope and selection provenance.
         sampling_method: Exact native window or bounded center-grid method.
@@ -413,7 +414,6 @@ def summarize_raster_sample(
     source_width, source_height = int(source_window.width), int(source_window.height)
     sample_height, sample_width = sample.shape
     sample_values = numpy.asarray(sample.compressed(), dtype=numpy.float64)
-    sample_values = sample_values[numpy.isfinite(sample_values)]
     if sample_values.size == 0:
         raise NoValidRasterSamplesError
 
