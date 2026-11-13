@@ -47,9 +47,10 @@ class VectorSummaryRequest(BaseModel):
         vector: Original source selection and attribute names.
         summaries: Ordered field/statistic pairs, each producing its own column.
             Repeated fields share their original values and all pairs share geometry.
-        boundary_tolerance_m: Approximate simplification distance using a local
-            equirectangular scale per group, or zero to retain the dissolved boundary.
-            Simplification affects geometry only, never attribute statistics.
+        boundary_tolerance_m: Approximate overview detail in metres, converted to
+            WGS84 degrees for triangle-area simplification, or zero to retain detail.
+            This is not a maximum displacement. Invalid overview geometry retains
+            the detailed dissolved boundary. Statistics always use original values.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

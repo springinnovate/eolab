@@ -1,10 +1,10 @@
 """Vector source reads honor caller time budgets without relaxing other limits."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
-from shapely.geometry import box, mapping
+from shapely.geometry import Polygon, box, mapping
 
 from catalog_selection_support import write_selection
 from eolab_app.bounded_geometry import GeometryValidationError
@@ -111,4 +111,85 @@ def test_longer_reads_still_stop_on_cancellation(
         with polygon_records(
             source, (), cancellation_requested=lambda: True, timeout_seconds=600
         ) as records:
+            list(records)
+
+
+@pytest.mark.parametrize(
+    "x,y,z,message",
+    [
+        (0, 0, float("inf"), "finite positions"),
+        (0, 0, float("nan"), "finite positions"),
+        (181, 0, 1, "canonical WGS 84 bounds"),
+        (0, 91, 1, "canonical WGS 84 bounds"),
+    ],
+)
+def test_native_polygon_validation_checks_z_and_canonical_bounds(
+    tmp_path: Path, x: float, y: float, z: float, message: str
+) -> None:
+    """Reject invalid native ordinates without weakening the original-source contract.
+
+    Args:
+        tmp_path: Isolated native vector directory.
+        x: Longitude for the source polygon's southwest vertex.
+        y: Latitude for the source polygon's southwest vertex.
+        z: Third ordinate, which must be finite even though analysis uses x/y.
+        message: Source-validation diagnostic expected from the original reader.
+    """
+    geometry = Polygon(
+        [(x, y, z), (x + 0.1, y, z), (x + 0.1, y + 0.1, z), (x, y + 0.1, z), (x, y, z)]
+    )
+    source = write_selection(tmp_path / "invalid.gpkg", [mapping(geometry)])
+    with pytest.raises(GeometryValidationError, match=message):
+        with polygon_records(source, (), max_feature_coordinates=None) as records:
+            list(records)
+
+
+def test_native_ring_validation_counts_holes_and_preserves_finite_z(
+    tmp_path: Path,
+) -> None:
+    """Count all native rings while retaining legitimate finite three-dimensional data.
+
+    Args:
+        tmp_path: Isolated original GeoPackage.
+    """
+    geometry = Polygon(
+        [(0, 0, 3), (2, 0, 3), (2, 2, 3), (0, 2, 3), (0, 0, 3)],
+        [[(0.5, 0.5, 3), (1, 0.5, 3), (1, 1, 3), (0.5, 1, 3), (0.5, 0.5, 3)]],
+    )
+    source = write_selection(tmp_path / "rings.gpkg", [mapping(geometry)])
+    with polygon_records(source, (), max_feature_coordinates=10) as records:
+        result, _ = next(records)
+        assert all(
+            position[2] == 3 for ring in result["coordinates"] for position in ring
+        )
+    with pytest.raises(GeometryValidationError, match="coordinate buffer"):
+        with polygon_records(source, (), max_feature_coordinates=9) as records:
+            list(records)
+
+
+def test_coordinate_ceiling_rejects_before_allocating_native_array(
+    source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enforce an interactive coordinate budget before allocating a numeric ring copy.
+
+    Args:
+        source: Real original polygon containing more than four coordinates.
+        monkeypatch: Detect an allocation that should be avoided by the budget.
+    """
+
+    def forbid_array(*args: Any, **kwargs: Any) -> NoReturn:
+        """Fail if coordinate conversion happens before the oversized-ring rejection.
+
+        Args:
+            args: Numeric ring passed for conversion.
+            kwargs: NumPy conversion options.
+
+        Raises:
+            AssertionError: An over-budget ring reached numeric-array allocation.
+        """
+        raise AssertionError("Coordinate ceiling must precede array allocation")
+
+    monkeypatch.setattr("eolab_app.bounded_vector.np.asarray", forbid_array)
+    with pytest.raises(GeometryValidationError, match="coordinate buffer"):
+        with polygon_records(source, (), max_feature_coordinates=4) as records:
             list(records)

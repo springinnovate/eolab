@@ -4,14 +4,21 @@ from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import statistics
 from typing import Literal
 
 import fiona
-from shapely import union_all
-from shapely.affinity import scale
+from shapely import (
+    coverage_simplify,
+    disjoint_subset_union_all,
+    get_num_geometries,
+    get_parts,
+    is_valid_reason,
+)
+from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
@@ -32,6 +39,8 @@ from eolab_app.processing.vector_summary_models import (
     VectorSummarySpec,
     VectorSummaryStatistic,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -117,38 +126,86 @@ def _read_summary_schema(
         return group_type, integer_fields
 
 
-def _simplify_group_boundary(
-    geometry: BaseGeometry, tolerance_m: float
-) -> BaseGeometry:
-    """Simplify a group's boundary using approximate metres at its middle latitude.
+def _merge_group_polygons(
+    polygons: list[BaseGeometry],
+    tolerance_m: float,
+    group_value: str | int | float | bool | None,
+) -> MultiPolygon:
+    """Dissolve original polygon parts and simplify their valid shared boundaries.
 
-    A local equirectangular scale converts longitude and latitude to distances.
-    This remains finite for wide groups and preserves disconnected parts; its
-    distance accuracy decreases as a group spans more latitudes. The operation
-    is intended for overview geometry, not measurements or changes to statistics.
+    Native disjoint-subset union limits overlay work to intersecting parts,
+    without assuming the original features have perfectly matching edges.
+    Visvalingam-Whyatt coverage simplification then removes boundary triangles
+    while retaining polygon components. Its tolerance is an approximate detail
+    scale based on triangle area, not a maximum displacement. Coordinates remain
+    in WGS84 to avoid invalidating touching rings through an affine round trip.
+    A failed or invalid simplification retains the exact valid dissolved result.
 
     Args:
-        geometry: Valid dissolved WGS84 Polygon or MultiPolygon.
-        tolerance_m: Nonnegative approximate tolerance; zero retains the boundary.
+        polygons: Nonempty group of validated original WGS84 polygons.
+        tolerance_m: Nonnegative approximate boundary detail in metres; zero
+            preserves detail. Conversion to degrees uses metres per degree at
+            the equator, giving finer east-west detail away from the equator.
+        group_value: Original grouping value used to identify native diagnostics.
 
     Returns:
-        Topology-preserving simplified geometry in WGS84.
+        Valid nonempty dissolved polygons, using original detail if necessary.
+
+    Raises:
+        ProcessingError: If the original polygons cannot form a valid union.
     """
-    if tolerance_m == 0:
-        return geometry
-    _, south, _, north = geometry.bounds
-    metres_per_degree = math.pi * 6_371_008.8 / 180
-    longitude_scale = metres_per_degree * math.cos(math.radians((south + north) / 2))
-    projected = scale(
-        geometry, xfact=longitude_scale, yfact=metres_per_degree, origin=(0, 0)
-    )
-    simplified = projected.simplify(tolerance_m, preserve_topology=True)
-    return scale(
-        simplified,
-        xfact=1 / longitude_scale,
-        yfact=1 / metres_per_degree,
-        origin=(0, 0),
-    )
+    try:
+        merged = disjoint_subset_union_all(get_parts(polygons))
+    except GEOSException as error:
+        LOGGER.warning(
+            "Vector summary group %r could not be merged: %s", group_value, error
+        )
+        raise ProcessingError(
+            "invalid_vector_summary_geometry",
+            "The selected polygons could not be merged into a valid overview.",
+        ) from error
+    if (
+        merged.geom_type not in {"Polygon", "MultiPolygon"}
+        or merged.is_empty
+        or not merged.is_valid
+    ):
+        LOGGER.warning(
+            "Vector summary group %r has an invalid union: %s",
+            group_value,
+            is_valid_reason(merged),
+        )
+        raise ProcessingError(
+            "invalid_vector_summary_geometry",
+            "The selected polygons could not be merged into a valid overview.",
+        )
+    if tolerance_m > 0:
+        tolerance_degrees = tolerance_m / (math.pi * 6_371_008.8 / 180)
+        try:
+            overview = coverage_simplify(merged, tolerance_degrees)
+        except GEOSException as error:
+            reason = str(error)
+        else:
+            if (
+                overview.geom_type in {"Polygon", "MultiPolygon"}
+                and not overview.is_empty
+                and overview.is_valid
+                and get_num_geometries(overview) == get_num_geometries(merged)
+            ):
+                return (
+                    MultiPolygon([overview])
+                    if overview.geom_type == "Polygon"
+                    else overview
+                )
+            reason = (
+                f"{overview.geom_type}, {get_num_geometries(overview)} parts: "
+                f"{is_valid_reason(overview)}"
+            )
+        LOGGER.warning(
+            "Retained detailed boundary for vector summary group %r after failed simplification: %s",
+            group_value,
+            reason,
+        )
+    return MultiPolygon([merged]) if merged.geom_type == "Polygon" else merged
 
 
 def _summarize_group_values(
@@ -310,20 +367,9 @@ def calculate_vector_summary(
                     column.statistic,
                     fields[column.output_field] == "int64",
                 )
-            merged = _simplify_group_boundary(
-                union_all(group.polygons), spec.inputs.boundary_tolerance_m
+            merged = _merge_group_polygons(
+                group.polygons, spec.inputs.boundary_tolerance_m, key
             )
-            if merged.geom_type == "Polygon":
-                merged = MultiPolygon([merged])
-            if (
-                merged.geom_type != "MultiPolygon"
-                or merged.is_empty
-                or not merged.is_valid
-            ):
-                raise ProcessingError(
-                    "invalid_vector_summary_geometry",
-                    "A merged group could not be written as valid polygons. Try a finer boundary detail.",
-                )
             destination.write(
                 {
                     "geometry": mapping(merged),

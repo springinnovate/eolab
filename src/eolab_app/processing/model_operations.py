@@ -360,7 +360,7 @@ OPERATIONS = MappingProxyType(
                 requires_raster_grid=False,
                 execution_inputs=vector_summary.prepare_vector_summary_execution,
                 progress_descriptions=(
-                    ("reading_vector_features", "Reading polygon attributes"),
+                    ("reading_vector_features", "Reading polygon features"),
                     (
                         "merging_vector_groups",
                         "Merging polygons and writing group statistics",
