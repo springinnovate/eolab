@@ -355,6 +355,10 @@ queues downloads without running the model. Preparation continues after closing
 the page and attempts remaining tiles when a tile download fails. Return to
 administration to check progress, inspect failure details, retry missing inputs,
 or download preparation reports while the configured job retention permits.
+Download progress separates reused tiles from new downloads and shows the last
+completed download, average speed and an approximate remaining size based on
+completed tiles. A recent status update means the worker reported in; it does not
+mean a tile finished.
 **Retry all missing inputs** checks all areas and years still saved in preparation
 history against current inputs, reuses cached tiles, and skips matching work
 already in progress. Once the request is accepted, checks and preparation continue

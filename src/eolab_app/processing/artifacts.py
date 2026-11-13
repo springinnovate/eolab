@@ -10,6 +10,7 @@ import stat
 from threading import Event
 import time
 from typing import Any
+from collections.abc import Mapping
 from uuid import uuid4
 from pydantic import TypeAdapter, ValidationError
 
@@ -25,9 +26,18 @@ from eolab_app.processing.models import ProcessingError
 
 
 def write_progress(
-    directory: Path, phase: str, complete: int, total: int, *, unit: str = "blocks"
+    directory: Path,
+    phase: str,
+    complete: int,
+    total: int,
+    *,
+    unit: str = "blocks",
+    details: Mapping[str, int | float | str | None] | None = None,
 ) -> None:
     """Atomically expose bounded native-kernel progress to its supervisor.
+
+    Callers must keep the complete serialized snapshot within the progress
+    reader's 1024-byte limit, including any operation-owned details.
 
     Args:
         directory: Confined private attempt directory.
@@ -35,15 +45,20 @@ def write_progress(
         complete: Processed native block count.
         total: Admitted native block count.
         unit: Work unit for this stage; existing raster operations count blocks.
+        details: Optional operation-owned measurements containing no paths or secrets.
+
+    Raises:
+        OSError: If the attempt progress file cannot be written or replaced.
     """
-    temporary = directory / "progress.tmp"
-    temporary.write_text(
-        json.dumps(
-            {"phase": phase, "completedBlocks": complete, "totalBlocks": total}
-            if unit == "blocks"
-            else {"phase": phase, "completed": complete, "total": total, "unit": unit}
-        )
+    snapshot = (
+        {"phase": phase, "completedBlocks": complete, "totalBlocks": total}
+        if unit == "blocks"
+        else {"phase": phase, "completed": complete, "total": total, "unit": unit}
     )
+    if details is not None:
+        snapshot["details"] = dict(details)
+    temporary = directory / "progress.tmp"
+    temporary.write_text(json.dumps(snapshot))
     temporary.replace(directory / "progress.json")
 
 

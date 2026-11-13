@@ -249,8 +249,21 @@ def prepare_habitat_input_cache(
             runtime.connection,
             cache_directory=runtime.cache_directory,
             working_directory=directory,
-            progress=lambda complete, total: write_progress(
-                directory, "fetching_habitat_tiles", complete, total, unit="tiles"
+            progress=lambda update: write_progress(
+                directory,
+                "fetching_habitat_tiles",
+                update.completed,
+                update.total,
+                unit="tiles",
+                details={
+                    "cachedTiles": update.cached_tiles,
+                    "downloadedTiles": update.downloaded_tiles,
+                    "failedTiles": update.failed_tiles,
+                    "downloadedBytes": update.downloaded_bytes,
+                    "elapsedSeconds": update.elapsed_seconds,
+                    "observedAt": update.observed_at,
+                    "lastDownloadAt": update.last_download_at,
+                },
             ),
             # The existing supervisor stops and joins blocked native acquisition.
             check_cancelled=lambda: None,
