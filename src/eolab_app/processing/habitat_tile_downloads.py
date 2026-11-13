@@ -14,7 +14,7 @@ from googleapiclient.errors import HttpError
 
 from eolab_app.processing.raster_preparation import RasterGrid
 
-_MAX_CONCURRENT_TILES = 4
+_MAX_CONCURRENT_TILES = 8
 _SUCCESSES_TO_GROW = 2
 _MAX_THROTTLE_RETRIES = 3
 _CANCEL_CHECK_INTERVAL = 0.1
