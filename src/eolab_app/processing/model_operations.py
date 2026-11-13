@@ -164,6 +164,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
             summary, published artifact and recorded numerical policy, when
             that metadata remains available.
         outcome: Describe retained scientific metadata in Run YAML.
+        outcome_details_type: Optional operation-owned schema for the outcome's
+            details section. Operations without this schema cannot publish details.
         cached: Optional cache reader; None means the operation always computes results.
         reusable: Optional cache-value extractor; None disables result-cache writes.
         primary_input: Argument bound to the primary raster or temporal source,
@@ -174,6 +176,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
             the default callback requires an authorized raster.
         fixed_input_models: Argument names and schemas for values fixed in Model YAML.
         input_adapters: Additional operation-owned types accepted by selected inputs.
+        requires_raster_grid: Whether preparation must record a raster calculation
+            grid. Vector-only operations set False and retain their own policy.
         progress_descriptions: Native phase names and their plain user-facing
             descriptions, each containing non-whitespace text up to 200 characters.
             Missing phases use the client's generic running-state description.
@@ -216,6 +220,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         [dict[str, Any], dict[str, Any], dict[str, Any] | None], dict[str, Any]
     ]
     outcome: Callable[[dict[str, Any]], dict[str, Any]]
+    outcome_details_type: type[BaseModel] | None = None
     cached: (
         Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]] | None
     ) = None
@@ -224,6 +229,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
     ) = None
     additional_outputs: tuple[OperationOutput, ...] = ()
     primary_input: str | None = "raster"
+    requires_raster_grid: bool = True
     extra_sources: (
         Callable[[Request | Queued | Prepared], dict[str, RasterSourceReference]] | None
     ) = None

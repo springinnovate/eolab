@@ -89,10 +89,24 @@ function timeSeriesCards(result, element) {
     return [card];
 }
 
+/** Describe a vector file before its ordinary map and download actions.
+ * @param {Object} result Validated vector output metadata.
+ * @param {(tag:string,text?:string,className?:string)=>HTMLElement} element Owning view's DOM element factory.
+ * @return {HTMLElement[]} One primary result card.
+ */
+function vectorCards(result, element) {
+    const card = element("article", "", "models-result");
+    card.append(element("h5", result.displayName ?? result.label, "models-name"),
+        element("span", `${result.featureCount.toLocaleString()} features`));
+    if (!result.featureCount) card.append(element("p", "This result contains no features.", "models-help"));
+    return [card];
+}
+
 const RESULT_VIEWS = new Map([
     ["raster", {cards: rasterCards}],
     ["statistics", {cards: statisticsCards}],
     ["timeSeries", {cards: timeSeriesCards}],
+    ["vector", {cards: vectorCards}],
 ]);
 
 /** Show the primary output and its actions before a collapsed list of supporting files.

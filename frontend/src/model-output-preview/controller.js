@@ -1,12 +1,13 @@
 /** Keep opt-in output displays tied to their originating run and file lifetime. */
 import { readArtifactPreview } from "./api.js";
 import { describeRasterSource } from "../raster/source-api.js";
+import { describeVectorArtifact } from "../vector/api.js";
 import { normalizeVectorStyle, vectorStyleLegend } from "../vector/style.js";
 
-/** Output formats displayed through ordinary raster rendering or GeoJSON previews.
+/** Output formats displayed through ordinary layers or existing GeoJSON previews.
  * @type {Set<string>}
  */
-const MAP_OUTPUT_MEDIA_TYPES = new Set(["image/tiff", "application/geo+json"]);
+const MAP_OUTPUT_MEDIA_TYPES = new Set(["image/tiff", "application/geopackage+sqlite3", "application/geo+json"]);
 
 /** Return a result's default map-view key, also used for its file-level messages.
  * @param {string} jobId Run identity. @param {string} artifactId File identity.
@@ -38,12 +39,14 @@ export class ModelOutputLayers {
      * @param {()=>void} dependencies.onChange Refresh output buttons and the private-map notice.
      * @param {(job:Object)=>void} [dependencies.onRunObserved] Share revalidated run state through composition.
      * @param {(raster:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addRaster Attach through the common raster owner.
+     * @param {(vector:Object,lifecycle:Object,presentation:Object)=>Promise<Object|null>} dependencies.addVector Attach through the common vector owner.
      * @param {Function} [dependencies.describe=describeRasterSource] Original-source metadata reader.
+     * @param {Function} [dependencies.describeVector=describeVectorArtifact] Owned vector-result metadata reader.
      * @param {(jobId:string,file:Object,signal:AbortSignal)=>Promise<Object>} [dependencies.read=readArtifactPreview] Bounded GeoJSON preview reader.
      * @param {Object} [dependencies.clock=globalThis] Timer and wall-clock provider.
      */
-    constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved = () => {}, describe = describeRasterSource, read = readArtifactPreview, clock = globalThis}) {
-        Object.assign(this, {api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, onRunObserved, describe, read, clock});
+    constructor({api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved = () => {}, describe = describeRasterSource, describeVector = describeVectorArtifact, read = readArtifactPreview, clock = globalThis}) {
+        Object.assign(this, {api, addLayer, updateLayer, removeLayer, refreshLayers, createLayer, openRun, onChange, addRaster, addVector, onRunObserved, describe, describeVector, read, clock});
         this.layers = new Map(); this.pending = new Map(); this.messages = new Map(); this.timer = null; this.expiryTimer = null; this.destroyed = false;
         this.runStates = new Map();
     }
@@ -79,7 +82,7 @@ export class ModelOutputLayers {
     }
 
     /** Explicitly load a file, then attach it only if its run is still available.
-     * Run-name changes during raster publication are applied through the map owner
+     * Run-name changes during layer publication are applied through the map owner
      * after attachment completes.
      * @param {Object} job Validated owning run snapshot.
      * @param {Object} file Validated manifest file.
@@ -105,35 +108,42 @@ export class ModelOutputLayers {
             if (!MAP_OUTPUT_MEDIA_TYPES.has(file.mediaType) || job.status !== "ready" || Date.parse(job.expiresAt) <= Date.now()) {
                 throw new Error("This result is no longer available. Run the tool again.");
             }
-            if (file.mediaType === "image/tiff") {
+            if (["image/tiff", "application/geopackage+sqlite3"].includes(file.mediaType)) {
+                const vector = file.mediaType === "application/geopackage+sqlite3";
                 const source = {kind: "runArtifact", jobId: job.jobId, artifactId: file.artifactId};
-                const metadata = await this.describe(source, abort.signal);
+                const metadata = await (vector ? this.describeVector : this.describe)(source, abort.signal);
                 if (this.destroyed || abort.signal.aborted || !isCurrent()) return;
-                if (metadata.version !== file.sha256) throw new Error("This raster result changed. Reopen the run and try again.");
-                if (Date.parse(this.runStates.get(job.jobId).expiresAt) <= Date.now()) throw new Error("This raster result expired. Run the tool again.");
-                const bbox = metadata.bounds;
-                if (!bbox) throw new Error("This raster cannot be placed on the map. Download it or choose it directly as a tool input.");
-                if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This raster crosses unsupported map bounds.");
+                if (!vector && metadata.version !== file.sha256) throw new Error("This raster result changed. Reopen the run and try again.");
+                if (Date.parse(this.runStates.get(job.jobId).expiresAt) <= Date.now()) throw new Error("This result expired. Run the tool again.");
+                const bbox = vector ? metadata.bbox : metadata.bounds;
+                if (!bbox) throw new Error(vector ? "This result contains no features to display. Download it to inspect the file." : "This raster cannot be placed on the map. Download it or choose it directly as a tool input.");
+                if (vector ? bbox[0] > bbox[2] || bbox[1] > bbox[3] : bbox[0] >= bbox[2] || bbox[1] >= bbox[3])
+                    throw new Error("This result crosses unsupported map bounds.");
                 const presentation = this.outputPresentation(job.jobId, file);
-                const retained = await this.addRaster({source, version: metadata.version, bbox, ...presentation,
+                const layerSource = vector ? {...metadata, name: presentation.label,
+                    defaultNumericField: job.result?.name === file.name ? job.result.defaultNumericField : undefined} : {source, version: metadata.version, bbox, ...presentation,
                     capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
-                        calculations: true, modelInput: true}}, {
+                        calculations: true, modelInput: true}};
+                const retained = await (vector ? this.addVector : this.addRaster)(layerSource, {
                     /** Reopen the source run without putting private identity into a catalog item. @return {void} */
                     info: () => this.openRun(job.jobId),
                     /** Copy source identity and appearance for Undo or another authorized view.
-                     * @param {Object} appearance Shared raster appearance. @return {Object} Restoration data.
+                     * @param {Object} appearance Ordinary layer appearance.
+                     * @param {Object} [filter] Accepted vector predicate, when the source is a vector.
+                     * @return {Object} Restoration data without file bytes or credentials.
                      */
-                    copy: appearance => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance}),
+                    copy: (appearance, filter) => ({kind: "model-output-preview", jobId: job.jobId, artifactId: file.artifactId, appearance,
+                        ...(filter ? {filter} : {})}),
                     /** Release display membership only; accepted calculations retain their own inputs. @return {void} */
                     removed: () => { this.layers.delete(key); this.schedule(); this.onChange(); },
-                }, {...presentation, key, canAddView: true, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, signal: abort.signal,
+                }, {...presentation, key, canAddView: true, visible: restore?.visible ?? true, opacity: restore?.opacity ?? 1, appearance: restore?.local.appearance, filter: restore?.local.filter, signal: abort.signal,
                     customName: restore?.customName ?? null,
                     isCurrent: () => !this.destroyed && !abort.signal.aborted && isCurrent() &&
                         this.runStates.get(job.jobId)?.status === "ready" && Date.parse(this.runStates.get(job.jobId).expiresAt) > Date.now()});
                 if (retained !== null && !abort.signal.aborted) {
                     const latest = this.runStates.get(job.jobId);
                     this.layers.set(key, {key, jobId: job.jobId, runName: latest.label,
-                        file: latest.artifacts.files.find(value => value.artifactId === file.artifactId) ?? file, expiresAt: latest.expiresAt, kind: "raster"});
+                        file: latest.artifacts.files.find(value => value.artifactId === file.artifactId) ?? file, expiresAt: latest.expiresAt, kind: vector ? "vector" : "raster", ordinary: true});
                     const current = this.outputPresentation(job.jobId, file);
                     if (current.label !== presentation.label || current.group.label !== presentation.group.label) this.updateLayer(key, current);
                 }

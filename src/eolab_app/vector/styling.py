@@ -6,6 +6,7 @@ from collections.abc import Callable
 from math import ceil
 from threading import Event
 from typing import Any, TypeVar
+from eolab_app.source_files import finish_source_task
 
 from eolab_app.rendering.errors import (
     PublishedLayerChangedError,
@@ -279,10 +280,13 @@ class VectorStyleService:
         ],
         operation: str,
     ) -> _FieldRead:
-        """Read an immutable vector field within its interactive work limits.
+        """Read an immutable vector field and wait for native exit before releasing it.
+
+        Cancellation signals the native reader and retains its slot until the
+        thread stops, allowing the source owner to keep the file leased safely.
 
         Args:
-            layer: Original source and metadata from catalog or upload lookup.
+            layer: Original source and metadata from its owning source resolver.
             field: Attribute selected for this read.
             read: Focused field-reader operation.
             operation: User-facing operation name for safe errors.
@@ -293,20 +297,24 @@ class VectorStyleService:
         Raises:
             VectorConflictError: If the read result disagrees with the recorded
                 feature count.
+            asyncio.CancelledError: After the cancelled native reader has stopped.
         """
         cancel_event = Event()
-        try:
-            async with self._field_slots:
-                result = await asyncio.to_thread(
+        async with self._field_slots:
+            task = asyncio.create_task(
+                asyncio.to_thread(
                     read,
                     layer.source,
                     field,
                     VECTOR_FIELD_FEATURE_LIMIT,
                     cancel_event,
                 )
-        except asyncio.CancelledError:
-            cancel_event.set()
-            raise
+            )
+            try:
+                result = await asyncio.shield(task)
+            finally:
+                cancel_event.set()
+                await finish_source_task(task)
         if result.complete and result.scanned_feature_count != layer.feature_count:
             raise VectorConflictError(
                 f"{operation} unavailable: the feature count read from the file "

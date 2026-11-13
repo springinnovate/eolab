@@ -22,6 +22,30 @@ const PUBLICATION = Object.freeze({
   },
 });
 
+test("run artifacts use ordinary vector metadata, style actions and owner lifecycle callbacks", async () => {
+  const fixture = createAdapterFixture(false), {adapter} = fixture;
+  const source = {kind: "runArtifact", jobId: "a".repeat(32), artifactId: "b".repeat(32), name: "Processed regions",
+    layerName: "processed", fields: {region_code: "int", score: "float"}, defaultNumericField: "score"};
+  const publication = await adapter.publish(source);
+  assert.equal(fixture.numericCalls[0].field, "score");
+  const lifecycleCalls = [];
+  const record = {entry: {key: "result-view"}, publication,
+    state: adapter.createState({source: {vector: source, lifecycle: {info: () => lifecycleCalls.push("info"),
+      removed: () => lifecycleCalls.push("removed"), copy: (appearance, filter) => ({kind: "owned-result", appearance, filter})}}, publication})};
+  adapter.createLayer(record, () => {});
+  const described = adapter.describeSource(record);
+  assert.deepEqual(described.source, {kind: "runArtifact", jobId: source.jobId, artifactId: source.artifactId});
+  assert.equal(described.selection, null);
+  assert.deepEqual(described.numericFields.map(field => field.name), ["region_code", "score"]);
+  assert.equal(adapter.snapshot(record).canFilter, true);
+  await adapter.applyStyle(record, {...PUBLICATION.style, fillColor: "#00ff00"});
+  assert.equal(fixture.wmsCalls[0].layer.styleRequests[0].styles, "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa");
+  const copied = adapter.copyLayerForUndo(record);
+  assert.equal(copied.kind, "owned-result"); assert.equal(copied.appearance.definition.fillColor, "#00ff00");
+  adapter.info(record); adapter.removed(record);
+  assert.deepEqual(lifecycleCalls, ["info", "removed"]);
+});
+
 /**
  * Create a focused adapter fixture with inspectable WMS and fit calls.
  *

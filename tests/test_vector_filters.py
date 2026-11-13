@@ -250,7 +250,7 @@ def test_filter_wms_boundary_translates_render_inspection_and_highlight(tmp_path
 
 
 def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path: Path) -> None:
-    """Keep bounded reader slots occupied during cooperative cancellation.
+    """Keep the canceled caller and reader slot waiting until native work exits.
 
     Args:
         tmp_path: Isolated mounted source fixture.
@@ -296,8 +296,8 @@ def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path: Path) ->
         task = asyncio.create_task(service.count_filter(request))
         assert await asyncio.to_thread(started.wait, 2)
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        await asyncio.sleep(0.05)
+        assert not task.done()
         assert service._filter_slots.locked()
         waiting = asyncio.create_task(service.count_filter(request))
         await asyncio.sleep(0.05)
@@ -305,8 +305,11 @@ def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path: Path) ->
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
+        assert not task.done()
+        assert service._filter_slots.locked()
         release.set()
-        await asyncio.sleep(0.05)
+        with pytest.raises(asyncio.CancelledError):
+            await task
         assert not service._filter_slots.locked()
 
     asyncio.run(exercise())

@@ -138,7 +138,36 @@ class ModelTimeSeriesResult(ModelResultFile):
     temporalCoverage: TemporalResultCoverage
 
 
+class ModelVectorResult(ModelResultFile):
+    """A downloadable GeoPackage displayed through ordinary private vector source access.
+
+    Field inventory and bounds are admitted by the existing vector source owner;
+    this response identifies the output layer. An operation may suggest a numeric
+    attribute for initial styling without defining any operation-specific fields.
+
+    Attributes:
+        kind: Vector result discriminator.
+        mediaType: GeoPackage output format.
+        presentation: Ordinary map display alongside the file download.
+        layerName: Native layer to read within the GeoPackage.
+        featureCount: Number of published features.
+        defaultNumericField: Optional attribute to use for the initial numeric style.
+    """
+
+    kind: Literal["vector"]
+    mediaType: Literal["application/geopackage+sqlite3"]
+    presentation: Literal["map"]
+    layerName: Annotated[str, Field(min_length=1)]
+    featureCount: Annotated[int, Field(ge=1)]
+    defaultNumericField: Annotated[str, Field(min_length=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+
 ModelResult = Annotated[
-    ModelRasterResult | ModelStatisticsResult | ModelTimeSeriesResult,
+    ModelRasterResult
+    | ModelStatisticsResult
+    | ModelTimeSeriesResult
+    | ModelVectorResult,
     Field(discriminator="kind"),
 ]

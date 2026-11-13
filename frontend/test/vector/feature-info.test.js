@@ -79,6 +79,7 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
   assert.equal(calls[0].options.body.get("request"), "GetFeatureInfo");
   assert.equal(calls[0].options.headers.Accept, "application/json");
   assert.equal(calls[0].options.headers["X-EOLab-Uploads"], "1");
+  assert.equal(calls[0].options.headers["X-EOLab-Processing"], "1");
 
   await assert.rejects(
     () => fetchVectorFeatureInfo({
