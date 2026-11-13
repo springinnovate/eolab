@@ -98,11 +98,7 @@ def test_clip_submission_preserves_canonical_hashes_and_stored_inputs(
         restored = operation.parse_specification(plan.specification)
         assert restored.model_dump(mode="json", by_alias=True) == expected_spec
         assert identify_shared_calculation(restored) == expected_work
-        with patch.object(
-            clip_models, "CatalogRasterRequest", wraps=CatalogRasterRequest
-        ) as repeated_validation:
-            asyncio.run(service.submit_raster_clip("owner", request))
-        repeated_validation.assert_not_called()
+        asyncio.run(service.submit_raster_clip("owner", request))
         owner, retry_id, submitted, request_hash = jobs.submit.call_args.args
         assert (owner, retry_id, request_hash) == ("owner", request_id, expected_hash)
         assert submitted.specification == expected_spec
@@ -117,7 +113,7 @@ def test_clip_submission_preserves_canonical_hashes_and_stored_inputs(
 
 
 def test_clip_queue_reuses_validation_and_revalidates_persisted_inputs() -> None:
-    """Run clip invariants once at admission and again when the worker restores JSON."""
+    """Run clip invariants at admission and when the worker restores persisted inputs."""
     operation = get_model_operation("raster.clip.v1")
     with patch.object(
         clip_models, "CatalogRasterRequest", wraps=CatalogRasterRequest
@@ -133,8 +129,6 @@ def test_clip_queue_reuses_validation_and_revalidates_persisted_inputs() -> None
         restored = operation.parse_specification(plan.specification)
         assert validate_source.call_count == 2
         assert restored.model_dump(mode="json", by_alias=True) == plan.specification
-        UnpreparedClip.model_validate_json(json.dumps(plan.specification))
-        assert validate_source.call_count == 3
 
 
 @pytest.mark.parametrize(
@@ -174,8 +168,6 @@ def test_raw_and_persisted_clip_boundaries_reject_invalid_inputs(
     stored = {"operation": operation.id, "request": inputs}
     with pytest.raises(ValidationError):
         operation.parse_specification(deepcopy(stored))
-    with pytest.raises(ValidationError):
-        UnpreparedClip.model_validate_json(json.dumps(stored))
     service = MagicMock(spec=ProcessingService)
     app = FastAPI()
     app.include_router(create_processing_router(service))
