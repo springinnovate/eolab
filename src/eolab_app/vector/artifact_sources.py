@@ -110,6 +110,9 @@ class ArtifactVectorSourceResolver:
     ) -> AsyncIterator[ArtifactVectorLayer]:
         """Keep an owned vector file available throughout a complete consumer read.
 
+        Cached metadata bypasses unrelated cold scans after source authorization.
+        Cache misses remain serialized and recheck the cache before native work.
+
         Args:
             owner: Server-derived browser identity.
             job_id: Opaque run ID.
@@ -121,6 +124,7 @@ class ArtifactVectorSourceResolver:
 
         Raises:
             SourceFileError: If ownership, expiry, format, or native inspection fails.
+            asyncio.CancelledError: After native work stops and the lease is released.
         """
         async with self.files.open(owner, job_id, artifact_id) as source:
             if source.media_type != "application/geopackage+sqlite3":
@@ -128,39 +132,41 @@ class ArtifactVectorSourceResolver:
                     "This result is not a supported vector file.", 422
                 )
             key = (job_id, artifact_id)
-            async with self._read_lock:
-                metadata = self._metadata.get(key)
-                if metadata is None:
-                    try:
-                        result = await run_bounded_process(
-                            read_artifact_vector_metadata, (source.path,), 60
-                        )
-                    except ProcessDeadlineError as error:
-                        raise SourceFileError(
-                            "This vector result's map metadata took too long to read.",
-                            422,
-                        ) from error
-                    if isinstance(result, str):
-                        raise SourceFileError(result, 422)
-                    name, fields, count, bounds, kind, inventory = result
-                    metadata = ArtifactVectorLayer(
-                        VectorLayer(
-                            resource_name=f"vector_result_{job_id}_{artifact_id}",
-                            source=ResolvedVectorSource(
-                                source_kind="mounted",
-                                source_format="geopackage",
-                                source_path=source.path,
-                                asset_key="data",
-                                layer_name=name,
+            metadata = self._metadata.get(key)
+            if metadata is None:
+                async with self._read_lock:
+                    metadata = self._metadata.get(key)
+                    if metadata is None:
+                        try:
+                            result = await run_bounded_process(
+                                read_artifact_vector_metadata, (source.path,), 60
+                            )
+                        except ProcessDeadlineError as error:
+                            raise SourceFileError(
+                                "This vector result's map metadata took too long to read.",
+                                422,
+                            ) from error
+                        if isinstance(result, str):
+                            raise SourceFileError(result, 422)
+                        name, fields, count, bounds, kind, inventory = result
+                        metadata = ArtifactVectorLayer(
+                            VectorLayer(
+                                resource_name=f"vector_result_{job_id}_{artifact_id}",
+                                source=ResolvedVectorSource(
+                                    source_kind="mounted",
+                                    source_format="geopackage",
+                                    source_path=source.path,
+                                    asset_key="data",
+                                    layer_name=name,
+                                ),
+                                fields=fields,
+                                feature_count=count,
+                                bbox=bounds,
+                                geometry_kind=kind,
                             ),
-                            fields=fields,
-                            feature_count=count,
-                            bbox=bounds,
-                            geometry_kind=kind,
-                        ),
-                        inventory,
-                    )
-                    self._metadata[key] = metadata
+                            inventory,
+                        )
+                        self._metadata[key] = metadata
             yield metadata
 
     def forget_metadata(self, job_id: str, artifact_id: str) -> None:
