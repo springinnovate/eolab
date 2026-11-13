@@ -1344,6 +1344,38 @@ class PostgresJobStore:
             )
             return row, lease
 
+    def get_transferred_result(self, identifier: str, lease: str) -> dict[str, Any]:
+        """Resolve a ready run using an existing internal read capability.
+
+        The browser's owner was checked when acquiring the transfer. Its opaque
+        capability retains that job's files; it cannot authorize another job.
+        The caller must keep renewing the transfer until its reader has stopped.
+
+        Args:
+            identifier: Opaque subscribed run identity.
+            lease: Server-issued transfer capability, never a browser owner hash.
+
+        Returns:
+            Ready run metadata while both the subscription and transfer are live.
+
+        Raises:
+            ProcessingError: If the capability, run or result lifetime is unavailable.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT j.* FROM processing.subscribed_jobs j "
+                "JOIN processing.transfers t ON t.job_id=j.job_id "
+                "WHERE j.id=%s AND t.id=%s AND t.expires_at>now() "
+                "AND j.status='ready' AND j.expires_at>now()",
+                (identifier, lease),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ProcessingError(
+                    "result_unavailable", "This result is no longer available.", 404
+                )
+            return row
+
     def transfer_heartbeat(self, lease: str, release: bool = False) -> bool:
         """Renew or release a bounded download lease.
 

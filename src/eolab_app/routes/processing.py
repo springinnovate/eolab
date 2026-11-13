@@ -372,6 +372,44 @@ def create_processing_router(
         route_class=RequestSizeLimitedRoute,
     )
 
+    @router.get("/source-files/{job_id}/{artifact_id}", include_in_schema=False)
+    async def locate_retained_source(
+        job_id: JobId, artifact_id: JobId, request: Request, response: Response
+    ) -> dict[str, str]:
+        """Locate a run file for an internal worker holding its read capability.
+
+        Args:
+            job_id: Opaque subscribed run identity.
+            artifact_id: Opaque published file identity within the run.
+            request: Bearer transfer capability issued after browser authorization.
+            response: Response receiving private no-store headers.
+
+        Returns:
+            Internal mount-relative file location and its published media type.
+
+        Raises:
+            HTTPException: If the read capability or retained source is unavailable.
+        """
+        response.headers["Cache-Control"] = "private, no-store"
+        authorization = request.headers.get("Authorization", "")
+        match = re.fullmatch(r"Bearer ([a-f0-9]{32})", authorization)
+        if match is None:
+            raise HTTPException(
+                401,
+                "A source read capability is required.",
+                headers={"Cache-Control": "private, no-store"},
+            )
+        try:
+            return await _await_service_result(
+                service.locate_transferred_model_artifact(match[1], job_id, artifact_id)
+            )
+        except HTTPException as error:
+            error.headers = {
+                **(error.headers or {}),
+                "Cache-Control": "private, no-store",
+            }
+            raise
+
     @router.get("/models", response_model=ModelLibrary)
     async def discover_models(request: Request, response: Response) -> dict[str, Any]:
         """List installed model recipes and their setup fields.

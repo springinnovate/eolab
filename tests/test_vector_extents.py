@@ -4,6 +4,8 @@ import asyncio
 import json
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -23,12 +25,18 @@ from eolab_app.main import create_app
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.extent_jobs import ExtentJobs
-from eolab_app.vector.extent_operation import FeatureExtent, SelectionExtentResult
+from eolab_app.vector.extent_operation import (
+    ArtifactExtentSelection,
+    ArtifactSourceLocation,
+    FeatureExtent,
+    SelectionExtentResult,
+    resolve_artifact_path,
+)
 from eolab_app.vector.extents import read_selected_extent
 from eolab_app.vector.filters import CatalogVectorFilterRequest
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import MountedVectorResolver
-from eolab_jobs.client import JobsClient
+from eolab_jobs.client import JobResult, JobsClient
 
 from test_outline_jobs import outline_case
 
@@ -313,3 +321,277 @@ def test_route_disconnect_cancels_only_its_extent(
         ]
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "case", ["valid", "empty", "null-geometry", "denied", "traversal", "missing-lease"]
+)
+def test_registered_extent_reads_leased_artifact_through_source_authority(
+    tmp_path: Path, case: str
+) -> None:
+    """Use the registered runner, HTTP source capability and real GeoPackage reader.
+
+    Args:
+        tmp_path: Read-only worker mount populated with one published result.
+        case: Successful extent, no coordinates, denied source or invalid descriptor.
+    """
+    directory = tmp_path / "results" / ("d" * 32)
+    directory.mkdir(parents=True)
+    path = directory / "features.gpkg"
+    with fiona.open(
+        path,
+        "w",
+        driver="GPKG",
+        layer="features",
+        crs="EPSG:4326",
+        schema={"geometry": "Point", "properties": {"name": "str"}},
+    ) as dataset:
+        for name, coordinates in [
+            ("Exact", (0, 1)),
+            ("exact", (20, 30)),
+            ("Null", None),
+        ]:
+            dataset.write(
+                {
+                    "geometry": (
+                        {"type": "Point", "coordinates": coordinates}
+                        if coordinates is not None
+                        else None
+                    ),
+                    "properties": {"name": name},
+                }
+            )
+    selection = ArtifactExtentSelection(
+        kind="runArtifact",
+        jobId="a" * 32,
+        artifactId="b" * 32,
+        filter=VectorFilter(
+            rules=[
+                {
+                    "field": "name",
+                    "operator": "eq",
+                    "value": {"empty": "Absent", "null-geometry": "Null"}.get(
+                        case, "Exact"
+                    ),
+                }
+            ]
+        ),
+    )
+    lease = "c" * 32
+    calls: list[tuple[str, str | None]] = []
+
+    class SourceHandler(BaseHTTPRequestHandler):
+        """Serve only the internal leased-source descriptor used by this worker."""
+
+        def do_GET(self) -> None:
+            """Record the capability and return source metadata or an authorization failure."""
+            calls.append((self.path, self.headers.get("Authorization")))
+            relative = path.relative_to(tmp_path).as_posix()
+            body = json.dumps(
+                {
+                    "relativePath": (
+                        "results/../secret.gpkg" if case == "traversal" else relative
+                    ),
+                    "mediaType": "application/geopackage+sqlite3",
+                }
+            ).encode()
+            self.send_response(403 if case == "denied" else 200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            """Keep controlled source HTTP responses out of test output.
+
+            Args:
+                format: Standard HTTP log format.
+                args: Values supplied by the fixture server.
+            """
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SourceHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    command = f"""
+from pathlib import Path
+import sys
+from eolab_app.vector import extent_operation as op, extents
+op.SOURCE_FILES_URL = 'http://127.0.0.1:{server.server_port}/source-files'
+op.PROCESSING_MOUNT = Path({str(tmp_path)!r})
+original_read = extents.read_file_extent
+def check_memory_and_read(path, candidate):
+    if sys.platform == 'linux':
+        import resource
+        assert 0 < resource.getrlimit(resource.RLIMIT_AS)[0] <= 2 * 1024**3
+    return original_read(path, candidate)
+extents.read_file_extent = check_memory_and_read
+from job_service.runner import main
+main()
+"""
+    inputs = {"selection": selection.model_dump(mode="json")}
+    if case != "missing-lease":
+        inputs["readLease"] = lease
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", command],
+            cwd=Path(__file__).parents[1] / "services/jobs",
+            input=json.dumps(
+                {"operation": "vector.selection-extent.v1", "inputs": inputs}
+            ).encode(),
+            capture_output=True,
+            timeout=20,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert result.returncode == 0, result.stderr.decode()
+    reply = json.loads(result.stdout)
+    assert (
+        str(tmp_path) not in result.stdout.decode()
+        and lease not in result.stdout.decode()
+    )
+    if case == "missing-lease":
+        assert reply == {"ok": False} and not calls
+        return
+    assert calls == [
+        (f"/source-files/{selection.jobId}/{selection.artifactId}", f"Bearer {lease}")
+    ]
+    assert reply["ok"]
+    if case in {"denied", "traversal"}:
+        assert reply["value"]["extent"] is None
+        assert reply["value"]["error"] == "The selected vector result is unavailable."
+    else:
+        expected = {
+            "valid": {"matched": 1, "bbox": [0, 1, 0, 1]},
+            "empty": {"matched": 0, "bbox": None},
+            "null-geometry": {"matched": 1, "bbox": None},
+        }
+        assert reply["value"]["extent"] == expected[case]
+        assert reply["value"]["error"] is None
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "/results/file.gpkg",
+        "C:/results/file.gpkg",
+        "results/../secret.gpkg",
+        "results/./file.gpkg",
+        "results\\file.gpkg",
+        "results/missing.gpkg",
+        "results",
+    ],
+)
+def test_internal_artifact_locator_confines_the_native_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    """Reject absolute, traversing, missing and non-file internal source locations.
+
+    Args:
+        tmp_path: Shared mount containing only a results directory.
+        monkeypatch: Configure the worker mount without changing a public input.
+        relative: Invalid internal source authority response.
+    """
+    from eolab_app.catalog_selection import SelectionUnavailableError
+
+    (tmp_path / "results").mkdir()
+    monkeypatch.setattr("eolab_app.vector.extent_operation.PROCESSING_MOUNT", tmp_path)
+    with pytest.raises(SelectionUnavailableError, match="unavailable"):
+        resolve_artifact_path(
+            ArtifactSourceLocation(
+                relativePath=relative, mediaType="application/geopackage+sqlite3"
+            )
+        )
+
+
+def test_internal_artifact_locator_rejects_linked_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a symbolic link even when its target stays inside published results.
+
+    Args:
+        tmp_path: Shared mount containing an immutable file and a linked alias.
+        monkeypatch: Configure the worker mount for the filesystem boundary.
+    """
+    from eolab_app.catalog_selection import SelectionUnavailableError
+
+    directory = tmp_path / "results"
+    directory.mkdir()
+    original = directory / "original.gpkg"
+    original.write_bytes(b"immutable")
+    try:
+        (directory / "linked.gpkg").symlink_to(original)
+    except OSError:
+        pytest.skip("This host does not permit symbolic-link creation")
+    monkeypatch.setattr("eolab_app.vector.extent_operation.PROCESSING_MOUNT", tmp_path)
+    with pytest.raises(SelectionUnavailableError, match="unavailable"):
+        resolve_artifact_path(
+            ArtifactSourceLocation(
+                relativePath="results/linked.gpkg",
+                mediaType="application/geopackage+sqlite3",
+            )
+        )
+
+
+def test_artifact_extent_uses_existing_budgets_and_waits_for_terminal_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require confirmed native exit before the caller releases a run-file lease.
+
+    Args:
+        monkeypatch: Observe options at the existing JobsClient boundary.
+    """
+    captured: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    async def run(
+        client: JobsClient, payload: dict[str, Any], **options: Any
+    ) -> JobResult:
+        """Capture the submitted operation and return its ordinary typed result.
+
+        Args:
+            client: Existing Jobs client receiving the request.
+            payload: Registered operation and immutable source inputs.
+            options: Client deadline, deletion and cleanup settings.
+
+        Returns:
+            Completed Jobs response containing the native extent contract.
+        """
+        captured.append((payload, options))
+        return JobResult(jobId=uuid4(), value={"extent": EXTENT})
+
+    monkeypatch.setattr(JobsClient, "run", run)
+    selection = ArtifactExtentSelection(
+        kind="runArtifact", jobId="a" * 32, artifactId="b" * 32, filter=VectorFilter()
+    )
+
+    async def scenario() -> dict[str, Any]:
+        """Call the real extent adapter with an opaque source capability.
+
+        Returns:
+            Validated matching count and bounds from the registered operation.
+        """
+        async with httpx2.AsyncClient() as http:
+            return await ExtentJobs(JobsClient(http, TOKEN)).measure_artifact(
+                selection, "c" * 32
+            )
+
+    assert asyncio.run(scenario()) == EXTENT
+    assert captured == [
+        (
+            {
+                "operation": "vector.selection-extent.v1",
+                "inputs": {
+                    "selection": selection.model_dump(mode="json"),
+                    "readLease": "c" * 32,
+                },
+                "priority": 0,
+                "executionTimeoutSeconds": 15,
+                "queueTimeoutSeconds": 30,
+            },
+            {
+                "timeout_seconds": 60,
+                "delete_on_completion": True,
+                "require_terminal_cleanup": True,
+            },
+        )
+    ]

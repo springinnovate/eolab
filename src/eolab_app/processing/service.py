@@ -1885,6 +1885,56 @@ class ProcessingService:
             raise ProcessingError(
                 "result_unavailable", "This result is no longer available.", 409
             )
+        return await self._resolve_model_artifact_file(row, artifact_id)
+
+    async def locate_transferred_model_artifact(
+        self, lease: str, identifier: str, artifact_id: str
+    ) -> dict[str, str]:
+        """Locate a retained run file for an internal reader with a read capability.
+
+        This does not create or extend a lease. The submitting application keeps
+        its existing transfer alive until the remote reader has stopped. The
+        internal response is relative to the deployment's read-only result mount;
+        browser APIs and Jobs submissions continue to use opaque identities.
+
+        Args:
+            lease: Server-issued transfer capability authorizing this run's files.
+            identifier: Opaque subscribed run identity.
+            artifact_id: Published file identity within that run's manifest.
+
+        Returns:
+            Confined mount-relative location and published media type.
+
+        Raises:
+            ProcessingError: If the capability, run, file or lifetime is unavailable.
+            ValidationError: If persisted publication metadata is malformed.
+        """
+        row = await asyncio.to_thread(
+            self.jobs.get_transferred_result, identifier, lease
+        )
+        require_operation(row, MODEL_OPERATION)
+        source = await self._resolve_model_artifact_file(row, artifact_id)
+        return {
+            "relativePath": source.path.relative_to(self.artifacts.root).as_posix(),
+            "mediaType": source.media_type,
+        }
+
+    async def _resolve_model_artifact_file(
+        self, row: dict[str, Any], artifact_id: str
+    ) -> ResolvedSourceFile:
+        """Resolve one published file after its caller authorizes the run and lifetime.
+
+        Args:
+            row: Run metadata returned by an owner or active-transfer boundary.
+            artifact_id: Requested opaque file ID.
+
+        Returns:
+            Confined immutable file and its recorded publication metadata.
+
+        Raises:
+            ProcessingError: If the file identity or confined file is unavailable.
+            ValidationError: If the persisted manifest is malformed.
+        """
         manifest = read_artifact_manifest(row["artifact"]["manifest"])
         file = next((file for file in manifest.files if file.id == artifact_id), None)
         if file is None:

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import re
-from typing import Any
 
 import fiona
 from rasterio.warp import transform_bounds
@@ -19,10 +18,6 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
 )
 from eolab_app.source_files import LeasedSourceFiles, SourceFileError
-from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.catalog_selection import SelectionUnavailableError
-from eolab_app.vector.filters import VectorFilter, validate_filter
-from eolab_app.vector.extents import read_layer_extent
 from eolab_app.vector.models import ResolvedVectorSource, VectorLayer
 from eolab_app.vector_field_values import (
     FieldValueInventory,
@@ -168,35 +163,6 @@ class ArtifactVectorSourceResolver:
                     self._metadata[key] = metadata
             yield metadata
 
-    async def measure_layer_extent(
-        self, layer: VectorLayer, candidate: VectorFilter
-    ) -> dict[str, Any]:
-        """Measure filtered bounds while the caller holds the result's file lease.
-
-        Args:
-            layer: Original layer from open_layer.
-            candidate: Browser-supplied filter, checked against the admitted fields.
-
-        Returns:
-            Matching count and WGS84 extent from the ordinary bounded reader.
-
-        Raises:
-            SourceFileError: If the filter, native source or interactive read fails.
-        """
-        checked = validate_filter(candidate, layer.fields)
-        async with self._read_lock:
-            try:
-                result = await run_bounded_process(
-                    read_artifact_vector_extent, (layer, checked), 21
-                )
-            except ProcessDeadlineError as error:
-                raise SourceFileError(
-                    "Vector extent reading exceeded its time budget.", 422
-                ) from error
-        if isinstance(result, str):
-            raise SourceFileError(result, 422)
-        return result
-
     def forget_metadata(self, job_id: str, artifact_id: str) -> None:
         """Release cached metadata after its source lifetime ends.
 
@@ -213,27 +179,3 @@ class ArtifactVectorSourceResolver:
             Immutable run/file ID pairs without file paths or ownership credentials.
         """
         return tuple(self._metadata)
-
-
-def read_artifact_vector_extent(
-    writer: ProcessResultWriter, layer: VectorLayer, candidate: VectorFilter
-) -> None:
-    """Run the ordinary extent reader in a cancellable native process.
-
-    Args:
-        writer: Native-process result channel.
-        layer: Source-owner-authorized file retained by the HTTP caller.
-        candidate: Validated filter for the exact original fields.
-    """
-    try:
-        writer.put(read_layer_extent(layer, candidate))
-    except (
-        GeometryValidationError,
-        SelectionUnavailableError,
-        ValueError,
-        OSError,
-        fiona.errors.FionaError,
-    ):
-        writer.put(
-            "The selected vector bounds could not be read within the map's limits."
-        )

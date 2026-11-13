@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import httpx2
 import pytest
@@ -25,10 +26,23 @@ from tests.test_vector_uploads import write_layer
 
 HEADERS = {"X-EOLab-Processing": "1"}
 BASE = f"/api/vector-rendering/artifacts/{PRIVATE['jobId']}/{PRIVATE['artifactId']}"
+JOBS_TOKEN = "test-outline-" + "a" * 40
+EXTENT = {"matched": 1, "bbox": [0, 0, 1, 1]}
 
 
 class VectorFileAuthority(FileAuthority):
     """Supply an immutable GeoPackage through the existing leased-file boundary."""
+
+    def __init__(self, path: Path) -> None:
+        """Track source retention and the external Jobs transport for route tests.
+
+        Args:
+            path: Completed immutable GeoPackage.
+        """
+        super().__init__(path)
+        self.jobs_calls: list[httpx2.Request] = []
+        self.jobs_outcome = "success"
+        self.jobs_id = str(uuid4())
 
     async def acquire(self, owner: str, run: str, file: str) -> FileLease:
         """Authorize and retain the real GeoPackage.
@@ -44,9 +58,12 @@ class VectorFileAuthority(FileAuthority):
         Raises:
             SourceFileError: If the browser or result lifetime rejects access.
         """
+        lease = await super().acquire(owner, run, file)
+        self.leases.remove(lease.lease_id)
+        lease_id = f"{self.sequence:032x}"
+        self.leases.add(lease_id)
         return replace(
-            await super().acquire(owner, run, file),
-            media_type="application/geopackage+sqlite3",
+            lease, lease_id=lease_id, media_type="application/geopackage+sqlite3"
         )
 
     async def resolve(self, owner: str, run: str, file: str) -> ResolvedSourceFile:
@@ -239,10 +256,58 @@ def result_boundary(
             200, content=b"tile", headers={"Content-Type": "image/png"}
         )
 
+    def jobs(request: httpx2.Request) -> httpx2.Response:
+        """Serve the real Jobs client while requiring an active original-file lease.
+
+        Args:
+            request: Internal authenticated job lifecycle request.
+
+        Returns:
+            Controlled terminal state, extent result or admission error.
+        """
+        authority.jobs_calls.append(request)
+        assert authority.leases, "Jobs must retain the original file through cleanup"
+        assert request.url.host == "jobs"
+        assert request.headers["authorization"] == f"Bearer {JOBS_TOKEN}"
+        if request.url.path == "/api/jobs":
+            payload = json.loads(request.content)
+            assert payload["inputs"] == {
+                "selection": {**PRIVATE, "filter": FILTER},
+                "readLease": next(iter(authority.leases)),
+            }
+        if authority.jobs_outcome == "full":
+            return httpx2.Response(
+                503,
+                json={
+                    "error": {
+                        "code": "capacity",
+                        "message": "Job capacity is busy; retry later",
+                    }
+                },
+            )
+        if request.method == "DELETE":
+            return httpx2.Response(204)
+        if request.url.path.endswith("/result"):
+            extent = (
+                {"matched": 0, "bbox": None}
+                if authority.jobs_outcome == "empty"
+                else EXTENT
+            )
+            return httpx2.Response(
+                200, json={"jobId": authority.jobs_id, "value": {"extent": extent}}
+            )
+        status = (
+            authority.jobs_outcome
+            if authority.jobs_outcome in {"expired", "timed_out", "failed"}
+            else "succeeded"
+        )
+        return httpx2.Response(202, json={"jobId": authority.jobs_id, "status": status})
+
     app = application_module.create_app(
         version_file_path,
         catalog_transport=httpx2.MockTransport(reject_catalog),
         geoserver_transport=httpx2.MockTransport(render),
+        jobs_transport=httpx2.MockTransport(jobs),
     )
     owner, other = TestClient(app, base_url="https://testserver"), TestClient(
         app, base_url="https://testserver"
@@ -307,6 +372,242 @@ def test_result_uses_ordinary_vector_fields_filters_and_owned_original(
         owner.get(BASE + "/field-values", params={"field": "label"}).status_code == 409
     )
     assert not authority.leases
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "empty", "full", "expired", "timed_out", "failed"]
+)
+def test_result_extent_uses_jobs_without_rendering_or_metadata_reads(
+    result_boundary: tuple[Any, ...], outcome: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the ordinary zoom response while scheduling owned reads through Jobs.
+
+    Args:
+        result_boundary: Real application routes with controlled external transports.
+        outcome: Completed result, queue rejection or worker lifecycle failure.
+        monkeypatch: Reject local GIS metadata reads during the extent request.
+    """
+    from eolab_app.vector import artifact_sources
+
+    owner, _, authority, renderer, _, _ = result_boundary
+    authority.jobs_outcome = outcome
+
+    async def reject_local_read(*args: Any, **kwargs: Any) -> None:
+        """Reject a second process scheduler or local metadata preflight.
+
+        Args:
+            args: Unexpected native process arguments.
+            kwargs: Unexpected native process options.
+
+        Raises:
+            AssertionError: Zoom must use only its admitted Jobs operation.
+        """
+        raise AssertionError("Generated zoom started local native work")
+
+    monkeypatch.setattr(artifact_sources, "run_bounded_process", reject_local_read)
+    response = owner.post(BASE + "/extent", json={"filter": FILTER}, headers=HEADERS)
+    submitted = json.loads(authority.jobs_calls[0].content)
+    assert submitted["operation"] == "vector.selection-extent.v1"
+    assert submitted["inputs"]["selection"] == {**PRIVATE, "filter": FILTER}
+    assert submitted["priority"] == 0
+    assert submitted["executionTimeoutSeconds"] == 15
+    assert submitted["queueTimeoutSeconds"] == 30
+    assert str(authority.path) not in authority.jobs_calls[0].content.decode()
+    assert JOBS_TOKEN not in response.text and str(authority.path) not in response.text
+    assert not renderer.requests
+    assert not authority.leases
+    if outcome in {"success", "empty"}:
+        assert response.status_code == 200, response.text
+        assert response.json() == (
+            EXTENT if outcome == "success" else {"matched": 0, "bbox": None}
+        )
+        assert response.headers["Cache-Control"] == "private, no-store"
+        assert authority.jobs_calls[-1].method == "DELETE"
+    else:
+        assert response.status_code == 409, response.text
+        expected = {
+            "full": "busy or unavailable",
+            "expired": "waited too long",
+            "timed_out": "time budget",
+            "failed": "could not be read",
+        }[outcome]
+        assert expected in response.text
+
+
+def test_result_extent_rejects_foreign_and_expired_sources_before_jobs(
+    result_boundary: tuple[Any, ...],
+) -> None:
+    """Reject unavailable source identities before admitting work or leasing files.
+
+    Args:
+        result_boundary: Owner and foreign browsers with the real access boundary.
+    """
+    owner, other, authority, _, _, _ = result_boundary
+    assert (
+        other.post(
+            BASE + "/extent", json={"filter": FILTER}, headers=HEADERS
+        ).status_code
+        == 404
+    )
+    assert owner.post(BASE + "/extent", json={"filter": FILTER}).status_code == 403
+    authority.ready = False
+    assert (
+        owner.post(
+            BASE + "/extent", json={"filter": FILTER}, headers=HEADERS
+        ).status_code
+        == 409
+    )
+    assert not authority.jobs_calls
+    assert not authority.leases
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+@pytest.mark.parametrize("transport_outage", [False, True])
+def test_disconnected_result_extent_keeps_lease_until_jobs_stops(
+    result_boundary: tuple[Any, ...],
+    version_file_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    transport_outage: bool,
+) -> None:
+    """Retain the original file until a disconnected Jobs read confirms native exit.
+
+    Args:
+        result_boundary: Existing file authority and real application collaborators.
+        version_file_path: Application version fixture.
+        monkeypatch: Shorten the old optional cleanup budget to expose early release.
+        status: Admitted state when the browser disconnects.
+        transport_outage: Whether the cancellation transport temporarily fails.
+    """
+    from fastapi import APIRouter, HTTPException, Request
+    import eolab_jobs.client as jobs_client_module
+    from eolab_app.vector.filters import VectorFilterRequest
+
+    _, _, authority, _, _, _ = result_boundary
+    monkeypatch.setattr(jobs_client_module, "CLEANUP_SECONDS", 0.01)
+    routers: list[APIRouter] = []
+    create_router = application_module.create_artifact_vector_router
+
+    def record_router(*args: Any, **kwargs: Any) -> APIRouter:
+        """Capture the actual router before FastAPI lazily includes it.
+
+        Args:
+            args: Composed vector collaborators.
+            kwargs: Existing Jobs executor and source access.
+
+        Returns:
+            Unmodified production artifact router.
+        """
+        router = create_router(*args, **kwargs)
+        routers.append(router)
+        return router
+
+    monkeypatch.setattr(
+        application_module, "create_artifact_vector_router", record_router
+    )
+
+    async def scenario() -> None:
+        """Drive a real route disconnect, worker cancellation and eventual termination."""
+        admitted, disconnected, cancellation, stopped = (
+            asyncio.Event() for _ in range(4)
+        )
+        recovered, polling = asyncio.Event(), asyncio.Event()
+        calls: list[tuple[str, str]] = []
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            """Keep Jobs nonterminal until the controlled worker has actually stopped.
+
+            Args:
+                request: Authenticated Jobs admission or cleanup request.
+
+            Returns:
+                Admitted, cancelling or terminal state and eventual deletion.
+
+            Raises:
+                httpx2.ConnectError: While the selected temporary outage is active.
+            """
+            assert (
+                request.url.host == "jobs"
+            ), "Extent must not contact Catalog or GeoServer"
+            assert authority.leases, "The lease was released before Jobs stopped"
+            calls.append((request.method, request.url.path))
+            if request.url.path == "/api/jobs":
+                admitted.set()
+                return httpx2.Response(
+                    202, json={"jobId": authority.jobs_id, "status": status}
+                )
+            if request.url.path.endswith("/cancel"):
+                cancellation.set()
+            if transport_outage and cancellation.is_set() and not recovered.is_set():
+                raise httpx2.ConnectError("Temporary Jobs outage", request=request)
+            if request.method == "DELETE":
+                assert stopped.is_set()
+                return httpx2.Response(204)
+            if cancellation.is_set():
+                polling.set()
+            current = (
+                "cancelled"
+                if stopped.is_set()
+                else "cancelling" if cancellation.is_set() else status
+            )
+            return httpx2.Response(
+                200, json={"jobId": authority.jobs_id, "status": current}
+            )
+
+        async def receive() -> dict[str, Any]:
+            """Wait for the browser to disconnect from this request.
+
+            Returns:
+                The ASGI disconnect event.
+            """
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        transport = httpx2.MockTransport(respond)
+        application_module.create_app(
+            version_file_path,
+            jobs_transport=transport,
+            catalog_transport=transport,
+            geoserver_transport=transport,
+        )
+        endpoint = next(
+            route.endpoint
+            for route in routers[-1].routes
+            if route.path
+            == "/api/vector-rendering/artifacts/{job_id}/{artifact_id}/extent"
+        )
+        task = asyncio.create_task(
+            endpoint(
+                (next(iter(authority.owners)), PRIVATE["jobId"], PRIVATE["artifactId"]),
+                VectorFilterRequest(filter=FILTER),
+                Request({"type": "http"}, receive),
+            )
+        )
+        try:
+            await asyncio.wait_for(admitted.wait(), 5)
+            disconnected.set()
+            await asyncio.wait_for(cancellation.wait(), 5)
+            # The previous bounded cleanup could return while the reader was alive.
+            await asyncio.sleep(0.05)
+            assert not task.done()
+            assert authority.leases
+            recovered.set()
+            await asyncio.wait_for(polling.wait(), 5)
+            assert not task.done()
+            assert authority.leases
+            stopped.set()
+            with pytest.raises(HTTPException) as failure:
+                await asyncio.wait_for(task, 5)
+            assert failure.value.status_code == 499
+            assert calls[-1] == ("DELETE", f"/api/jobs/{authority.jobs_id}")
+            assert not authority.leases
+        finally:
+            recovered.set()
+            stopped.set()
+            disconnected.set()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+
+    asyncio.run(scenario())
 
 
 def test_result_wms_and_cached_composite_recheck_ownership_and_expiry(
@@ -529,6 +830,10 @@ def test_cancelled_native_field_reads_keep_result_lease_until_exit(
 
     async def exercise() -> None:
         """Cancel a real service call while checking that its source lease remains live."""
+
+        # Metadata process startup is independent of the field reader's cancellation.
+        async with sources.open_layer("owner", PRIVATE["jobId"], PRIVATE["artifactId"]):
+            pass
 
         async def operation() -> Any:
             """Read the owned source under the same lease used by private HTTP operations.

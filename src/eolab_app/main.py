@@ -581,6 +581,7 @@ def create_app(
             lambda request, response: get_processing_session_owner_hash(
                 request, response, processing_session_ttl
             ),
+            extent_executor=ExtentJobs(vector_jobs),
         )
     )
     application.include_router(

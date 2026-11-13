@@ -1,6 +1,7 @@
 """Measure filtered vector bounds without retaining display geometry."""
 
 import math
+from pathlib import Path
 from time import monotonic
 from typing import Any
 
@@ -10,7 +11,6 @@ from rasterio.errors import RasterioError
 from rasterio.warp import transform_bounds
 
 from eolab_app.attribute_filter import matches_filter, validate_filter, ogr_predicate
-from eolab_app.vector.models import VectorLayer
 from eolab_app.vector.filters import VectorFilter
 from eolab_app.bounded_geometry import (
     GeometryValidationError,
@@ -56,12 +56,12 @@ def read_selected_extent(
             )
 
 
-def read_layer_extent(layer: VectorLayer, candidate: VectorFilter) -> dict[str, Any]:
+def read_file_extent(path: Path, candidate: VectorFilter) -> dict[str, Any]:
     """Measure an authorized result layer using the ordinary interactive extent budget.
 
     Args:
-        layer: Source-owner-authorized GeoPackage and field metadata.
-        candidate: Attribute filter checked against that layer's fields.
+        path: Authorized single-layer GeoPackage retained by the source owner.
+        candidate: Attribute filter to validate against the original field schema.
 
     Returns:
         Exact matching count and WGS84 envelopes without retaining geometry.
@@ -70,13 +70,15 @@ def read_layer_extent(layer: VectorLayer, candidate: VectorFilter) -> dict[str, 
         GeometryValidationError: If source geometry or the read budget is invalid.
         SelectionUnavailableError: If a native projection cannot be read.
         OSError: If the original source cannot be opened.
+        ValueError: If the file contains more than one layer or fields do not match.
     """
     limits = VectorReadLimits()
     deadline = monotonic() + limits.seconds
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
+        (layer_name,) = fiona.listlayers(path)
         with fiona.open(
-            layer.source.source_path,
-            layer=layer.source.layer_name,
+            path,
+            layer=layer_name,
             enabled_drivers=["GPKG"],
         ) as dataset:
             return _read_dataset_extent(
