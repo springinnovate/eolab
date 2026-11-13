@@ -1,7 +1,6 @@
 /** Pure initial vector appearance derived from Catalog fields and explicit results. */
 
 import {
-    normalizeVectorNumericClassification,
     normalizeVectorStyle,
     sequentialPaletteColors,
     vectorCategoricalFieldKind,
@@ -85,33 +84,28 @@ export function defaultVectorLabelPlacement(geometryKind) {
  * Derive a new layer's colors with labels disabled until the user enables them.
  *
  * @param {Object} initial Validated publication's default symbol style.
- * @param {ReadonlyArray<{name:string,type:string}>} fields Catalog fields.
- * @param {Object|null} [classification=null] Explicit bounded classification result.
+ * @param {Awaited<ReturnType<typeof import("./api.js").classifyVectorNumbers>>|null}
+ * [classification=null] Frozen API result for the selected default numeric field,
+ * using VECTOR_NUMERIC_DEFAULTS method and class count; null keeps one symbol.
  * @return {Object} Complete normalized initial style with labels off and optional numeric ranges.
- * @throws {TypeError} If a classification does not match the default request.
+ * @throws {TypeError|RangeError} If the initial symbol style is invalid.
  */
-export function deriveDefaultVectorStyle(initial, fields, classification = null) {
+export function deriveDefaultVectorStyle(initial, classification = null) {
     const style = normalizeVectorStyle(initial);
     let graduated = null;
     if (classification !== null) {
-        const summary = normalizeVectorNumericClassification(classification);
-        if (summary.field !== defaultVectorNumericField(fields)
-            || summary.method !== VECTOR_NUMERIC_DEFAULTS.method
-            || summary.requestedClassCount !== VECTOR_NUMERIC_DEFAULTS.classCount) {
-            throw new TypeError("Default numeric classification does not match the request.");
-        }
         const colors = sequentialPaletteColors(
-            VECTOR_NUMERIC_DEFAULTS.palette, summary.actualClassCount,
+            VECTOR_NUMERIC_DEFAULTS.palette, classification.actualClassCount,
         );
         graduated = {
             ...VECTOR_NUMERIC_DEFAULTS,
-            field: summary.field,
-            rules: summary.classes.map((range, index) => ({
+            field: classification.field,
+            rules: classification.classes.map((range, index) => ({
                 minimum: range.minimum,
                 maximum: range.maximum,
                 color: colors[index],
             })),
-            missingColor: summary.nullCount > 0 ? "#d1d5db" : null,
+            missingColor: classification.nullCount > 0 ? "#d1d5db" : null,
         };
     }
     return normalizeVectorStyle({ ...style, label: null, graduated });

@@ -292,13 +292,13 @@ export function createVectorMapLayerAdapter({
             const fields = getVectorSourceFields(source);
             const defaultFields = source.defaultNumericField ? fields.filter(field => field.name === source.defaultNumericField) : fields;
             const numericField = defaultVectorNumericField(defaultFields);
-            let candidate = deriveDefaultVectorStyle(publication.style, defaultFields);
+            let candidate = deriveDefaultVectorStyle(publication.style);
             let defaultStyleNotice = "";
             if (numericField !== null) {
                 try {
                     const summary = await classify(source, numericField,
                         VECTOR_NUMERIC_DEFAULTS.method, VECTOR_NUMERIC_DEFAULTS.classCount);
-                    candidate = deriveDefaultVectorStyle(publication.style, defaultFields, summary);
+                    candidate = deriveDefaultVectorStyle(publication.style, summary);
                 } catch {
                     defaultStyleNotice = "Automatic numeric coloring was unavailable. " +
                         "Choose Color by in Style to try again or use another field.";

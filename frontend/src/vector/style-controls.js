@@ -3,8 +3,6 @@
 import {
     categoryValueKey,
     formatCategoryValue,
-    normalizeVectorCategorySummary,
-    normalizeVectorNumericClassification,
     normalizeVectorStyle,
     qualitativeCategoryColor,
     sequentialPaletteColors,
@@ -202,12 +200,14 @@ export class VectorStyleControls {
     /**
      * Show controls for one composition-provided vector style target.
      *
-     * @param {{key:string,style:Object,fields:ReadonlyArray,notice?:string,
-     * summarize:(field:string)=>Promise<Object>,
-     * classify:(field:string,method:string,classCount:number)=>Promise<Object>,
+     * @param {{key:string,style:Object,fields:ReadonlyArray<{name:string,type:string}>,notice?:string,
+     * summarize:(field:string)=>ReturnType<typeof import("./api.js").summarizeVectorCategories>,
+     * classify:(field:string,method:string,classCount:number)=>ReturnType<typeof import("./api.js").classifyVectorNumbers>,
      * apply:(style:Object)=>Promise<Object>}} target
-     * Narrow vector target contract.
+     * Narrow vector target contract. Summary and classification callbacks return
+     * the API's frozen results, already validated against their requests.
      * @return {void}
+     * @throws {TypeError|RangeError} If the target style is invalid.
      */
     show(target) {
         const style = normalizeVectorStyle(target.style);
@@ -562,7 +562,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Load the selected field's bounded category summary through the target.
+     * Display the selected field's API-validated category summary through the target.
      *
      * @return {Promise<void>} Resolves after the latest request renders or its
      * safe error is presented; stale requests leave current state unchanged.
@@ -589,18 +589,13 @@ export class VectorStyleControls {
         this.categoryList.replaceChildren();
         this.#synchronizeCategoryInputs();
         try {
-            const summary = normalizeVectorCategorySummary(
-                await target.summarize(field)
-            );
+            const summary = await target.summarize(field);
             if (
                 this.generation !== generation ||
                 this.categoryRequest !== categoryRequest ||
                 this.target !== target ||
                 this.categoryField.value !== field
             ) return;
-            if (summary.field !== field) {
-                throw new TypeError("Category summary field changed unexpectedly.");
-            }
             this.categorySummary = summary;
             this.categoryLimit.max = String(summary.maximumLimit);
             this.categoryLimit.setAttribute("max", String(summary.maximumLimit));
@@ -640,7 +635,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Load server-computed ranges for the selected numeric field and method.
+     * Display API-validated ranges for the selected numeric field and method.
      *
      * @return {Promise<void>} Resolves after the latest classification renders
      * or its safe error is presented; stale requests do not mutate the form.
@@ -668,9 +663,7 @@ export class VectorStyleControls {
         this.graduatedList.replaceChildren();
         this.#synchronizeGraduatedInputs();
         try {
-            const summary = normalizeVectorNumericClassification(
-                await target.classify(field, method, requestedClassCount)
-            );
+            const summary = await target.classify(field, method, requestedClassCount);
             if (
                 this.generation !== generation ||
                 this.graduatedRequest !== graduatedRequest ||
@@ -679,12 +672,6 @@ export class VectorStyleControls {
                 this.graduatedMethod.value !== method ||
                 Number(this.graduatedClassCount.value) !== requestedClassCount
             ) return;
-            if (
-                summary.field !== field || summary.method !== method ||
-                summary.requestedClassCount !== requestedClassCount
-            ) {
-                throw new TypeError("Numeric classification changed unexpectedly.");
-            }
             this.graduatedSummary = summary;
             const seeded = this.graduatedRuleSeed;
             const preserveSeed = seeded !== null &&
