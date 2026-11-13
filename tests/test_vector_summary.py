@@ -1,7 +1,10 @@
-"""Verify grouped sums and overview geometry from real original vector files."""
+"""Verify grouped statistics and overview geometry from real original vector files."""
 
 from dataclasses import replace
+import json
+import math
 from pathlib import Path
+from sys import float_info
 from typing import Any
 
 import fiona
@@ -19,6 +22,7 @@ from eolab_app.processing.vector_summary_models import (
     VectorSummaryInput,
     VectorSummaryRequest,
     VectorSummarySpec,
+    VectorSummaryStatistic,
 )
 
 
@@ -26,13 +30,13 @@ from eolab_app.processing.vector_summary_models import (
     "capture_kind", ["configured", "missing_role", "extra_role", "old_shape"]
 )
 def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
-    """Bind the installed recipe's generic vector capture to its internal sum request.
+    """Bind the installed recipe's generic vector capture and default statistic.
 
     Args:
         capture_kind: Valid configured roles, malformed roles or the removed input shape.
     """
     registry = ModelRegistry.load_installed()
-    definition = registry.get("vector-summary", "1.0.0")
+    definition = registry.get("vector-summary", "1.1.0")
     selected = {
         "selection": {
             "collectionId": "eolab-mounted-vectors",
@@ -73,6 +77,7 @@ def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
     assert isinstance(calculation, VectorSummaryRequest)
     assert calculation.vector.groupField == "state_name"
     assert calculation.vector.valueField == "total_es"
+    assert calculation.statistic == "sum"
     assert calculation.boundary_tolerance_m == 1000
     assert invocation.inputs == {"vector": selected}
 
@@ -85,6 +90,7 @@ def summary_source(
     value_name: str = "total_es",
     numeric_type: str = "float",
     candidate: VectorFilter | None = None,
+    statistic: VectorSummaryStatistic = "sum",
 ) -> tuple[ResolvedCatalogSelection, VectorSummarySpec]:
     """Write source rows and their immutable selection without any rendering component.
 
@@ -95,6 +101,7 @@ def summary_source(
         value_name: Native numeric-column name, including long names.
         numeric_type: Fiona source type for the value column.
         candidate: Optional exact selection predicate.
+        statistic: Reduction captured in the operation request.
 
     Returns:
         Original source descriptor and exact-boundary summary specification.
@@ -135,6 +142,7 @@ def summary_source(
             vector=VectorSummaryInput(
                 selection=selection, groupField=group_name, valueField=value_name
             ),
+            statistic=statistic,
             boundary_tolerance_m=0,
         )
     )
@@ -147,13 +155,13 @@ def read_summary(path: Path) -> dict[Any, tuple[Any, Any]]:
         path: Published calculation file in its worker attempt directory.
 
     Returns:
-        Group keys mapped to their sum and Shapely geometry.
+        Group keys mapped to their numeric result and Shapely geometry.
     """
     with fiona.open(path, layer="summary") as dataset:
-        group_field, sum_field = tuple(dataset.schema["properties"])
+        group_field, summary_field = tuple(dataset.schema["properties"])
         return {
             feature.properties[group_field]: (
-                feature.properties[sum_field],
+                feature.properties[summary_field],
                 shape(feature.geometry),
             )
             for feature in dataset
@@ -203,6 +211,166 @@ def test_integer_sums_preserve_values_above_float_precision(tmp_path: Path) -> N
     )
     calculate_vector_summary(source, spec, tmp_path)
     assert read_summary(tmp_path / "result.gpkg")["A"][0] == 2**53 + 1
+
+
+@pytest.mark.parametrize(
+    "statistic, expected",
+    [("sum", 6), ("mean", 3), ("max", 4), ("min", 2), ("stdev", 1)],
+)
+def test_group_statistics_exclude_missing_values_without_removing_geometry(
+    tmp_path: Path, statistic: VectorSummaryStatistic, expected: float
+) -> None:
+    """Publish finite-value statistics, null empty groups and the complete group geometry.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+        statistic: Selected group reduction.
+        expected: Exact result for the group's two finite values.
+    """
+    source, spec = summary_source(
+        tmp_path,
+        [
+            ("A", 2),
+            ("A", 4),
+            ("A", None),
+            ("A", math.nan),
+            ("A", math.inf),
+            ("A", -math.inf),
+            ("missing", None),
+            (None, 8),
+        ],
+        statistic=statistic,
+    )
+    artifact = calculate_vector_summary(source, spec, tmp_path)
+    values = read_summary(tmp_path / "result.gpkg")
+    assert values["A"][0] == expected
+    assert values["missing"][0] is None
+    assert values[None][0] == (0 if statistic == "stdev" else 8)
+    assert len(values["A"][1].geoms) == 6 and values["A"][1].area == 6
+    assert artifact.summary_field == f"{statistic}_total_es"
+    assert artifact.input_feature_count == 8 and artifact.missing_value_count == 5
+    provenance = json.loads((tmp_path / "provenance.json").read_text())
+    assert provenance["inputs"]["statistic"] == statistic
+
+
+@pytest.mark.parametrize(
+    "statistic, expected, integer_output",
+    [
+        ("sum", 2**61 + 1, True),
+        ("min", 2**60, True),
+        ("max", 2**60 + 1, True),
+        ("mean", float(2**60), False),
+        ("stdev", 0.5, False),
+    ],
+)
+def test_integer_statistics_preserve_precision_and_choose_output_type(
+    tmp_path: Path,
+    statistic: VectorSummaryStatistic,
+    expected: int | float,
+    integer_output: bool,
+) -> None:
+    """Retain native integer precision through reduction, converting only float outputs.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+        statistic: Selected reduction over consecutive large integers.
+        expected: Exact or nearest representable output value.
+        integer_output: Whether the statistic must retain an integer column.
+    """
+    source, spec = summary_source(
+        tmp_path,
+        [("A", 2**60), ("A", 2**60 + 1)],
+        numeric_type="int64",
+        statistic=statistic,
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    with fiona.open(tmp_path / "result.gpkg", layer="summary") as result:
+        value = next(iter(result)).properties[f"{statistic}_total_es"]
+        assert type(value) is (int if integer_output else float)
+        assert value == expected
+
+
+def test_integer_mean_does_not_require_its_sum_to_fit_int64(tmp_path: Path) -> None:
+    """Write a finite mean even when the exact integer total exceeds the output range.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+    """
+    source, spec = summary_source(
+        tmp_path, [("A", 2**63 - 1)] * 2, numeric_type="int64", statistic="mean"
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    value = read_summary(tmp_path / "result.gpkg")["A"][0]
+    assert isinstance(value, float) and value == float(2**63 - 1)
+
+
+@pytest.mark.parametrize(
+    "statistic, values, expected",
+    [
+        ("sum", [1e308, 1e308, -1e308], 1e308),
+        ("mean", [float_info.max] * 2, float_info.max),
+        ("mean", [1e308, 1e308, -1e308], 1e308 / 3),
+        ("mean", [1e16, 1, -1e16], 1 / 3),
+        ("stdev", [float_info.max, -float_info.max], float_info.max),
+        ("stdev", [1e308, 1e308], 0),
+        ("stdev", [1e-300, -1e-300], 1e-300),
+        ("stdev", [1e15, 1e15 + 1], 0.5),
+    ],
+)
+def test_float_statistics_avoid_intermediate_overflow_and_cancellation(
+    tmp_path: Path,
+    statistic: VectorSummaryStatistic,
+    values: list[float],
+    expected: float,
+) -> None:
+    """Write representable statistics even when naive totals or squared differences overflow.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+        statistic: Numerically sensitive reduction.
+        values: Finite source doubles with extreme magnitude or small variation.
+        expected: Correctly representable result, including tiny deviations.
+    """
+    source, spec = summary_source(
+        tmp_path, [("A", value) for value in values], statistic=statistic
+    )
+    calculate_vector_summary(source, spec, tmp_path)
+    value = read_summary(tmp_path / "result.gpkg")["A"][0]
+    assert value == pytest.approx(expected, rel=1e-15, abs=0)
+
+
+def test_float_sum_rejects_an_unrepresentable_final_result(tmp_path: Path) -> None:
+    """Reject true float overflow after the exact fallback distinguishes intermediate overflow.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+    """
+    source, spec = summary_source(tmp_path, [("A", 1e308), ("A", 1e308)])
+    with pytest.raises(ProcessingError) as error:
+        calculate_vector_summary(source, spec, tmp_path)
+    assert error.value.code == "vector_summary_overflow"
+
+
+@pytest.mark.parametrize("statistic", ["sum", "mean", "max", "min", "stdev"])
+def test_statistic_column_collision_preserves_group_field(
+    tmp_path: Path,
+    statistic: VectorSummaryStatistic,
+) -> None:
+    """Give every statistic the existing case-insensitive collision-safe field naming.
+
+    Args:
+        tmp_path: Real original and output GeoPackages.
+        statistic: Selected reduction whose normal column name already names the group.
+    """
+    group_name = f"{statistic}_total_es".upper()
+    source, spec = summary_source(
+        tmp_path, [("A", 2)], group_name=group_name, statistic=statistic
+    )
+    artifact = calculate_vector_summary(source, spec, tmp_path)
+    assert artifact.summary_field == f"{statistic}_total_es_2"
+    assert read_summary(tmp_path / "result.gpkg")["A"][0] == (
+        0 if statistic == "stdev" else 2
+    )
 
 
 @pytest.mark.parametrize(

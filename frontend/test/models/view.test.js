@@ -220,6 +220,32 @@ test("run renewal and deletion have explicit scope, confirmation and busy feedba
     assert.equal(h.view.run.renew.hidden, true); assert.equal(h.view.run.inputs.hidden, true);
 });
 
+test("choice parameters render each recipe's labels and defaults without coercing values", () => {
+    const h = fixture();
+    const definitions = [
+        {type: "choice", label: "Output detail", choices: [{value: "1", label: "Quick overview"}, {value: "2", label: "Detailed output"}], default: "1"},
+        {type: "choice", label: "Display arrangement", choices: [{value: "compact", label: "Compact list"}, {value: "expanded", label: "Expanded cards"}], default: "expanded"},
+    ];
+    for (const [index, parameter] of definitions.entries()) {
+        const recipe = {...model, parameters: {...model.parameters, mode: parameter}};
+        h.state.draft = createModelDraft(recipe, {rasters: [raster], area}, `choice-${index}`);
+        h.view.render(h.state);
+        const control = h.view.setup.parameters.mode;
+        assert.equal(control.tagName, "select");
+        assert.equal(control.required, true);
+        assert.equal(control.value, parameter.default);
+        assert.deepEqual(control.children.map(option => ({value: option.value, label: option.textContent})), parameter.choices);
+        assert.ok(h.view.setup.fields.querySelectorAll("label").some(label => label.textContent === parameter.label));
+        const selected = parameter.choices.find(choice => choice.value !== parameter.default).value;
+        control.value = selected; control.dispatchEvent(new Event("change"));
+        assert.deepEqual(h.actions.at(-1), ["Edit", {parameters: {...h.state.draft.parameters, mode: selected}}]);
+        Object.assign(h.state.draft, h.actions.at(-1)[1]); control.focus(); h.view.render(h.state);
+        assert.equal(h.view.setup.parameters.mode, control);
+        assert.equal(h.doc.activeElement, control);
+        assert.equal(control.value, selected);
+    }
+});
+
 test("all model controls exist in production markup and progress retains field focus", () => {
     const h = fixture(); const field = h.view.setup.parameters.summary;
     field.value = "mean(a)"; field.focus();

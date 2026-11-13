@@ -238,8 +238,9 @@ export class ModelsView {
             filterDescription, vectorStatus, mapFilterStatus, filterHost, areaDescription, mapHelp};
     }
 
-    /** Construct the editable fields for one draft, retaining their DOM identities.
-     * @param {Object} draft New draft.
+    /** Construct editable inputs and recipe parameters, retaining their DOM identities.
+     * Choice parameters use the recipe's option labels and preserve their string values.
+     * @param {Object} draft New draft with validated recipe settings and current parameter values.
      * @return {void}
      */
     buildSetup(draft) {
@@ -279,11 +280,13 @@ export class ModelsView {
         if (temporal) fields.append(temporal.reductionRoot);
         const parameters = {};
         for (const [name, parameter] of Object.entries(draft.model.parameters)) {
-            const input = this.element(parameter.type === "summary_expression" ? "textarea" : "input");
-            if (parameter.type === "summary_expression") { input.rows = 2; input.maxLength = 4096; input.spellcheck = false; }
+            const choice = parameter.type === "choice";
+            const input = this.element(choice ? "select" : parameter.type === "summary_expression" ? "textarea" : "input");
+            if (choice) { input.required = true; this.options(input, parameter.choices, draft.parameters[name]); }
+            else if (parameter.type === "summary_expression") { input.rows = 2; input.maxLength = 4096; input.spellcheck = false; }
             else { input.type = "number"; input.step = "any"; input.required = parameter.type !== "optional_number"; if (parameter.minimum != null) input.min = String(parameter.minimum); }
-            input.addEventListener("input", () => this.handlers.onEdit({parameters: {...this.state.draft.parameters,
-                [name]: parameter.type === "summary_expression" ? input.value : input.value === "" ? null : Number(input.value)}}));
+            input.addEventListener(choice ? "change" : "input", () => this.handlers.onEdit({parameters: {...this.state.draft.parameters,
+                [name]: choice || parameter.type === "summary_expression" ? input.value : input.value === "" ? null : Number(input.value)}}));
             parameters[name] = input;
             fields.append(this.field(`models-parameter-${name}`, `${parameter.label}${parameter.unit ? ` (${parameter.unit})` : ""}${parameter.type === "optional_number" ? " — optional" : ""}`, input));
             if (modelHasInput(draft.model, "mask_source") && parameter.type === "optional_number") fields.append(this.element("p", "Leave blank for no distance cutoff. Distance is measured in a straight line from the starting cells.", "models-help"));
@@ -561,7 +564,8 @@ export class ModelsView {
     }
 
     /** Render run progress, results, saved inputs and deletion confirmation without replacing controls.
-     * @param {Object} state Controller snapshot.
+     * Saved choice parameters display their labels from the run's captured recipe.
+     * @param {Object} state Controller snapshot with validated saved inputs and parameter values.
      * @return {void}
      */
     renderRun(state) {
@@ -656,8 +660,12 @@ export class ModelsView {
                                 input.type === "area_statistic" ? describeAreaStatistic(value) : describeModelArea(value);
                 list.append(this.element("dt", input.label), this.element("dd", description));
             }
-            for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) list.append(this.element("dt", parameter.label),
-                this.element("dd", invocation.parameters[name] === null ? "Not set" : `${invocation.parameters[name]}${parameter.unit ? ` ${parameter.unit}` : ""}`));
+            for (const [name, parameter] of Object.entries(invocation.model.definition.parameters)) {
+                const value = invocation.parameters[name];
+                const description = parameter.type === "choice" ? parameter.choices.find(choice => choice.value === value).label
+                    : value === null ? "Not set" : `${value}${parameter.unit ? ` ${parameter.unit}` : ""}`;
+                list.append(this.element("dt", parameter.label), this.element("dd", description));
+            }
             r.inputsBody.replaceChildren(list);
         } else if (!invocation) { r.inputsBody.textContent = state.invocationError || "Reading saved inputs…"; r.invocation = null; }
         const metadataAvailable = job && job.status !== "deleted" && (!job.metadataExpiresAt || Date.parse(job.metadataExpiresAt) > Date.now());

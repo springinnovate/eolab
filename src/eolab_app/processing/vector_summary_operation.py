@@ -18,20 +18,21 @@ from eolab_app.processing.vector_summary_models import (
 def bind_vector_summary(
     inputs: dict[str, Any], parameters: dict[str, Any], request_id: str, label: str
 ) -> VectorSummaryRequest:
-    """Bind a recipe's polygon fields and boundary setting to a summary request.
+    """Bind a recipe's polygon fields, statistic and boundary detail to a summary request.
 
     Args:
         inputs: Captured source and configured group/value roles under "vector".
             The installed recipe and generic vector input contract validate those roles.
-        parameters: Approximate simplification distance under "boundary_tolerance_m".
+        parameters: Selected "statistic" and approximate simplification distance
+            under "boundary_tolerance_m".
         request_id: Ordinary model submission retry identifier, owned by admission.
         label: Ordinary model run name, owned by the surrounding model request.
 
     Returns:
-        Validated field choices and boundary tolerance without filesystem paths.
+        Validated field choices, statistic and boundary tolerance without filesystem paths.
 
     Raises:
-        ValidationError: If a selection, field name or tolerance is invalid.
+        ValidationError: If a selection, field name, statistic or tolerance is invalid.
     """
     selected = inputs["vector"]
     return VectorSummaryRequest(

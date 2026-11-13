@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from eolab_app.processing.model_definitions import ModelDefinition, ModelRegistry
+from eolab_app.processing.model_definitions import (
+    ChoiceParameter,
+    ModelDefinition,
+    ModelRegistry,
+)
 from eolab_app.processing.model_run_contracts import (
     ModelInvocation,
     ModelRunRequest,
@@ -25,6 +29,116 @@ from model_recipe_support import multiple_output_recipe
 from eolab_app.processing.model_operations import OperationOutput
 import eolab_app.processing.model_operations as operation_registry
 import eolab_app.processing.model_definitions as definitions
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"choices": []},
+        {"choices": [{"value": "2", "label": "Two"}] * 2},
+        {"default": "missing"},
+        {"default": 2},
+        {"choices": [{"value": 2, "label": "Two"}]},
+        {"choices": [{"value": "2", "label": ""}]},
+    ],
+)
+def test_choice_parameter_rejects_invalid_recipe_values(change: dict[str, Any]) -> None:
+    """Reject ambiguous choices and defaults outside the recipe's string values.
+
+    Args:
+        change: Invalid fields applied to a valid neutral choice definition.
+    """
+    document = {
+        "type": "choice",
+        "label": "Resolution",
+        "choices": [{"value": "2", "label": "Two meters"}],
+        "default": "2",
+    }
+    assert ChoiceParameter.model_validate(document).default == "2"
+    with pytest.raises(ValidationError):
+        ChoiceParameter.model_validate({**document, **change})
+
+
+def test_choice_recipe_round_trip_preserves_order_identity_and_immutability() -> None:
+    """Keep ordered options immutable and covered by the exported recipe checksum."""
+    definition = ModelRegistry.load_installed().get("vector-summary", "1.1.0")
+    reloaded = ModelDefinition.model_validate(
+        parse_yaml(export_yaml(definition.to_document()))
+    )
+    assert reloaded.digest == definition.digest
+    choice = reloaded.parameters["statistic"]
+    assert isinstance(choice, ChoiceParameter)
+    assert tuple(item.value for item in choice.choices) == (
+        "sum",
+        "mean",
+        "max",
+        "min",
+        "stdev",
+    )
+    assert choice.default == "sum"
+    with pytest.raises(ValidationError):
+        choice.choices[0].value = "changed"
+    changed = definition.to_document()
+    changed["parameters"]["statistic"]["choices"][0]["label"] = "Total"
+    assert ModelDefinition.model_validate(changed).digest != definition.digest
+
+
+@pytest.mark.parametrize("value", ["mean", "unknown", 2, None])
+def test_saved_choice_uses_its_recipe_values(value: Any) -> None:
+    """Validate captured strings against recipe choices without operation-specific code.
+
+    Args:
+        value: Supported string value or invalid persisted value to validate.
+    """
+    definition = ModelRegistry.load_installed().get("vector-summary", "1.1.0")
+    document = definition.to_document()
+    document["parameters"]["method"] = document["parameters"].pop("statistic")
+    document["parameters"]["method"]["default"] = "mean"
+    document["steps"][0]["parameters"]["statistic"] = {"parameter": "method"}
+    definition = ModelDefinition.model_validate(document)
+    request = ModelRunRequest.model_validate(
+        {
+            "requestId": "generic-choice-bindings",
+            "utcOffsetMinutes": 0,
+            "label": "Mean by region",
+            "model": {
+                "id": definition.id,
+                "version": definition.version,
+                "definitionSha256": definition.digest,
+            },
+            "inputs": {
+                "vector": {
+                    "selection": {
+                        "collectionId": "eolab-mounted-vectors",
+                        "itemId": "source",
+                        "assetKey": "data",
+                        "layerName": "areas",
+                        "filter": {"enabled": False, "match": "all", "rules": []},
+                    },
+                    "fields": {"group": "region", "value": "amount"},
+                }
+            },
+            "parameters": {},
+        }
+    )
+    calculation, captured = build_model_calculation_request(
+        request, ModelRegistry((definition,))
+    )
+    assert calculation.statistic == "mean"
+    source = captured.model_dump(mode="json", by_alias=True)
+    source["parameters"]["method"] = value
+    if value == "mean":
+        invocation = ModelInvocation.model_validate(source)
+        assert invocation.parameters["method"] == "mean"
+        assert (
+            ModelInvocation.model_validate_json(
+                invocation.model_dump_json(by_alias=True)
+            )
+            == invocation
+        )
+    else:
+        with pytest.raises(ValidationError):
+            ModelInvocation.model_validate(source)
 
 
 @pytest.mark.parametrize("missing_field", ["source", "primary_input"])

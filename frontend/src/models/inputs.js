@@ -5,6 +5,14 @@ import { getModelInputHandler } from "./input-handlers.js";
 
 /** @typedef {{key:string,label:string,polygons:Array<{type:"Polygon",coordinates:number[][][]}>,total:number}} DrawnPolygonLayer */
 
+/** A recipe setting whose string value is selected from named options.
+ * @typedef {Object} ModelChoiceParameter
+ * @property {"choice"} type Parameter family.
+ * @property {string} label User-facing setting name.
+ * @property {Array<{value:string,label:string}>} choices Nonempty options with unique values and readable labels.
+ * @property {string} default Initial value, matching one declared option.
+ */
+
 /** Check whether a model declares an input of the requested type.
  * @param {Object} model Installed recipe.
  * @param {string} type Input type from the model contract.
@@ -287,7 +295,7 @@ export function createModelDraft(model, context, id) {
  * @param {string} requestId Stable retry identity generated before dispatch.
  * @param {number} [utcOffsetMinutes=-new Date().getTimezoneOffset()] Local minutes east of UTC, captured once for this submission and its retries.
  * @return {Object} Detached submission with any drawn polygons awaiting upload.
- * @throws {Error} If a required input, label, area or parameter is missing.
+ * @throws {Error} If a required input, label, area or parameter is missing or a choice is not declared by the recipe.
  */
 export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new Date().getTimezoneOffset()) {
     if (!draft.label.trim() || [...draft.label.trim()].length > 80) throw new Error("Name this run using 1–80 characters.");
@@ -336,6 +344,8 @@ export function captureModelSubmission(draft, requestId, utcOffsetMinutes = -new
         throw new Error("Choose an analysis area for Earth Engine inputs.");
     for (const [name, parameter] of Object.entries(draft.model.parameters)) {
         const value = draft.parameters[name];
+        if (parameter.type === "choice" && !parameter.choices.some(choice => choice.value === value))
+            throw new Error(`Choose an available option for ${parameter.label}.`);
         if (parameter.type === "summary_expression" && (typeof value !== "string" || !value.trim())) throw new Error("Enter a summary formula.");
         if (["number", "optional_number"].includes(parameter.type) && !(value === null && parameter.type === "optional_number")) {
             if (!Number.isFinite(value)) throw new Error(`Enter a number for ${parameter.label}.`);
