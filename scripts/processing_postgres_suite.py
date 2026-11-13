@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 SUITES = (
+    "test_habitat_bulk_preparation_jobs.py",
     "test_habitat_preparation_jobs.py",
     "test_vector_field_values_postgres.py",
     "test_temporal_processing_postgres.py",

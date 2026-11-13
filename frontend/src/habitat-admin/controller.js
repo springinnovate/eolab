@@ -1,5 +1,5 @@
 /** Prepare named Catalog areas and observe administrator-owned Habitat jobs. */
-import { ACTIVE_PREPARATION_STATES, canRetryPreparation, preparationStatus } from "./api.js";
+import { ACTIVE_PREPARATION_STATES, RETRY_ALL_OPERATION, canRetryPreparation, preparationStatus } from "./api.js";
 import { validateVectorSelection } from "../selected-area.js";
 import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterSummary } from "../vector/filter.js";
 
@@ -34,8 +34,7 @@ export class HabitatAdminController {
         this.state = { options: null, sources: [], searching: false, searchError: "", nextSearch: null,
             areas: [], years: [], coverageRows: [], checking: false, submissions: [], jobs: [], nextCursor: null,
             inventory: null, inventoryLoading: false, inventoryError: "", inventoryCheckedAt: null,
-            historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0,
-            retryAllRunning: false, retryAllStatus: "", retryAllErrors: [] };
+            historyLoading: false, historyError: "", error: "", submitting: false, canPrepare: false, requestedJobs: 0, completedJobs: 0 };
         this.jobs = new Map(); this.jobMutations = new Map(); this.mutationRevision = 0;
         this.failureLogs = new Map();
         this.readControllers = new Set(); this.mutationControllers = new Set();
@@ -93,19 +92,20 @@ export class HabitatAdminController {
         this.render();
     }
 
-    /** Read one available failure log after the administrator expands its report.
-     * @param {string} id Preparation whose report supplies the tile diagnostics.
+    /** Read available tile or saved-area failures after the administrator expands a report.
+     * @param {string} id Preparation whose report supplies tile-download or saved-area failures.
      * @returns {Promise<void>} Resolves after the log, a read error or cancellation.
      */
     async openFailureLog(id) {
         const job = this.jobs.get(id), current = this.failureLogs.get(id);
-        if (!this.isVisible() || !job?.result?.failedTileCount || preparationStatus(job) !== "ready" ||
+        if (!this.isVisible() || !(job?.result?.failedTileCount || job?.result?.failedCount) || preparationStatus(job) !== "ready" ||
             current?.controller || current?.failures) return;
         const controller = new AbortController();
         const log = {sha256: job.result.sha256, controller, failures: null, error: ""};
         this.failureLogs.set(id, log); this.readControllers.add(controller); this.render();
         try {
-            const failures = await this.api.failureLog(job.result, controller.signal);
+            const failures = await (job.operation === RETRY_ALL_OPERATION
+                ? this.api.retryAllFailures(job.result, controller.signal) : this.api.failureLog(job.result, controller.signal));
             if (!controller.signal.aborted) log.failures = failures;
         } catch (error) {
             if (!controller.signal.aborted) log.error = error.message;
@@ -309,7 +309,7 @@ export class HabitatAdminController {
     }
 
     /** Persist commands before POSTing, preserving uncertain outcomes independently.
-     * @param {Object[]} rows Captured submission or explicit-retry commands.
+     * @param {Object[]} rows Captured individual preparation, explicit retry or durable bulk commands.
      * @returns {Promise<void>} Resolves after all current commands settle or the page is destroyed.
      */
     async sendSubmissions(rows) {
@@ -327,7 +327,8 @@ export class HabitatAdminController {
                 if (this.destroyed) return;
                 const controller = new AbortController(); this.mutationControllers.add(controller);
                 try {
-                    const job = row.kind === "retry" ? await this.api.retry(row.sourceJobId, row.request.requestId, controller.signal) : await this.api.submit(row.request, controller.signal);
+                    const job = row.kind === "retryAll" ? await this.api.retryAll(row.request.requestId, controller.signal) :
+                        row.kind === "retry" ? await this.api.retry(row.sourceJobId, row.request.requestId, controller.signal) : await this.api.submit(row.request, controller.signal);
                     if (this.destroyed) return;
                     row.status = "accepted"; row.jobId = job.jobId; row.error = ""; this.mergeJob(job, true);
                 } catch (error) {
@@ -361,7 +362,8 @@ export class HabitatAdminController {
             const saved = JSON.parse(this.storage?.getItem(PENDING_KEY) ?? "[]");
             if (!Array.isArray(saved)) throw new Error("Invalid saved preparation commands.");
             this.state.submissions = saved.map(row => {
-                if (!row || !["prepare", "retry"].includes(row.kind) || typeof row.name !== "string" || !Number.isInteger(row.year) ||
+                if (!row || !["prepare", "retry", "retryAll"].includes(row.kind) || typeof row.name !== "string" ||
+                    (row.kind === "retryAll" ? row.year !== null : !Number.isInteger(row.year)) ||
                     !/^[A-Za-z0-9_-]{16,80}$/.test(row.request?.requestId)) throw new Error("Invalid saved preparation command.");
                 let request, key;
                 if (row.kind === "prepare") {
@@ -369,9 +371,12 @@ export class HabitatAdminController {
                         !row.request.name.trim() || [...row.request.name].length > 80 || !Number.isInteger(row.request.year) || row.request.selection?.uploadId !== undefined) throw new Error("Invalid saved preparation inputs.");
                     const selection = validateVectorSelection(row.request.selection);
                     request = { ...row.request, selection }; key = preparationKey(selection, request.year);
-                } else {
+                } else if (row.kind === "retry") {
                     if (!/^[a-f0-9]{32}$/.test(row.sourceJobId) || Object.keys(row.request).join() !== "requestId") throw new Error("Invalid saved preparation retry.");
                     request = { requestId: row.request.requestId }; key = `retry:${row.sourceJobId}`;
+                } else {
+                    if (Object.keys(row.request).join() !== "requestId") throw new Error("Invalid saved bulk preparation request.");
+                    request = {requestId: row.request.requestId}; key = `retryAll:${request.requestId}`;
                 }
                 return { key, name: row.name, year: row.year, kind: row.kind, sourceJobId: row.sourceJobId, request,
                     status: "uncertain", jobId: null, error: "Recover this submission to check whether it was accepted." };
@@ -476,72 +481,22 @@ export class HabitatAdminController {
         await this.sendSubmissions([row]);
     }
 
-    /** Prepare currently missing inputs for every distinct retained saved area and year.
-     * Read all history before checking coverage, skip matching active work, and use
-     * ordinary recoverable preparations with the current scientific configuration.
-     * Hiding the page cancels planning; accepted preparations keep their normal lifecycle.
-     * @returns {Promise<void>} Resolves after submissions, individual check errors or cancelled planning.
+    /** Hand all saved-area checks and missing-input preparation to one durable server job.
+     * Save the exact request ID before sending; leaving the page never cancels
+     * accepted work, and an unknown response can be recovered with the same ID.
+     * @returns {Promise<void>} Resolves after acceptance, definite rejection or an uncertain response.
      */
     async retryAll() {
         if (!this.isVisible() || this.state.submitting) return;
+        if ([...this.jobs.values()].some(job => job.operation === RETRY_ALL_OPERATION && ACTIVE_PREPARATION_STATES.has(job.status))) return;
         if (this.state.submissions.some(row => ["uncertain", "submitting"].includes(row.status))) {
-            this.state.retryAllStatus = "Use Recover submission in Requested preparations to check unknown results before retrying all."; this.render(); return;
+            this.state.error = "Use Recover submission in Requested preparations to check unknown results before retrying all."; this.render(); return;
         }
-        const controller = new AbortController(); this.readControllers.add(controller);
-        this.state.submitting = this.state.retryAllRunning = true;
-        this.state.retryAllErrors = []; this.state.retryAllStatus = "Reading all saved areas and years…"; this.render();
-        try {
-            const areas = new Map(), active = new Set();
-            let cursor = null;
-            do {
-                const page = await this.api.list({cursor, limit: 100, signal: controller.signal});
-                if (controller.signal.aborted || this.destroyed) return;
-                for (const job of page.jobs) {
-                    if (job.status === "deleted" || !job.inputs ||
-                        job.metadataExpiresAt && Date.parse(job.metadataExpiresAt) <= Date.now()) continue;
-                    const key = preparationKey(job.inputs.selection, job.inputs.year);
-                    if (!areas.has(key)) areas.set(key, job.inputs);
-                    if (ACTIVE_PREPARATION_STATES.has(job.status)) active.add(key);
-                }
-                cursor = page.nextCursor;
-            } while (cursor !== null);
-            const missing = [];
-            let cached = 0;
-            for (const [key, inputs] of areas) {
-                if (active.has(key)) continue;
-                this.state.retryAllStatus = `Checking saved inputs for ${inputs.name} · ${inputs.year}…`; this.render();
-                try {
-                    const coverage = await this.api.coverage(inputs.selection, inputs.year, controller.signal);
-                    if (controller.signal.aborted || this.destroyed) return;
-                    if (coverage.missingTiles) missing.push({key, inputs});
-                    else cached++;
-                } catch (error) {
-                    if (controller.signal.aborted || this.destroyed) return;
-                    this.state.retryAllErrors.push({name: inputs.name, year: inputs.year, detail: error.message});
-                    this.render();
-                }
-            }
-            this.readControllers.delete(controller);
-            const submissions = missing.map(({key, inputs}) => ({key, name: inputs.name, year: inputs.year, kind: "prepare",
-                status: "submitting", request: {requestId: this.newId(), name: inputs.name, selection: inputs.selection, year: inputs.year}, jobId: null, error: ""}));
-            const keys = new Set(submissions.map(row => row.key));
-            this.state.submissions = [...this.state.submissions.filter(row => !keys.has(row.key)), ...submissions];
-            this.state.retryAllStatus = `Requesting ${submissions.length} preparations for missing inputs…`;
-            await this.sendSubmissions(submissions);
-            if (this.destroyed) return;
-            const queued = submissions.filter(row => row.status === "accepted").length;
-            this.state.retryAllStatus = areas.size
-                ? `All saved areas and years checked. ${queued} queued · ${cached} already cached · ${active.size} already being prepared · ${this.state.retryAllErrors.length} could not be checked.${submissions.some(row => row.status !== "accepted") ? " Review requested preparations for submission errors." : ""}`
-                : "No saved areas and years are available. Choose an area and year to prepare inputs.";
-        } catch (error) {
-            if (!controller.signal.aborted && !this.destroyed) this.state.retryAllStatus = `Saved preparations could not be checked. Nothing was submitted. ${error.message}`;
-        } finally {
-            this.readControllers.delete(controller);
-            if (!this.destroyed) {
-                if (controller.signal.aborted) this.state.retryAllStatus = "Checking stopped. No new preparations were submitted. Click Retry all missing inputs to try again.";
-                this.state.submitting = this.state.retryAllRunning = false; this.render(); this.schedule();
-            }
-        }
+        const request = {requestId: this.newId()};
+        const row = {key: `retryAll:${request.requestId}`, name: "Retry all missing inputs", year: null, kind: "retryAll",
+            status: "submitting", request, jobId: null, error: ""};
+        this.state.submissions.push(row);
+        await this.sendSubmissions([row]);
     }
 
     /** Schedule status polling using the existing active and idle Processing cadence.
