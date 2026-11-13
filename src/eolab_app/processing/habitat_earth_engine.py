@@ -1,25 +1,31 @@
 """Fetch and reuse the original Habitat predictor and response rasters."""
 
-from collections.abc import Callable
-from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import errno
+from functools import partial
+from http.client import HTTPException
 import json
 import os
 import re
 import stat
 from importlib.resources import as_file, files
+from itertools import chain
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock, local
 from typing import Literal
+from urllib.parse import urlsplit
 
 from affine import Affine
 from pydantic import BaseModel, ConfigDict, Field
 import ee
 from google.auth.exceptions import GoogleAuthError
+from google.oauth2.service_account import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.errors import HttpError
-from httplib2 import HttpLib2Error
+from httplib2 import Http, HttpLib2Error, Response
 from nhi_terrestrial_integrity_modeling.analysis_config import (
     RasterBandDefinition,
     RasterCacheGrid,
@@ -34,6 +40,11 @@ from rasterio.crs import CRS
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
+from eolab_app.processing.habitat_tile_downloads import (
+    HabitatTileDownload,
+    download_habitat_tiles,
+    get_provider_http_error,
+)
 from eolab_app.processing.raster_preparation import RasterGrid, calculate_raster_grid
 
 _PROVIDER_ERRORS = (OSError, GoogleAuthError, HttpError, HttpLib2Error, ee.EEException)
@@ -49,6 +60,81 @@ _PROVIDER_SECRETS = re.compile(
     r"|\b[A-Z]:[\\/][^\s<>\"']+|(?<![\w:/])/[^\s<>\"']+|\\\\[^\s<>\"']+",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+class _HabitatEarthEngineTransport:
+    """Give each Earth Engine request thread its own connection and auth state."""
+
+    def __init__(self, credentials: Credentials | None) -> None:
+        """Keep the service account as a template for independent thread credentials.
+
+        Args:
+            credentials: Scoped Earth Engine service account, or None for offline tests.
+        """
+        self._credentials = credentials
+        self._thread = local()
+        self._connections: list[Http | AuthorizedHttp] = []
+        self._lock = Lock()
+
+    def request(
+        self,
+        uri: str,
+        method: str = "GET",
+        body: str | bytes | None = None,
+        headers: dict[str, str] | None = None,
+        **options: object,
+    ) -> tuple[Response, bytes]:
+        """Send one SDK request and expose tile throttling before SDK retries.
+
+        Args:
+            uri: URL produced by the official Earth Engine client.
+            method: HTTP method selected by the client.
+            body: Encoded request payload.
+            headers: Request headers supplied by the client.
+            **options: Additional options forwarded to the HTTP transport.
+
+        Returns:
+            HTTP response and body for ordinary SDK handling.
+
+        Raises:
+            HttpError: A computePixels request was throttled.
+            OSError: The transport could not communicate with the server.
+            GoogleAuthError: The service account could not authorize the request.
+        """
+        connection = getattr(self._thread, "connection", None)
+        if connection is None:
+            connection = Http()
+            if self._credentials is not None:
+                # Clone mutable token state and match the SDK's project billing behavior.
+                connection = AuthorizedHttp(
+                    self._credentials.with_quota_project(None), http=connection
+                )
+            self._thread.connection = connection
+            with self._lock:
+                self._connections.append(connection)
+        try:
+            response, content = connection.request(
+                uri, method, body=body, headers=headers, **options
+            )
+        except HTTPException as error:
+            # Preserve SDK connection retries when the HTTP response is truncated.
+            raise ConnectionError(
+                "The Earth Engine HTTP response was incomplete."
+            ) from error
+        if (
+            response.status == 429
+            and method == "POST"
+            and urlsplit(uri).path.endswith("/image:computePixels")
+        ):
+            # Raising here bypasses the SDK's internal retry for this one status.
+            raise HttpError(response, content)
+        return response, content
+
+    def close(self) -> None:
+        """Close all attempt-owned transports after request threads have stopped."""
+        for connection in self._connections:
+            connection.close()
+        self._connections.clear()
 
 
 @dataclass(frozen=True)
@@ -601,12 +687,10 @@ def _describe_provider_failure(
             None,
         )
 
-    http_error = (
-        error if isinstance(error, HttpError) else error.__cause__ or error.__context__
-    )
+    http_error = get_provider_http_error(error)
     status = None
     message = ""
-    if isinstance(http_error, HttpError):
+    if http_error is not None:
         if 100 <= http_error.status_code <= 599:
             status = http_error.status_code
         # The HttpError string also includes its request URL. Read only the
@@ -661,18 +745,20 @@ def _describe_provider_failure(
     return code, message[:512] or fallback, status
 
 
+@contextmanager
 def _build_habitat_image(
     configuration: RasterStackConfiguration,
     settings: HabitatEarthEngineSettings,
-) -> ee.Image:
-    """Connect with server credentials and build the original scientific image.
+) -> Iterator[ee.Image]:
+    """Connect and yield the original scientific image for one acquisition.
 
     Args:
         configuration: Scientific settings from load_habitat_stack.
         settings: Server-only Earth Engine project and service-account key path.
 
-    Returns:
-        Earth Engine expression for the configured bands, ready for tile requests.
+    Yields:
+        Earth Engine expression for the configured bands. Finish all requests
+        before leaving the context, which closes its connections.
 
     Raises:
         HabitatEarthEngineConnectionError: If credentials, initialization or
@@ -687,21 +773,63 @@ def _build_habitat_image(
             "Ecosystem Condition could not load the mounted service-account credentials. "
             "Ask the administrator to check the configured project and credentials."
         ) from None
-    try:
-        ee.Initialize(credentials, project=settings.project)
-    except (*_PROVIDER_ERRORS, ValueError) as error:
-        _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
-        raise HabitatEarthEngineConnectionError(
-            "Ecosystem Condition could not connect to Earth Engine. Check the configured project "
-            f"and the mounted service-account credentials and permissions. {detail}"
-        ) from None
-    try:
-        return build_earth_engine_stack(configuration)
-    except _PROVIDER_ERRORS as error:
-        _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
-        raise HabitatEarthEngineConnectionError(
-            f"Ecosystem Condition could not build the configured Earth Engine inputs. {detail}"
-        ) from None
+    with closing(_HabitatEarthEngineTransport(credentials)) as transport:
+        try:
+            ee.Initialize(
+                credentials=None, project=settings.project, http_transport=transport
+            )
+        except (*_PROVIDER_ERRORS, ValueError) as error:
+            _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
+            raise HabitatEarthEngineConnectionError(
+                "Ecosystem Condition could not connect to Earth Engine. Check the configured project "
+                f"and the mounted service-account credentials and permissions. {detail}"
+            ) from None
+        try:
+            image = build_earth_engine_stack(configuration)
+        except _PROVIDER_ERRORS as error:
+            _, detail, _ = _describe_provider_failure(error, settings.credentials_file)
+            raise HabitatEarthEngineConnectionError(
+                f"Ecosystem Condition could not build the configured Earth Engine inputs. {detail}"
+            ) from None
+        yield image
+
+
+def _fetch_habitat_tile(
+    image: ee.Image, names: tuple[str, ...], grid: RasterGrid
+) -> bytes:
+    """Request one GeoTIFF from the initialized Earth Engine client.
+
+    Args:
+        image: Original scientific image for this acquisition.
+        names: Ordered predictor and response bands.
+        grid: Exact projected tile with its georeferencing.
+
+    Returns:
+        GeoTIFF bytes to validate and publish in the attempt thread.
+
+    Raises:
+        ee.EEException: Earth Engine rejected the request.
+        OSError: The request failed at the network boundary.
+    """
+    return ee.data.computePixels(
+        {
+            "expression": image,
+            "fileFormat": "GEO_TIFF",
+            "bandIds": list(names),
+            "grid": {
+                "dimensions": {"width": grid.width, "height": grid.height},
+                "affineTransform": {
+                    "scaleX": grid.transform.a,
+                    "shearX": 0,
+                    "translateX": grid.transform.c,
+                    "shearY": 0,
+                    "scaleY": grid.transform.e,
+                    "translateY": grid.transform.f,
+                },
+                "crsWkt": grid.crs.to_wkt(version="WKT1_GDAL"),
+            },
+        }
+    )
 
 
 def _publish_tile(directory: Path, entry: Path) -> None:
@@ -733,17 +861,18 @@ def get_habitat_tiles(
     progress: Callable[[int, int], None],
     check_cancelled: Callable[[], None],
 ) -> HabitatTiles:
-    """Reuse completed Habitat tiles and attempt every missing tile for a projected AOI.
+    """Reuse completed Habitat tiles and adapt download concurrency for missing tiles.
 
     Run in a dedicated Processing native process: Earth Engine initialization is
     process-global. The upstream scientific configuration digest includes year,
     grid, datasets, bands and stack version; globally anchored tile coordinates
     allow overlapping AOIs to reuse the same pixels. Completed entries are
     immutable and are not reopened or rehashed here. An entirely cached request
-    does not connect to Earth Engine. Namespace identity and source year are
-    recorded before publishing a missing tile, so its later inventory does not
-    depend on installed historical configurations. Warm historical namespaces
-    require no metadata migration.
+    does not connect to Earth Engine. HTTP 429 slows subsequent requests in this
+    attempt and retries the throttled tile before reporting a terminal failure.
+    Namespace identity and source year are recorded before publishing a missing
+    tile, so the cache inventory does not depend on installed historical
+    configurations. Warm historical namespaces require no metadata migration.
 
     Args:
         area: Valid, nonempty AOI already projected to configuration.grid.crs.
@@ -778,65 +907,72 @@ def get_habitat_tiles(
     progress(0, len(grids))
     stack_directory = cache_directory / configuration.raster_configuration_sha256
     stack_directory.mkdir(parents=True, exist_ok=True)
-    image = None
-    paths: list[Path] = []
-    failures: list[HabitatTileFailure] = []
-    for grid in grids:
-        check_cancelled()
-        entry = _get_tile_cache_directory(grid, configuration.grid, stack_directory)
-        if not entry.exists():
-            _publish_cache_configuration(
-                configuration, stack_directory, working_directory
-            )
-            if image is None:
-                image = _build_habitat_image(configuration, settings)
-            try:
-                pixels = ee.data.computePixels(
-                    {
-                        "expression": image,
-                        "fileFormat": "GEO_TIFF",
-                        "bandIds": list(bands),
-                        "grid": {
-                            "dimensions": {"width": grid.width, "height": grid.height},
-                            "affineTransform": {
-                                "scaleX": grid.transform.a,
-                                "shearX": 0,
-                                "translateX": grid.transform.c,
-                                "shearY": 0,
-                                "scaleY": grid.transform.e,
-                                "translateY": grid.transform.f,
-                            },
-                            "crsWkt": grid.crs.to_wkt(version="WKT1_GDAL"),
-                        },
-                    }
+    paths: dict[int, Path] = {}
+    failures: dict[int, HabitatTileFailure] = {}
+
+    def missing_tiles() -> Iterator[HabitatTileDownload]:
+        """Count cache hits in selection order and yield uncached tiles.
+
+        Yields:
+            Selected tiles that still need an Earth Engine request.
+        """
+        for index, grid in enumerate(grids):
+            check_cancelled()
+            entry = _get_tile_cache_directory(grid, configuration.grid, stack_directory)
+            if entry.exists():
+                paths[index] = entry / "tile.tif"
+                progress(len(paths), len(grids))
+            else:
+                yield HabitatTileDownload(index, grid, entry)
+
+    missing = missing_tiles()
+    first = next(missing, None)
+    if first is not None:
+        _publish_cache_configuration(configuration, stack_directory, working_directory)
+        names = tuple(bands)
+        with (
+            _build_habitat_image(configuration, settings) as image,
+            closing(
+                download_habitat_tiles(
+                    chain((first,), missing),
+                    partial(_fetch_habitat_tile, image, names),
+                    check_cancelled,
                 )
-            except _PROVIDER_ERRORS as error:
-                column, row = map(int, entry.name.split("_"))
-                code, detail, status = _describe_provider_failure(
-                    error, settings.credentials_file
-                )
-                failures.append(
-                    HabitatTileFailure(
+            ) as downloaded,
+        ):
+            for tile, result in downloaded:
+                check_cancelled()
+                if isinstance(result, _PROVIDER_ERRORS):
+                    column, row = map(int, tile.entry.name.split("_"))
+                    code, detail, status = _describe_provider_failure(
+                        result, settings.credentials_file
+                    )
+                    failures[tile.index] = HabitatTileFailure(
                         column=column,
                         row=row,
                         code=code,
                         detail=detail,
                         httpStatus=status,
                     )
-                )
+                else:
+                    if isinstance(result, Exception):
+                        raise result
+                    if result is not None:
+                        with TemporaryDirectory(
+                            prefix="habitat-gee-", dir=working_directory
+                        ) as temporary:
+                            directory = Path(temporary)
+                            path = directory / "tile.tif"
+                            path.write_bytes(result)
+                            _name_downloaded_bands(path, tile.grid, names)
+                            check_cancelled()
+                            _publish_tile(directory, tile.entry)
+                    paths[tile.index] = tile.entry / "tile.tif"
                 progress(len(paths), len(grids))
-                continue
-            check_cancelled()
-            with TemporaryDirectory(
-                prefix="habitat-gee-", dir=working_directory
-            ) as temporary:
-                directory = Path(temporary)
-                path = directory / "tile.tif"
-                path.write_bytes(pixels)
-                _name_downloaded_bands(path, grid, tuple(bands))
-                check_cancelled()
-                _publish_tile(directory, entry)
-        paths.append(entry / "tile.tif")
-        progress(len(paths), len(grids))
     check_cancelled()
-    return HabitatTiles(tuple(paths), bands, len(grids), tuple(failures))
+    return HabitatTiles(
+        tuple(paths[index] for index in sorted(paths)),
+        bands,
+        len(grids),
+        tuple(failures[index] for index in sorted(failures)),
+    )
