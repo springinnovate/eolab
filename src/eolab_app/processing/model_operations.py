@@ -35,7 +35,7 @@ from eolab_app.processing.vector_summary import vector_summary_process_target
 from eolab_app.processing.vector_summary_models import (
     OPERATION as VECTOR_SUMMARY_OPERATION,
     QueuedVectorSummary,
-    VectorSummaryInput,
+    VectorSummaryDetails,
     VectorSummaryPolicy,
     VectorSummaryRequest,
     VectorSummarySpec,
@@ -174,6 +174,8 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
             summary, published artifact and recorded numerical policy, when
             that metadata remains available.
         outcome: Describe retained scientific metadata in Run YAML.
+        outcome_details_type: Optional operation-owned schema for the outcome's
+            details section. Operations without this schema cannot publish details.
         cached: Optional cache reader; None means the operation always computes results.
         reusable: Optional cache-value extractor; None disables result-cache writes.
         primary_input: Argument bound to the primary raster or temporal source,
@@ -228,6 +230,7 @@ class ModelOperation(Generic[Request, Queued, Prepared]):
         [dict[str, Any], dict[str, Any], dict[str, Any] | None], dict[str, Any]
     ]
     outcome: Callable[[dict[str, Any]], dict[str, Any]]
+    outcome_details_type: type[BaseModel] | None = None
     cached: (
         Callable[[OperationContext, Prepared, Path], Awaitable[Artifact | None]] | None
     ) = None
@@ -323,7 +326,7 @@ OPERATIONS = MappingProxyType(
                 VectorSummaryRequest, QueuedVectorSummary, VectorSummarySpec
             ](
                 id=VECTOR_SUMMARY_OPERATION,
-                inputs=(("vector", "vector_summary"),),
+                inputs=(("vector", "vector"),),
                 parameters=(("boundary_tolerance_m", "number"),),
                 output=OperationOutput(
                     "summary",
@@ -352,10 +355,10 @@ OPERATIONS = MappingProxyType(
                 ),
                 result=vector_summary.describe_vector_summary_result,
                 outcome=vector_summary.describe_vector_summary_outcome,
+                outcome_details_type=VectorSummaryDetails,
                 primary_input=None,
                 requires_raster_grid=False,
                 execution_inputs=vector_summary.prepare_vector_summary_execution,
-                input_adapters=(("vector_summary", TypeAdapter(VectorSummaryInput)),),
                 progress_descriptions=(
                     ("reading_vector_features", "Reading polygon attributes"),
                     (

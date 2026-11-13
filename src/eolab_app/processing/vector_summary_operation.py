@@ -9,6 +9,7 @@ from eolab_app.processing.operation_context import OperationContext
 from eolab_app.processing.vector_summary_models import (
     OPERATION,
     QueuedVectorSummary,
+    VectorSummaryInput,
     VectorSummaryRequest,
     VectorSummarySpec,
 )
@@ -20,7 +21,8 @@ def bind_vector_summary(
     """Bind a recipe's polygon fields and boundary setting to a summary request.
 
     Args:
-        inputs: Captured source and field choices under the literal key "vector".
+        inputs: Captured source and configured group/value roles under "vector".
+            The installed recipe and generic vector input contract validate those roles.
         parameters: Approximate simplification distance under "boundary_tolerance_m".
         request_id: Ordinary model submission retry identifier, owned by admission.
         label: Ordinary model run name, owned by the surrounding model request.
@@ -31,7 +33,15 @@ def bind_vector_summary(
     Raises:
         ValidationError: If a selection, field name or tolerance is invalid.
     """
-    return VectorSummaryRequest(vector=inputs["vector"], **parameters)
+    selected = inputs["vector"]
+    return VectorSummaryRequest(
+        vector=VectorSummaryInput(
+            selection=selected["selection"],
+            groupField=selected["fields"]["group"],
+            valueField=selected["fields"]["value"],
+        ),
+        **parameters,
+    )
 
 
 def build_vector_summary_submission(
@@ -120,7 +130,7 @@ def describe_vector_summary_result(
     return {
         "layerName": "summary",
         "featureCount": artifact["feature_count"],
-        "summaryField": artifact["summary_field"],
+        "defaultNumericField": artifact["summary_field"],
     }
 
 
@@ -131,7 +141,7 @@ def describe_vector_summary_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
         artifact: Published file metadata returned by the registered summary worker.
 
     Returns:
-        The vector outcome with download integrity and included/missing feature counts.
+        Ordinary vector metadata and the operation's separately typed grouping details.
     """
     return {
         "statistics": None,
@@ -139,7 +149,10 @@ def describe_vector_summary_outcome(artifact: dict[str, Any]) -> dict[str, Any]:
             "filename": artifact["filename"],
             "bytes": artifact["size"],
             "sha256": artifact["sha256"],
+            "layerName": "summary",
             "featureCount": artifact["feature_count"],
+        },
+        "details": {
             "summaryField": artifact["summary_field"],
             "inputFeatureCount": artifact["input_feature_count"],
             "missingValueCount": artifact["missing_value_count"],

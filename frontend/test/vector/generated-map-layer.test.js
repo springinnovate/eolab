@@ -8,11 +8,11 @@ import {fileManifest, job} from "../../test-support/models/fixtures.js";
 
 test("generated vectors retain ordinary styling, filters and run ownership across additional views and Undo", async () => {
     const artifacts = fileManifest(), file = artifacts.files[0];
-    Object.assign(file, {name: "vector", mediaType: "application/geopackage+sqlite3", filename: "summary.gpkg"});
+    Object.assign(file, {name: "vector", mediaType: "application/geopackage+sqlite3", filename: "processed.gpkg"});
     const run = job({status: "ready", artifacts, expiresAt: artifacts.expiresAt,
-        result: {name: "vector", summaryField: "sum_total_es"}});
-    const metadata = {kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, layerName: "summary",
-        fields: {state_code: "int", sum_total_es: "float"}, featureCount: 2, bbox: [-2, 40, 2, 44], geometryKind: "polygon"};
+        result: {name: "vector", defaultNumericField: "score"}});
+    const metadata = {kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId, layerName: "processed",
+        fields: {region_code: "int", score: "float"}, featureCount: 2, bbox: [-2, 40, 2, 44], geometryKind: "polygon"};
     const style = {geometryKind: "polygon", fillColor: "#2b83ba", fillOpacity: 1, strokeColor: "#000000",
         strokeOpacity: 1, strokeWidth: 1, pointSize: null, categorical: null, graduated: null, label: null};
     const classifiedFields = [], inspected = [], map = {removeLayer() {}, fitBounds() {}};
@@ -20,7 +20,7 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
         leaflet: {tileLayer: {wms: (_url, options) => ({options, once() {}, on() {}, setOpacity() {}, setZIndex() {},
             addTo() { return this; }, setParams(params) { Object.assign(this.options, params); }})}},
         leafletMap: map, wmsUrl: "/wms", onTileError() {},
-        publish: async () => ({layerName: "eolab:summary", styleName: "vector-polygon", bbox: metadata.bbox,
+        publish: async () => ({layerName: "eolab:processed", styleName: "vector-polygon", bbox: metadata.bbox,
             geometryKind: "polygon", style}),
         classify: async (_source, field, method, requestedClassCount) => {
             classifiedFields.push(field);
@@ -29,8 +29,8 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
                 observedMinimum: 1, observedMaximum: 7, numericValueCount: 2, scannedFeatureCount: 2, featureCount: 2,
                 nullCount: 0, unsupportedValueCount: 0, complete: true, defaultClassCount: 5, minimumClassCount: 2, maximumClassCount: 9};
         },
-        style: async (_source, definition) => ({styleName: "sum-style", style: definition}),
-        filter: async (_source, predicate) => ({layerName: "eolab:summary_filtered", filter: predicate}),
+        style: async (_source, definition) => ({styleName: "processed-style", style: definition}),
+        filter: async (_source, predicate) => ({layerName: "eolab:processed_filtered", filter: predicate}),
         countFilter: async () => ({matched: 1, total: 2, complete: true}),
     });
     let outputs;
@@ -50,17 +50,17 @@ test("generated vectors retain ordinary styling, filters and run ownership acros
     const key = artifactLayerKey(run.jobId, file.artifactId), record = layers.getRecord(key);
     assert.equal(record.adapter, adapter);
     assert.equal(record.entry.group.id, run.jobId);
-    assert.equal(adapter.describeStyle(record).style.graduated.field, "sum_total_es");
-    assert.deepEqual(classifiedFields, ["sum_total_es"]);
-    const predicate = {enabled: true, match: "all", rules: [{field: "sum_total_es", operator: "gt", value: 3}]};
+    assert.equal(adapter.describeStyle(record).style.graduated.field, "score");
+    assert.deepEqual(classifiedFields, ["score"]);
+    const predicate = {enabled: true, match: "all", rules: [{field: "score", operator: "gt", value: 3}]};
     await adapter.applyFilterState(record, predicate);
     const edited = {...adapter.describeStyle(record).style, strokeWidth: 3};
     await adapter.applyStyle(record, edited);
-    layers.renameLayer(key, "My state totals");
+    layers.renameLayer(key, "My processed regions");
     layers.setVisible(key, false);
     const copyKey = await layers.addAnotherView(key), copy = layers.getRecord(copyKey);
     assert.equal(copy.entry.group.id, run.jobId);
-    assert.equal(copy.entry.label, "My state totals");
+    assert.equal(copy.entry.label, "My processed regions");
     assert.equal(copy.entry.visible, false);
     assert.deepEqual(adapter.describeSource(copy).source, {kind: "runArtifact", jobId: run.jobId, artifactId: file.artifactId});
     assert.deepEqual(adapter.describeStyle(copy).style, edited);

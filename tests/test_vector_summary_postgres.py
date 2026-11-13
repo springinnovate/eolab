@@ -1,6 +1,7 @@
 """Run vector summaries through real source, HTTP, PostgreSQL and native worker boundaries."""
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,10 @@ import psycopg
 import pytest
 
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.model_run_contracts import RunDocument
 from eolab_app.processing.model_yaml import parse_yaml
+from eolab_app.processing.vector_summary_models import VectorSummaryDetails
+from eolab_app.routes.processing import COOKIE
 from test_model_runs_postgres import model_request, submit
 from test_processing_jobs import HEADERS, store
 from test_processing_uploaded_vectors import UploadBoundary, upload_boundary
@@ -24,7 +28,7 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     tmp_path: Path,
     source_kind: str,
 ) -> None:
-    """Publish and renew a real grouped GeoPackage without a map or GeoServer.
+    """Publish a grouped GeoPackage and retain its typed diagnostics after file expiry.
 
     Args:
         upload_boundary: Existing upload, source, HTTP and native worker composition.
@@ -48,8 +52,7 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
         inputs={
             "vector": {
                 "selection": selection,
-                "groupField": "label",
-                "valueField": "count",
+                "fields": {"group": "label", "value": "count"},
             }
         },
         parameters={"boundary_tolerance_m": 0},
@@ -67,7 +70,7 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     completed = response.json()
     assert completed["status"] == "ready", completed
     result = completed["result"]
-    assert result["kind"] == "vector" and result["summaryField"] == "sum_count"
+    assert result["kind"] == "vector" and result["defaultNumericField"] == "sum_count"
     assert result["featureCount"] == 1 and result["layerName"] == "summary"
     assert datetime.fromisoformat(
         completed["expiresAt"].replace("Z", "+00:00")
@@ -85,6 +88,17 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     document = parse_yaml(client.get(base + "/run-yaml").content, run=True)
     assert "grid" not in document["execution"]
     assert document["execution"]["outcome"]["vector"]["featureCount"] == 1
+    assert document["execution"]["outcome"]["vector"]["layerName"] == "summary"
+    assert document["execution"]["outcome"]["details"] == {
+        "summaryField": "sum_count",
+        "inputFeatureCount": 1,
+        "missingValueCount": 0,
+    }
+    assert isinstance(
+        RunDocument.model_validate(document).execution.outcome.details,
+        VectorSummaryDetails,
+    )
+    assert document["invocation"]["inputs"]["vector"] == request["inputs"]["vector"]
     assert document["execution"]["numericalPolicy"]["boundaryToleranceMeters"] == 0
     with TestClient(client.app, base_url="https://testserver") as stranger:
         assert stranger.get(result["url"]).status_code == 404
@@ -97,6 +111,25 @@ def test_summary_uses_original_source_and_ordinary_result_lifetime(
     renewed = client.post(base + "/renew", headers=HEADERS)
     assert renewed.status_code == 200, renewed.text
     assert renewed.json()["artifacts"]["files"] == original_files
+    owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+    row = store.get(run["jobId"], owner)
+    published = worker.artifacts.root / "results" / row["attempt_id"] / "result.gpkg"
+    assert published.exists()
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (run["jobId"],),
+        )
+    client.portal.call(worker.cleanup)
+    assert not published.exists()
+    assert client.get(base).json()["status"] == "expired"
+    assert client.get(result["url"]).status_code == 409
+    after_expiry = parse_yaml(client.get(base + "/run-yaml").content, run=True)
+    assert after_expiry["execution"]["outcome"] == document["execution"]["outcome"]
+    assert isinstance(
+        RunDocument.model_validate(after_expiry).execution.outcome.details,
+        VectorSummaryDetails,
+    )
     assert client.delete(base, headers=HEADERS).status_code == 200
     assert client.get(result["url"]).status_code == 409
     client.portal.call(worker.cleanup)
@@ -119,8 +152,7 @@ def test_summary_rejects_another_browsers_upload_before_queueing(
             inputs={
                 "vector": {
                     "selection": selection,
-                    "groupField": "label",
-                    "valueField": "count",
+                    "fields": {"group": "label", "value": "count"},
                 }
             },
             parameters={"boundary_tolerance_m": 0},

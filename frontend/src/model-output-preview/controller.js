@@ -117,10 +117,11 @@ export class ModelOutputLayers {
                 if (Date.parse(this.runStates.get(job.jobId).expiresAt) <= Date.now()) throw new Error("This result expired. Run the tool again.");
                 const bbox = vector ? metadata.bbox : metadata.bounds;
                 if (!bbox) throw new Error(vector ? "This result contains no features to display. Download it to inspect the file." : "This raster cannot be placed on the map. Download it or choose it directly as a tool input.");
-                if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new Error("This result crosses unsupported map bounds.");
+                if (vector ? bbox[0] > bbox[2] || bbox[1] > bbox[3] : bbox[0] >= bbox[2] || bbox[1] >= bbox[3])
+                    throw new Error("This result crosses unsupported map bounds.");
                 const presentation = this.outputPresentation(job.jobId, file);
                 const layerSource = vector ? {...metadata, name: presentation.label,
-                    defaultNumericField: job.result?.name === file.name ? job.result.summaryField : undefined} : {source, version: metadata.version, bbox, ...presentation,
+                    defaultNumericField: job.result?.name === file.name ? job.result.defaultNumericField : undefined} : {source, version: metadata.version, bbox, ...presentation,
                     capabilities: {pixels: metadata.capabilities.pixels.supported, statistics: metadata.capabilities.statistics.supported,
                         calculations: true, modelInput: true}};
                 const retained = await (vector ? this.addVector : this.addRaster)(layerSource, {

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 SUITES = (
-    "test_habitat_bulk_preparation_jobs.py",
     "test_vector_summary_postgres.py",
+    "test_habitat_bulk_preparation_jobs.py",
     "test_habitat_preparation_jobs.py",
     "test_vector_field_values_postgres.py",
     "test_temporal_processing_postgres.py",
@@ -16,6 +16,7 @@ SUITES = (
     "test_processing_uploaded_vectors.py",
     "test_model_artifact_previews_postgres.py",
     "test_model_artifacts_postgres.py",
+    "test_model_vector_results_postgres.py",
     "test_model_runs_postgres.py",
     "test_model_generated_inputs_postgres.py",
     "test_processing_jobs.py",

@@ -10,6 +10,9 @@ from shapely.geometry import Point, box, mapping, shape
 
 from eolab_app.attribute_filter import VectorFilter
 from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.processing.model_definitions import ModelRegistry
+from eolab_app.processing.model_run_contracts import ModelRunRequest
+from eolab_app.processing.model_runs import build_model_calculation_request
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.vector_summary import calculate_vector_summary
 from eolab_app.processing.vector_summary_models import (
@@ -17,6 +20,61 @@ from eolab_app.processing.vector_summary_models import (
     VectorSummaryRequest,
     VectorSummarySpec,
 )
+
+
+@pytest.mark.parametrize(
+    "capture_kind", ["configured", "missing_role", "extra_role", "old_shape"]
+)
+def test_summary_uses_configured_field_choices(capture_kind: str) -> None:
+    """Bind the installed recipe's generic vector capture to its internal sum request.
+
+    Args:
+        capture_kind: Valid configured roles, malformed roles or the removed input shape.
+    """
+    registry = ModelRegistry.load_installed()
+    definition = registry.get("vector-summary", "1.0.0")
+    selected = {
+        "selection": {
+            "collectionId": "eolab-mounted-vectors",
+            "itemId": "source",
+            "assetKey": "data",
+            "layerName": "areas",
+            "filter": {"enabled": False, "match": "all", "rules": []},
+        },
+        "fields": {"group": "state_name", "value": "total_es"},
+    }
+    if capture_kind == "missing_role":
+        selected["fields"].pop("value")
+    elif capture_kind == "extra_role":
+        selected["fields"]["weight"] = "population"
+    elif capture_kind == "old_shape":
+        selected.pop("fields")
+        selected.update(groupField="state_name", valueField="total_es")
+    request = ModelRunRequest.model_validate(
+        {
+            "requestId": "summary-configured-fields",
+            "utcOffsetMinutes": 0,
+            "label": "Totals per state",
+            "model": {
+                "id": definition.id,
+                "version": definition.version,
+                "definitionSha256": definition.digest,
+            },
+            "inputs": {"vector": selected},
+            "parameters": {},
+        }
+    )
+    if capture_kind != "configured":
+        with pytest.raises(ProcessingError) as error:
+            build_model_calculation_request(request, registry)
+        assert error.value.code == "invalid_model_inputs"
+        return
+    calculation, invocation = build_model_calculation_request(request, registry)
+    assert isinstance(calculation, VectorSummaryRequest)
+    assert calculation.vector.groupField == "state_name"
+    assert calculation.vector.valueField == "total_es"
+    assert calculation.boundary_tolerance_m == 1000
+    assert invocation.inputs == {"vector": selected}
 
 
 def summary_source(

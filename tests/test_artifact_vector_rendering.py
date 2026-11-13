@@ -131,6 +131,7 @@ def result_boundary(
     version_file_path: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> tuple[
     TestClient,
     TestClient,
@@ -146,12 +147,13 @@ def result_boundary(
         version_file_path: Application build fixture.
         tmp_path: Original result file directory.
         monkeypatch: Replace external file authority and GeoServer transports.
+        request: Optional parametrized native geometry; polygons are the default.
 
     Returns:
         Owner, unrelated browser, file authority, renderer, publication and upstream log.
     """
-    path = tmp_path / "summary.gpkg"
-    write_layer(path, layer="summary")
+    path = tmp_path / "result.gpkg"
+    write_layer(path, geometry=getattr(request, "param", "Polygon"), layer="features")
     authority = VectorFileAuthority(path)
     token = "c" * 64
     authority.owners = {hashlib.sha256(token.encode()).hexdigest()}
@@ -249,25 +251,33 @@ def result_boundary(
     return owner, other, authority, renderer, services[0], forwarded
 
 
+@pytest.mark.parametrize(
+    ("result_boundary", "geometry_kind"),
+    [("Polygon", "polygon"), ("Point", "point")],
+    indirect=["result_boundary"],
+)
 def test_result_uses_ordinary_vector_fields_filters_and_owned_original(
-    result_boundary: tuple[Any, ...],
+    result_boundary: tuple[Any, ...], geometry_kind: VectorGeometryKind
 ) -> None:
     """Reuse original-source vector operations without catalog or preview dependencies.
 
     Args:
         result_boundary: Real application services with external ownership and renderer fixtures.
+        geometry_kind: Ordinary style family inferred from the original file.
     """
     owner, other, authority, renderer, _, _ = result_boundary
     described = owner.get(BASE)
     assert described.status_code == 200, described.text
     metadata = described.json()
     assert metadata["fields"] == {"label": "str", "count": "int", "weight": "float"}
-    assert metadata["layerName"] == "summary" and metadata["geometryKind"] == "polygon"
+    assert metadata["layerName"] == "features"
+    assert metadata["geometryKind"] == geometry_kind
     assert str(authority.path) not in described.text
     assert other.get(BASE).status_code == 404
     assert owner.post(BASE + "/layers").status_code == 403
     published = owner.post(BASE + "/layers", headers=HEADERS)
     assert published.status_code == 200, published.text
+    assert published.json()["geometryKind"] == geometry_kind
     operations = [
         ("category-summaries", {"field": "label"}),
         (
@@ -488,8 +498,8 @@ def test_cancelled_native_field_reads_keep_result_lease_until_exit(
     from eolab_app.vector.sources import PublishedVectorRegistry
     from eolab_app.vector.styling import VectorStyleService
 
-    path = tmp_path / "summary.gpkg"
-    write_layer(path, layer="summary")
+    path = tmp_path / "result.gpkg"
+    write_layer(path, layer="features")
     authority = VectorFileAuthority(path)
     sources = ArtifactVectorSourceResolver(authority.files())
     reader = BlockingFieldReader()
@@ -607,7 +617,7 @@ def test_geoserver_result_publication_hides_capabilities_and_cleans_datastore(
                 name,
                 "geopackage",
                 tmp_path / "source.gpkg",
-                "summary",
+                "features",
                 "polygon",
                 advertised=False,
             )

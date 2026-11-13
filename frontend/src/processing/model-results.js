@@ -83,12 +83,12 @@ function validateStatisticsResult(result) {
 /** Check the layer identity and feature count of a generated vector file.
  * @param {Object} result Vector result from the Processing API.
  * @return {void}
- * @throws {Error} If the layer, count or summary field is invalid.
+ * @throws {Error} If the layer, count or preferred numeric coloring field is invalid.
  */
 function validateVectorResult(result) {
     if (typeof result.layerName !== "string" || !result.layerName ||
         !Number.isSafeInteger(result.featureCount) || result.featureCount < 0 ||
-        result.summaryField !== undefined && (typeof result.summaryField !== "string" || !result.summaryField)) {
+        result.defaultNumericField !== undefined && (typeof result.defaultNumericField !== "string" || !result.defaultNumericField)) {
         throw new Error("Processing returned invalid vector result details.");
     }
 }
